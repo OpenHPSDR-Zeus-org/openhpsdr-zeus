@@ -51,6 +51,25 @@ function Normalize-BaseUrl {
     return $Url.TrimEnd("/")
 }
 
+function ConvertTo-LongFileSystemPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if ([System.IO.Path]::DirectorySeparatorChar -ne "\") {
+        return $Path
+    }
+    if ($Path.StartsWith("\\?\", [StringComparison]::Ordinal)) {
+        return $Path
+    }
+    if ($Path.StartsWith("\\", [StringComparison]::Ordinal)) {
+        return "\\?\UNC\" + $Path.Substring(2)
+    }
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        return "\\?\" + $Path
+    }
+
+    return $Path
+}
+
 function Enable-ModernTls {
     try {
         [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
@@ -176,7 +195,7 @@ function Read-JsonText {
 function Read-JsonFile {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    return Read-JsonText -Text (Get-Content -LiteralPath $Path -Raw) -Source $Path
+    return Read-JsonText -Text ([System.IO.File]::ReadAllText((ConvertTo-LongFileSystemPath -Path $Path))) -Source $Path
 }
 
 function Write-JsonFile {
@@ -187,11 +206,14 @@ function Write-JsonFile {
 
     $parent = Split-Path -Parent $Path
     if (-not [string]::IsNullOrWhiteSpace($parent)) {
-        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+        [System.IO.Directory]::CreateDirectory((ConvertTo-LongFileSystemPath -Path $parent)) | Out-Null
     }
 
     $json = $Value | ConvertTo-Json -Depth 48
-    Set-Content -LiteralPath $Path -Value $json -Encoding UTF8
+    [System.IO.File]::WriteAllText(
+        (ConvertTo-LongFileSystemPath -Path $Path),
+        $json,
+        [System.Text.Encoding]::UTF8)
 }
 
 function Add-JsonLine {
@@ -202,7 +224,7 @@ function Add-JsonLine {
 
     $parent = Split-Path -Parent $Path
     if (-not [string]::IsNullOrWhiteSpace($parent)) {
-        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+        [System.IO.Directory]::CreateDirectory((ConvertTo-LongFileSystemPath -Path $parent)) | Out-Null
     }
 
     $json = ($Value | ConvertTo-Json -Depth 48 -Compress) + [Environment]::NewLine
@@ -211,7 +233,7 @@ function Add-JsonLine {
     for ($attempt = 0; $attempt -lt 8; $attempt++) {
         try {
             $stream = [System.IO.File]::Open(
-                $Path,
+                (ConvertTo-LongFileSystemPath -Path $Path),
                 [System.IO.FileMode]::Append,
                 [System.IO.FileAccess]::Write,
                 [System.IO.FileShare]::ReadWrite)
@@ -417,6 +439,7 @@ function Get-FrontendTuneCandidates {
             $snr = Get-NumericValue (Get-JsonValue $peak "snrDb")
             $dbfs = Get-NumericValue (Get-JsonValue $peak "dbfs")
             $confidence = Get-NumericValue (Get-JsonValue $peak "confidence")
+            $currentVfo = Get-NumericValue (Get-JsonValue $sample "currentVfoHz")
             $distance = Get-FrontendPeakFilterDistanceHz -Peak $peak -FilterLowHz $low -FilterHighHz $high
             if ($null -eq $distance) {
                 continue
@@ -453,6 +476,9 @@ function Get-FrontendTuneCandidates {
                 rawSuggestedVfoMhz = [Math]::Round($rawSuggestedVfoHz / 1000000.0, 6)
                 tuningStepHz = $effectiveTuneStepHz
                 tuneSnapDeltaHz = [long]($suggestedVfoHz - $rawSuggestedVfoHz)
+                currentVfoHz = if ($null -eq $currentVfo) { $null } else { [long][Math]::Round([double]$currentVfo) }
+                retuneDeltaHz = if ($null -eq $currentVfo) { $null } else { [long]($suggestedVfoHz - [long][Math]::Round([double]$currentVfo)) }
+                exactRetuneDeltaHz = if ($null -eq $currentVfo) { $null } else { [long]($rawSuggestedVfoHz - [long][Math]::Round([double]$currentVfo)) }
                 peakFrequencyHz = [long][Math]::Round([double]$frequency)
                 peakFrequencyMhz = [Math]::Round([double]$frequency / 1000000.0, 6)
                 peakOffsetHz = if ($null -eq $offset) { $null } else { [long][Math]::Round([double]$offset) }
@@ -1024,13 +1050,17 @@ function New-SampleRecord {
 function Read-InputSamples {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $resolved = (Resolve-Path -LiteralPath $Path).Path
+    $resolved = [System.IO.Path]::GetFullPath($Path)
+    if (-not [System.IO.File]::Exists((ConvertTo-LongFileSystemPath -Path $resolved))) {
+        throw "Input path does not exist: $Path"
+    }
+
     $records = New-Object System.Collections.Generic.List[object]
     $extension = [System.IO.Path]::GetExtension($resolved)
 
     if ($extension -ieq ".jsonl") {
         $index = 0
-        foreach ($line in (Get-Content -LiteralPath $resolved)) {
+        foreach ($line in [System.IO.File]::ReadLines((ConvertTo-LongFileSystemPath -Path $resolved))) {
             if ([string]::IsNullOrWhiteSpace($line)) {
                 continue
             }
@@ -1298,6 +1328,17 @@ function New-SampleSummary {
         rxAudioLevelerBoostSlewLimited = Get-JsonValue $runtime "rxAudioLevelerBoostSlewLimited"
         rxAudioLevelerPeakLimited = Get-JsonValue $runtime "rxAudioLevelerPeakLimited"
         rxAudioLevelerOutputLimited = Get-JsonValue $runtime "rxAudioLevelerOutputLimited"
+        rxAudioLevelerRequestedProfile = Get-JsonValue $runtime "rxAudioLevelerRequestedProfile"
+        rxAudioLevelerActiveProfile = Get-JsonValue $runtime "rxAudioLevelerActiveProfile"
+        rxAudioLevelerExperimental = Get-JsonValue $runtime "rxAudioLevelerExperimental"
+        rxAudioLevelerControlRmsValid = Get-JsonValue $runtime "rxAudioLevelerControlRmsValid"
+        rxAudioLevelerControlRmsDbfs = Get-JsonValue $runtime "rxAudioLevelerControlRmsDbfs"
+        rxAudioLevelerControlRmsHangDb = Get-JsonValue $runtime "rxAudioLevelerControlRmsHangDb"
+        txOutputHeadroomRequestedProfile = Get-JsonValue $runtime "txOutputHeadroomRequestedProfile"
+        txOutputHeadroomActiveProfile = Get-JsonValue $runtime "txOutputHeadroomActiveProfile"
+        txOutputHeadroomExperimental = Get-JsonValue $runtime "txOutputHeadroomExperimental"
+        txOutputHeadroomTrimDb = Get-JsonValue $runtime "txOutputHeadroomTrimDb"
+        txOutputHeadroomPureSignalBypassed = Get-JsonValue $runtime "txOutputHeadroomPureSignalBypassed"
         squelchOpen = Test-Truthy (Get-JsonValue $runtime "squelchOpen")
         monitorBacklogSamples = Get-JsonValue $runtime "monitorBacklogSamples"
         requestedNrMode = [string](Get-JsonValue $diagnostics "requestedNrMode")
@@ -1566,6 +1607,12 @@ function Build-Report {
     $rxAudioLevelerCandidateHybridSpeechPriorValues = New-Object System.Collections.Generic.List[double]
     $rxAudioLevelerCandidateNoSignalNoisePriorValues = New-Object System.Collections.Generic.List[double]
     $rxAudioLevelerCandidateNoiseProfilePriorValues = New-Object System.Collections.Generic.List[double]
+    $rxAudioLevelerProfileCounts = @{}
+    $txOutputHeadroomRequestedProfileCounts = @{}
+    $txOutputHeadroomActiveProfileCounts = @{}
+    $txOutputHeadroomTrimValues = New-Object System.Collections.Generic.List[double]
+    $rxAudioLevelerControlRmsValues = New-Object System.Collections.Generic.List[double]
+    $rxAudioLevelerControlRmsHangValues = New-Object System.Collections.Generic.List[double]
     $backlogValues = New-Object System.Collections.Generic.List[double]
     $frontendSceneAgeValues = New-Object System.Collections.Generic.List[double]
     $frontendTopPeakCountValues = New-Object System.Collections.Generic.List[double]
@@ -1659,6 +1706,7 @@ function Build-Report {
     $rxAudioLevelerOutputLimitedSamples = New-Object System.Collections.Generic.List[object]
     $rxAudioLevelerConstrainedSamples = New-Object System.Collections.Generic.List[object]
     $rxAudioLevelerCandidateNoSignalNoiseCapSamples = New-Object System.Collections.Generic.List[object]
+    $rxAudioLevelerNormalStrengthControlRmsSamples = New-Object System.Collections.Generic.List[object]
     $candidateSpeechContinuitySamples = New-Object System.Collections.Generic.List[object]
     $candidateSpeechContinuityOutputValues = New-Object System.Collections.Generic.List[double]
     $candidateSpeechContinuityGainValues = New-Object System.Collections.Generic.List[double]
@@ -1693,6 +1741,7 @@ function Build-Report {
     $candidateSpeechContinuityDropoutThresholdDbfs = -45.0
     $candidateSpeechContinuityOutputMovementThresholdDb = 6.0
     $candidateSpeechContinuityGainMovementThresholdDb = 8.0
+    $rxAudioLevelerNormalStrengthControlRmsThresholdDbfs = -24.0
     $frontendNearPassbandThresholdHz = 3000.0
     $frontendFilterPassbandEdgeToleranceHz = 0.0
     $frontendStrongPassbandSnrThresholdDb = 20.0
@@ -1717,6 +1766,11 @@ function Build-Report {
     $rxAudioLevelerCandidateNoSignalNoiseCapCount = 0
     $rxAudioLevelerCandidateFarPeakNoiseCapCount = 0
     $rxAudioLevelerCandidateNoProofNoiseCapCount = 0
+    $rxAudioLevelerExperimentalSampleCount = 0
+    $rxAudioLevelerControlRmsValidCount = 0
+    $rxAudioLevelerNormalStrengthControlRmsValidCount = 0
+    $txOutputHeadroomExperimentalSampleCount = 0
+    $txOutputHeadroomPureSignalBypassedSampleCount = 0
     $candidateSpeechContinuitySampleCount = 0
     $candidateSpeechContinuityFadeCount = 0
     $candidateSpeechContinuityDropoutCount = 0
@@ -1953,6 +2007,7 @@ function Build-Report {
                 peakCount = $frontendTopPeaks.Count
                 nearest = Convert-FrontendTopPeak $nearestFrontendPeak
                 strongest = Convert-FrontendTopPeak $strongestFrontendPeak
+                currentVfoHz = $sampleRadioVfoHz
                 nearPassbandPeak = $sampleHasNearPassbandPeak
                 filterPassbandKnown = $sampleFilterPassbandKnown
                 filterLowHz = $sampleFilterLowHz
@@ -2722,6 +2777,74 @@ function Build-Report {
             $rxAudioLevelerOutputRmsDbfs = Get-JsonValue $runtime "rxAudioLevelerOutputRmsDbfs"
             $rxAudioLevelerInputPeakDbfs = Get-JsonValue $runtime "rxAudioLevelerInputPeakDbfs"
             $rxAudioLevelerOutputPeakDbfs = Get-JsonValue $runtime "rxAudioLevelerOutputPeakDbfs"
+            $rxAudioLevelerRequestedProfileValue = Get-JsonValue $runtime "rxAudioLevelerRequestedProfile"
+            $rxAudioLevelerActiveProfileValue = Get-JsonValue $runtime "rxAudioLevelerActiveProfile"
+            $rxAudioLevelerRequestedProfile = [string]$rxAudioLevelerRequestedProfileValue
+            $rxAudioLevelerActiveProfile = [string]$rxAudioLevelerActiveProfileValue
+            $rxAudioLevelerProfileExplicit = -not [string]::IsNullOrWhiteSpace($rxAudioLevelerActiveProfile)
+            if ([string]::IsNullOrWhiteSpace($rxAudioLevelerRequestedProfile)) {
+                $rxAudioLevelerRequestedProfile = "current"
+            }
+            if ([string]::IsNullOrWhiteSpace($rxAudioLevelerActiveProfile)) {
+                $rxAudioLevelerActiveProfile = $rxAudioLevelerRequestedProfile
+            }
+            $rxAudioLevelerExperimental = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerExperimental")
+            $rxAudioLevelerControlRmsValid = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerControlRmsValid")
+            $rxAudioLevelerControlRmsDbfs = Get-JsonValue $runtime "rxAudioLevelerControlRmsDbfs"
+            $rxAudioLevelerControlRmsHangDb = Get-JsonValue $runtime "rxAudioLevelerControlRmsHangDb"
+            $rxAudioLevelerInputRmsDbfsNumber = Get-NumericValue $rxAudioLevelerInputRmsDbfs
+            $rxAudioLevelerProfileSample = ($rxAudioLevelerProfileExplicit -and ($runtimeIsRxAudio -or
+                $null -ne $rxAudioLevelerInputRmsDbfs -or
+                $null -ne $rxAudioLevelerOutputRmsDbfs))
+            if ($rxAudioLevelerProfileSample) {
+                Add-Count $rxAudioLevelerProfileCounts $rxAudioLevelerActiveProfile
+                if ($rxAudioLevelerExperimental) {
+                    $rxAudioLevelerExperimentalSampleCount++
+                }
+                if ($rxAudioLevelerControlRmsValid) {
+                    $rxAudioLevelerControlRmsValidCount++
+                    Add-Number $rxAudioLevelerControlRmsValues $rxAudioLevelerControlRmsDbfs
+                    Add-Number $rxAudioLevelerControlRmsHangValues $rxAudioLevelerControlRmsHangDb
+                    if ([string]::Equals($rxAudioLevelerActiveProfile, "stable-speech-candidate", [StringComparison]::OrdinalIgnoreCase) -and
+                        $null -ne $rxAudioLevelerInputRmsDbfsNumber -and
+                        [double]$rxAudioLevelerInputRmsDbfsNumber -ge $rxAudioLevelerNormalStrengthControlRmsThresholdDbfs) {
+                        $rxAudioLevelerNormalStrengthControlRmsValidCount++
+                        $rxAudioLevelerNormalStrengthControlRmsSamples.Add([ordered]@{
+                            sampleIndex = Get-JsonValue $sample "sampleIndex"
+                            sampledUtc = Get-JsonValue $sample "sampledUtc"
+                            activeProfile = $rxAudioLevelerActiveProfile
+                            inputRmsDbfs = $rxAudioLevelerInputRmsDbfsNumber
+                            outputRmsDbfs = Get-NumericValue $rxAudioLevelerOutputRmsDbfs
+                            controlRmsDbfs = Get-NumericValue $rxAudioLevelerControlRmsDbfs
+                            controlRmsHangDb = Get-NumericValue $rxAudioLevelerControlRmsHangDb
+                            thresholdDbfs = $rxAudioLevelerNormalStrengthControlRmsThresholdDbfs
+                        }) | Out-Null
+                    }
+                }
+            }
+            $txOutputHeadroomRequestedProfileValue = Get-JsonValue $runtime "txOutputHeadroomRequestedProfile"
+            $txOutputHeadroomActiveProfileValue = Get-JsonValue $runtime "txOutputHeadroomActiveProfile"
+            $txOutputHeadroomRequestedProfile = [string]$txOutputHeadroomRequestedProfileValue
+            $txOutputHeadroomActiveProfile = [string]$txOutputHeadroomActiveProfileValue
+            $txOutputHeadroomProfileExplicit = -not [string]::IsNullOrWhiteSpace($txOutputHeadroomRequestedProfile) -or
+                -not [string]::IsNullOrWhiteSpace($txOutputHeadroomActiveProfile)
+            if ([string]::IsNullOrWhiteSpace($txOutputHeadroomRequestedProfile)) {
+                $txOutputHeadroomRequestedProfile = "current"
+            }
+            if ([string]::IsNullOrWhiteSpace($txOutputHeadroomActiveProfile)) {
+                $txOutputHeadroomActiveProfile = $txOutputHeadroomRequestedProfile
+            }
+            if ($txOutputHeadroomProfileExplicit) {
+                Add-Count $txOutputHeadroomRequestedProfileCounts $txOutputHeadroomRequestedProfile
+                Add-Count $txOutputHeadroomActiveProfileCounts $txOutputHeadroomActiveProfile
+                if (Test-Truthy (Get-JsonValue $runtime "txOutputHeadroomExperimental")) {
+                    $txOutputHeadroomExperimentalSampleCount++
+                }
+                if (Test-Truthy (Get-JsonValue $runtime "txOutputHeadroomPureSignalBypassed")) {
+                    $txOutputHeadroomPureSignalBypassedSampleCount++
+                }
+                Add-Number $txOutputHeadroomTrimValues (Get-JsonValue $runtime "txOutputHeadroomTrimDb")
+            }
             $runtimePassbandAudioRmsDbfsNumber = $null
             if ($runtimeIsRxAudio) {
                 $runtimePassbandAudioRmsDbfsNumber = Get-NumericValue $rxAudioLevelerOutputRmsDbfs
@@ -2985,6 +3108,8 @@ function Build-Report {
     $rxAudioLevelerCandidateHybridSpeechPriorStats = Get-NumberStats $rxAudioLevelerCandidateHybridSpeechPriorValues
     $rxAudioLevelerCandidateNoSignalNoisePriorStats = Get-NumberStats $rxAudioLevelerCandidateNoSignalNoisePriorValues
     $rxAudioLevelerCandidateNoiseProfilePriorStats = Get-NumberStats $rxAudioLevelerCandidateNoiseProfilePriorValues
+    $rxAudioLevelerControlRmsStats = Get-NumberStats $rxAudioLevelerControlRmsValues
+    $rxAudioLevelerControlRmsHangStats = Get-NumberStats $rxAudioLevelerControlRmsHangValues
     $candidateSpeechContinuityOutputStats = Get-NumberStats $candidateSpeechContinuityOutputValues
     $candidateSpeechContinuityGainStats = Get-NumberStats $candidateSpeechContinuityGainValues
     $backlogStats = Get-NumberStats $backlogValues
@@ -3170,6 +3295,9 @@ function Build-Report {
     $rxAudioLevelerCandidateNoSignalNoiseCapTopSamples = @($rxAudioLevelerCandidateNoSignalNoiseCapSamples.ToArray() |
         Sort-Object @{Expression = "candidateNoiseProfilePrior"; Descending = $true }, @{Expression = "candidateNoSignalNoisePrior"; Descending = $true } |
         Select-Object -First 8)
+    $rxAudioLevelerNormalStrengthControlRmsTopSamples = @($rxAudioLevelerNormalStrengthControlRmsSamples.ToArray() |
+        Sort-Object @{Expression = "inputRmsDbfs"; Descending = $true }, @{Expression = "controlRmsHangDb"; Descending = $true } |
+        Select-Object -First 8)
     $passbandAudioTopSamples = @($passbandAudioSamples.ToArray() |
         Sort-Object @{Expression = "finalAudioRmsDbfs"; Descending = $true } |
         Select-Object -First 8)
@@ -3190,6 +3318,16 @@ function Build-Report {
         -Samples @($frontendTopPeakSamples.ToArray()) `
         -MaxCount 6 `
         -TuneStepHz $TuneStepHz)
+    $frontendNearestTuneCandidate = @(Get-FrontendTuneCandidates `
+        -Samples @($frontendTopPeakSamples.ToArray()) `
+        -MaxCount 64 `
+        -TuneStepHz $TuneStepHz |
+        Where-Object { $null -ne (Get-JsonValue $_ "retuneDeltaHz") } |
+        Sort-Object @{Expression = { [Math]::Abs([double](Get-JsonValue $_ "retuneDeltaHz")) }; Ascending = $true },
+            @{Expression = { [double](Get-JsonValue $_ "filterDistanceHz") }; Ascending = $true },
+            @{Expression = { [double](Get-JsonValue $_ "snrDb") }; Descending = $true } |
+        Select-Object -First 1)
+    $frontendNearestTuneCandidateValue = if ($frontendNearestTuneCandidate.Count -le 0) { $null } else { $frontendNearestTuneCandidate[0] }
     $candidateNormalizationCompressionDb = $null
     $candidateWeakStrongOutputGapDb = $null
     $candidateWeakStrongFinalAudioGapDb = $null
@@ -3764,6 +3902,9 @@ elseif ($candidateSpeechContinuityDropoutCount -gt 0) {
     if ($rxAudioLevelerCandidateNoSignalNoiseCapCount -gt 0) {
         $summaryRecommendations.Add("Comparison no-signal noise cap fired in this trace; inspect rxAudioLevelerWatch candidate prior fields and topCandidateNoSignalNoiseCapSamples before judging weak-signal muting.") | Out-Null
     }
+    if ($rxAudioLevelerNormalStrengthControlRmsValidCount -gt 0) {
+        $summaryRecommendations.Add("Stable-speech RX leveler control memory was active on normal-strength input; inspect rxAudioLevelerWatch.topNormalStrengthControlRmsSamples before accepting the candidate as no-pumping evidence.") | Out-Null
+    }
     switch ($candidateSpeechContinuityStatus) {
         "speech-dropout-risk" {
             $summaryRecommendations.Add("Comparison speech-continuity samples dropped below audible final audio; tune held weak-speech rescue or leveler release before tightening noise gates.") | Out-Null
@@ -3814,6 +3955,15 @@ elseif ($candidateSpeechContinuityDropoutCount -gt 0) {
     if ($runtimeCount -gt 0 -and $rxAudioLevelerDiagnosticCount -lt $runtimeCount) {
         $summaryRecommendations.Add("Recapture this trace after restarting a backend that exports RX audio leveler diagnostics; final loudness normalization evidence is incomplete.") | Out-Null
     }
+    if ($rxAudioLevelerExperimentalSampleCount -gt 0) {
+        $summaryRecommendations.Add("RX audio leveler experimental profile was active; pair this trace with a matched current-profile baseline before promoting leveler changes.") | Out-Null
+    }
+    if ($txOutputHeadroomExperimentalSampleCount -gt 0) {
+        $summaryRecommendations.Add("TX output headroom experimental profile was requested or active; pair this trace with a matched current-profile TX baseline before promoting TX headroom changes.") | Out-Null
+    }
+    if ($txOutputHeadroomPureSignalBypassedSampleCount -gt 0) {
+        $summaryRecommendations.Add("TX output headroom candidate was bypassed while PureSignal was armed; use this as bypass proof, not as effective headroom-trim proof.") | Out-Null
+    }
     if ($rxAudioLevelerBoostSlewLimitedCount -gt 0) {
         $summaryRecommendations.Add("RX audio leveler boost slew limited one or more samples; inspect rxAudioLevelerWatch.topBoostSlewLimitedSamples before tuning weak-signal loudness.") | Out-Null
     }
@@ -3854,10 +4004,20 @@ elseif ($candidateSpeechContinuityDropoutCount -gt 0) {
         $summaryRecommendations.Add("Frontend top-peak evidence is missing; refresh the web frontend so comparison traces record actual band peak locations before choosing a tuning window.") | Out-Null
     }
     elseif ($frontendFilterPassbandPeakSampleCount -eq 0 -and $frontendNearPassbandPeakSampleCount -gt 0) {
-        $summaryRecommendations.Add("Frontend saw peaks near the dial, but none inside the RX filter passband; tune the signal into the active filter window before using this trace as on-signal Candidate evidence.") | Out-Null
+        if ($null -ne $frontendNearestTuneCandidateValue) {
+            $summaryRecommendations.Add("Frontend saw peaks near the dial, but none inside the RX filter passband; nearest stepped retune target is $($frontendNearestTuneCandidateValue["suggestedVfoMhz"]) MHz (delta $($frontendNearestTuneCandidateValue["retuneDeltaHz"]) Hz) before using this trace as on-signal Candidate evidence.") | Out-Null
+        }
+        else {
+            $summaryRecommendations.Add("Frontend saw peaks near the dial, but none inside the RX filter passband; tune the signal into the active filter window before using this trace as on-signal Candidate evidence.") | Out-Null
+        }
     }
     elseif ($frontendNearPassbandPeakSampleCount -eq 0) {
-        $summaryRecommendations.Add("Frontend saw band peaks, but none were within 3 kHz of the dial; retune toward frontendTopPeakWatch.topSamples before using this trace as on-signal Candidate evidence.") | Out-Null
+        if ($null -ne $frontendNearestTuneCandidateValue) {
+            $summaryRecommendations.Add("Frontend saw band peaks, but none were within 3 kHz of the dial; nearest stepped retune target is $($frontendNearestTuneCandidateValue["suggestedVfoMhz"]) MHz (delta $($frontendNearestTuneCandidateValue["retuneDeltaHz"]) Hz) before using this trace as on-signal Candidate evidence.") | Out-Null
+        }
+        else {
+            $summaryRecommendations.Add("Frontend saw band peaks, but none were within 3 kHz of the dial; retune toward frontendTopPeakWatch.topSamples before using this trace as on-signal Candidate evidence.") | Out-Null
+        }
     }
     $rxAudioLevelerConstrainedMaxAbsGainDeltaDb = $null
     $rxAudioLevelerConstrainedDesiredGainValues = New-Object System.Collections.Generic.List[double]
@@ -4401,8 +4561,35 @@ elseif ($candidateSpeechContinuityDropoutCount -gt 0) {
         rxAudioLevelerCandidateHybridSpeechPrior = $rxAudioLevelerCandidateHybridSpeechPriorStats
         rxAudioLevelerCandidateNoSignalNoisePrior = $rxAudioLevelerCandidateNoSignalNoisePriorStats
         rxAudioLevelerCandidateNoiseProfilePrior = $rxAudioLevelerCandidateNoiseProfilePriorStats
+        rxAudioLevelerProfileCounts = @(ConvertTo-CountArray $rxAudioLevelerProfileCounts)
+        rxAudioLevelerExperimentalSampleCount = $rxAudioLevelerExperimentalSampleCount
+        rxAudioLevelerControlRmsValidSampleCount = $rxAudioLevelerControlRmsValidCount
+        rxAudioLevelerControlRmsDbfs = $rxAudioLevelerControlRmsStats
+        rxAudioLevelerControlRmsHangDb = $rxAudioLevelerControlRmsHangStats
+        rxAudioLevelerNormalStrengthControlRmsValidSampleCount = $rxAudioLevelerNormalStrengthControlRmsValidCount
+        txOutputHeadroomRequestedProfileCounts = @(ConvertTo-CountArray $txOutputHeadroomRequestedProfileCounts)
+        txOutputHeadroomActiveProfileCounts = @(ConvertTo-CountArray $txOutputHeadroomActiveProfileCounts)
+        txOutputHeadroomExperimentalSampleCount = $txOutputHeadroomExperimentalSampleCount
+        txOutputHeadroomPureSignalBypassedSampleCount = $txOutputHeadroomPureSignalBypassedSampleCount
+        txOutputHeadroomTrimDb = Get-NumberStats $txOutputHeadroomTrimValues
+        txOutputHeadroomWatch = [ordered]@{
+            requestedProfileCounts = @(ConvertTo-CountArray $txOutputHeadroomRequestedProfileCounts)
+            activeProfileCounts = @(ConvertTo-CountArray $txOutputHeadroomActiveProfileCounts)
+            experimentalSampleCount = $txOutputHeadroomExperimentalSampleCount
+            pureSignalBypassedSampleCount = $txOutputHeadroomPureSignalBypassedSampleCount
+            trimDb = Get-NumberStats $txOutputHeadroomTrimValues
+            recommendation = "Use headroom-trim-candidate active-profile samples as effective TX output trim evidence; use PureSignal-bypassed samples only as bypass safety evidence."
+        }
         rxAudioLevelerWatch = [ordered]@{
             diagnosticSampleCount = $rxAudioLevelerDiagnosticCount
+            profileCounts = @(ConvertTo-CountArray $rxAudioLevelerProfileCounts)
+            experimentalSampleCount = $rxAudioLevelerExperimentalSampleCount
+            controlRmsValidSampleCount = $rxAudioLevelerControlRmsValidCount
+            controlRmsDbfs = $rxAudioLevelerControlRmsStats
+            controlRmsHangDb = $rxAudioLevelerControlRmsHangStats
+            normalStrengthControlRmsThresholdDbfs = $rxAudioLevelerNormalStrengthControlRmsThresholdDbfs
+            normalStrengthControlRmsValidSampleCount = $rxAudioLevelerNormalStrengthControlRmsValidCount
+            topNormalStrengthControlRmsSamples = @($rxAudioLevelerNormalStrengthControlRmsTopSamples)
             constrainedSampleCount = $rxAudioLevelerConstrainedCount
             constrainedPct = $rxAudioLevelerConstrainedPct
             candidateNoSignalNoiseCapSampleCount = $rxAudioLevelerCandidateNoSignalNoiseCapCount
@@ -4483,8 +4670,10 @@ elseif ($candidateSpeechContinuityDropoutCount -gt 0) {
             topNearPassbandSamples = @($frontendNearPassbandPeakTopSamples)
             topFilterPassbandSamples = @($frontendFilterPassbandPeakTopSamples)
             tuneCandidates = @($frontendTuneCandidates)
+            nearestTuneCandidate = $frontendNearestTuneCandidateValue
         }
         frontendTuneCandidates = @($frontendTuneCandidates)
+        frontendNearestTuneCandidate = $frontendNearestTuneCandidateValue
         frontendAdjacentNoiseProfile = [ordered]@{
             usableSampleCount = $frontendAdjacentNoiseUsableCount
             bins = $frontendAdjacentNoiseBinStats
@@ -4885,6 +5074,10 @@ else {
         }) -join "; "
         Write-Host "Frontend tune candidates: $candidateText"
     }
+    $nearestTuneCandidate = Get-JsonValue $report "frontendNearestTuneCandidate"
+    if ($null -ne $nearestTuneCandidate) {
+        Write-Host "Nearest frontend tune target: $($nearestTuneCandidate["suggestedVfoMhz"]) MHz (delta $($nearestTuneCandidate["retuneDeltaHz"]) Hz, peak $($nearestTuneCandidate["peakFrequencyMhz"]) MHz, off $($nearestTuneCandidate["peakOffsetHz"]) Hz)"
+    }
     $weakWatch = $report["candidateWeakSignalWatch"]
     if ($null -ne $weakWatch) {
         Write-Host "Candidate weak outcome: weak=$($weakWatch["weakInputSampleCount"]), recovered=$($weakWatch["weakRecoveredSampleCount"]), dropouts=$($weakWatch["weakDropoutSampleCount"]), finalAudible=$($weakWatch["weakDropoutFinalAudibleSampleCount"]), candidateLoss=$($weakWatch["weakDropoutCandidateLossSampleCount"]), hotMakeup=$($weakWatch["hotMakeupSampleCount"])"
@@ -4897,7 +5090,12 @@ else {
     }
     $levelerWatch = $report["rxAudioLevelerWatch"]
     if ($null -ne $levelerWatch) {
-        Write-Host "RX leveler safety: constrained=$($levelerWatch["constrainedSampleCount"]), boostSlew=$($levelerWatch["boostSlewLimitedSampleCount"]), peakLimited=$($levelerWatch["peakLimitedSampleCount"]), outputLimited=$($levelerWatch["outputLimitedSampleCount"])"
+        $profileCounts = @($levelerWatch["profileCounts"])
+        $profileText = (($profileCounts | ForEach-Object { "$($_["name"])=$($_["count"])" }) -join ",")
+        if ([string]::IsNullOrWhiteSpace($profileText)) {
+            $profileText = "current=0"
+        }
+        Write-Host "RX leveler safety: profiles=$profileText, experimental=$($levelerWatch["experimentalSampleCount"]), constrained=$($levelerWatch["constrainedSampleCount"]), boostSlew=$($levelerWatch["boostSlewLimitedSampleCount"]), peakLimited=$($levelerWatch["peakLimitedSampleCount"]), outputLimited=$($levelerWatch["outputLimitedSampleCount"])"
     }
 }
 

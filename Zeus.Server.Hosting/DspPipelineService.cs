@@ -131,9 +131,28 @@ public class DspPipelineService : BackgroundService,
     /// safe from the request thread.</summary>
     public void SetTxMonitorMeterOnly(bool on) => _txMonitorMeterOnly = on;
 
+    internal RxAudioLevelerProfile RxAudioLevelerRequestedProfile =>
+        NormalizeRxAudioLevelerProfile((RxAudioLevelerProfile)Volatile.Read(ref _rxAudioLevelerRequestedProfile));
+
+    internal RxAudioLevelerProfile RxAudioLevelerActiveProfile =>
+        NormalizeRxAudioLevelerProfile((RxAudioLevelerProfile)Volatile.Read(ref _rxAudioLevelerActiveProfile));
+
+    internal (RxAudioLevelerProfile Requested, RxAudioLevelerProfile Active) SnapshotRxAudioLevelerProfiles()
+    {
+        var requested = RxAudioLevelerRequestedProfile;
+        var active = RxAudioLevelerActiveProfile;
+        return (requested, active);
+    }
+
+    internal void SetRxAudioLevelerProfile(RxAudioLevelerProfile profile) =>
+        Volatile.Write(ref _rxAudioLevelerRequestedProfile, (int)NormalizeRxAudioLevelerProfile(profile));
+
     internal struct RxAudioLevelerState
     {
         public double GainDb;
+        public bool ControlRmsValid;
+        public double ControlRmsDbfs;
+        public double ControlRmsHangDb;
         public bool DiagnosticsValid;
         public double InputRmsDbfs;
         public double InputPeakDbfs;
@@ -152,7 +171,140 @@ public class DspPipelineService : BackgroundService,
         public bool OutputLimited;
     }
 
+    internal enum RxAudioLevelerProfile
+    {
+        Current = 0,
+        StableSpeechCandidate = 1,
+    }
+
+    internal static string RxAudioLevelerProfileId(RxAudioLevelerProfile profile) =>
+        NormalizeRxAudioLevelerProfile(profile) switch
+        {
+            RxAudioLevelerProfile.StableSpeechCandidate => "stable-speech-candidate",
+            _ => "current",
+        };
+
+    internal static bool TryParseRxAudioLevelerProfile(string? value, out RxAudioLevelerProfile profile)
+    {
+        string normalized = (value ?? string.Empty)
+            .Trim()
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .Replace(" ", string.Empty, StringComparison.Ordinal)
+            .ToLowerInvariant();
+
+        profile = normalized switch
+        {
+            "current" => RxAudioLevelerProfile.Current,
+            "stablespeechcandidate" => RxAudioLevelerProfile.StableSpeechCandidate,
+            _ => RxAudioLevelerProfile.Current,
+        };
+        return normalized is "current" or "stablespeechcandidate";
+    }
+
+    private static RxAudioLevelerProfile NormalizeRxAudioLevelerProfile(RxAudioLevelerProfile profile) =>
+        profile == RxAudioLevelerProfile.StableSpeechCandidate
+            ? RxAudioLevelerProfile.StableSpeechCandidate
+            : RxAudioLevelerProfile.Current;
+
+    internal const double TxOutputHeadroomCandidateTrimDb = -0.35;
+    internal static readonly float TxOutputHeadroomCandidateScale =
+        (float)Math.Pow(10.0, TxOutputHeadroomCandidateTrimDb / 20.0);
+
+    internal enum TxOutputHeadroomProfile
+    {
+        Current = 0,
+        HeadroomTrimCandidate = 1,
+    }
+
+    internal readonly record struct TxOutputHeadroomRuntime(
+        TxOutputHeadroomProfile RequestedProfile,
+        TxOutputHeadroomProfile ActiveProfile,
+        bool Experimental,
+        bool PureSignalBypassed,
+        double TrimDb,
+        float LinearScale)
+    {
+        public static TxOutputHeadroomRuntime Current => new(
+            TxOutputHeadroomProfile.Current,
+            TxOutputHeadroomProfile.Current,
+            Experimental: false,
+            PureSignalBypassed: false,
+            TrimDb: 0.0,
+            LinearScale: 1.0f);
+    }
+
+    internal TxOutputHeadroomProfile TxOutputHeadroomRequestedProfile =>
+        NormalizeTxOutputHeadroomProfile((TxOutputHeadroomProfile)Volatile.Read(ref _txOutputHeadroomRequestedProfile));
+
+    internal TxOutputHeadroomRuntime SnapshotTxOutputHeadroomRuntime()
+    {
+        var requested = TxOutputHeadroomRequestedProfile;
+        bool experimental = requested != TxOutputHeadroomProfile.Current;
+        bool pureSignalArmed = _radio.Snapshot().PsEnabled
+            || Volatile.Read(ref _txOutputHeadroomPureSignalEnabled) != 0;
+        bool pureSignalBypassed = experimental
+            && pureSignalArmed;
+        var active = pureSignalBypassed ? TxOutputHeadroomProfile.Current : requested;
+        return new TxOutputHeadroomRuntime(
+            RequestedProfile: requested,
+            ActiveProfile: active,
+            Experimental: experimental,
+            PureSignalBypassed: pureSignalBypassed,
+            TrimDb: active == TxOutputHeadroomProfile.HeadroomTrimCandidate
+                ? TxOutputHeadroomCandidateTrimDb
+                : 0.0,
+            LinearScale: active == TxOutputHeadroomProfile.HeadroomTrimCandidate
+                ? TxOutputHeadroomCandidateScale
+                : 1.0f);
+    }
+
+    internal (TxOutputHeadroomProfile Requested, TxOutputHeadroomProfile Active, bool PureSignalBypassed)
+        SnapshotTxOutputHeadroomProfiles()
+    {
+        var runtime = SnapshotTxOutputHeadroomRuntime();
+        return (runtime.RequestedProfile, runtime.ActiveProfile, runtime.PureSignalBypassed);
+    }
+
+    internal void SetTxOutputHeadroomProfile(TxOutputHeadroomProfile profile) =>
+        Volatile.Write(ref _txOutputHeadroomRequestedProfile, (int)NormalizeTxOutputHeadroomProfile(profile));
+
+    internal static string TxOutputHeadroomProfileId(TxOutputHeadroomProfile profile) =>
+        NormalizeTxOutputHeadroomProfile(profile) switch
+        {
+            TxOutputHeadroomProfile.HeadroomTrimCandidate => "headroom-trim-candidate",
+            _ => "current",
+        };
+
+    internal static bool TryParseTxOutputHeadroomProfile(string? value, out TxOutputHeadroomProfile profile)
+    {
+        string normalized = (value ?? string.Empty)
+            .Trim()
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .Replace(" ", string.Empty, StringComparison.Ordinal)
+            .ToLowerInvariant();
+
+        profile = normalized switch
+        {
+            "current" => TxOutputHeadroomProfile.Current,
+            "headroomtrimcandidate" => TxOutputHeadroomProfile.HeadroomTrimCandidate,
+            "txoutputheadroomcandidate" => TxOutputHeadroomProfile.HeadroomTrimCandidate,
+            _ => TxOutputHeadroomProfile.Current,
+        };
+        return normalized is "current" or "headroomtrimcandidate" or "txoutputheadroomcandidate";
+    }
+
+    private static TxOutputHeadroomProfile NormalizeTxOutputHeadroomProfile(TxOutputHeadroomProfile profile) =>
+        profile == TxOutputHeadroomProfile.HeadroomTrimCandidate
+            ? TxOutputHeadroomProfile.HeadroomTrimCandidate
+            : TxOutputHeadroomProfile.Current;
+
     private RxAudioLevelerState _rxAudioLeveler;
+    private int _rxAudioLevelerRequestedProfile = (int)RxAudioLevelerProfile.Current;
+    private int _rxAudioLevelerActiveProfile = (int)RxAudioLevelerProfile.Current;
+    private int _txOutputHeadroomRequestedProfile = (int)TxOutputHeadroomProfile.Current;
+    private int _txOutputHeadroomPureSignalEnabled;
 
     internal sealed class AdaptiveSquelchState
     {
@@ -178,6 +330,7 @@ public class DspPipelineService : BackgroundService,
     // signals are still caught.
     private const double RxLevelerGateRmsDb = -50.0;
     private const double RxLevelerMaxBoostDb = 10.0;
+    private const double RxLevelerStableSpeechMaxBoostDb = 24.0;
     private const double RxLevelerMaxCutDb = -24.0;
     private const double RxLevelerBoostSlewDbPerBlock = 2.0;
     private const double RxLevelerFastBoostSlewDbPerBlock = 2.5;
@@ -199,8 +352,12 @@ public class DspPipelineService : BackgroundService,
     private const double RxLevelerPauseMemoryDecayDbPerBlock = 4.5;
     private const int RxLevelerGainRampMaxSamples = 256;
     private const double RxLevelerPeakTarget = 0.74;
+    private const double RxLevelerStableSpeechPeakTarget = 0.68;
     private const double RxLevelerOutputSoftKnee = 0.74;
     private const double RxLevelerOutputPeakCeiling = 0.84;
+    private const double RxLevelerStableSpeechRmsReleaseDbPerBlock = 0.8;
+    private const double RxLevelerStableSpeechMaxRmsHangDb = 8.0;
+    private const double RxLevelerStableSpeechMemoryMaxInputRmsDb = -24.0;
     private const int AdaptiveSquelchWindowSamples = 12;
     private const int AdaptiveSquelchMinSamples = 2;
     private const double AdaptiveSquelchFloorPercentile = 0.20;
@@ -275,7 +432,13 @@ public class DspPipelineService : BackgroundService,
 
     internal static void ApplyRxAudioLeveler(
         Span<float> samples,
-        ref RxAudioLevelerState state)
+        ref RxAudioLevelerState state) =>
+        ApplyRxAudioLeveler(samples, ref state, RxAudioLevelerProfile.Current);
+
+    internal static void ApplyRxAudioLeveler(
+        Span<float> samples,
+        ref RxAudioLevelerState state,
+        RxAudioLevelerProfile profile)
     {
         if (samples.Length == 0) return;
 
@@ -293,26 +456,41 @@ public class DspPipelineService : BackgroundService,
         double inputRmsDbfs = AudioLinearToDbfsRaw(rms);
         double inputPeakDbfs = AudioLinearToDbfsRaw(peak);
         bool belowGate = rms <= 0.0 || !double.IsFinite(inputRmsDbfs) || inputRmsDbfs < RxLevelerGateRmsDb;
+        double maxBoostDb = profile == RxAudioLevelerProfile.StableSpeechCandidate
+            ? RxLevelerStableSpeechMaxBoostDb
+            : RxLevelerMaxBoostDb;
+        double peakTarget = profile == RxAudioLevelerProfile.StableSpeechCandidate
+            ? RxLevelerStableSpeechPeakTarget
+            : RxLevelerPeakTarget;
+
+        double controlRmsDbfs = belowGate
+            ? inputRmsDbfs
+            : SelectRxLevelerControlRmsDbfs(
+                inputRmsDbfs,
+                belowGate,
+                profile,
+                ref state);
+        bool controlRmsValidForBlock = state.ControlRmsValid;
 
         double desiredDb = belowGate
             ? 0.0
-            : RxLevelerTargetRmsDb - inputRmsDbfs;
-        desiredDb = Math.Clamp(desiredDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
+            : RxLevelerTargetRmsDb - controlRmsDbfs;
+        desiredDb = Math.Clamp(desiredDb, RxLevelerMaxCutDb, maxBoostDb);
 
         double peakHeadroomDb = double.NaN;
         bool peakLimited = false;
         if (peak > 1.0e-9)
         {
-            peakHeadroomDb = 20.0 * Math.Log10(Math.Max(RxLevelerPeakTarget, 1.0e-9) / peak);
+            peakHeadroomDb = 20.0 * Math.Log10(Math.Max(peakTarget, 1.0e-9) / peak);
             if (double.IsFinite(peakHeadroomDb) && desiredDb > peakHeadroomDb)
             {
-                desiredDb = Math.Clamp(peakHeadroomDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
+                desiredDb = Math.Clamp(peakHeadroomDb, RxLevelerMaxCutDb, maxBoostDb);
                 peakLimited = true;
             }
         }
 
         double currentDb = double.IsFinite(state.GainDb) ? state.GainDb : 0.0;
-        currentDb = Math.Clamp(currentDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
+        currentDb = Math.Clamp(currentDb, RxLevelerMaxCutDb, maxBoostDb);
 
         // True when the gain we are currently holding would, on its own, drive
         // this block's peak past the limiter target — i.e. a gain "held" high
@@ -386,12 +564,12 @@ public class DspPipelineService : BackgroundService,
         }
         else if (!belowGate)
         {
-            double cutSlewDb = (peak > RxLevelerPeakTarget || peakLimited || currentGainOverdrivesPeak)
+            double cutSlewDb = (peak > peakTarget || peakLimited || currentGainOverdrivesPeak)
                 ? Math.Max(RxLevelerSmoothCutDb, currentDb - desiredDb)
                 : RxLevelerSmoothCutDb;
             nextDb = Math.Max(desiredDb, currentDb - cutSlewDb);
         }
-        nextDb = Math.Clamp(nextDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
+        nextDb = Math.Clamp(nextDb, RxLevelerMaxCutDb, maxBoostDb);
 
         // Hard per-block peak guard. The smooth boost/cut slews above track
         // loudness gently; this is the safety floor that stops a held-high gain
@@ -402,13 +580,13 @@ public class DspPipelineService : BackgroundService,
         // strong signal blasts the speaker" failure this leveler exists to stop.
         // Cutting straight to the peak-safe gain is inaudible next to that blast.
         if (!belowGate && double.IsFinite(peakHeadroomDb) && nextDb > peakHeadroomDb)
-            nextDb = Math.Clamp(peakHeadroomDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
+            nextDb = Math.Clamp(peakHeadroomDb, RxLevelerMaxCutDb, maxBoostDb);
 
         int rampSamples = Math.Clamp(Math.Min(samples.Length, RxLevelerGainRampMaxSamples), 1, Math.Max(1, samples.Length));
         double preLimitPeak = 0.0;
         int outputLimitSampleCount = 0;
         double appliedEndDb = belowGate ? 0.0 : nextDb;
-        bool emergencyCut = !belowGate && nextDb < currentDb && (peak > RxLevelerPeakTarget || peakLimited || currentGainOverdrivesPeak);
+        bool emergencyCut = !belowGate && nextDb < currentDb && (peak > peakTarget || peakLimited || currentGainOverdrivesPeak);
         for (int i = 0; i < samples.Length; i++)
         {
             float clean = SanitizeAudioSample(samples[i]);
@@ -439,6 +617,12 @@ public class DspPipelineService : BackgroundService,
             : 0.0;
 
         state.GainDb = nextDb;
+        state.ControlRmsValid =
+            !belowGate &&
+            profile == RxAudioLevelerProfile.StableSpeechCandidate &&
+            controlRmsValidForBlock &&
+            double.IsFinite(state.ControlRmsDbfs);
+        state.ControlRmsHangDb = state.ControlRmsValid ? state.ControlRmsDbfs - inputRmsDbfs : 0.0;
         state.DiagnosticsValid = true;
         state.InputRmsDbfs = inputRmsDbfs;
         state.InputPeakDbfs = inputPeakDbfs;
@@ -454,6 +638,58 @@ public class DspPipelineService : BackgroundService,
         state.BoostSlewLimited = boostSlewLimited;
         state.PeakLimited = peakLimited;
         state.OutputLimited = outputLimitSampleCount > 0;
+    }
+
+    private static double SelectRxLevelerControlRmsDbfs(
+        double inputRmsDbfs,
+        bool belowGate,
+        RxAudioLevelerProfile profile,
+        ref RxAudioLevelerState state)
+    {
+        if (profile != RxAudioLevelerProfile.StableSpeechCandidate || !double.IsFinite(inputRmsDbfs))
+        {
+            state.ControlRmsValid = false;
+            state.ControlRmsDbfs = inputRmsDbfs;
+            state.ControlRmsHangDb = 0.0;
+            return inputRmsDbfs;
+        }
+
+        if (belowGate)
+        {
+            if (state.PauseHoldBlocks <= 0)
+                state.ControlRmsValid = false;
+            return inputRmsDbfs;
+        }
+
+        if (inputRmsDbfs >= RxLevelerStableSpeechMemoryMaxInputRmsDb)
+        {
+            state.ControlRmsValid = false;
+            state.ControlRmsDbfs = inputRmsDbfs;
+            state.ControlRmsHangDb = 0.0;
+            return inputRmsDbfs;
+        }
+
+        if (!state.ControlRmsValid || !double.IsFinite(state.ControlRmsDbfs))
+        {
+            state.ControlRmsDbfs = inputRmsDbfs;
+        }
+        else if (inputRmsDbfs >= state.ControlRmsDbfs)
+        {
+            state.ControlRmsDbfs = inputRmsDbfs;
+        }
+        else
+        {
+            state.ControlRmsDbfs = Math.Max(
+                inputRmsDbfs,
+                state.ControlRmsDbfs - RxLevelerStableSpeechRmsReleaseDbPerBlock);
+        }
+
+        state.ControlRmsDbfs = Math.Min(
+            state.ControlRmsDbfs,
+            inputRmsDbfs + RxLevelerStableSpeechMaxRmsHangDb);
+        state.ControlRmsValid = true;
+        state.ControlRmsHangDb = state.ControlRmsDbfs - inputRmsDbfs;
+        return state.ControlRmsDbfs;
     }
 
 
@@ -971,6 +1207,12 @@ public class DspPipelineService : BackgroundService,
     private bool _diagAudioLevelerBoostSlewLimited;
     private bool _diagAudioLevelerPeakLimited;
     private bool _diagAudioLevelerOutputLimited;
+    private string _diagAudioLevelerRequestedProfile = "current";
+    private string _diagAudioLevelerActiveProfile = "current";
+    private bool _diagAudioLevelerExperimental;
+    private bool _diagAudioLevelerControlRmsValid;
+    private double _diagAudioLevelerControlRmsDbfs = double.NaN;
+    private double _diagAudioLevelerControlRmsHangDb = double.NaN;
     private bool _diagAudioTxMonitorRequested;
     private bool _diagAudioSquelchEnabled;
     private bool _diagAudioSquelchOpen;
@@ -1175,6 +1417,8 @@ public class DspPipelineService : BackgroundService,
             audioSinkCount = _audioSinks.Length,
             monitorBacklogSamples = MonitorBacklog,
             audio,
+            rxAudioLevelerProfile = BuildRxAudioLevelerProfileSnapshot(),
+            txOutputHeadroomProfile = BuildTxOutputHeadroomProfileSnapshot(),
             listenability = BuildRxListenabilityDiagnostics(rxMeters, audio, squelchConfig),
             display,
             secondReceiverHealth,
@@ -1188,14 +1432,40 @@ public class DspPipelineService : BackgroundService,
         };
     }
 
+    private object BuildTxOutputHeadroomProfileSnapshot()
+    {
+        var runtime = SnapshotTxOutputHeadroomRuntime();
+        return new
+        {
+            requested = TxOutputHeadroomProfileId(runtime.RequestedProfile),
+            active = TxOutputHeadroomProfileId(runtime.ActiveProfile),
+            runtime.Experimental,
+            trimDb = Math.Round(runtime.TrimDb, 2),
+            runtime.PureSignalBypassed,
+            integrationPoint = "post-wdsp-mic-wire-output",
+        };
+    }
+
+    private object BuildRxAudioLevelerProfileSnapshot()
+    {
+        var (requested, active) = SnapshotRxAudioLevelerProfiles();
+        return new
+        {
+            requested = RxAudioLevelerProfileId(requested),
+            active = RxAudioLevelerProfileId(active),
+            experimental = requested != RxAudioLevelerProfile.Current,
+        };
+    }
+
     public DspLiveRuntimeEvidenceDto SnapshotLiveRuntimeEvidence()
     {
         var rxMeters = SnapshotRxMetersDiagnostics();
         var audio = SnapshotAudioDiagnostics();
+        var txHeadroom = SnapshotTxOutputHeadroomRuntime();
         string status = LiveRuntimeEvidenceStatus(rxMeters, audio);
 
         return new DspLiveRuntimeEvidenceDto(
-            SchemaVersion: 4,
+            SchemaVersion: 5,
             GeneratedUtc: DateTimeOffset.UtcNow,
             Status: status,
             RxMetersFresh: rxMeters.Fresh,
@@ -1235,6 +1505,17 @@ public class DspPipelineService : BackgroundService,
             RxAudioLevelerBoostSlewLimited: audio.RxAudioLevelerBoostSlewLimited,
             RxAudioLevelerPeakLimited: audio.RxAudioLevelerPeakLimited,
             RxAudioLevelerOutputLimited: audio.RxAudioLevelerOutputLimited,
+            RxAudioLevelerRequestedProfile: audio.RxAudioLevelerRequestedProfile,
+            RxAudioLevelerActiveProfile: audio.RxAudioLevelerActiveProfile,
+            RxAudioLevelerExperimental: audio.RxAudioLevelerExperimental,
+            RxAudioLevelerControlRmsValid: audio.RxAudioLevelerControlRmsValid,
+            RxAudioLevelerControlRmsDbfs: audio.RxAudioLevelerControlRmsDbfs,
+            RxAudioLevelerControlRmsHangDb: audio.RxAudioLevelerControlRmsHangDb,
+            TxOutputHeadroomRequestedProfile: TxOutputHeadroomProfileId(txHeadroom.RequestedProfile),
+            TxOutputHeadroomActiveProfile: TxOutputHeadroomProfileId(txHeadroom.ActiveProfile),
+            TxOutputHeadroomExperimental: txHeadroom.Experimental,
+            TxOutputHeadroomTrimDb: Math.Round(txHeadroom.TrimDb, 2),
+            TxOutputHeadroomPureSignalBypassed: txHeadroom.PureSignalBypassed,
             MonitorBacklogSamples: audio.MonitorBacklogSamples,
             AudioSinkCount: audio.AudioSinkCount,
             DiagnosticRecommendation: LiveRuntimeEvidenceRecommendation(status, rxMeters, audio));
@@ -1734,6 +2015,12 @@ public class DspPipelineService : BackgroundService,
         bool levelerBoostSlewLimited;
         bool levelerPeakLimited;
         bool levelerOutputLimited;
+        string levelerRequestedProfile;
+        string levelerActiveProfile;
+        bool levelerExperimental;
+        bool levelerControlRmsValid;
+        double levelerControlRmsDbfs;
+        double levelerControlRmsHangDb;
         string squelchMode;
         string squelchGateSource;
         bool squelchOpenKnown;
@@ -1772,6 +2059,12 @@ public class DspPipelineService : BackgroundService,
             levelerBoostSlewLimited = _diagAudioLevelerBoostSlewLimited;
             levelerPeakLimited = _diagAudioLevelerPeakLimited;
             levelerOutputLimited = _diagAudioLevelerOutputLimited;
+            levelerRequestedProfile = _diagAudioLevelerRequestedProfile;
+            levelerActiveProfile = _diagAudioLevelerActiveProfile;
+            levelerExperimental = _diagAudioLevelerExperimental;
+            levelerControlRmsValid = _diagAudioLevelerControlRmsValid;
+            levelerControlRmsDbfs = _diagAudioLevelerControlRmsDbfs;
+            levelerControlRmsHangDb = _diagAudioLevelerControlRmsHangDb;
             squelchMode = _diagAudioSquelchMode;
             squelchGateSource = _diagAudioSquelchGateSource;
             squelchOpenKnown = _diagAudioSquelchOpenKnown;
@@ -1813,6 +2106,12 @@ public class DspPipelineService : BackgroundService,
             levelerBoostSlewLimited,
             levelerPeakLimited,
             levelerOutputLimited,
+            levelerRequestedProfile,
+            levelerActiveProfile,
+            levelerExperimental,
+            levelerControlRmsValid,
+            levelerControlRmsDbfs,
+            levelerControlRmsHangDb,
             squelchMode,
             squelchGateSource,
             squelchOpenKnown);
@@ -1851,6 +2150,12 @@ public class DspPipelineService : BackgroundService,
         bool levelerBoostSlewLimited = false,
         bool levelerPeakLimited = false,
         bool levelerOutputLimited = false,
+        string levelerRequestedProfile = "current",
+        string levelerActiveProfile = "current",
+        bool levelerExperimental = false,
+        bool levelerControlRmsValid = false,
+        double levelerControlRmsDbfs = double.NaN,
+        double levelerControlRmsHangDb = double.NaN,
         string? squelchMode = null,
         string? squelchGateSource = null,
         bool? squelchOpenKnown = null)
@@ -1949,6 +2254,12 @@ public class DspPipelineService : BackgroundService,
             RxAudioLevelerBoostSlewLimited: levelerValid ? levelerBoostSlewLimited : null,
             RxAudioLevelerPeakLimited: levelerValid ? levelerPeakLimited : null,
             RxAudioLevelerOutputLimited: levelerValid ? levelerOutputLimited : null,
+            RxAudioLevelerRequestedProfile: string.IsNullOrWhiteSpace(levelerRequestedProfile) ? "current" : levelerRequestedProfile,
+            RxAudioLevelerActiveProfile: string.IsNullOrWhiteSpace(levelerActiveProfile) ? "current" : levelerActiveProfile,
+            RxAudioLevelerExperimental: levelerExperimental,
+            RxAudioLevelerControlRmsValid: levelerValid ? levelerControlRmsValid : null,
+            RxAudioLevelerControlRmsDbfs: RoundLevelerDb(levelerValid && levelerControlRmsValid, levelerControlRmsDbfs),
+            RxAudioLevelerControlRmsHangDb: RoundLevelerDb(levelerValid && levelerControlRmsValid, levelerControlRmsHangDb),
             SquelchMode: squelchMode,
             SquelchGateSource: squelchGateSource,
             SquelchOpenKnown: openKnown,
@@ -2043,6 +2354,13 @@ public class DspPipelineService : BackgroundService,
             _diagAudioLevelerBoostSlewLimited = levelerValid && leveler.BoostSlewLimited;
             _diagAudioLevelerPeakLimited = levelerValid && leveler.PeakLimited;
             _diagAudioLevelerOutputLimited = levelerValid && leveler.OutputLimited;
+            var (levelerRequestedProfile, levelerActiveProfile) = SnapshotRxAudioLevelerProfiles();
+            _diagAudioLevelerRequestedProfile = RxAudioLevelerProfileId(levelerRequestedProfile);
+            _diagAudioLevelerActiveProfile = RxAudioLevelerProfileId(levelerActiveProfile);
+            _diagAudioLevelerExperimental = levelerRequestedProfile != RxAudioLevelerProfile.Current;
+            _diagAudioLevelerControlRmsValid = levelerValid && leveler.ControlRmsValid;
+            _diagAudioLevelerControlRmsDbfs = _diagAudioLevelerControlRmsValid ? leveler.ControlRmsDbfs : double.NaN;
+            _diagAudioLevelerControlRmsHangDb = _diagAudioLevelerControlRmsValid ? leveler.ControlRmsHangDb : double.NaN;
             _diagAudioSquelchMode = squelchMode;
             _diagAudioSquelchGateSource = squelchGateSource;
             _diagAudioSquelchOpenKnown = !squelch.Enabled || squelch.Adaptive;
@@ -2050,6 +2368,22 @@ public class DspPipelineService : BackgroundService,
             _diagAudioSinkCount = _audioSinks.Length;
         }
     }
+
+    internal RxAudioLevelerProfile SelectRxAudioLevelerProfileForBlock()
+    {
+        var requested = RxAudioLevelerRequestedProfile;
+        if (RxAudioLevelerActiveProfile != requested)
+        {
+            _rxAudioLeveler = default;
+            Volatile.Write(ref _rxAudioLevelerActiveProfile, (int)requested);
+        }
+
+        return requested;
+    }
+
+    internal RxAudioLevelerState RxAudioLevelerStateForTest => _rxAudioLeveler;
+
+    internal void SetRxAudioLevelerStateForTest(RxAudioLevelerState state) => _rxAudioLeveler = state;
 
     private static bool IsAdaptiveSquelchTailActive(SquelchConfig cfg, AdaptiveSquelchState state)
     {
@@ -2953,6 +3287,7 @@ public class DspPipelineService : BackgroundService,
     {
         lock (_engineLock)
         {
+        Volatile.Write(ref _txOutputHeadroomPureSignalEnabled, s.PsEnabled ? 1 : 0);
         // Forward VFO changes to the P2 client when it's active. RadioService
         // does this for P1 via ActiveClient?.SetVfoAHz() inside SetVfo, but
         // ActiveClient is null for P2 connections, so the radio never learns
@@ -3252,6 +3587,7 @@ public class DspPipelineService : BackgroundService,
                 _p2Client?.SetPsFeedbackEnabled(false);
                 p1Active?.SetPsEnabled(false);
                 DrainPsFeedback();
+                Volatile.Write(ref _txOutputHeadroomPureSignalEnabled, 0);
             }
             // Mark applied only when we actually armed or disarmed. A deferred
             // (keyed) arm leaves _appliedPsEnabled stale on purpose so the
@@ -4677,9 +5013,11 @@ public class DspPipelineService : BackgroundService,
                 // already run by this point (and any RX audio plugin has had
                 // its shot), so weak cleaned audio can be lifted without
                 // letting a sudden strong signal blast the speaker.
+                var rxAudioLevelerProfile = SelectRxAudioLevelerProfileForBlock();
                 ApplyRxAudioLeveler(
                     audioBuf.AsSpan(0, audioSampleCount),
-                    ref _rxAudioLeveler);
+                    ref _rxAudioLeveler,
+                    rxAudioLevelerProfile);
 
                 // CW sidetone is mixed (+=) into the RX block so every
                 // downstream sink — browser WS, native audio, TCI audio
@@ -4986,6 +5324,12 @@ internal sealed record AudioPathDiagnosticsDto(
     bool? RxAudioLevelerBoostSlewLimited,
     bool? RxAudioLevelerPeakLimited,
     bool? RxAudioLevelerOutputLimited,
+    string RxAudioLevelerRequestedProfile,
+    string RxAudioLevelerActiveProfile,
+    bool RxAudioLevelerExperimental,
+    bool? RxAudioLevelerControlRmsValid,
+    double? RxAudioLevelerControlRmsDbfs,
+    double? RxAudioLevelerControlRmsHangDb,
     string SquelchMode,
     string SquelchGateSource,
     bool SquelchOpenKnown,

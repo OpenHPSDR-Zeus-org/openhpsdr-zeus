@@ -158,7 +158,8 @@ public sealed class TxAudioIngest : IDisposable
         : this(ring, () => pipeline.CurrentEngine, () => tx.IsMoxOn, hub, log,
                forwardP2: iq => pipeline.ForwardTxIqToP2(iq.Span),
                txOwnedByTuneDriver: () => tx.IsTunOn || tx.IsTwoToneOn,
-               preKeyOpenAtTicks: () => tx.PreKeyOpenAtTicks)
+               preKeyOpenAtTicks: () => tx.PreKeyOpenAtTicks,
+               txOutputHeadroomRuntime: pipeline.SnapshotTxOutputHeadroomRuntime)
     {
     }
 
@@ -176,7 +177,8 @@ public sealed class TxAudioIngest : IDisposable
         Action<ReadOnlyMemory<float>>? forwardP2 = null,
         Action<int>? onWdspConsumed = null,
         Func<bool>? txOwnedByTuneDriver = null,
-        Func<long>? preKeyOpenAtTicks = null)
+        Func<long>? preKeyOpenAtTicks = null,
+        Func<DspPipelineService.TxOutputHeadroomRuntime>? txOutputHeadroomRuntime = null)
     {
         _ring = ring;
         _engineProvider = engineProvider;
@@ -185,6 +187,8 @@ public sealed class TxAudioIngest : IDisposable
         _onWdspConsumed = onWdspConsumed;
         _txOwnedByTuneDriver = txOwnedByTuneDriver ?? (static () => false);
         _preKeyOpenAtTicks = preKeyOpenAtTicks ?? (static () => 0L);
+        _txOutputHeadroomRuntime = txOutputHeadroomRuntime
+            ?? (static () => DspPipelineService.TxOutputHeadroomRuntime.Current);
         _hub = hub;
         _log = log;
         _handler = OnMicPcmBytesFromBrowserMic;
@@ -206,6 +210,7 @@ public sealed class TxAudioIngest : IDisposable
     // settles before RF appears. 0 = no window (the default-0 setting, CW, TUN,
     // two-tone, TCI, hardware-PTT — all unset or cleared by TxService).
     private readonly Func<long> _preKeyOpenAtTicks;
+    private readonly Func<DspPipelineService.TxOutputHeadroomRuntime> _txOutputHeadroomRuntime;
 
     // Cross-thread handoff: written from the TCI timer thread (Start/Stop of
     // the TX_CHRONO service), read every audio block from the WDSP worker.
@@ -405,6 +410,7 @@ public sealed class TxAudioIngest : IDisposable
                 if (produced > 0)
                 {
                     var iqSpan = new ReadOnlySpan<float>(_scratchIq, 0, 2 * produced);
+                    float rawIqPeak = PeakAbs(_scratchIq.AsSpan(0, 2 * produced));
                     // Only push the modulated IQ to the radio while MOX is
                     // asserted. When the chain is running for monitor-only
                     // (preview without keying) the IQ has been generated for
@@ -434,6 +440,18 @@ public sealed class TxAudioIngest : IDisposable
                             && System.Diagnostics.Stopwatch.GetTimestamp() < openAt
                             && !wavRecent;
 
+                        if (!mute)
+                        {
+                            var headroom = _txOutputHeadroomRuntime();
+                            if (headroom.ActiveProfile == DspPipelineService.TxOutputHeadroomProfile.HeadroomTrimCandidate
+                                && headroom.LinearScale > 0f
+                                && headroom.LinearScale < 1.0f)
+                            {
+                                ApplyTxOutputHeadroom(_scratchIq.AsSpan(0, 2 * produced), headroom.LinearScale);
+                                iqSpan = new ReadOnlySpan<float>(_scratchIq, 0, 2 * produced);
+                            }
+                        }
+
                         // P1 path — EP2 packer in Protocol1Client drains the ring.
                         _ring.Write(mute
                             ? new ReadOnlySpan<float>(_muteIq, 0, 2 * produced)
@@ -450,20 +468,8 @@ public sealed class TxAudioIngest : IDisposable
                     onConsumed?.Invoke(blockSize);
 
                     // Accumulate peaks for the 1 Hz diagnostic log.
-                    float micPeak = 0f;
-                    for (int s = 0; s < blockSize; s++)
-                    {
-                        float a = _scratchMic[s];
-                        if (a < 0) a = -a;
-                        if (a > micPeak) micPeak = a;
-                    }
-                    float iqPeak = 0f;
-                    for (int s = 0; s < 2 * produced; s++)
-                    {
-                        float a = _scratchIq[s];
-                        if (a < 0) a = -a;
-                        if (a > iqPeak) iqPeak = a;
-                    }
+                    float micPeak = PeakAbs(_scratchMic.AsSpan(0, blockSize));
+                    float iqPeak = rawIqPeak;
                     if (micPeak > _peakMicAccum) _peakMicAccum = micPeak;
                     if (iqPeak > _peakIqAccum) _peakIqAccum = iqPeak;
                     _peakBlocksAccum++;
@@ -487,5 +493,23 @@ public sealed class TxAudioIngest : IDisposable
                 _accumulatorFill = remainder;
             }
         }
+    }
+
+    private static void ApplyTxOutputHeadroom(Span<float> iqInterleaved, float scale)
+    {
+        for (int i = 0; i < iqInterleaved.Length; i++)
+            iqInterleaved[i] *= scale;
+    }
+
+    private static float PeakAbs(ReadOnlySpan<float> samples)
+    {
+        float peak = 0f;
+        for (int i = 0; i < samples.Length; i++)
+        {
+            float value = samples[i];
+            if (value < 0) value = -value;
+            if (value > peak) peak = value;
+        }
+        return peak;
     }
 }

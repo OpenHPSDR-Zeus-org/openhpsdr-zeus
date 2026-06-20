@@ -139,6 +139,22 @@ function Get-JsonArray {
     return @($value)
 }
 
+function Get-NamedCountFromRecords {
+    param(
+        $Records,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    foreach ($record in @($Records)) {
+        $recordName = [string](Get-JsonValue $record "name")
+        if ([string]::Equals($recordName, $Name, [StringComparison]::OrdinalIgnoreCase)) {
+            return [int](Get-NumericValueOrDefault (Get-JsonValue $record "count"))
+        }
+    }
+
+    return 0
+}
+
 function Get-AcceptanceActionById {
     param(
         $Report,
@@ -3128,6 +3144,27 @@ function Test-StringArrayContains {
     return $false
 }
 
+function Get-MissingStringValues {
+    param(
+        [string[]]$Required,
+        $Actual
+    )
+
+    $missing = New-Object System.Collections.Generic.List[string]
+    foreach ($requiredValue in @($Required)) {
+        $required = [string]$requiredValue
+        if ([string]::IsNullOrWhiteSpace($required)) {
+            continue
+        }
+
+        if (-not (Test-StringArrayContains $Actual $required)) {
+            $missing.Add($required) | Out-Null
+        }
+    }
+
+    return @($missing.ToArray())
+}
+
 function New-LiveHistoryExperimentCoverage {
     param(
         $Plan,
@@ -4096,6 +4133,70 @@ function Get-NonG2CrossRadioValidationTargetIds {
         })
 }
 
+function Get-CrossRadioSourceValidationHardwareTarget {
+    param($Report)
+
+    foreach ($field in @("crossRadioValidationNonG2TargetIds", "crossRadioValidationTargetIds")) {
+        foreach ($value in @(Get-JsonArray $Report $field)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+                return [string]$value
+            }
+        }
+    }
+
+    foreach ($field in @("captureHardwareTarget", "hardwareTarget", "liveAcceptanceCycleCaptureHardwareTarget", "liveAcceptanceCycleHardwareTarget", "target")) {
+        $value = [string](Get-JsonValue $Report $field)
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            return $value
+        }
+    }
+
+    return ""
+}
+
+function Get-CrossRadioSourceValidationScenarioIds {
+    param($Report)
+
+    $ids = New-Object System.Collections.Generic.List[string]
+    foreach ($field in @("crossRadioValidationScenarioIds", "benchmarkPlanScenarioIds", "offlineFixtureMetricsScenarioIds", "txFixtureSafetyScenarioIds", "scenarioIds")) {
+        foreach ($value in @(Get-JsonArray $Report $field)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$value) -and -not (Test-StringArrayContains @($ids.ToArray()) ([string]$value))) {
+                $ids.Add([string]$value) | Out-Null
+            }
+        }
+    }
+    foreach ($record in @(Get-JsonArray $Report "artifactScenarioCoverage")) {
+        $scenarioId = [string](Get-JsonValue $record "scenarioId")
+        if (-not [string]::IsNullOrWhiteSpace($scenarioId) -and -not (Test-StringArrayContains @($ids.ToArray()) $scenarioId)) {
+            $ids.Add($scenarioId) | Out-Null
+        }
+    }
+
+    return @($ids.ToArray())
+}
+
+function Get-CrossRadioSourceValidationComparisonIds {
+    param($Report)
+
+    $ids = New-Object System.Collections.Generic.List[string]
+    foreach ($field in @("crossRadioValidationComparisonIds", "offlineFixtureMetricsComparisonIds", "txFixtureSafetyComparisonIds", "comparisonIds")) {
+        foreach ($value in @(Get-JsonArray $Report $field)) {
+            $comparisonId = ConvertTo-ComparisonId ([string]$value)
+            if (-not [string]::IsNullOrWhiteSpace($comparisonId) -and -not (Test-StringArrayContains @($ids.ToArray()) $comparisonId)) {
+                $ids.Add($comparisonId) | Out-Null
+            }
+        }
+    }
+    foreach ($record in @(Get-JsonArray $Report "artifactComparisonCoverage")) {
+        $comparisonId = ConvertTo-ComparisonId ([string](Get-JsonValue $record "comparisonId"))
+        if (-not [string]::IsNullOrWhiteSpace($comparisonId) -and -not (Test-StringArrayContains @($ids.ToArray()) $comparisonId)) {
+            $ids.Add($comparisonId) | Out-Null
+        }
+    }
+
+    return @($ids.ToArray())
+}
+
 function Test-OrionMkIIBoard {
     param([string]$Value)
 
@@ -4187,6 +4288,47 @@ function Test-BundleRelativeEvidencePath {
     }
 
     return $true
+}
+
+function Resolve-BundleContainedEvidencePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$BundlePath,
+        [string]$Path
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return ""
+    }
+
+    try {
+        $bundleFull = [System.IO.Path]::GetFullPath($BundlePath)
+        $candidateFull = if ([System.IO.Path]::IsPathRooted($Path)) {
+            [System.IO.Path]::GetFullPath($Path)
+        }
+        else {
+            [System.IO.Path]::GetFullPath((Join-Path $BundlePath $Path))
+        }
+
+        $trimChars = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+        $bundleComparable = $bundleFull.TrimEnd($trimChars)
+        $candidateComparable = $candidateFull.TrimEnd($trimChars)
+        if ([string]::Equals($bundleComparable, $candidateComparable, [StringComparison]::OrdinalIgnoreCase)) {
+            return $candidateFull
+        }
+
+        if (-not $bundleFull.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+            $bundleFull = $bundleFull + [System.IO.Path]::DirectorySeparatorChar
+        }
+
+        if ($candidateFull.StartsWith($bundleFull, [StringComparison]::OrdinalIgnoreCase)) {
+            return $candidateFull
+        }
+    }
+    catch {
+        return ""
+    }
+
+    return ""
 }
 
 function ConvertTo-NormalizedEvidencePathText {
@@ -4498,6 +4640,18 @@ function Get-LiveTraceComparisonAbsolutePaths {
                 Add-AbsolutePathIfPresent $absolutePaths "$collectionName.$name" (Get-JsonValue $item $name)
             }
         }
+    }
+
+    return @($absolutePaths.ToArray())
+}
+
+function Get-RxLevelerAbSourceAbsolutePaths {
+    param($Report)
+
+    $absolutePaths = New-Object System.Collections.Generic.List[object]
+    $source = Get-JsonValue $Report "rxLevelerAbSource"
+    foreach ($name in @("summaryPath", "wrapperSummaryPath", "currentInputPath", "candidateInputPath")) {
+        Add-AbsolutePathIfPresent $absolutePaths "rxLevelerAbSource.$name" (Get-JsonValue $source $name)
     }
 
     return @($absolutePaths.ToArray())
@@ -5824,6 +5978,65 @@ $nativeStageTimingEvidence = [ordered]@{
     nativeCStageInstrumentationStatus = ""
     nativeAllocationProbeStatus = ""
 }
+$wdspChannelLifecycleArtifactId = "wdsp-channel-lifecycle-report"
+$wdspChannelLifecycleEvidence = [ordered]@{
+    present = $false
+    readyForReview = $false
+    status = "not-captured"
+    path = ""
+    sha256 = ""
+    tool = ""
+    schemaVersion = 0
+    scenarioId = ""
+    wdspRuntimeRid = ""
+    wdspRuntimeSha256 = ""
+    wdspRuntimeStatus = ""
+    cycleCount = 0
+    transitionCount = 0
+    transitionFailureCount = 0
+    stateTransitionSuccess = $false
+    nativeExceptionCount = 0
+    meterEscapeCount = 0
+    audioDrainSamples = 0
+    audioDrainFailureCount = 0
+    staleAudioAfterCloseSamples = 0
+    lifecycleGateFailureCount = 0
+    defaultBehaviorChanged = $false
+}
+$txFixtureSafetyArtifactId = "tx-fixture-safety-report"
+$txFixtureSafetyEvidence = [ordered]@{
+    present = $false
+    readyForReview = $false
+    status = "not-captured"
+    path = ""
+    sha256 = ""
+    schemaVersion = 0
+    tool = ""
+    evidenceKind = ""
+    metricsPath = ""
+    metricsSha256 = ""
+    metricsHashStatus = "not-evaluated"
+    evidenceEngine = ""
+    evidenceTool = ""
+    wdspBackedEvidence = $false
+    wdspRuntimeRid = ""
+    wdspRuntimeSha256 = ""
+    wdspRuntimeStatus = ""
+    runtimeHashStatus = "not-evaluated"
+    scenarioCount = 0
+    comparisonCount = 0
+    missingScenarioCount = 0
+    missingComparisonCount = 0
+    gateFailureCount = 0
+    clippingCountTotal = 0
+    maxTxOutputPeakDbfs = 0.0
+    maxTxAlcGainReductionDb = 0.0
+    maxTxCfcGainReductionDb = 0.0
+    maxTxLevelerGainReductionDb = 0.0
+    maxProcessingElapsedMs = 0.0
+    minThroughputRatio = $null
+    defaultBehaviorChanged = $false
+}
 $metricComparisonEvidence = [ordered]@{
     present = $false
     readyForReview = $false
@@ -5881,12 +6094,85 @@ $pureSignalSafeBypassEvidence = [ordered]@{
     missingModes = @()
     pureSignalDefaultStatePreserved = $false
     defaultBehaviorChangeApproved = $false
+    liveReadinessEvidenceRequired = $false
+    liveReadinessReady = $false
+    liveReadinessReadyCount = 0
+    liveReadinessMissingCount = 0
+    liveReadinessFailureCount = 0
+    modeConsistencyReady = $false
+    modeMismatchCaptureCount = 0
+    modeMismatchSampleCount = 0
     feedbackStabilityMin = 0.0
     feedbackStabilityThreshold = 0.0
     txMonitorCouplingMax = 0.0
     txMonitorCouplingThreshold = 0.0
     clippingCountTotal = 0
     gateFailureCount = 0
+    captureRecordCount = 0
+    disabledCaptureRecordCount = 0
+    enabledCaptureRecordCount = 0
+    captureTraceMissingCount = 0
+    captureTraceHashMismatchCount = 0
+    captureTraceProvenanceReady = $false
+}
+$txOutputHeadroomAbArtifactId = "tx-output-headroom-ab-trace"
+$txOutputHeadroomAbEvidence = [ordered]@{
+    present = $false
+    readyForReview = $false
+    status = "not-evaluated"
+    path = ""
+    sha256 = ""
+    tool = ""
+    mode = ""
+    noKeyingByScript = $false
+    allowTransmit = $false
+    requiresLiveReady = $false
+    preflightReady = $false
+    preflightFailureCount = 0
+    preflightFailures = @()
+    liveReadinessReady = $false
+    profileBeforeCurrent = $false
+    currentProfileReady = $false
+    candidateProfileReady = $false
+    resetToCurrentReady = $false
+    candidateActiveProfile = ""
+    candidatePureSignalBypassActive = $false
+    candidateReadyForBenchmarkTrace = $false
+    candidateOkSampleCount = 0
+    candidateRuntimeEvidenceSampleCount = 0
+    candidateTxMonitorSampleCount = 0
+    candidateExperimentalSampleCount = 0
+    candidatePureSignalBypassedSampleCount = 0
+    watcherSummaryRequired = $false
+    watcherSummaryReady = $false
+    watcherSummaryMissingCount = 0
+    watcherSummaryInvalidCount = 0
+    watcherSummaryMismatchCount = 0
+    watcherProfileBucketReady = $false
+    watcherProfileBucketMissingCount = 0
+    watcherProfileBucketMismatchCount = 0
+}
+$rxLevelerAbLiveComparisonArtifactId = "rx-leveler-ab-live-comparison"
+$rxLevelerAbLiveComparisonEvidence = [ordered]@{
+    present = $false
+    ready = $false
+    readyForReview = $false
+    status = "not-evaluated"
+    evidenceStatus = ""
+    path = ""
+    sha256 = ""
+    tool = ""
+    bundleRelativePaths = $false
+    absolutePathCount = 0
+    activeAudioReady = $false
+    passbandEvidenceReady = $false
+    candidateControlMemoryReady = $false
+    optimizationReady = $false
+    promotionReady = $false
+    materialImprovementCount = 0
+    optimizationRegressionCount = 0
+    baselinePassbandPeakSampleCount = 0
+    candidatePassbandPeakSampleCount = 0
 }
 $liveTraceComparisonArtifactId = "live-diagnostics-trace-comparison"
 $liveTraceThetisComparisonArtifactId = "live-diagnostics-trace-comparison-thetis-parity"
@@ -6484,6 +6770,25 @@ $g2RxPeakHuntEvidence = [ordered]@{
     referencedJsonlMissingCount = 0
 }
 $crossRadioValidationArtifactId = "cross-radio-validation-report"
+$crossRadioRequiredSourceScenarioIds = @(
+    "weak-cw-carrier",
+    "ssb-like-speech",
+    "fading-carrier",
+    "impulse-noise",
+    "strong-adjacent",
+    "noise-only-gating",
+    "agc-level-step",
+    "squelch-transition",
+    "tx-two-tone",
+    "tx-voice-like",
+    "tx-puresignal-safe-bypass"
+)
+$crossRadioRequiredSourceComparisonIds = @(
+    "off-baseline",
+    "thetis-parity",
+    "current-zeus",
+    "candidate-under-test"
+)
 $crossRadioValidationEvidence = [ordered]@{
     present = $false
     readyForReview = $false
@@ -6508,7 +6813,28 @@ $crossRadioValidationEvidence = [ordered]@{
     sourceMetricComparisonReadyCount = 0
     sourceLiveTraceComparisonReadyCount = 0
     sourceThetisLiveTraceComparisonReadyCount = 0
+    sourceReportProvenanceReady = $false
+    sourceReportPathInvalidCount = 0
+    sourceReportFileMissingCount = 0
+    sourceReportJsonInvalidCount = 0
+    sourceReportStrictValidationMarkerMissingCount = 0
+    sourceReportHashPresentCount = 0
+    sourceReportHashMissingCount = 0
+    sourceReportHashMismatchCount = 0
+    sourceReportSummaryMismatchCount = 0
     sourceBackedEvidenceReady = $false
+    requiredSourceScenarioCount = $crossRadioRequiredSourceScenarioIds.Count
+    requiredSourceScenarioIds = @($crossRadioRequiredSourceScenarioIds)
+    sourceBackedScenarioCount = 0
+    sourceBackedScenarioIds = @()
+    missingRequiredSourceScenarioCount = $crossRadioRequiredSourceScenarioIds.Count
+    missingRequiredSourceScenarioIds = @($crossRadioRequiredSourceScenarioIds)
+    requiredSourceComparisonCount = $crossRadioRequiredSourceComparisonIds.Count
+    requiredSourceComparisonIds = @($crossRadioRequiredSourceComparisonIds)
+    sourceBackedComparisonCount = 0
+    sourceBackedComparisonIds = @()
+    missingRequiredSourceComparisonCount = $crossRadioRequiredSourceComparisonIds.Count
+    missingRequiredSourceComparisonIds = @($crossRadioRequiredSourceComparisonIds)
     sourceReports = @()
     status = "not-captured"
 }
@@ -7375,10 +7701,16 @@ else {
     $captureAllArtifactIds[$manualTuneObserverArtifactId] = $true
     $captureAllArtifactIds[$g2RxPeakHuntArtifactId] = $true
     $captureAllArtifactIds[$pureSignalSafeBypassArtifactId] = $true
+    $captureAllArtifactIds[$txFixtureSafetyArtifactId] = $true
+    $captureAllArtifactIds[$wdspChannelLifecycleArtifactId] = $true
+    $captureAllArtifactIds[$rxLevelerAbLiveComparisonArtifactId] = $true
     $captureArtifactScenarioIds[$externalEngineBakeoffCycleArtifactId] = @(Get-JsonArray $manifest "scenarioIds")
     $captureArtifactScenarioIds[$manualTuneObserverArtifactId] = @(Get-JsonArray $manifest "scenarioIds")
     $captureArtifactScenarioIds[$g2RxPeakHuntArtifactId] = @(Get-JsonArray $manifest "scenarioIds")
     $captureArtifactScenarioIds[$pureSignalSafeBypassArtifactId] = @("tx-puresignal-safe-bypass")
+    $captureArtifactScenarioIds[$txFixtureSafetyArtifactId] = @("tx-two-tone", "tx-voice-like")
+    $captureArtifactScenarioIds[$wdspChannelLifecycleArtifactId] = @("wdsp-channel-lifecycle")
+    $captureArtifactScenarioIds[$rxLevelerAbLiveComparisonArtifactId] = @("rx-audio-leveler-passband")
     foreach ($matrixReportArtifactId in @(
             "live-diagnostics-matrix-report-off-baseline",
             "live-diagnostics-matrix-report-thetis-parity",
@@ -8690,6 +9022,52 @@ else {
                     }
                 }
 
+                if ($artifactId -eq "rx-audio-leveler-fixture-benchmark") {
+                    $fixtureReadiness = Get-JsonValue $artifactJson "readiness"
+                    $fixtureScenarioCount = @(Get-JsonArray $artifactJson "scenarios").Count
+                    $fixtureReadinessScenarioCount = [int](Get-NumericValueOrDefault (Get-JsonValue $fixtureReadiness "scenarioCount"))
+                    $fixtureCandidatePassCount = [int](Get-NumericValueOrDefault (Get-JsonValue $fixtureReadiness "candidatePassCount"))
+                    $fixtureCandidateFailCount = [int](Get-NumericValueOrDefault (Get-JsonValue $fixtureReadiness "candidateFailCount"))
+                    $fixtureCandidateAllGatesPass = Test-Truthy (Get-JsonValue $fixtureReadiness "candidateAllGatesPass")
+                    $fixtureExperimentalOptIn = Test-Truthy (Get-JsonValue $fixtureReadiness "experimentalOptIn")
+                    $fixtureDefaultBehaviorChanged = Test-Truthy (Get-JsonValue $fixtureReadiness "defaultBehaviorChanged")
+                    $fixtureReadyForLiveAb = Test-Truthy (Get-JsonValue $fixtureReadiness "readyForLiveAb")
+
+                    $record["readinessScenarioCount"] = $fixtureReadinessScenarioCount
+                    $record["readinessCandidatePassCount"] = $fixtureCandidatePassCount
+                    $record["readinessCandidateFailCount"] = $fixtureCandidateFailCount
+                    $record["readinessCandidateAllGatesPass"] = $fixtureCandidateAllGatesPass
+                    $record["readinessExperimentalOptIn"] = $fixtureExperimentalOptIn
+                    $record["readinessDefaultBehaviorChanged"] = $fixtureDefaultBehaviorChanged
+                    $record["readinessReadyForLiveAb"] = $fixtureReadyForLiveAb
+
+                    if ($null -eq $fixtureReadiness) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-fixture-readiness-missing" "Artifact '$artifactId' must include readiness summary fields before live RX leveler A/B optimization."
+                        $artifactValidationOk = $false
+                    }
+                    elseif ($fixtureReadinessScenarioCount -ne $fixtureScenarioCount) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-fixture-readiness-scenario-count-mismatch" "Artifact '$artifactId' readiness scenarioCount=$fixtureReadinessScenarioCount does not match scenarios count $fixtureScenarioCount."
+                        $artifactValidationOk = $false
+                    }
+                    elseif ($fixtureCandidatePassCount + $fixtureCandidateFailCount -ne $fixtureScenarioCount) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-fixture-readiness-pass-count-mismatch" "Artifact '$artifactId' readiness pass/fail counts do not sum to scenarios count $fixtureScenarioCount."
+                        $artifactValidationOk = $false
+                    }
+
+                    if (-not $fixtureCandidateAllGatesPass -or -not $fixtureReadyForLiveAb -or $fixtureCandidateFailCount -ne 0) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-fixture-readiness-not-ready" "Artifact '$artifactId' fixture gates do not prove the opt-in candidate is ready for live G2 A/B optimization."
+                        $artifactValidationOk = $false
+                    }
+                    if (-not $fixtureExperimentalOptIn) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-fixture-not-opt-in" "Artifact '$artifactId' must declare experimentalOptIn=true so current operator defaults remain unchanged."
+                        $artifactValidationOk = $false
+                    }
+                    if ($fixtureDefaultBehaviorChanged) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-fixture-default-behavior-changed" "Artifact '$artifactId' must declare defaultBehaviorChanged=false before optimization evidence is accepted."
+                        $artifactValidationOk = $false
+                    }
+                }
+
                 $metricEntries = @(Get-MetricEvidenceEntries $artifactJson)
                 if ($metricEntries.Count -eq 0) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "artifact-metrics-missing" "Artifact '$artifactId' does not contain any metric result entries."
@@ -8985,12 +9363,74 @@ else {
                 }
                 $pureSignalDefaultStatePreserved = Test-Truthy (Get-JsonValue $artifactJson "pureSignalDefaultStatePreserved")
                 $defaultBehaviorChangeApproved = Test-Truthy (Get-JsonValue $artifactJson "defaultBehaviorChangeApproved")
+                $liveReadinessEvidenceRequired = Test-Truthy (Get-JsonValue $artifactJson "liveReadinessEvidenceRequired")
+                $liveReadinessReady = Test-Truthy (Get-JsonValue $artifactJson "liveReadinessReady")
+                $liveReadinessReadyCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "liveReadinessReadyCount"))
+                $liveReadinessMissingCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "liveReadinessMissingCount"))
+                $liveReadinessFailureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "liveReadinessFailureCount"))
+                $modeConsistencyReady = Test-Truthy (Get-JsonValue $artifactJson "modeConsistencyReady")
+                $modeMismatchCaptureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "modeMismatchCaptureCount"))
+                $modeMismatchSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "modeMismatchSampleCount"))
                 $feedbackStabilityMin = [double](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "feedbackStabilityMin"))
                 $feedbackStabilityThreshold = [double](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "feedbackStabilityThreshold"))
                 $txMonitorCouplingMax = [double](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "txMonitorCouplingMax"))
                 $txMonitorCouplingThreshold = [double](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "txMonitorCouplingThreshold"))
                 $clippingCountTotal = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "clippingCountTotal"))
                 $gateFailureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "gateFailureCount"))
+                $captureRecords = @(Get-JsonArray $artifactJson "captures")
+                $disabledCaptureRecordCount = 0
+                $enabledCaptureRecordCount = 0
+                $captureTraceMissingCount = 0
+                $captureTraceHashMismatchCount = 0
+
+                foreach ($captureRecord in $captureRecords) {
+                    $captureMode = ([string](Get-JsonValue $captureRecord "mode")).Trim().ToLowerInvariant()
+                    if ([string]::Equals($captureMode, "disabled", [StringComparison]::OrdinalIgnoreCase)) {
+                        $disabledCaptureRecordCount++
+                    }
+                    elseif ([string]::Equals($captureMode, "enabled", [StringComparison]::OrdinalIgnoreCase)) {
+                        $enabledCaptureRecordCount++
+                    }
+
+                    $capturePath = [string](Get-JsonValue $captureRecord "path")
+                    $captureSha256 = [string](Get-JsonValue $captureRecord "sha256")
+                    if ([string]::IsNullOrWhiteSpace($capturePath)) {
+                        $captureTraceMissingCount++
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-capture-path-missing" "Artifact '$artifactId' capture record mode='$captureMode' must declare trace path."
+                        $artifactValidationOk = $false
+                        continue
+                    }
+
+                    $resolvedCapturePath = Get-BundlePath $bundlePath $capturePath
+                    if (-not (Test-Path -LiteralPath $resolvedCapturePath -PathType Leaf)) {
+                        $captureTraceMissingCount++
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-capture-file-missing" "Artifact '$artifactId' capture record mode='$captureMode' trace file is missing: $capturePath."
+                        $artifactValidationOk = $false
+                        continue
+                    }
+
+                    if ([string]::IsNullOrWhiteSpace($captureSha256)) {
+                        $captureTraceHashMismatchCount++
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-capture-hash-missing" "Artifact '$artifactId' capture record mode='$captureMode' trace '$capturePath' must declare sha256."
+                        $artifactValidationOk = $false
+                        continue
+                    }
+
+                    $actualCaptureSha256 = Get-FileSha256 $resolvedCapturePath
+                    if (-not [string]::Equals($actualCaptureSha256, $captureSha256, [StringComparison]::OrdinalIgnoreCase)) {
+                        $captureTraceHashMismatchCount++
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-capture-hash-mismatch" "Artifact '$artifactId' capture record mode='$captureMode' trace '$capturePath' sha256='$captureSha256' but file hashes to '$actualCaptureSha256'."
+                        $artifactValidationOk = $false
+                    }
+                }
+
+                $captureTraceProvenanceReady = (
+                    $captureRecords.Count -gt 0 -and
+                    $disabledCaptureRecordCount -gt 0 -and
+                    $enabledCaptureRecordCount -gt 0 -and
+                    $captureTraceMissingCount -eq 0 -and
+                    $captureTraceHashMismatchCount -eq 0
+                )
 
                 $pureSignalSafeBypassEvidence["tool"] = $tool
                 $pureSignalSafeBypassEvidence["schemaVersion"] = $schemaVersion
@@ -9004,12 +9444,26 @@ else {
                 $pureSignalSafeBypassEvidence["missingModes"] = @($missingModes)
                 $pureSignalSafeBypassEvidence["pureSignalDefaultStatePreserved"] = $pureSignalDefaultStatePreserved
                 $pureSignalSafeBypassEvidence["defaultBehaviorChangeApproved"] = $defaultBehaviorChangeApproved
+                $pureSignalSafeBypassEvidence["liveReadinessEvidenceRequired"] = $liveReadinessEvidenceRequired
+                $pureSignalSafeBypassEvidence["liveReadinessReady"] = $liveReadinessReady
+                $pureSignalSafeBypassEvidence["liveReadinessReadyCount"] = $liveReadinessReadyCount
+                $pureSignalSafeBypassEvidence["liveReadinessMissingCount"] = $liveReadinessMissingCount
+                $pureSignalSafeBypassEvidence["liveReadinessFailureCount"] = $liveReadinessFailureCount
+                $pureSignalSafeBypassEvidence["modeConsistencyReady"] = $modeConsistencyReady
+                $pureSignalSafeBypassEvidence["modeMismatchCaptureCount"] = $modeMismatchCaptureCount
+                $pureSignalSafeBypassEvidence["modeMismatchSampleCount"] = $modeMismatchSampleCount
                 $pureSignalSafeBypassEvidence["feedbackStabilityMin"] = $feedbackStabilityMin
                 $pureSignalSafeBypassEvidence["feedbackStabilityThreshold"] = $feedbackStabilityThreshold
                 $pureSignalSafeBypassEvidence["txMonitorCouplingMax"] = $txMonitorCouplingMax
                 $pureSignalSafeBypassEvidence["txMonitorCouplingThreshold"] = $txMonitorCouplingThreshold
                 $pureSignalSafeBypassEvidence["clippingCountTotal"] = $clippingCountTotal
                 $pureSignalSafeBypassEvidence["gateFailureCount"] = $gateFailureCount
+                $pureSignalSafeBypassEvidence["captureRecordCount"] = $captureRecords.Count
+                $pureSignalSafeBypassEvidence["disabledCaptureRecordCount"] = $disabledCaptureRecordCount
+                $pureSignalSafeBypassEvidence["enabledCaptureRecordCount"] = $enabledCaptureRecordCount
+                $pureSignalSafeBypassEvidence["captureTraceMissingCount"] = $captureTraceMissingCount
+                $pureSignalSafeBypassEvidence["captureTraceHashMismatchCount"] = $captureTraceHashMismatchCount
+                $pureSignalSafeBypassEvidence["captureTraceProvenanceReady"] = $captureTraceProvenanceReady
 
                 if ($tool -ne "summarize-dsp-puresignal-bench") {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-tool-invalid" "Artifact '$artifactId' must be generated by summarize-dsp-puresignal-bench.ps1."
@@ -9031,12 +9485,24 @@ else {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-mode-coverage-missing" "Artifact '$artifactId' must include ready disabled and enabled PureSignal bench captures; missingModes=$($missingModes -join ', ')."
                     $artifactValidationOk = $false
                 }
+                if (-not $captureTraceProvenanceReady) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-capture-provenance-not-ready" "Artifact '$artifactId' must include disabled and enabled capture records whose trace files exist and match their sha256 values; captures=$($captureRecords.Count), disabled=$disabledCaptureRecordCount, enabled=$enabledCaptureRecordCount, missing=$captureTraceMissingCount, hashMismatches=$captureTraceHashMismatchCount."
+                    $artifactValidationOk = $false
+                }
                 if (-not $pureSignalDefaultStatePreserved) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-default-state-changed" "Artifact '$artifactId' does not prove PureSignal default/bypass state was preserved."
                     $artifactValidationOk = $false
                 }
                 if ($defaultBehaviorChangeApproved) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-default-change-approved" "Artifact '$artifactId' must not approve default behavior changes."
+                    $artifactValidationOk = $false
+                }
+                if ($liveReadinessEvidenceRequired -and -not $liveReadinessReady) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-live-readiness-not-ready" "Artifact '$artifactId' requires live-readiness evidence but reports liveReadinessReady=false; missing=$liveReadinessMissingCount, failures=$liveReadinessFailureCount."
+                    $artifactValidationOk = $false
+                }
+                if (-not $modeConsistencyReady) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "puresignal-safe-bypass-mode-sample-mismatch" "Artifact '$artifactId' has PureSignal samples that do not match the requested disabled/enabled capture mode; mismatchCaptures=$modeMismatchCaptureCount, mismatchSamples=$modeMismatchSampleCount."
                     $artifactValidationOk = $false
                 }
                 if ($gateFailureCount -gt 0) {
@@ -9056,7 +9522,300 @@ else {
                     $artifactValidationOk = $false
                 }
 
-                $pureSignalSafeBypassEvidence["status"] = if ($artifactValidationOk) { "ready" } else { "not-ready" }
+                if ($artifactValidationOk) {
+                    $pureSignalSafeBypassEvidence["status"] = "ready"
+                }
+                else {
+                    $pureSignalSafeBypassEvidence["readyForReview"] = $false
+                    $pureSignalSafeBypassEvidence["status"] = "not-ready"
+                }
+            }
+
+            if ($artifactKind -ieq "diagnostics-ab-summary-json" -or $artifactId -eq $txOutputHeadroomAbArtifactId) {
+                $txOutputHeadroomAbEvidence["present"] = $true
+                $txOutputHeadroomAbEvidence["path"] = $artifactPath
+                $txOutputHeadroomAbEvidence["sha256"] = Get-FileSha256 $resolvedArtifactPath
+
+                $tool = [string](Get-JsonValue $artifactJson "tool")
+                $mode = [string](Get-JsonValue $artifactJson "mode")
+                $noKeyingByScript = Test-Truthy (Get-JsonValue $artifactJson "noKeyingByScript")
+                $allowTransmit = Test-Truthy (Get-JsonValue $artifactJson "allowTransmit")
+                $requiresLiveReady = Test-Truthy (Get-JsonValue $artifactJson "requiresLiveReady")
+                $profileBefore = Get-JsonValue $artifactJson "profileBefore"
+                $profile = Get-JsonValue $artifactJson "profile"
+                $currentReady = Get-JsonValue $artifactJson "currentProfileReady"
+                $candidateReady = Get-JsonValue $artifactJson "candidateProfileReady"
+                $current = Get-JsonValue $artifactJson "current"
+                $reset = Get-JsonValue $artifactJson "resetToCurrent"
+                $candidate = Get-JsonValue $artifactJson "candidate"
+                $liveReadiness = Get-JsonValue $artifactJson "liveReadiness"
+                if ($null -eq $liveReadiness) {
+                    $liveReadiness = Get-JsonValue $artifactJson "liveReadinessBefore"
+                }
+                $failures = @(Get-JsonArray $artifactJson "failures")
+
+                $preflightReady = Test-Truthy (Get-JsonValue $artifactJson "ready")
+                $liveReadinessReady = Test-Truthy (Get-JsonValue $liveReadiness "ready")
+                $profileBeforeCurrent = [string]::Equals([string](Get-JsonValue $profileBefore "profile"), "current", [StringComparison]::OrdinalIgnoreCase) -and
+                    [string]::Equals([string](Get-JsonValue $profileBefore "activeProfile"), "current", [StringComparison]::OrdinalIgnoreCase)
+                if (-not $profileBeforeCurrent -and $null -ne $profile) {
+                    $profileBeforeCurrent = [string]::Equals([string](Get-JsonValue $profile "profile"), "current", [StringComparison]::OrdinalIgnoreCase) -and
+                        [string]::Equals([string](Get-JsonValue $profile "activeProfile"), "current", [StringComparison]::OrdinalIgnoreCase)
+                }
+                $currentProfileReady = Test-Truthy (Get-JsonValue $currentReady "ready")
+                $candidateProfileReady = Test-Truthy (Get-JsonValue $candidateReady "ready")
+                $resetToCurrentReady = Test-Truthy (Get-JsonValue $reset "ready")
+                $candidateActiveProfile = [string](Get-JsonValue $candidateReady "activeProfile")
+                $candidatePureSignalBypassActive = Test-Truthy (Get-JsonValue $candidateReady "pureSignalBypassActive")
+                $currentReadyForBenchmarkTrace = Test-Truthy (Get-JsonValue $current "readyForBenchmarkTrace")
+                $currentOkSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $current "okSampleCount"))
+                $currentRuntimeEvidenceSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $current "runtimeEvidenceSampleCount"))
+                $currentTxMonitorSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $current "txMonitorSampleCount"))
+                $candidateReadyForBenchmarkTrace = Test-Truthy (Get-JsonValue $candidate "readyForBenchmarkTrace")
+                $candidateOkSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $candidate "okSampleCount"))
+                $candidateRuntimeEvidenceSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $candidate "runtimeEvidenceSampleCount"))
+                $candidateTxMonitorSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $candidate "txMonitorSampleCount"))
+                $candidateExperimentalSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $candidate "experimentalSampleCount"))
+                $candidatePureSignalBypassedSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $candidate "pureSignalBypassedSampleCount"))
+                $watcherSummaryRequired = -not [string]::Equals($mode, "preflight-only", [StringComparison]::OrdinalIgnoreCase)
+                $watcherSummaryReady = -not $watcherSummaryRequired
+                $watcherSummaryMissingCount = 0
+                $watcherSummaryInvalidCount = 0
+                $watcherSummaryMismatchCount = 0
+                $watcherProfileBucketReady = -not $watcherSummaryRequired
+                $watcherProfileBucketMissingCount = 0
+                $watcherProfileBucketMismatchCount = 0
+
+                if ($watcherSummaryRequired) {
+                    $watcherSummarySpecs = @(
+                        [pscustomobject]@{
+                            Label = "current"
+                            Capture = $current
+                            ExpectedReady = $currentReadyForBenchmarkTrace
+                            ExpectedOk = $currentOkSampleCount
+                            ExpectedRuntime = $currentRuntimeEvidenceSampleCount
+                            ExpectedTxMonitor = $currentTxMonitorSampleCount
+                            CompareHeadroomWatch = $true
+                            ExpectedExperimental = 0
+                            ExpectedPureSignalBypassed = 0
+                            ExpectedRequestedProfile = "current"
+                            ExpectedActiveProfile = "current"
+                        },
+                        [pscustomobject]@{
+                            Label = "candidate"
+                            Capture = $candidate
+                            ExpectedReady = $candidateReadyForBenchmarkTrace
+                            ExpectedOk = $candidateOkSampleCount
+                            ExpectedRuntime = $candidateRuntimeEvidenceSampleCount
+                            ExpectedTxMonitor = $candidateTxMonitorSampleCount
+                            CompareHeadroomWatch = $true
+                            ExpectedExperimental = $candidateExperimentalSampleCount
+                            ExpectedPureSignalBypassed = $candidatePureSignalBypassedSampleCount
+                            ExpectedRequestedProfile = "headroom-trim-candidate"
+                            ExpectedActiveProfile = $candidateActiveProfile
+                        }
+                    )
+
+                    foreach ($summarySpec in $watcherSummarySpecs) {
+                        $summaryReportPath = [string](Get-JsonValue $summarySpec.Capture "reportPath")
+                        $resolvedSummaryPath = Resolve-BundleContainedEvidencePath -BundlePath $bundlePath -Path $summaryReportPath
+                        if ([string]::IsNullOrWhiteSpace($summaryReportPath) -or
+                            [string]::IsNullOrWhiteSpace($resolvedSummaryPath) -or
+                            -not (Test-Path -LiteralPath $resolvedSummaryPath -PathType Leaf)) {
+                            $watcherSummaryMissingCount++
+                            $watcherProfileBucketMissingCount++
+                            continue
+                        }
+
+                        $watcherSummary = $null
+                        try {
+                            $watcherSummary = Read-JsonFile $resolvedSummaryPath
+                        }
+                        catch {
+                            $watcherSummaryInvalidCount++
+                            $watcherProfileBucketMissingCount++
+                            continue
+                        }
+
+                        $watcherTool = [string](Get-JsonValue $watcherSummary "tool")
+                        if (-not [string]::Equals($watcherTool, "watch-dsp-live-diagnostics", [StringComparison]::OrdinalIgnoreCase)) {
+                            $watcherSummaryInvalidCount++
+                            $watcherProfileBucketMissingCount++
+                            continue
+                        }
+
+                        if ((Test-Truthy (Get-JsonValue $watcherSummary "readyForBenchmarkTrace")) -ne [bool]$summarySpec.ExpectedReady) {
+                            $watcherSummaryMismatchCount++
+                        }
+                        if ([int](Get-NumericValueOrDefault (Get-JsonValue $watcherSummary "okSampleCount")) -ne [int]$summarySpec.ExpectedOk) {
+                            $watcherSummaryMismatchCount++
+                        }
+                        if ([int](Get-NumericValueOrDefault (Get-JsonValue $watcherSummary "runtimeEvidenceSampleCount")) -ne [int]$summarySpec.ExpectedRuntime) {
+                            $watcherSummaryMismatchCount++
+                        }
+                        if ([int](Get-NumericValueOrDefault (Get-JsonValue $watcherSummary "txMonitorSampleCount")) -ne [int]$summarySpec.ExpectedTxMonitor) {
+                            $watcherSummaryMismatchCount++
+                        }
+
+                        if ($summarySpec.CompareHeadroomWatch) {
+                            $headroomWatch = Get-JsonValue $watcherSummary "txOutputHeadroomWatch"
+                            if ($null -eq $headroomWatch) {
+                                $watcherSummaryInvalidCount++
+                                $watcherProfileBucketMissingCount++
+                                continue
+                            }
+
+                            if ([int](Get-NumericValueOrDefault (Get-JsonValue $headroomWatch "experimentalSampleCount")) -ne [int]$summarySpec.ExpectedExperimental) {
+                                $watcherSummaryMismatchCount++
+                            }
+                            if ([int](Get-NumericValueOrDefault (Get-JsonValue $headroomWatch "pureSignalBypassedSampleCount")) -ne [int]$summarySpec.ExpectedPureSignalBypassed) {
+                                $watcherSummaryMismatchCount++
+                            }
+
+                            $requestedProfileCounts = @(Get-JsonArray $headroomWatch "requestedProfileCounts")
+                            $activeProfileCounts = @(Get-JsonArray $headroomWatch "activeProfileCounts")
+                            if ($requestedProfileCounts.Count -eq 0 -or $activeProfileCounts.Count -eq 0) {
+                                $watcherProfileBucketMissingCount++
+                            }
+                            else {
+                                $expectedOk = [int]$summarySpec.ExpectedOk
+                                $requestedCount = Get-NamedCountFromRecords -Records $requestedProfileCounts -Name ([string]$summarySpec.ExpectedRequestedProfile)
+                                $activeCount = Get-NamedCountFromRecords -Records $activeProfileCounts -Name ([string]$summarySpec.ExpectedActiveProfile)
+                                if ($requestedCount -ne $expectedOk) {
+                                    $watcherProfileBucketMismatchCount++
+                                }
+                                if ($activeCount -ne $expectedOk) {
+                                    $watcherProfileBucketMismatchCount++
+                                }
+                            }
+                        }
+                    }
+
+                    $watcherSummaryReady = ($watcherSummaryMissingCount -eq 0 -and
+                        $watcherSummaryInvalidCount -eq 0 -and
+                        $watcherSummaryMismatchCount -eq 0)
+                    $watcherProfileBucketReady = ($watcherSummaryReady -and
+                        $watcherProfileBucketMissingCount -eq 0 -and
+                        $watcherProfileBucketMismatchCount -eq 0)
+                }
+
+                $txOutputHeadroomAbEvidence["tool"] = $tool
+                $txOutputHeadroomAbEvidence["mode"] = $mode
+                $txOutputHeadroomAbEvidence["noKeyingByScript"] = $noKeyingByScript
+                $txOutputHeadroomAbEvidence["allowTransmit"] = $allowTransmit
+                $txOutputHeadroomAbEvidence["requiresLiveReady"] = $requiresLiveReady
+                $txOutputHeadroomAbEvidence["preflightReady"] = $preflightReady
+                $txOutputHeadroomAbEvidence["preflightFailureCount"] = $failures.Count
+                $txOutputHeadroomAbEvidence["preflightFailures"] = @($failures)
+                $txOutputHeadroomAbEvidence["liveReadinessReady"] = $liveReadinessReady
+                $txOutputHeadroomAbEvidence["profileBeforeCurrent"] = $profileBeforeCurrent
+                $txOutputHeadroomAbEvidence["currentProfileReady"] = $currentProfileReady
+                $txOutputHeadroomAbEvidence["candidateProfileReady"] = $candidateProfileReady
+                $txOutputHeadroomAbEvidence["resetToCurrentReady"] = $resetToCurrentReady
+                $txOutputHeadroomAbEvidence["candidateActiveProfile"] = $candidateActiveProfile
+                $txOutputHeadroomAbEvidence["candidatePureSignalBypassActive"] = $candidatePureSignalBypassActive
+                $txOutputHeadroomAbEvidence["candidateReadyForBenchmarkTrace"] = $candidateReadyForBenchmarkTrace
+                $txOutputHeadroomAbEvidence["candidateOkSampleCount"] = $candidateOkSampleCount
+                $txOutputHeadroomAbEvidence["candidateRuntimeEvidenceSampleCount"] = $candidateRuntimeEvidenceSampleCount
+                $txOutputHeadroomAbEvidence["candidateTxMonitorSampleCount"] = $candidateTxMonitorSampleCount
+                $txOutputHeadroomAbEvidence["candidateExperimentalSampleCount"] = $candidateExperimentalSampleCount
+                $txOutputHeadroomAbEvidence["candidatePureSignalBypassedSampleCount"] = $candidatePureSignalBypassedSampleCount
+                $txOutputHeadroomAbEvidence["watcherSummaryRequired"] = $watcherSummaryRequired
+                $txOutputHeadroomAbEvidence["watcherSummaryReady"] = $watcherSummaryReady
+                $txOutputHeadroomAbEvidence["watcherSummaryMissingCount"] = $watcherSummaryMissingCount
+                $txOutputHeadroomAbEvidence["watcherSummaryInvalidCount"] = $watcherSummaryInvalidCount
+                $txOutputHeadroomAbEvidence["watcherSummaryMismatchCount"] = $watcherSummaryMismatchCount
+                $txOutputHeadroomAbEvidence["watcherProfileBucketReady"] = $watcherProfileBucketReady
+                $txOutputHeadroomAbEvidence["watcherProfileBucketMissingCount"] = $watcherProfileBucketMissingCount
+                $txOutputHeadroomAbEvidence["watcherProfileBucketMismatchCount"] = $watcherProfileBucketMismatchCount
+
+                if ($tool -ne "capture-tx-output-headroom-ab") {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-tool-invalid" "Artifact '$artifactId' must be generated by capture-tx-output-headroom-ab.ps1."
+                    $artifactValidationOk = $false
+                }
+                if (-not $noKeyingByScript) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-keying-unsafe" "Artifact '$artifactId' must declare noKeyingByScript=true."
+                    $artifactValidationOk = $false
+                }
+
+                if ([string]::Equals($mode, "preflight-only", [StringComparison]::OrdinalIgnoreCase)) {
+                    if (-not $preflightReady -or $failures.Count -gt 0) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-preflight-not-ready" "Artifact '$artifactId' preflight is not ready: $($failures -join ', ')."
+                        $artifactValidationOk = $false
+                    }
+                    if (-not $liveReadinessReady) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-live-not-ready" "Artifact '$artifactId' preflight does not prove live diagnostics readiness."
+                        $artifactValidationOk = $false
+                    }
+                    if (-not $profileBeforeCurrent) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-profile-not-current" "Artifact '$artifactId' preflight must leave the TX output headroom profile at current/current."
+                        $artifactValidationOk = $false
+                    }
+                    $txOutputHeadroomAbEvidence["readyForReview"] = $artifactValidationOk
+                    $txOutputHeadroomAbEvidence["status"] = if ($artifactValidationOk) { "preflight-ready" } else { "not-ready" }
+                }
+                else {
+                    if (-not $allowTransmit) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-allow-transmit-missing" "Artifact '$artifactId' full A/B capture must declare allowTransmit=true; use preflight-only for no-mutation readiness evidence."
+                        $artifactValidationOk = $false
+                    }
+                    if ($watcherSummaryMissingCount -gt 0) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-watcher-summary-missing" "Artifact '$artifactId' full A/B capture must bundle watcher summaries for current and candidate captures."
+                        $artifactValidationOk = $false
+                    }
+                    if ($watcherSummaryInvalidCount -gt 0) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-watcher-summary-tool-invalid" "Artifact '$artifactId' watcher summaries must be valid watch-dsp-live-diagnostics reports."
+                        $artifactValidationOk = $false
+                    }
+                    if ($watcherSummaryMismatchCount -gt 0) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-watcher-summary-count-mismatch" "Artifact '$artifactId' embedded A/B counts must match the bundled watcher summaries."
+                        $artifactValidationOk = $false
+                    }
+                    if ($watcherProfileBucketMissingCount -gt 0 -or $watcherProfileBucketMismatchCount -gt 0) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-watcher-profile-bucket-mismatch" "Artifact '$artifactId' watcher summaries must prove requested/active TX output headroom profile buckets for the full current/candidate windows; missing=$watcherProfileBucketMissingCount, mismatches=$watcherProfileBucketMismatchCount."
+                        $artifactValidationOk = $false
+                    }
+                    if (-not $profileBeforeCurrent) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-initial-profile-invalid" "Artifact '$artifactId' must begin from current/current TX output headroom profile."
+                        $artifactValidationOk = $false
+                    }
+                    if (-not $currentProfileReady) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-current-not-ready" "Artifact '$artifactId' does not prove the current profile capture was ready."
+                        $artifactValidationOk = $false
+                    }
+                    if (-not $candidateProfileReady) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-candidate-not-ready" "Artifact '$artifactId' does not prove the candidate profile capture was ready."
+                        $artifactValidationOk = $false
+                    }
+                    if (-not $resetToCurrentReady) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-reset-not-ready" "Artifact '$artifactId' did not reset the TX output headroom profile to current."
+                        $artifactValidationOk = $false
+                    }
+                    if (-not $candidateReadyForBenchmarkTrace -or $candidateOkSampleCount -le 0 -or $candidateRuntimeEvidenceSampleCount -le 0) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-candidate-trace-not-ready" "Artifact '$artifactId' candidate trace is not benchmark-ready."
+                        $artifactValidationOk = $false
+                    }
+                    if ($candidatePureSignalBypassActive -or [string]::Equals($candidateActiveProfile, "current", [StringComparison]::OrdinalIgnoreCase)) {
+                        if ($candidatePureSignalBypassedSampleCount -le 0) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-puresignal-bypass-unproven" "Artifact '$artifactId' reports candidate bypass but no PureSignal-bypassed samples."
+                            $artifactValidationOk = $false
+                        }
+                        $txOutputHeadroomAbEvidence["status"] = if ($artifactValidationOk) { "puresignal-bypass-ready" } else { "not-ready" }
+                    }
+                    else {
+                        if (-not [string]::Equals($candidateActiveProfile, "headroom-trim-candidate", [StringComparison]::OrdinalIgnoreCase)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-active-profile-invalid" "Artifact '$artifactId' candidate activeProfile must be headroom-trim-candidate unless PureSignal bypass is expected."
+                            $artifactValidationOk = $false
+                        }
+                        if ($candidateExperimentalSampleCount -le 0 -or $candidateTxMonitorSampleCount -le 0) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-output-headroom-ab-tx-samples-missing" "Artifact '$artifactId' must include experimental candidate samples and TX monitor samples for live output-headroom proof."
+                            $artifactValidationOk = $false
+                        }
+                        $txOutputHeadroomAbEvidence["status"] = if ($artifactValidationOk) { "headroom-trace-ready" } else { "not-ready" }
+                    }
+
+                    $txOutputHeadroomAbEvidence["readyForReview"] = $artifactValidationOk
+                }
             }
 
             $matrixRuns = @(Get-JsonArray $artifactJson "runs")
@@ -9730,6 +10489,117 @@ else {
                         }
                     }
                 }
+            }
+
+            if ($null -ne $artifactJson -and ($artifactKind -ieq "rx-leveler-ab-comparison-json" -or $artifactId -eq $rxLevelerAbLiveComparisonArtifactId)) {
+                $rxLevelerAbLiveComparisonEvidence["present"] = $true
+                $rxLevelerAbLiveComparisonEvidence["path"] = $artifactPath
+                $rxLevelerAbLiveComparisonEvidence["sha256"] = Get-FileSha256 $resolvedArtifactPath
+
+                $rxLevelerTool = [string](Get-JsonValue $artifactJson "tool")
+                $rxLevelerReadyForReview = Test-Truthy (Get-JsonValue $artifactJson "readyForReview")
+                $rxLevelerActiveAudioReady = Test-Truthy (Get-JsonValue $artifactJson "rxLevelerAbActiveAudioReady")
+                $rxLevelerPassbandReady = Test-Truthy (Get-JsonValue $artifactJson "rxLevelerAbPassbandEvidenceReady")
+                $rxLevelerControlMemoryReady = Test-Truthy (Get-JsonValue $artifactJson "rxLevelerAbCandidateControlMemoryReady")
+                $rxLevelerOptimizationReady = Test-Truthy (Get-JsonValue $artifactJson "rxLevelerAbOptimizationReady")
+                $rxLevelerPromotionReady = Test-Truthy (Get-JsonValue $artifactJson "rxLevelerAbPromotionReady")
+                $rxLevelerEvidenceStatus = [string](Get-JsonValue $artifactJson "rxLevelerAbEvidenceStatus")
+                $rxLevelerOptimizationEvidence = Get-JsonValue $artifactJson "rxLevelerAbOptimizationEvidence"
+                $rxLevelerCaptureStabilityReady = Test-Truthy (Get-JsonValue $artifactJson "rxLevelerAbCaptureStabilityReady")
+                $rxLevelerCaptureStabilityEvidence = Get-JsonValue $artifactJson "rxLevelerAbCaptureStabilityEvidence"
+                $rxLevelerCaptureStabilityStatus = [string](Get-JsonValue $rxLevelerCaptureStabilityEvidence "status")
+                $rxLevelerPassbandEvidence = Get-JsonValue $artifactJson "rxLevelerAbPassbandEvidence"
+                $rxLevelerMaterialImprovementCount = [int](Get-NumericValueOrDefault (Get-JsonValue $rxLevelerOptimizationEvidence "materialImprovementCount"))
+                $rxLevelerOptimizationRegressionCount = [int](Get-NumericValueOrDefault (Get-JsonValue $rxLevelerOptimizationEvidence "regressionCount"))
+                $rxLevelerBaselinePassbandSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $rxLevelerPassbandEvidence "baselinePassbandPeakSampleCount"))
+                $rxLevelerCandidatePassbandSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $rxLevelerPassbandEvidence "candidatePassbandPeakSampleCount"))
+                $rxLevelerBundleRelativePaths = Test-Truthy (Get-JsonValue $artifactJson "bundleRelativePaths")
+                $rxLevelerAbsolutePaths = @()
+                $rxLevelerAbsolutePaths += @(Get-LiveTraceComparisonAbsolutePaths $artifactJson)
+                $rxLevelerAbsolutePaths += @(Get-RxLevelerAbSourceAbsolutePaths $artifactJson)
+                $rxLevelerReady = $true
+
+                $rxLevelerAbLiveComparisonEvidence["tool"] = $rxLevelerTool
+                $rxLevelerAbLiveComparisonEvidence["readyForReview"] = $rxLevelerReadyForReview
+                $rxLevelerAbLiveComparisonEvidence["evidenceStatus"] = $rxLevelerEvidenceStatus
+                $rxLevelerAbLiveComparisonEvidence["bundleRelativePaths"] = $rxLevelerBundleRelativePaths
+                $rxLevelerAbLiveComparisonEvidence["absolutePathCount"] = $rxLevelerAbsolutePaths.Count
+                $rxLevelerAbLiveComparisonEvidence["activeAudioReady"] = $rxLevelerActiveAudioReady
+                $rxLevelerAbLiveComparisonEvidence["passbandEvidenceReady"] = $rxLevelerPassbandReady
+                $rxLevelerAbLiveComparisonEvidence["candidateControlMemoryReady"] = $rxLevelerControlMemoryReady
+                $rxLevelerAbLiveComparisonEvidence["optimizationReady"] = $rxLevelerOptimizationReady
+                $rxLevelerAbLiveComparisonEvidence["captureStabilityReady"] = $rxLevelerCaptureStabilityReady
+                $rxLevelerAbLiveComparisonEvidence["captureStabilityStatus"] = $rxLevelerCaptureStabilityStatus
+                $rxLevelerAbLiveComparisonEvidence["promotionReady"] = $rxLevelerPromotionReady
+                $rxLevelerAbLiveComparisonEvidence["materialImprovementCount"] = $rxLevelerMaterialImprovementCount
+                $rxLevelerAbLiveComparisonEvidence["optimizationRegressionCount"] = $rxLevelerOptimizationRegressionCount
+                $rxLevelerAbLiveComparisonEvidence["baselinePassbandPeakSampleCount"] = $rxLevelerBaselinePassbandSampleCount
+                $rxLevelerAbLiveComparisonEvidence["candidatePassbandPeakSampleCount"] = $rxLevelerCandidatePassbandSampleCount
+
+                if ($rxLevelerTool -ne "compare-dsp-live-diagnostics-traces") {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-ab-comparison-tool-invalid" "Artifact '$artifactId' must be generated by summarize-dsp-rx-leveler-ab.ps1 over compare-dsp-live-diagnostics-traces.ps1 output."
+                    $rxLevelerReady = $false
+                    $artifactValidationOk = $false
+                }
+                if (-not $rxLevelerBundleRelativePaths) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-ab-comparison-paths-not-bundle-relative" "Artifact '$artifactId' report was not generated with bundleRelativePaths=true; rerun summarize-dsp-rx-leveler-ab.ps1 with -BundleDir."
+                    $rxLevelerReady = $false
+                    $artifactValidationOk = $false
+                }
+                if ($rxLevelerAbsolutePaths.Count -gt 0) {
+                    $pathExamples = Get-PathExampleText $rxLevelerAbsolutePaths
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-ab-comparison-absolute-paths" "Artifact '$artifactId' report contains $($rxLevelerAbsolutePaths.Count) absolute path(s); rerun summarize-dsp-rx-leveler-ab.ps1 with -BundleDir. Examples: $pathExamples"
+                    $rxLevelerReady = $false
+                    $artifactValidationOk = $false
+                }
+                if (-not $rxLevelerReadyForReview) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-ab-comparison-not-ready" "Artifact '$artifactId' reports readyForReview=false."
+                    $rxLevelerReady = $false
+                    $artifactValidationOk = $false
+                }
+                if (-not $rxLevelerActiveAudioReady) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-ab-active-audio-not-ready" "Artifact '$artifactId' must prove activeAudioEvidence.ready before RX leveler improvement evidence can be promoted."
+                    $rxLevelerReady = $false
+                    $artifactValidationOk = $false
+                }
+                if (-not $rxLevelerPassbandReady) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-ab-passband-not-ready" "Artifact '$artifactId' must prove passbandEvidence.ready so tuned-signal evidence is present in both current and candidate windows."
+                    $rxLevelerReady = $false
+                    $artifactValidationOk = $false
+                }
+                if (-not $rxLevelerControlMemoryReady) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-ab-control-memory-not-ready" "Artifact '$artifactId' reports candidate control-memory safety is not ready."
+                    $rxLevelerReady = $false
+                    $artifactValidationOk = $false
+                }
+                if (-not $rxLevelerOptimizationReady) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-ab-optimization-not-ready" "Artifact '$artifactId' must prove material RX leveler optimization before the opt-in candidate can advance."
+                    $rxLevelerReady = $false
+                    $artifactValidationOk = $false
+                }
+                if ($rxLevelerMaterialImprovementCount -lt 1) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-ab-material-improvement-missing" "Artifact '$artifactId' reports materialImprovementCount=$rxLevelerMaterialImprovementCount; expected at least one material RX leveler improvement."
+                    $rxLevelerReady = $false
+                    $artifactValidationOk = $false
+                }
+                if ($rxLevelerOptimizationRegressionCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-ab-optimization-regression" "Artifact '$artifactId' reports $rxLevelerOptimizationRegressionCount RX leveler optimization regression(s)."
+                    $rxLevelerReady = $false
+                    $artifactValidationOk = $false
+                }
+                if (-not $rxLevelerPromotionReady) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-ab-promotion-not-ready" "Artifact '$artifactId' reports rxLevelerAbPromotionReady=false."
+                    $rxLevelerReady = $false
+                    $artifactValidationOk = $false
+                }
+                if (-not [string]::Equals($rxLevelerEvidenceStatus, "ready", [StringComparison]::OrdinalIgnoreCase)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "rx-leveler-ab-evidence-status-not-ready" "Artifact '$artifactId' reports rxLevelerAbEvidenceStatus='$rxLevelerEvidenceStatus'; expected 'ready'."
+                    $rxLevelerReady = $false
+                    $artifactValidationOk = $false
+                }
+
+                $rxLevelerAbLiveComparisonEvidence["ready"] = $rxLevelerReady
+                $rxLevelerAbLiveComparisonEvidence["status"] = if ($rxLevelerReady) { "ready" } elseif ([string]::IsNullOrWhiteSpace($rxLevelerEvidenceStatus)) { "not-ready" } else { $rxLevelerEvidenceStatus }
             }
 
             if ($artifactKind -ieq "diagnostics-comparison-json" -or $artifactId -eq $liveTraceComparisonArtifactId -or $artifactId -eq $liveTraceThetisComparisonArtifactId) {
@@ -12163,27 +13033,131 @@ else {
                 $sourceMetricComparisonReadyCount = 0
                 $sourceLiveTraceComparisonReadyCount = 0
                 $sourceThetisLiveTraceComparisonReadyCount = 0
+                $sourceReportPathInvalidCount = 0
+                $sourceReportFileMissingCount = 0
+                $sourceReportJsonInvalidCount = 0
+                $sourceReportStrictValidationMarkerMissingCount = 0
+                $sourceReportHashPresentCount = 0
+                $sourceReportHashMissingCount = 0
+                $sourceReportHashMismatchCount = 0
+                $sourceReportSummaryMismatchCount = 0
+                $sourceBackedScenarioIds = New-Object System.Collections.Generic.List[string]
+                $sourceBackedComparisonIds = New-Object System.Collections.Generic.List[string]
 
                 foreach ($sourceReport in $sourceReports) {
                     $sourcePath = [string](Get-JsonValue $sourceReport "path")
-                    $sourceTargetId = [string](Get-JsonValue $sourceReport "hardwareTarget")
-                    if ([string]::IsNullOrWhiteSpace($sourceTargetId)) {
-                        $sourceTargetId = [string](Get-JsonValue $sourceReport "target")
+                    $sourceSha256 = [string](Get-JsonValue $sourceReport "sha256")
+                    $sourceResolvedPath = Resolve-BundleContainedEvidencePath -BundlePath $bundlePath -Path $sourcePath
+                    $sourceFilePresent = $false
+                    $sourceActualSha256 = ""
+                    $sourceHashStatus = "not-evaluated"
+                    $sourceJson = $null
+                    $sourceJsonReady = $false
+                    if ([string]::IsNullOrWhiteSpace($sourcePath) -or [string]::IsNullOrWhiteSpace($sourceResolvedPath)) {
+                        $sourceReportPathInvalidCount++
+                        $sourceHashStatus = "path-invalid"
+                    }
+                    elseif (-not (Test-Path -LiteralPath $sourceResolvedPath -PathType Leaf)) {
+                        $sourceReportFileMissingCount++
+                        $sourceHashStatus = "file-missing"
+                    }
+                    else {
+                        $sourceFilePresent = $true
+                        if ([string]::IsNullOrWhiteSpace($sourceSha256)) {
+                            $sourceReportHashMissingCount++
+                            $sourceHashStatus = "hash-missing"
+                        }
+                        else {
+                            $sourceReportHashPresentCount++
+                            $sourceActualSha256 = Get-FileSha256 $sourceResolvedPath
+                            if ([string]::Equals($sourceActualSha256, $sourceSha256, [StringComparison]::OrdinalIgnoreCase)) {
+                                $sourceHashStatus = "hash-match"
+                            }
+                            else {
+                                $sourceReportHashMismatchCount++
+                                $sourceHashStatus = "hash-mismatch"
+                            }
+                        }
+                    }
+                    if ($sourceFilePresent) {
+                        try {
+                            $sourceJson = Read-JsonFile $sourceResolvedPath
+                            $sourceJsonReady = $true
+                        }
+                        catch {
+                            $sourceReportJsonInvalidCount++
+                            if ($sourceHashStatus -eq "not-evaluated" -or $sourceHashStatus -eq "hash-match") {
+                                $sourceHashStatus = "json-invalid"
+                            }
+                        }
                     }
 
+                    $sourceData = if ($sourceJsonReady) { $sourceJson } else { $sourceReport }
+                    $sourceStrictValidationMarkerReady = $sourceJsonReady -and (Test-Truthy (Get-JsonValue $sourceData "crossRadioValidationRequired"))
+                    if (-not $sourceStrictValidationMarkerReady) {
+                        $sourceReportStrictValidationMarkerMissingCount++
+                    }
+                    $sourceTargetId = Get-CrossRadioSourceValidationHardwareTarget $sourceData
                     $sourceIsNonG2 = (-not [string]::IsNullOrWhiteSpace($sourceTargetId)) -and -not (Test-G2BenchmarkTarget $sourceTargetId)
-                    $sourceValidationOk = Test-Truthy (Get-JsonValue $sourceReport "validationOk")
-                    $sourceErrorCount = [int](Get-NumericValueOrDefault (Get-JsonValue $sourceReport "errorCount"))
-                    $sourceWarningCount = [int](Get-NumericValueOrDefault (Get-JsonValue $sourceReport "warningCount"))
-                    $sourceMetricReady = Test-Truthy (Get-JsonValue $sourceReport "metricComparisonReady")
-                    $sourceLiveTraceReady = Test-Truthy (Get-JsonValue $sourceReport "liveTraceComparisonReady")
-                    $sourceThetisLiveTraceReady = Test-Truthy (Get-JsonValue $sourceReport "liveTraceThetisComparisonReady")
-                    $sourceReadyForCrossRadio = $sourceValidationOk -and
+                    $sourceValidationOk = if ($sourceJsonReady) { Test-Truthy (Get-JsonValue $sourceData "ok") } else { Test-Truthy (Get-JsonValue $sourceData "validationOk") }
+                    $sourceErrorCount = [int](Get-NumericValueOrDefault (Get-JsonValue $sourceData "errorCount"))
+                    $sourceWarningCount = [int](Get-NumericValueOrDefault (Get-JsonValue $sourceData "warningCount"))
+                    $sourceHardwareStatus = [string](Get-JsonValue $sourceData "hardwareEvidenceStatus")
+                    if ([string]::IsNullOrWhiteSpace($sourceHardwareStatus)) {
+                        $sourceHardwareStatus = [string](Get-JsonValue $sourceData "liveAcceptanceCycleHardwareEvidenceStatus")
+                    }
+                    $sourceHardwareReadyValue = Get-JsonValue $sourceData "hardwareEvidenceReady"
+                    $sourceHardwareReady = if ($null -ne $sourceHardwareReadyValue) {
+                        Test-Truthy $sourceHardwareReadyValue
+                    }
+                    else {
+                        [string]::Equals($sourceHardwareStatus, "cross-radio-hardware-evidence-ready", [StringComparison]::OrdinalIgnoreCase)
+                    }
+                    $sourceMetricReady = Test-Truthy (Get-JsonValue $sourceData "metricComparisonReady")
+                    $sourceLiveTraceReady = Test-Truthy (Get-JsonValue $sourceData "liveTraceComparisonReady")
+                    $sourceThetisLiveTraceReady = Test-Truthy (Get-JsonValue $sourceData "liveTraceThetisComparisonReady")
+                    $sourceScenarioIds = @(Get-CrossRadioSourceValidationScenarioIds $sourceData)
+                    $sourceComparisonIds = @(Get-CrossRadioSourceValidationComparisonIds $sourceData)
+                    if ($sourceJsonReady) {
+                        $embeddedTargetId = Get-CrossRadioSourceValidationHardwareTarget $sourceReport
+                        $embeddedValidationOk = Test-Truthy (Get-JsonValue $sourceReport "validationOk")
+                        $embeddedErrorCount = [int](Get-NumericValueOrDefault (Get-JsonValue $sourceReport "errorCount"))
+                        $embeddedWarningCount = [int](Get-NumericValueOrDefault (Get-JsonValue $sourceReport "warningCount"))
+                        $embeddedHardwareStatus = [string](Get-JsonValue $sourceReport "hardwareEvidenceStatus")
+                        $embeddedMetricReady = Test-Truthy (Get-JsonValue $sourceReport "metricComparisonReady")
+                        $embeddedLiveTraceReady = Test-Truthy (Get-JsonValue $sourceReport "liveTraceComparisonReady")
+                        $embeddedThetisLiveTraceReady = Test-Truthy (Get-JsonValue $sourceReport "liveTraceThetisComparisonReady")
+                        $embeddedScenarioIds = @(Get-CrossRadioSourceValidationScenarioIds $sourceReport)
+                        $embeddedComparisonIds = @(Get-CrossRadioSourceValidationComparisonIds $sourceReport)
+                        if (-not [string]::Equals($embeddedTargetId, $sourceTargetId, [StringComparison]::OrdinalIgnoreCase)) { $sourceReportSummaryMismatchCount++ }
+                        if ($embeddedValidationOk -ne $sourceValidationOk) { $sourceReportSummaryMismatchCount++ }
+                        if ($embeddedErrorCount -ne $sourceErrorCount) { $sourceReportSummaryMismatchCount++ }
+                        if ($embeddedWarningCount -ne $sourceWarningCount) { $sourceReportSummaryMismatchCount++ }
+                        if (-not [string]::Equals($embeddedHardwareStatus, $sourceHardwareStatus, [StringComparison]::OrdinalIgnoreCase)) { $sourceReportSummaryMismatchCount++ }
+                        if ($embeddedMetricReady -ne $sourceMetricReady) { $sourceReportSummaryMismatchCount++ }
+                        if ($embeddedLiveTraceReady -ne $sourceLiveTraceReady) { $sourceReportSummaryMismatchCount++ }
+                        if ($embeddedThetisLiveTraceReady -ne $sourceThetisLiveTraceReady) { $sourceReportSummaryMismatchCount++ }
+                        if (-not (Test-StringArraySame -Actual $embeddedScenarioIds -Expected $sourceScenarioIds)) { $sourceReportSummaryMismatchCount++ }
+                        if (-not (Test-StringArraySame -Actual $embeddedComparisonIds -Expected $sourceComparisonIds)) { $sourceReportSummaryMismatchCount++ }
+                    }
+                    $sourceMissingScenarioIds = @(Get-MissingStringValues -Required $crossRadioRequiredSourceScenarioIds -Actual $sourceScenarioIds)
+                    $sourceMissingComparisonIds = @(Get-MissingStringValues -Required $crossRadioRequiredSourceComparisonIds -Actual $sourceComparisonIds)
+                    $sourceBaseReadyForCrossRadio = $sourceValidationOk -and
                     $sourceErrorCount -eq 0 -and
                     $sourceIsNonG2 -and
+                    $sourceHardwareReady -and
                     $sourceMetricReady -and
                     $sourceLiveTraceReady -and
                     $sourceThetisLiveTraceReady
+                    $sourceReadyForCrossRadio = $sourceValidationOk -and
+                    $sourceErrorCount -eq 0 -and
+                    $sourceIsNonG2 -and
+                    $sourceHardwareReady -and
+                    $sourceMetricReady -and
+                    $sourceLiveTraceReady -and
+                    $sourceThetisLiveTraceReady -and
+                    $sourceMissingScenarioIds.Count -eq 0 -and
+                    $sourceMissingComparisonIds.Count -eq 0
 
                     if (-not $sourceValidationOk -or $sourceErrorCount -gt 0) {
                         $sourceProblemReportCount++
@@ -12206,20 +13180,56 @@ else {
                     if ($sourceThetisLiveTraceReady) {
                         $sourceThetisLiveTraceComparisonReadyCount++
                     }
+                    if ($sourceBaseReadyForCrossRadio) {
+                        foreach ($sourceScenarioId in $sourceScenarioIds) {
+                            if (-not [string]::IsNullOrWhiteSpace([string]$sourceScenarioId) -and -not (Test-StringArrayContains @($sourceBackedScenarioIds.ToArray()) ([string]$sourceScenarioId))) {
+                                $sourceBackedScenarioIds.Add([string]$sourceScenarioId) | Out-Null
+                            }
+                        }
+                        foreach ($sourceComparisonId in $sourceComparisonIds) {
+                            if (-not [string]::IsNullOrWhiteSpace([string]$sourceComparisonId) -and -not (Test-StringArrayContains @($sourceBackedComparisonIds.ToArray()) ([string]$sourceComparisonId))) {
+                                $sourceBackedComparisonIds.Add([string]$sourceComparisonId) | Out-Null
+                            }
+                        }
+                    }
 
                     $normalizedSourceReports.Add([ordered]@{
                             path = $sourcePath
+                            sha256 = $sourceSha256
+                            actualSha256 = $sourceActualSha256
+                            filePresent = $sourceFilePresent
+                            hashStatus = $sourceHashStatus
+                            strictValidationMarkerReady = $sourceStrictValidationMarkerReady
                             hardwareTarget = $sourceTargetId
                             targetIsNonG2 = $sourceIsNonG2
                             validationOk = $sourceValidationOk
                             errorCount = $sourceErrorCount
                             warningCount = $sourceWarningCount
+                            hardwareEvidenceStatus = $sourceHardwareStatus
+                            hardwareEvidenceReady = $sourceHardwareReady
                             metricComparisonReady = $sourceMetricReady
                             liveTraceComparisonReady = $sourceLiveTraceReady
                             liveTraceThetisComparisonReady = $sourceThetisLiveTraceReady
+                            scenarioIds = @($sourceScenarioIds)
+                            comparisonIds = @($sourceComparisonIds)
+                            missingRequiredScenarioIds = @($sourceMissingScenarioIds)
+                            missingRequiredComparisonIds = @($sourceMissingComparisonIds)
                             readyForCrossRadio = $sourceReadyForCrossRadio
                         }) | Out-Null
                 }
+
+                $missingRequiredSourceScenarioIds = @(Get-MissingStringValues -Required $crossRadioRequiredSourceScenarioIds -Actual @($sourceBackedScenarioIds.ToArray()))
+                $missingRequiredSourceComparisonIds = @(Get-MissingStringValues -Required $crossRadioRequiredSourceComparisonIds -Actual @($sourceBackedComparisonIds.ToArray()))
+                $sourceReportProvenanceReady = ($sourceReports.Count -gt 0 -and
+                    $sourceReportPathInvalidCount -eq 0 -and
+                    $sourceReportFileMissingCount -eq 0 -and
+                    $sourceReportJsonInvalidCount -eq 0 -and
+                    $sourceReportStrictValidationMarkerMissingCount -eq 0 -and
+                    $sourceReportHashMissingCount -eq 0 -and
+                    $sourceReportHashMismatchCount -eq 0 -and
+                    $sourceReportSummaryMismatchCount -eq 0 -and
+                    $sourceReportHashPresentCount -eq $sourceReports.Count)
+                $sourceBackedEvidenceReady = ($readyNonG2SourceReportCount -gt 0 -and $missingRequiredSourceScenarioIds.Count -eq 0 -and $missingRequiredSourceComparisonIds.Count -eq 0 -and $sourceReportProvenanceReady)
 
                 $crossRadioValidationEvidence["tool"] = $tool
                 $crossRadioValidationEvidence["schemaVersion"] = $schemaVersion
@@ -12241,7 +13251,28 @@ else {
                 $crossRadioValidationEvidence["sourceMetricComparisonReadyCount"] = $sourceMetricComparisonReadyCount
                 $crossRadioValidationEvidence["sourceLiveTraceComparisonReadyCount"] = $sourceLiveTraceComparisonReadyCount
                 $crossRadioValidationEvidence["sourceThetisLiveTraceComparisonReadyCount"] = $sourceThetisLiveTraceComparisonReadyCount
-                $crossRadioValidationEvidence["sourceBackedEvidenceReady"] = ($readyNonG2SourceReportCount -gt 0)
+                $crossRadioValidationEvidence["sourceReportProvenanceReady"] = $sourceReportProvenanceReady
+                $crossRadioValidationEvidence["sourceReportPathInvalidCount"] = $sourceReportPathInvalidCount
+                $crossRadioValidationEvidence["sourceReportFileMissingCount"] = $sourceReportFileMissingCount
+                $crossRadioValidationEvidence["sourceReportJsonInvalidCount"] = $sourceReportJsonInvalidCount
+                $crossRadioValidationEvidence["sourceReportStrictValidationMarkerMissingCount"] = $sourceReportStrictValidationMarkerMissingCount
+                $crossRadioValidationEvidence["sourceReportHashPresentCount"] = $sourceReportHashPresentCount
+                $crossRadioValidationEvidence["sourceReportHashMissingCount"] = $sourceReportHashMissingCount
+                $crossRadioValidationEvidence["sourceReportHashMismatchCount"] = $sourceReportHashMismatchCount
+                $crossRadioValidationEvidence["sourceReportSummaryMismatchCount"] = $sourceReportSummaryMismatchCount
+                $crossRadioValidationEvidence["requiredSourceScenarioCount"] = $crossRadioRequiredSourceScenarioIds.Count
+                $crossRadioValidationEvidence["requiredSourceScenarioIds"] = @($crossRadioRequiredSourceScenarioIds)
+                $crossRadioValidationEvidence["sourceBackedScenarioCount"] = $sourceBackedScenarioIds.Count
+                $crossRadioValidationEvidence["sourceBackedScenarioIds"] = @($sourceBackedScenarioIds.ToArray())
+                $crossRadioValidationEvidence["missingRequiredSourceScenarioCount"] = $missingRequiredSourceScenarioIds.Count
+                $crossRadioValidationEvidence["missingRequiredSourceScenarioIds"] = @($missingRequiredSourceScenarioIds)
+                $crossRadioValidationEvidence["requiredSourceComparisonCount"] = $crossRadioRequiredSourceComparisonIds.Count
+                $crossRadioValidationEvidence["requiredSourceComparisonIds"] = @($crossRadioRequiredSourceComparisonIds)
+                $crossRadioValidationEvidence["sourceBackedComparisonCount"] = $sourceBackedComparisonIds.Count
+                $crossRadioValidationEvidence["sourceBackedComparisonIds"] = @($sourceBackedComparisonIds.ToArray())
+                $crossRadioValidationEvidence["missingRequiredSourceComparisonCount"] = $missingRequiredSourceComparisonIds.Count
+                $crossRadioValidationEvidence["missingRequiredSourceComparisonIds"] = @($missingRequiredSourceComparisonIds)
+                $crossRadioValidationEvidence["sourceBackedEvidenceReady"] = $sourceBackedEvidenceReady
                 $crossRadioValidationEvidence["sourceReports"] = @($normalizedSourceReports.ToArray())
 
                 if ($schemaVersion -lt 1) {
@@ -12296,6 +13327,35 @@ else {
                     $artifactValidationOk = $false
                 }
 
+                if ($sourceReportPathInvalidCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-report-path-invalid" "Artifact '$artifactId' includes $sourceReportPathInvalidCount source report path(s) that are missing or outside the bundle."
+                    $artifactValidationOk = $false
+                }
+                if ($sourceReportFileMissingCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-report-file-missing" "Artifact '$artifactId' includes $sourceReportFileMissingCount source report path(s) that do not exist in the bundle."
+                    $artifactValidationOk = $false
+                }
+                if ($sourceReportJsonInvalidCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-report-json-invalid" "Artifact '$artifactId' includes $sourceReportJsonInvalidCount source report file(s) that cannot be parsed as JSON."
+                    $artifactValidationOk = $false
+                }
+                if ($sourceReportStrictValidationMarkerMissingCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-report-strict-marker-missing" "Artifact '$artifactId' includes $sourceReportStrictValidationMarkerMissingCount source report(s) that do not carry crossRadioValidationRequired=true from strict bundle validation."
+                    $artifactValidationOk = $false
+                }
+                if ($sourceReportHashMissingCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-report-hash-missing" "Artifact '$artifactId' includes $sourceReportHashMissingCount source report(s) without sha256 provenance."
+                    $artifactValidationOk = $false
+                }
+                if ($sourceReportHashMismatchCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-report-hash-mismatch" "Artifact '$artifactId' includes $sourceReportHashMismatchCount source report(s) whose current file hash does not match the cross-radio report."
+                    $artifactValidationOk = $false
+                }
+                if ($sourceReportSummaryMismatchCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-report-summary-mismatch" "Artifact '$artifactId' includes $sourceReportSummaryMismatchCount source report summary field(s) that do not match the bundled child validation report."
+                    $artifactValidationOk = $false
+                }
+
                 foreach ($sourceReport in @($normalizedSourceReports.ToArray() | Where-Object { Test-Truthy (Get-JsonValue $_ "targetIsNonG2") })) {
                     $sourcePath = [string](Get-JsonValue $sourceReport "path")
                     if (-not (Test-Truthy (Get-JsonValue $sourceReport "validationOk")) -or
@@ -12307,6 +13367,11 @@ else {
                         Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-metric-comparison-not-ready" "Artifact '$artifactId' source report '$sourcePath' must have metricComparisonReady=true."
                         $artifactValidationOk = $false
                     }
+                    if (-not (Test-Truthy (Get-JsonValue $sourceReport "hardwareEvidenceReady"))) {
+                        $sourceHardwareStatus = [string](Get-JsonValue $sourceReport "hardwareEvidenceStatus")
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-hardware-evidence-not-ready" "Artifact '$artifactId' source report '$sourcePath' must have hardwareEvidenceStatus='cross-radio-hardware-evidence-ready'; actual='$sourceHardwareStatus'."
+                        $artifactValidationOk = $false
+                    }
                     if (-not (Test-Truthy (Get-JsonValue $sourceReport "liveTraceComparisonReady"))) {
                         Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-live-trace-comparison-not-ready" "Artifact '$artifactId' source report '$sourcePath' must have liveTraceComparisonReady=true."
                         $artifactValidationOk = $false
@@ -12315,9 +13380,29 @@ else {
                         Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-thetis-live-trace-comparison-not-ready" "Artifact '$artifactId' source report '$sourcePath' must have liveTraceThetisComparisonReady=true."
                         $artifactValidationOk = $false
                     }
+                    $sourceMissingScenarios = @(Get-JsonArray $sourceReport "missingRequiredScenarioIds" | ForEach-Object { [string]$_ })
+                    if ($sourceMissingScenarios.Count -gt 0) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-scenario-coverage-incomplete" "Artifact '$artifactId' source report '$sourcePath' is missing required source-backed scenario coverage: $($sourceMissingScenarios -join ', ')."
+                        $artifactValidationOk = $false
+                    }
+                    $sourceMissingComparisons = @(Get-JsonArray $sourceReport "missingRequiredComparisonIds" | ForEach-Object { [string]$_ })
+                    if ($sourceMissingComparisons.Count -gt 0) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-comparison-coverage-incomplete" "Artifact '$artifactId' source report '$sourcePath' is missing required source-backed comparison coverage: $($sourceMissingComparisons -join ', ')."
+                        $artifactValidationOk = $false
+                    }
                 }
 
-                if ($artifactValidationOk -and $readyForReview -and $nonG2TargetIds.Count -gt 0 -and $scenarioIds.Count -gt 0 -and $comparisonIds.Count -gt 0 -and $readyNonG2SourceReportCount -gt 0) {
+                if ($missingRequiredSourceScenarioIds.Count -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-backed-scenarios-missing" "Artifact '$artifactId' is missing required source-backed scenario coverage: $($missingRequiredSourceScenarioIds -join ', ')."
+                    $artifactValidationOk = $false
+                }
+
+                if ($missingRequiredSourceComparisonIds.Count -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "cross-radio-validation-source-backed-comparisons-missing" "Artifact '$artifactId' is missing required source-backed comparison coverage: $($missingRequiredSourceComparisonIds -join ', ')."
+                    $artifactValidationOk = $false
+                }
+
+                if ($artifactValidationOk -and $readyForReview -and $nonG2TargetIds.Count -gt 0 -and $scenarioIds.Count -gt 0 -and $comparisonIds.Count -gt 0 -and $readyNonG2SourceReportCount -gt 0 -and $sourceBackedEvidenceReady -and $sourceReportProvenanceReady) {
                     $crossRadioValidationEvidence["status"] = "cross-radio-evidence-ready"
                 }
                 else {
@@ -14613,6 +15698,294 @@ else {
                 }
             }
 
+            if ($artifactKind -ieq "tx-fixture-safety-report-json" -or $artifactId -eq $txFixtureSafetyArtifactId) {
+                $txFixtureSafetyEvidence["present"] = $true
+                $txFixtureSafetyEvidence["path"] = $artifactPath
+                $txFixtureSafetyEvidence["sha256"] = Get-FileSha256 $resolvedArtifactPath
+
+                $tool = [string](Get-JsonValue $artifactJson "tool")
+                $schemaVersion = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "schemaVersion"))
+                $evidenceKind = [string](Get-JsonValue $artifactJson "evidenceKind")
+                $readyForReview = Test-Truthy (Get-JsonValue $artifactJson "readyForReview")
+                $status = [string](Get-JsonValue $artifactJson "status")
+                $metricsPath = [string](Get-JsonValue $artifactJson "metricsPath")
+                $metricsSha256 = ([string](Get-JsonValue $artifactJson "metricsSha256")).Trim().ToLowerInvariant()
+                $evidenceEngine = [string](Get-JsonValue $artifactJson "evidenceEngine")
+                $evidenceTool = [string](Get-JsonValue $artifactJson "evidenceTool")
+                $wdspBackedEvidence = Test-Truthy (Get-JsonValue $artifactJson "wdspBackedEvidence")
+                $runtimeRid = [string](Get-JsonValue $artifactJson "wdspRuntimeRid")
+                $runtimeSha256 = ([string](Get-JsonValue $artifactJson "wdspRuntimeSha256")).Trim().ToLowerInvariant()
+                $runtimeStatus = [string](Get-JsonValue $artifactJson "wdspRuntimeStatus")
+                $scenarioCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "scenarioCount"))
+                $comparisonCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "comparisonCount"))
+                $missingScenarioCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "missingScenarioCount"))
+                $missingComparisonCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "missingComparisonCount"))
+                $gateFailureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "gateFailureCount"))
+                $clippingCountTotal = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "clippingCountTotal"))
+                $maxTxOutputPeakDbfs = [double](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "maxTxOutputPeakDbfs") 0.0)
+                $maxTxAlcGainReductionDb = [double](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "maxTxAlcGainReductionDb") 0.0)
+                $maxTxCfcGainReductionDb = [double](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "maxTxCfcGainReductionDb") 0.0)
+                $maxTxLevelerGainReductionDb = [double](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "maxTxLevelerGainReductionDb") 0.0)
+                $maxProcessingElapsedMs = [double](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "maxProcessingElapsedMs") 0.0)
+                $minThroughputRatio = Get-NumericValue (Get-JsonValue $artifactJson "minThroughputRatio")
+                $defaultBehaviorChanged = Test-Truthy (Get-JsonValue $artifactJson "defaultBehaviorChanged")
+                $thresholds = Get-JsonValue $artifactJson "thresholds"
+                $maxOutputPeakThreshold = [double](Get-NumericValueOrDefault (Get-JsonValue $thresholds "maxOutputPeakDbfs") -0.25)
+
+                $txFixtureSafetyEvidence["schemaVersion"] = $schemaVersion
+                $txFixtureSafetyEvidence["tool"] = $tool
+                $txFixtureSafetyEvidence["evidenceKind"] = $evidenceKind
+                $txFixtureSafetyEvidence["readyForReview"] = $readyForReview
+                $txFixtureSafetyEvidence["status"] = $status
+                $txFixtureSafetyEvidence["metricsPath"] = $metricsPath
+                $txFixtureSafetyEvidence["metricsSha256"] = $metricsSha256
+                $txFixtureSafetyEvidence["evidenceEngine"] = $evidenceEngine
+                $txFixtureSafetyEvidence["evidenceTool"] = $evidenceTool
+                $txFixtureSafetyEvidence["wdspBackedEvidence"] = $wdspBackedEvidence
+                $txFixtureSafetyEvidence["wdspRuntimeRid"] = $runtimeRid
+                $txFixtureSafetyEvidence["wdspRuntimeSha256"] = $runtimeSha256
+                $txFixtureSafetyEvidence["wdspRuntimeStatus"] = $runtimeStatus
+                $txFixtureSafetyEvidence["scenarioCount"] = $scenarioCount
+                $txFixtureSafetyEvidence["comparisonCount"] = $comparisonCount
+                $txFixtureSafetyEvidence["missingScenarioCount"] = $missingScenarioCount
+                $txFixtureSafetyEvidence["missingComparisonCount"] = $missingComparisonCount
+                $txFixtureSafetyEvidence["gateFailureCount"] = $gateFailureCount
+                $txFixtureSafetyEvidence["clippingCountTotal"] = $clippingCountTotal
+                $txFixtureSafetyEvidence["maxTxOutputPeakDbfs"] = $maxTxOutputPeakDbfs
+                $txFixtureSafetyEvidence["maxTxAlcGainReductionDb"] = $maxTxAlcGainReductionDb
+                $txFixtureSafetyEvidence["maxTxCfcGainReductionDb"] = $maxTxCfcGainReductionDb
+                $txFixtureSafetyEvidence["maxTxLevelerGainReductionDb"] = $maxTxLevelerGainReductionDb
+                $txFixtureSafetyEvidence["maxProcessingElapsedMs"] = $maxProcessingElapsedMs
+                $txFixtureSafetyEvidence["minThroughputRatio"] = $minThroughputRatio
+                $txFixtureSafetyEvidence["defaultBehaviorChanged"] = $defaultBehaviorChanged
+
+                if ($schemaVersion -lt 1) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-schema-version-missing" "Artifact '$artifactId' must declare schemaVersion >= 1."
+                    $artifactValidationOk = $false
+                }
+                if ($tool -ne "summarize-dsp-tx-fixture-safety") {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-tool-invalid" "Artifact '$artifactId' must be generated by summarize-dsp-tx-fixture-safety.ps1."
+                    $artifactValidationOk = $false
+                }
+                if ($evidenceKind -ne "tx-fixture-safety-report-json") {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-kind-invalid" "Artifact '$artifactId' must declare evidenceKind='tx-fixture-safety-report-json'."
+                    $artifactValidationOk = $false
+                }
+                if (-not $readyForReview) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-not-ready" "Artifact '$artifactId' reports readyForReview=false with status='$status'."
+                    $artifactValidationOk = $false
+                }
+                if (-not $wdspBackedEvidence -or -not [string]::Equals($evidenceEngine, "wdsp", [StringComparison]::OrdinalIgnoreCase)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-not-wdsp-backed" "Artifact '$artifactId' must summarize WDSP-backed fixture evidence."
+                    $artifactValidationOk = $false
+                }
+                if ([string]::IsNullOrWhiteSpace($runtimeSha256)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-runtime-hash-missing" "Artifact '$artifactId' must declare wdspRuntimeSha256."
+                    $artifactValidationOk = $false
+                    $txFixtureSafetyEvidence["runtimeHashStatus"] = "missing"
+                }
+                elseif ($runtimeSha256 -notmatch "^[0-9a-f]{64}$") {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-runtime-hash-invalid" "Artifact '$artifactId' must declare wdspRuntimeSha256 as a 64-character lowercase hex SHA-256 digest."
+                    $artifactValidationOk = $false
+                    $txFixtureSafetyEvidence["runtimeHashStatus"] = "invalid"
+                }
+                else {
+                    $txFixtureSafetyEvidence["runtimeHashStatus"] = "valid"
+                }
+                if (-not [string]::Equals($runtimeStatus, "found", [StringComparison]::OrdinalIgnoreCase)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-runtime-not-found" "Artifact '$artifactId' reports wdspRuntimeStatus='$runtimeStatus'."
+                    $artifactValidationOk = $false
+                }
+                if ([string]::IsNullOrWhiteSpace($metricsPath)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-metrics-path-missing" "Artifact '$artifactId' must declare metricsPath."
+                    $artifactValidationOk = $false
+                    $txFixtureSafetyEvidence["metricsHashStatus"] = "path-missing"
+                }
+                else {
+                    $resolvedMetricsPath = Get-BundlePath $bundlePath $metricsPath
+                    if (-not (Test-Path -LiteralPath $resolvedMetricsPath -PathType Leaf)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-metrics-file-missing" "Artifact '$artifactId' references a missing metricsPath: $metricsPath"
+                        $artifactValidationOk = $false
+                        $txFixtureSafetyEvidence["metricsHashStatus"] = "file-missing"
+                    }
+                    elseif ([string]::IsNullOrWhiteSpace($metricsSha256)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-metrics-hash-missing" "Artifact '$artifactId' must declare metricsSha256."
+                        $artifactValidationOk = $false
+                        $txFixtureSafetyEvidence["metricsHashStatus"] = "missing"
+                    }
+                    else {
+                        $actualMetricsSha256 = Get-FileSha256 $resolvedMetricsPath
+                        if (-not [string]::Equals($metricsSha256, $actualMetricsSha256, [StringComparison]::OrdinalIgnoreCase)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-metrics-hash-mismatch" "Artifact '$artifactId' metricsSha256='$metricsSha256' but '$metricsPath' hashes to '$actualMetricsSha256'."
+                            $artifactValidationOk = $false
+                            $txFixtureSafetyEvidence["metricsHashStatus"] = "mismatch"
+                        }
+                        else {
+                            $txFixtureSafetyEvidence["metricsHashStatus"] = "match"
+                        }
+                    }
+                }
+                if ($scenarioCount -le 0 -or $comparisonCount -le 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-run-count-empty" "Artifact '$artifactId' must summarize TX fixture scenarios and comparisons."
+                    $artifactValidationOk = $false
+                }
+                if ($missingScenarioCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-missing-scenario" "Artifact '$artifactId' is missing $missingScenarioCount required TX fixture scenario(s)."
+                    $artifactValidationOk = $false
+                }
+                if ($missingComparisonCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-missing-comparison" "Artifact '$artifactId' is missing $missingComparisonCount required TX fixture comparison(s)."
+                    $artifactValidationOk = $false
+                }
+                if ($gateFailureCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-gate-failed" "Artifact '$artifactId' reports $gateFailureCount TX fixture safety gate failure(s)."
+                    $artifactValidationOk = $false
+                }
+                if ($clippingCountTotal -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-clipping" "Artifact '$artifactId' reports clippingCountTotal=$clippingCountTotal."
+                    $artifactValidationOk = $false
+                }
+                if ($maxTxOutputPeakDbfs -gt $maxOutputPeakThreshold) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-output-peak" "Artifact '$artifactId' reports maxTxOutputPeakDbfs=$maxTxOutputPeakDbfs above limit $maxOutputPeakThreshold."
+                    $artifactValidationOk = $false
+                }
+                if ($defaultBehaviorChanged) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "tx-fixture-safety-default-changed" "Artifact '$artifactId' must not approve or report default DSP behavior changes."
+                    $artifactValidationOk = $false
+                }
+
+                if ($artifactValidationOk) {
+                    $txFixtureSafetyEvidence["status"] = if ([string]::IsNullOrWhiteSpace($status)) { "ready" } else { $status }
+                }
+                else {
+                    $txFixtureSafetyEvidence["readyForReview"] = $false
+                    if ([string]::IsNullOrWhiteSpace($txFixtureSafetyEvidence.status) -or $txFixtureSafetyEvidence.status -eq "not-captured" -or $txFixtureSafetyEvidence.status -eq "ready") {
+                        $txFixtureSafetyEvidence["status"] = "not-ready"
+                    }
+                }
+            }
+
+            if ($artifactKind -ieq "wdsp-channel-lifecycle-json" -or $artifactId -eq $wdspChannelLifecycleArtifactId) {
+                $wdspChannelLifecycleEvidence["present"] = $true
+                $wdspChannelLifecycleEvidence["path"] = $artifactPath
+                $wdspChannelLifecycleEvidence["sha256"] = Get-FileSha256 $resolvedArtifactPath
+
+                $tool = [string](Get-JsonValue $artifactJson "tool")
+                $schemaVersion = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "schemaVersion"))
+                $readyForReview = Test-Truthy (Get-JsonValue $artifactJson "readyForReview")
+                $status = [string](Get-JsonValue $artifactJson "status")
+                $scenarioId = [string](Get-JsonValue $artifactJson "scenarioId")
+                $runtimeRid = [string](Get-JsonValue $artifactJson "wdspRuntimeRid")
+                $runtimeSha256 = ([string](Get-JsonValue $artifactJson "wdspRuntimeSha256")).Trim().ToLowerInvariant()
+                $runtimeStatus = [string](Get-JsonValue $artifactJson "wdspRuntimeStatus")
+                $cycleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "cycleCount"))
+                $transitionCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "transitionCount"))
+                $transitionFailureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "transitionFailureCount"))
+                $stateTransitionSuccess = Test-Truthy (Get-JsonValue $artifactJson "stateTransitionSuccess")
+                $nativeExceptionCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "nativeExceptionCount"))
+                $meterEscapeCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "meterEscapeCount"))
+                $audioDrainSamples = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "audioDrainSamples"))
+                $audioDrainFailureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "audioDrainFailureCount"))
+                $staleAudioAfterCloseSamples = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "staleAudioAfterCloseSamples"))
+                $lifecycleGateFailureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "lifecycleGateFailureCount"))
+                $defaultBehaviorChanged = Test-Truthy (Get-JsonValue $artifactJson "defaultBehaviorChanged")
+
+                $wdspChannelLifecycleEvidence["tool"] = $tool
+                $wdspChannelLifecycleEvidence["schemaVersion"] = $schemaVersion
+                $wdspChannelLifecycleEvidence["readyForReview"] = $readyForReview
+                $wdspChannelLifecycleEvidence["status"] = $status
+                $wdspChannelLifecycleEvidence["scenarioId"] = $scenarioId
+                $wdspChannelLifecycleEvidence["wdspRuntimeRid"] = $runtimeRid
+                $wdspChannelLifecycleEvidence["wdspRuntimeSha256"] = $runtimeSha256
+                $wdspChannelLifecycleEvidence["wdspRuntimeStatus"] = $runtimeStatus
+                $wdspChannelLifecycleEvidence["cycleCount"] = $cycleCount
+                $wdspChannelLifecycleEvidence["transitionCount"] = $transitionCount
+                $wdspChannelLifecycleEvidence["transitionFailureCount"] = $transitionFailureCount
+                $wdspChannelLifecycleEvidence["stateTransitionSuccess"] = $stateTransitionSuccess
+                $wdspChannelLifecycleEvidence["nativeExceptionCount"] = $nativeExceptionCount
+                $wdspChannelLifecycleEvidence["meterEscapeCount"] = $meterEscapeCount
+                $wdspChannelLifecycleEvidence["audioDrainSamples"] = $audioDrainSamples
+                $wdspChannelLifecycleEvidence["audioDrainFailureCount"] = $audioDrainFailureCount
+                $wdspChannelLifecycleEvidence["staleAudioAfterCloseSamples"] = $staleAudioAfterCloseSamples
+                $wdspChannelLifecycleEvidence["lifecycleGateFailureCount"] = $lifecycleGateFailureCount
+                $wdspChannelLifecycleEvidence["defaultBehaviorChanged"] = $defaultBehaviorChanged
+
+                if ($schemaVersion -lt 1) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-channel-lifecycle-schema-version-missing" "Artifact '$artifactId' must declare schemaVersion >= 1."
+                    $artifactValidationOk = $false
+                }
+                if ($tool -ne "run-dsp-wdsp-channel-lifecycle") {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-channel-lifecycle-tool-invalid" "Artifact '$artifactId' must be generated by run-dsp-wdsp-channel-lifecycle.ps1."
+                    $artifactValidationOk = $false
+                }
+                if (-not [string]::Equals($scenarioId, "wdsp-channel-lifecycle", [StringComparison]::Ordinal)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-channel-lifecycle-scenario-invalid" "Artifact '$artifactId' must declare scenarioId='wdsp-channel-lifecycle'."
+                    $artifactValidationOk = $false
+                }
+                if (-not $readyForReview) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-channel-lifecycle-not-ready" "Artifact '$artifactId' reports readyForReview=false with status='$status'."
+                    $artifactValidationOk = $false
+                }
+                if (-not $stateTransitionSuccess) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-channel-lifecycle-state-transition-failed" "Artifact '$artifactId' does not prove successful OpenChannel/SetMox/CloseChannel state transitions."
+                    $artifactValidationOk = $false
+                }
+                if ($transitionCount -le 0 -or $cycleCount -le 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-channel-lifecycle-transition-count-empty" "Artifact '$artifactId' did not record lifecycle transitions."
+                    $artifactValidationOk = $false
+                }
+                if ($transitionFailureCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-channel-lifecycle-transition-failed" "Artifact '$artifactId' reports $transitionFailureCount failed transition(s)."
+                    $artifactValidationOk = $false
+                }
+                if ($nativeExceptionCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-channel-lifecycle-native-exception" "Artifact '$artifactId' reports nativeExceptionCount=$nativeExceptionCount."
+                    $artifactValidationOk = $false
+                }
+                if ($meterEscapeCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-channel-lifecycle-meter-escape" "Artifact '$artifactId' reports meterEscapeCount=$meterEscapeCount."
+                    $artifactValidationOk = $false
+                }
+                if ($audioDrainSamples -le 0 -or $audioDrainFailureCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-channel-lifecycle-audio-drain-failed" "Artifact '$artifactId' reports audioDrainSamples=$audioDrainSamples and audioDrainFailureCount=$audioDrainFailureCount."
+                    $artifactValidationOk = $false
+                }
+                if ($staleAudioAfterCloseSamples -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-channel-lifecycle-stale-audio-after-close" "Artifact '$artifactId' reports staleAudioAfterCloseSamples=$staleAudioAfterCloseSamples."
+                    $artifactValidationOk = $false
+                }
+                if ($lifecycleGateFailureCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-channel-lifecycle-gate-failed" "Artifact '$artifactId' reports lifecycleGateFailureCount=$lifecycleGateFailureCount."
+                    $artifactValidationOk = $false
+                }
+                if ($defaultBehaviorChanged) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-channel-lifecycle-default-changed" "Artifact '$artifactId' must not approve or report default DSP behavior changes."
+                    $artifactValidationOk = $false
+                }
+                if ([string]::IsNullOrWhiteSpace($runtimeSha256)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-channel-lifecycle-runtime-hash-missing" "Artifact '$artifactId' must declare wdspRuntimeSha256 for the native runtime under test."
+                    $artifactValidationOk = $false
+                }
+                elseif ($runtimeSha256 -notmatch "^[0-9a-f]{64}$") {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-channel-lifecycle-runtime-hash-invalid" "Artifact '$artifactId' must declare wdspRuntimeSha256 as a 64-character lowercase hex SHA-256 digest."
+                    $artifactValidationOk = $false
+                }
+                if (-not [string]::IsNullOrWhiteSpace($runtimeStatus) -and -not [string]::Equals($runtimeStatus, "found", [StringComparison]::OrdinalIgnoreCase)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "wdsp-channel-lifecycle-runtime-not-found" "Artifact '$artifactId' reports wdspRuntimeStatus='$runtimeStatus'."
+                    $artifactValidationOk = $false
+                }
+
+                if ($artifactValidationOk) {
+                    $wdspChannelLifecycleEvidence["status"] = if ([string]::IsNullOrWhiteSpace($status)) { "ready" } else { $status }
+                }
+                else {
+                    $wdspChannelLifecycleEvidence["readyForReview"] = $false
+                    if ([string]::IsNullOrWhiteSpace($wdspChannelLifecycleEvidence.status) -or $wdspChannelLifecycleEvidence.status -eq "not-captured") {
+                        $wdspChannelLifecycleEvidence["status"] = "not-ready"
+                    }
+                }
+            }
+
             if ($artifactKind -ieq "native-audit-json" -or $artifactId -eq $nativeSymbolAuditArtifactId) {
                 $nativeSymbolAuditEvidence["present"] = $true
 
@@ -15690,6 +17063,94 @@ if ((Test-Truthy $offlineFixtureMetricsEvidence.present) -and (Test-Truthy $nati
     }
 }
 
+if ((Test-Truthy $offlineFixtureMetricsEvidence.present) -and (Test-Truthy $txFixtureSafetyEvidence.present)) {
+    $txMetricsPath = [string]$txFixtureSafetyEvidence.metricsPath
+    if ([string]::IsNullOrWhiteSpace($txMetricsPath)) {
+        Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "tx-fixture-safety-source-metrics-path-missing" "TX fixture safety report must declare the metricsPath used to generate it."
+        $txFixtureSafetyEvidence["readyForReview"] = $false
+        $txFixtureSafetyEvidence["status"] = "not-ready"
+        $txFixtureSafetyEvidence["metricsHashStatus"] = "path-missing"
+    }
+    else {
+        $sameMetricsPath = Test-ComparableEvidencePathSame -BundlePath $bundlePath -ExpectedPath ([string]$offlineFixtureMetricsEvidence.path) -ActualPath $txMetricsPath
+        if ($null -eq $sameMetricsPath -or -not $sameMetricsPath) {
+            Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "tx-fixture-safety-source-metrics-path-mismatch" "TX fixture safety metricsPath '$txMetricsPath' does not match artifact-manifest offline-fixture-metrics path '$($offlineFixtureMetricsEvidence.path)'."
+            $txFixtureSafetyEvidence["readyForReview"] = $false
+            $txFixtureSafetyEvidence["status"] = "not-ready"
+            $txFixtureSafetyEvidence["metricsHashStatus"] = "path-mismatch"
+        }
+    }
+
+    $sourceEngine = [string]$offlineFixtureMetricsEvidence.evidenceEngine
+    $txEngine = [string]$txFixtureSafetyEvidence.evidenceEngine
+    if (-not [string]::IsNullOrWhiteSpace($sourceEngine) -and
+        -not [string]::IsNullOrWhiteSpace($txEngine) -and
+        -not [string]::Equals($sourceEngine, $txEngine, [StringComparison]::OrdinalIgnoreCase)) {
+        Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "tx-fixture-safety-source-engine-mismatch" "TX fixture safety evidenceEngine '$txEngine' does not match offline-fixture-metrics evidenceEngine '$sourceEngine'."
+        $txFixtureSafetyEvidence["readyForReview"] = $false
+        $txFixtureSafetyEvidence["status"] = "not-ready"
+    }
+
+    if ((Test-Truthy $txFixtureSafetyEvidence.wdspBackedEvidence) -and -not (Test-Truthy $offlineFixtureMetricsEvidence.wdspBackedEvidence)) {
+        Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "tx-fixture-safety-source-not-wdsp-backed" "TX fixture safety claims WDSP-backed evidence, but offline-fixture-metrics is not WDSP-backed."
+        $txFixtureSafetyEvidence["readyForReview"] = $false
+        $txFixtureSafetyEvidence["status"] = "not-ready"
+    }
+
+    $expectedTxMetricsSha256 = ([string]$offlineFixtureMetricsEvidence.sha256).Trim().ToLowerInvariant()
+    $actualTxMetricsSha256 = ([string]$txFixtureSafetyEvidence.metricsSha256).Trim().ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($actualTxMetricsSha256)) {
+        $txFixtureSafetyEvidence["metricsHashStatus"] = "missing"
+        Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "tx-fixture-safety-source-metrics-hash-missing" "TX fixture safety report must declare metricsSha256 for the source offline-fixture-metrics artifact."
+        $txFixtureSafetyEvidence["readyForReview"] = $false
+        $txFixtureSafetyEvidence["status"] = "not-ready"
+    }
+    elseif ([string]::IsNullOrWhiteSpace($expectedTxMetricsSha256)) {
+        $txFixtureSafetyEvidence["metricsHashStatus"] = "source-missing"
+        Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "tx-fixture-safety-source-metrics-hash-source-missing" "Strict validation could not compute SHA-256 for the offline-fixture-metrics artifact."
+        $txFixtureSafetyEvidence["readyForReview"] = $false
+        $txFixtureSafetyEvidence["status"] = "not-ready"
+    }
+    elseif (-not [string]::Equals($expectedTxMetricsSha256, $actualTxMetricsSha256, [StringComparison]::OrdinalIgnoreCase)) {
+        $txFixtureSafetyEvidence["metricsHashStatus"] = "mismatch"
+        Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "tx-fixture-safety-source-metrics-hash-mismatch" "TX fixture safety metricsSha256 '$actualTxMetricsSha256' does not match current offline-fixture-metrics SHA-256 '$expectedTxMetricsSha256'. Rerun summarize-dsp-tx-fixture-safety.ps1 after regenerating fixture evidence."
+        $txFixtureSafetyEvidence["readyForReview"] = $false
+        $txFixtureSafetyEvidence["status"] = "not-ready"
+    }
+    else {
+        $txFixtureSafetyEvidence["metricsHashStatus"] = "match"
+    }
+
+    $expectedTxRuntimeSha256 = ([string]$offlineFixtureMetricsEvidence.wdspRuntimeSha256).Trim().ToLowerInvariant()
+    $actualTxRuntimeSha256 = ([string]$txFixtureSafetyEvidence.wdspRuntimeSha256).Trim().ToLowerInvariant()
+    if ((Test-Truthy $offlineFixtureMetricsEvidence.wdspBackedEvidence) -or (Test-Truthy $txFixtureSafetyEvidence.wdspBackedEvidence)) {
+        if ([string]::IsNullOrWhiteSpace($actualTxRuntimeSha256)) {
+            $txFixtureSafetyEvidence["runtimeHashStatus"] = "missing"
+            Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "tx-fixture-safety-runtime-hash-missing" "TX fixture safety report must declare wdspRuntimeSha256 for the WDSP runtime used by the source fixture run."
+            $txFixtureSafetyEvidence["readyForReview"] = $false
+            $txFixtureSafetyEvidence["status"] = "not-ready"
+        }
+        elseif ([string]::IsNullOrWhiteSpace($expectedTxRuntimeSha256)) {
+            $txFixtureSafetyEvidence["runtimeHashStatus"] = "source-missing"
+            Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "tx-fixture-safety-source-runtime-hash-missing" "offline-fixture-metrics must declare wdspRuntimeSha256 before TX fixture safety evidence can be accepted."
+            $txFixtureSafetyEvidence["readyForReview"] = $false
+            $txFixtureSafetyEvidence["status"] = "not-ready"
+        }
+        elseif (-not [string]::Equals($expectedTxRuntimeSha256, $actualTxRuntimeSha256, [StringComparison]::OrdinalIgnoreCase)) {
+            $txFixtureSafetyEvidence["runtimeHashStatus"] = "mismatch"
+            Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "tx-fixture-safety-runtime-hash-mismatch" "TX fixture safety wdspRuntimeSha256 '$actualTxRuntimeSha256' does not match offline-fixture-metrics wdspRuntimeSha256 '$expectedTxRuntimeSha256'. Rerun summarize-dsp-tx-fixture-safety.ps1 after regenerating fixture evidence."
+            $txFixtureSafetyEvidence["readyForReview"] = $false
+            $txFixtureSafetyEvidence["status"] = "not-ready"
+        }
+        else {
+            $txFixtureSafetyEvidence["runtimeHashStatus"] = "match"
+        }
+    }
+    else {
+        $txFixtureSafetyEvidence["runtimeHashStatus"] = "not-wdsp-backed"
+    }
+}
+
 if ((Test-Truthy $offlineFixtureMetricsEvidence.present) -and (Test-Truthy $nativeRuntimeArtifactAuditEvidence.present)) {
     $sourceRuntimeRid = [string]$offlineFixtureMetricsEvidence.wdspRuntimeRid
     $sourceRuntimeSha256 = ([string]$offlineFixtureMetricsEvidence.wdspRuntimeSha256).Trim().ToLowerInvariant()
@@ -15842,7 +17303,28 @@ $report = [ordered]@{
     crossRadioValidationSourceMetricComparisonReadyCount = $crossRadioValidationEvidence.sourceMetricComparisonReadyCount
     crossRadioValidationSourceLiveTraceComparisonReadyCount = $crossRadioValidationEvidence.sourceLiveTraceComparisonReadyCount
     crossRadioValidationSourceThetisLiveTraceComparisonReadyCount = $crossRadioValidationEvidence.sourceThetisLiveTraceComparisonReadyCount
+    crossRadioValidationSourceReportProvenanceReady = $crossRadioValidationEvidence.sourceReportProvenanceReady
+    crossRadioValidationSourceReportPathInvalidCount = $crossRadioValidationEvidence.sourceReportPathInvalidCount
+    crossRadioValidationSourceReportFileMissingCount = $crossRadioValidationEvidence.sourceReportFileMissingCount
+    crossRadioValidationSourceReportJsonInvalidCount = $crossRadioValidationEvidence.sourceReportJsonInvalidCount
+    crossRadioValidationSourceReportStrictValidationMarkerMissingCount = $crossRadioValidationEvidence.sourceReportStrictValidationMarkerMissingCount
+    crossRadioValidationSourceReportHashPresentCount = $crossRadioValidationEvidence.sourceReportHashPresentCount
+    crossRadioValidationSourceReportHashMissingCount = $crossRadioValidationEvidence.sourceReportHashMissingCount
+    crossRadioValidationSourceReportHashMismatchCount = $crossRadioValidationEvidence.sourceReportHashMismatchCount
+    crossRadioValidationSourceReportSummaryMismatchCount = $crossRadioValidationEvidence.sourceReportSummaryMismatchCount
     crossRadioValidationSourceBackedEvidenceReady = $crossRadioValidationEvidence.sourceBackedEvidenceReady
+    crossRadioValidationRequiredSourceScenarioCount = $crossRadioValidationEvidence.requiredSourceScenarioCount
+    crossRadioValidationRequiredSourceScenarioIds = @($crossRadioValidationEvidence.requiredSourceScenarioIds)
+    crossRadioValidationSourceBackedScenarioCount = $crossRadioValidationEvidence.sourceBackedScenarioCount
+    crossRadioValidationSourceBackedScenarioIds = @($crossRadioValidationEvidence.sourceBackedScenarioIds)
+    crossRadioValidationMissingRequiredSourceScenarioCount = $crossRadioValidationEvidence.missingRequiredSourceScenarioCount
+    crossRadioValidationMissingRequiredSourceScenarioIds = @($crossRadioValidationEvidence.missingRequiredSourceScenarioIds)
+    crossRadioValidationRequiredSourceComparisonCount = $crossRadioValidationEvidence.requiredSourceComparisonCount
+    crossRadioValidationRequiredSourceComparisonIds = @($crossRadioValidationEvidence.requiredSourceComparisonIds)
+    crossRadioValidationSourceBackedComparisonCount = $crossRadioValidationEvidence.sourceBackedComparisonCount
+    crossRadioValidationSourceBackedComparisonIds = @($crossRadioValidationEvidence.sourceBackedComparisonIds)
+    crossRadioValidationMissingRequiredSourceComparisonCount = $crossRadioValidationEvidence.missingRequiredSourceComparisonCount
+    crossRadioValidationMissingRequiredSourceComparisonIds = @($crossRadioValidationEvidence.missingRequiredSourceComparisonIds)
     liveMatrixMixedWeakStrongHuntReady = $liveMatrixMixedWeakStrongEvidence.huntReady
     liveMatrixMixedWeakStrongStatus = $liveMatrixMixedWeakStrongEvidence.status
     liveMatrixMixedWeakStrongReportCount = $liveMatrixMixedWeakStrongEvidence.reportCount
@@ -16174,6 +17656,59 @@ $report = [ordered]@{
     nativeStageTimingNativeCStageInstrumentationReady = $nativeStageTimingEvidence.nativeCStageInstrumentationReady
     nativeStageTimingNativeCStageInstrumentationStatus = $nativeStageTimingEvidence.nativeCStageInstrumentationStatus
     nativeStageTimingNativeAllocationProbeStatus = $nativeStageTimingEvidence.nativeAllocationProbeStatus
+    wdspChannelLifecycleReportPresent = $wdspChannelLifecycleEvidence.present
+    wdspChannelLifecycleReportReady = $wdspChannelLifecycleEvidence.readyForReview
+    wdspChannelLifecycleReportStatus = $wdspChannelLifecycleEvidence.status
+    wdspChannelLifecycleReportPath = $wdspChannelLifecycleEvidence.path
+    wdspChannelLifecycleReportSha256 = $wdspChannelLifecycleEvidence.sha256
+    wdspChannelLifecycleReportSchemaVersion = $wdspChannelLifecycleEvidence.schemaVersion
+    wdspChannelLifecycleReportTool = $wdspChannelLifecycleEvidence.tool
+    wdspChannelLifecycleScenarioId = $wdspChannelLifecycleEvidence.scenarioId
+    wdspChannelLifecycleWdspRuntimeRid = $wdspChannelLifecycleEvidence.wdspRuntimeRid
+    wdspChannelLifecycleWdspRuntimeSha256 = $wdspChannelLifecycleEvidence.wdspRuntimeSha256
+    wdspChannelLifecycleWdspRuntimeStatus = $wdspChannelLifecycleEvidence.wdspRuntimeStatus
+    wdspChannelLifecycleCycleCount = $wdspChannelLifecycleEvidence.cycleCount
+    wdspChannelLifecycleTransitionCount = $wdspChannelLifecycleEvidence.transitionCount
+    wdspChannelLifecycleTransitionFailureCount = $wdspChannelLifecycleEvidence.transitionFailureCount
+    wdspChannelLifecycleStateTransitionSuccess = $wdspChannelLifecycleEvidence.stateTransitionSuccess
+    wdspChannelLifecycleNativeExceptionCount = $wdspChannelLifecycleEvidence.nativeExceptionCount
+    wdspChannelLifecycleMeterEscapeCount = $wdspChannelLifecycleEvidence.meterEscapeCount
+    wdspChannelLifecycleAudioDrainSamples = $wdspChannelLifecycleEvidence.audioDrainSamples
+    wdspChannelLifecycleAudioDrainFailureCount = $wdspChannelLifecycleEvidence.audioDrainFailureCount
+    wdspChannelLifecycleStaleAudioAfterCloseSamples = $wdspChannelLifecycleEvidence.staleAudioAfterCloseSamples
+    wdspChannelLifecycleGateFailureCount = $wdspChannelLifecycleEvidence.lifecycleGateFailureCount
+    wdspChannelLifecycleDefaultBehaviorChanged = $wdspChannelLifecycleEvidence.defaultBehaviorChanged
+    txFixtureSafetyReportPresent = $txFixtureSafetyEvidence.present
+    txFixtureSafetyReportReady = $txFixtureSafetyEvidence.readyForReview
+    txFixtureSafetyReportStatus = $txFixtureSafetyEvidence.status
+    txFixtureSafetyReportPath = $txFixtureSafetyEvidence.path
+    txFixtureSafetyReportSha256 = $txFixtureSafetyEvidence.sha256
+    txFixtureSafetyReportSchemaVersion = $txFixtureSafetyEvidence.schemaVersion
+    txFixtureSafetyReportTool = $txFixtureSafetyEvidence.tool
+    txFixtureSafetyReportEvidenceKind = $txFixtureSafetyEvidence.evidenceKind
+    txFixtureSafetyMetricsPath = $txFixtureSafetyEvidence.metricsPath
+    txFixtureSafetyMetricsSha256 = $txFixtureSafetyEvidence.metricsSha256
+    txFixtureSafetyMetricsHashStatus = $txFixtureSafetyEvidence.metricsHashStatus
+    txFixtureSafetyEvidenceEngine = $txFixtureSafetyEvidence.evidenceEngine
+    txFixtureSafetyEvidenceTool = $txFixtureSafetyEvidence.evidenceTool
+    txFixtureSafetyWdspBackedEvidence = $txFixtureSafetyEvidence.wdspBackedEvidence
+    txFixtureSafetyWdspRuntimeRid = $txFixtureSafetyEvidence.wdspRuntimeRid
+    txFixtureSafetyWdspRuntimeSha256 = $txFixtureSafetyEvidence.wdspRuntimeSha256
+    txFixtureSafetyWdspRuntimeStatus = $txFixtureSafetyEvidence.wdspRuntimeStatus
+    txFixtureSafetyWdspRuntimeHashStatus = $txFixtureSafetyEvidence.runtimeHashStatus
+    txFixtureSafetyScenarioCount = $txFixtureSafetyEvidence.scenarioCount
+    txFixtureSafetyComparisonCount = $txFixtureSafetyEvidence.comparisonCount
+    txFixtureSafetyMissingScenarioCount = $txFixtureSafetyEvidence.missingScenarioCount
+    txFixtureSafetyMissingComparisonCount = $txFixtureSafetyEvidence.missingComparisonCount
+    txFixtureSafetyGateFailureCount = $txFixtureSafetyEvidence.gateFailureCount
+    txFixtureSafetyClippingCountTotal = $txFixtureSafetyEvidence.clippingCountTotal
+    txFixtureSafetyMaxTxOutputPeakDbfs = $txFixtureSafetyEvidence.maxTxOutputPeakDbfs
+    txFixtureSafetyMaxTxAlcGainReductionDb = $txFixtureSafetyEvidence.maxTxAlcGainReductionDb
+    txFixtureSafetyMaxTxCfcGainReductionDb = $txFixtureSafetyEvidence.maxTxCfcGainReductionDb
+    txFixtureSafetyMaxTxLevelerGainReductionDb = $txFixtureSafetyEvidence.maxTxLevelerGainReductionDb
+    txFixtureSafetyMaxProcessingElapsedMs = $txFixtureSafetyEvidence.maxProcessingElapsedMs
+    txFixtureSafetyMinThroughputRatio = $txFixtureSafetyEvidence.minThroughputRatio
+    txFixtureSafetyDefaultBehaviorChanged = $txFixtureSafetyEvidence.defaultBehaviorChanged
     metricComparisonPresent = $metricComparisonEvidence.present
     metricComparisonReady = $metricComparisonEvidence.readyForReview
     metricComparisonReportReadyForReview = $metricComparisonEvidence.reportReadyForReview
@@ -16684,12 +18219,80 @@ $report = [ordered]@{
     pureSignalSafeBypassMissingModes = @($pureSignalSafeBypassEvidence.missingModes)
     pureSignalSafeBypassDefaultStatePreserved = $pureSignalSafeBypassEvidence.pureSignalDefaultStatePreserved
     pureSignalSafeBypassDefaultBehaviorChangeApproved = $pureSignalSafeBypassEvidence.defaultBehaviorChangeApproved
+    pureSignalSafeBypassLiveReadinessEvidenceRequired = $pureSignalSafeBypassEvidence.liveReadinessEvidenceRequired
+    pureSignalSafeBypassLiveReadinessReady = $pureSignalSafeBypassEvidence.liveReadinessReady
+    pureSignalSafeBypassLiveReadinessReadyCount = $pureSignalSafeBypassEvidence.liveReadinessReadyCount
+    pureSignalSafeBypassLiveReadinessMissingCount = $pureSignalSafeBypassEvidence.liveReadinessMissingCount
+    pureSignalSafeBypassLiveReadinessFailureCount = $pureSignalSafeBypassEvidence.liveReadinessFailureCount
+    pureSignalSafeBypassModeConsistencyReady = $pureSignalSafeBypassEvidence.modeConsistencyReady
+    pureSignalSafeBypassModeMismatchCaptureCount = $pureSignalSafeBypassEvidence.modeMismatchCaptureCount
+    pureSignalSafeBypassModeMismatchSampleCount = $pureSignalSafeBypassEvidence.modeMismatchSampleCount
     pureSignalSafeBypassFeedbackStabilityMin = $pureSignalSafeBypassEvidence.feedbackStabilityMin
     pureSignalSafeBypassFeedbackStabilityThreshold = $pureSignalSafeBypassEvidence.feedbackStabilityThreshold
     pureSignalSafeBypassTxMonitorCouplingMax = $pureSignalSafeBypassEvidence.txMonitorCouplingMax
     pureSignalSafeBypassTxMonitorCouplingThreshold = $pureSignalSafeBypassEvidence.txMonitorCouplingThreshold
     pureSignalSafeBypassClippingCountTotal = $pureSignalSafeBypassEvidence.clippingCountTotal
     pureSignalSafeBypassGateFailureCount = $pureSignalSafeBypassEvidence.gateFailureCount
+    pureSignalSafeBypassCaptureRecordCount = $pureSignalSafeBypassEvidence.captureRecordCount
+    pureSignalSafeBypassDisabledCaptureRecordCount = $pureSignalSafeBypassEvidence.disabledCaptureRecordCount
+    pureSignalSafeBypassEnabledCaptureRecordCount = $pureSignalSafeBypassEvidence.enabledCaptureRecordCount
+    pureSignalSafeBypassCaptureTraceMissingCount = $pureSignalSafeBypassEvidence.captureTraceMissingCount
+    pureSignalSafeBypassCaptureTraceHashMismatchCount = $pureSignalSafeBypassEvidence.captureTraceHashMismatchCount
+    pureSignalSafeBypassCaptureTraceProvenanceReady = $pureSignalSafeBypassEvidence.captureTraceProvenanceReady
+    txOutputHeadroomAbTracePresent = $txOutputHeadroomAbEvidence.present
+    txOutputHeadroomAbTraceReady = $txOutputHeadroomAbEvidence.readyForReview
+    txOutputHeadroomAbTraceStatus = $txOutputHeadroomAbEvidence.status
+    txOutputHeadroomAbTracePath = $txOutputHeadroomAbEvidence.path
+    txOutputHeadroomAbTraceSha256 = $txOutputHeadroomAbEvidence.sha256
+    txOutputHeadroomAbTraceMode = $txOutputHeadroomAbEvidence.mode
+    txOutputHeadroomAbTraceNoKeyingByScript = $txOutputHeadroomAbEvidence.noKeyingByScript
+    txOutputHeadroomAbTraceAllowTransmit = $txOutputHeadroomAbEvidence.allowTransmit
+    txOutputHeadroomAbTraceRequiresLiveReady = $txOutputHeadroomAbEvidence.requiresLiveReady
+    txOutputHeadroomAbTracePreflightReady = $txOutputHeadroomAbEvidence.preflightReady
+    txOutputHeadroomAbTracePreflightFailureCount = $txOutputHeadroomAbEvidence.preflightFailureCount
+    txOutputHeadroomAbTracePreflightFailures = @($txOutputHeadroomAbEvidence.preflightFailures)
+    txOutputHeadroomAbTraceLiveReadinessReady = $txOutputHeadroomAbEvidence.liveReadinessReady
+    txOutputHeadroomAbTraceProfileBeforeCurrent = $txOutputHeadroomAbEvidence.profileBeforeCurrent
+    txOutputHeadroomAbTraceCurrentProfileReady = $txOutputHeadroomAbEvidence.currentProfileReady
+    txOutputHeadroomAbTraceCandidateProfileReady = $txOutputHeadroomAbEvidence.candidateProfileReady
+    txOutputHeadroomAbTraceResetToCurrentReady = $txOutputHeadroomAbEvidence.resetToCurrentReady
+    txOutputHeadroomAbTraceCandidateActiveProfile = $txOutputHeadroomAbEvidence.candidateActiveProfile
+    txOutputHeadroomAbTraceCandidatePureSignalBypassActive = $txOutputHeadroomAbEvidence.candidatePureSignalBypassActive
+    txOutputHeadroomAbTraceCandidateReadyForBenchmarkTrace = $txOutputHeadroomAbEvidence.candidateReadyForBenchmarkTrace
+    txOutputHeadroomAbTraceCandidateOkSampleCount = $txOutputHeadroomAbEvidence.candidateOkSampleCount
+    txOutputHeadroomAbTraceCandidateRuntimeEvidenceSampleCount = $txOutputHeadroomAbEvidence.candidateRuntimeEvidenceSampleCount
+    txOutputHeadroomAbTraceCandidateTxMonitorSampleCount = $txOutputHeadroomAbEvidence.candidateTxMonitorSampleCount
+    txOutputHeadroomAbTraceCandidateExperimentalSampleCount = $txOutputHeadroomAbEvidence.candidateExperimentalSampleCount
+    txOutputHeadroomAbTraceCandidatePureSignalBypassedSampleCount = $txOutputHeadroomAbEvidence.candidatePureSignalBypassedSampleCount
+    txOutputHeadroomAbTraceWatcherSummaryRequired = $txOutputHeadroomAbEvidence.watcherSummaryRequired
+    txOutputHeadroomAbTraceWatcherSummaryReady = $txOutputHeadroomAbEvidence.watcherSummaryReady
+    txOutputHeadroomAbTraceWatcherSummaryMissingCount = $txOutputHeadroomAbEvidence.watcherSummaryMissingCount
+    txOutputHeadroomAbTraceWatcherSummaryInvalidCount = $txOutputHeadroomAbEvidence.watcherSummaryInvalidCount
+    txOutputHeadroomAbTraceWatcherSummaryMismatchCount = $txOutputHeadroomAbEvidence.watcherSummaryMismatchCount
+    txOutputHeadroomAbTraceWatcherProfileBucketReady = $txOutputHeadroomAbEvidence.watcherProfileBucketReady
+    txOutputHeadroomAbTraceWatcherProfileBucketMissingCount = $txOutputHeadroomAbEvidence.watcherProfileBucketMissingCount
+    txOutputHeadroomAbTraceWatcherProfileBucketMismatchCount = $txOutputHeadroomAbEvidence.watcherProfileBucketMismatchCount
+    rxLevelerAbLiveComparisonPresent = $rxLevelerAbLiveComparisonEvidence.present
+    rxLevelerAbLiveComparisonReady = $rxLevelerAbLiveComparisonEvidence.ready
+    rxLevelerAbLiveComparisonReadyForReview = $rxLevelerAbLiveComparisonEvidence.readyForReview
+    rxLevelerAbLiveComparisonStatus = $rxLevelerAbLiveComparisonEvidence.status
+    rxLevelerAbLiveComparisonEvidenceStatus = $rxLevelerAbLiveComparisonEvidence.evidenceStatus
+    rxLevelerAbLiveComparisonPath = $rxLevelerAbLiveComparisonEvidence.path
+    rxLevelerAbLiveComparisonSha256 = $rxLevelerAbLiveComparisonEvidence.sha256
+    rxLevelerAbLiveComparisonTool = $rxLevelerAbLiveComparisonEvidence.tool
+    rxLevelerAbLiveComparisonBundleRelativePaths = $rxLevelerAbLiveComparisonEvidence.bundleRelativePaths
+    rxLevelerAbLiveComparisonAbsolutePathCount = $rxLevelerAbLiveComparisonEvidence.absolutePathCount
+    rxLevelerAbLiveComparisonActiveAudioReady = $rxLevelerAbLiveComparisonEvidence.activeAudioReady
+    rxLevelerAbLiveComparisonPassbandReady = $rxLevelerAbLiveComparisonEvidence.passbandEvidenceReady
+    rxLevelerAbLiveComparisonControlMemoryReady = $rxLevelerAbLiveComparisonEvidence.candidateControlMemoryReady
+    rxLevelerAbLiveComparisonOptimizationReady = $rxLevelerAbLiveComparisonEvidence.optimizationReady
+    rxLevelerAbLiveComparisonCaptureStabilityReady = $rxLevelerAbLiveComparisonEvidence.captureStabilityReady
+    rxLevelerAbLiveComparisonCaptureStabilityStatus = $rxLevelerAbLiveComparisonEvidence.captureStabilityStatus
+    rxLevelerAbLiveComparisonPromotionReady = $rxLevelerAbLiveComparisonEvidence.promotionReady
+    rxLevelerAbLiveComparisonMaterialImprovementCount = $rxLevelerAbLiveComparisonEvidence.materialImprovementCount
+    rxLevelerAbLiveComparisonRegressionCount = $rxLevelerAbLiveComparisonEvidence.optimizationRegressionCount
+    rxLevelerAbLiveComparisonBaselinePassbandPeakSampleCount = $rxLevelerAbLiveComparisonEvidence.baselinePassbandPeakSampleCount
+    rxLevelerAbLiveComparisonCandidatePassbandPeakSampleCount = $rxLevelerAbLiveComparisonEvidence.candidatePassbandPeakSampleCount
     errorCount = $errors.Count
     warningCount = $warnings.Count
     hardwareEvidence = $hardwareEvidence
@@ -16697,6 +18300,7 @@ $report = [ordered]@{
     metricCatalogEvidence = $metricCatalogEvidence
     offlineFixtureMetricsEvidence = $offlineFixtureMetricsEvidence
     nativeStageTimingEvidence = $nativeStageTimingEvidence
+    txFixtureSafetyEvidence = $txFixtureSafetyEvidence
     externalEngineCandidateEvidence = $externalEngineCandidateEvidence
     crossRadioValidationEvidence = $crossRadioValidationEvidence
     manualTuneObserverEvidence = $manualTuneObserverEvidence
@@ -16704,6 +18308,8 @@ $report = [ordered]@{
     externalEngineBakeoffEvidence = $externalEngineBakeoffEvidence
     externalEngineBakeoffCycleEvidence = $externalEngineBakeoffCycleEvidence
     pureSignalSafeBypassEvidence = $pureSignalSafeBypassEvidence
+    txOutputHeadroomAbEvidence = $txOutputHeadroomAbEvidence
+    rxLevelerAbLiveComparisonEvidence = $rxLevelerAbLiveComparisonEvidence
     metricComparisonEvidence = $metricComparisonEvidence
     liveTraceComparisonEvidence = $liveTraceComparisonEvidence
     liveTraceThetisComparisonEvidence = $liveTraceThetisComparisonEvidence

@@ -64,6 +64,7 @@ public class TxAudioIngestTests
         public int BlockSize { get; set; } = 1024;
         public int TxBlockSamples => BlockSize;
         public int TxOutputSamples => BlockSize;
+        public bool TxMonitorOn { get; set; }
         public int ProcessedBlocks { get; private set; }
         public float[]? LastMicBlock { get; private set; }
         public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved)
@@ -129,7 +130,7 @@ public class TxAudioIngestTests
         public void SetCfcConfig(CfcConfig cfg) { }
         public void SetTxMonitorEnabled(bool enabled) { }
         public int ReadTxMonitorAudio(Span<float> output) => 0;
-        public bool IsTxMonitorOn => false;
+        public bool IsTxMonitorOn => TxMonitorOn;
         public void Dispose() { }
     }
 
@@ -399,6 +400,101 @@ public class TxAudioIngestTests
         Assert.Contains(lastP2!, v => v == 0.5f);
     }
 
+    [Fact]
+    public void CandidateTxOutputHeadroom_TrimsKeyedVoiceWireIq()
+    {
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        float[]? lastP2 = null;
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>(),
+            forwardP2: iq => lastP2 = iq.ToArray(),
+            txOutputHeadroomRuntime: () => TxHeadroomRuntime(
+                DspPipelineService.TxOutputHeadroomProfile.HeadroomTrimCandidate));
+
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytes(payload);
+        ingest.OnMicPcmBytes(payload);
+
+        Assert.Equal(1, ingest.TotalTxBlocks);
+        Assert.NotNull(lastP2);
+        float expected = 0.5f * DspPipelineService.TxOutputHeadroomCandidateScale;
+        Assert.InRange(lastP2![0], expected - 0.000001f, expected + 0.000001f);
+        Assert.Equal(0f, lastP2[1]);
+        Assert.DoesNotContain(lastP2, v => v == 0.5f);
+    }
+
+    [Fact]
+    public void CandidateTxOutputHeadroom_PureSignalBypassPreservesWireIq()
+    {
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        float[]? lastP2 = null;
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>(),
+            forwardP2: iq => lastP2 = iq.ToArray(),
+            txOutputHeadroomRuntime: () => TxHeadroomRuntime(
+                DspPipelineService.TxOutputHeadroomProfile.Current,
+                pureSignalBypassed: true));
+
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytes(payload);
+        ingest.OnMicPcmBytes(payload);
+
+        Assert.Equal(1, ingest.TotalTxBlocks);
+        Assert.NotNull(lastP2);
+        Assert.Contains(lastP2!, v => v == 0.5f);
+    }
+
+    [Fact]
+    public void CandidateTxOutputHeadroom_DoesNotRunWhenTuneDriverOwnsTx()
+    {
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        float[]? lastP2 = null;
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>(),
+            forwardP2: iq => lastP2 = iq.ToArray(),
+            txOwnedByTuneDriver: () => true,
+            txOutputHeadroomRuntime: () => TxHeadroomRuntime(
+                DspPipelineService.TxOutputHeadroomProfile.HeadroomTrimCandidate));
+
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytes(payload);
+        ingest.OnMicPcmBytes(payload);
+
+        Assert.Equal(0, engine.ProcessedBlocks);
+        Assert.Equal(0, ingest.TotalTxBlocks);
+        Assert.Equal(0, ring.Count);
+        Assert.Null(lastP2);
+    }
+
+    [Fact]
+    public void CandidateTxOutputHeadroom_DoesNotWriteMonitorOnlyPreview()
+    {
+        var engine = new StubEngine { BlockSize = 1024, TxMonitorOn = true };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        float[]? lastP2 = null;
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => false, hub, new NullLogger<TxAudioIngest>(),
+            forwardP2: iq => lastP2 = iq.ToArray(),
+            txOutputHeadroomRuntime: () => TxHeadroomRuntime(
+                DspPipelineService.TxOutputHeadroomProfile.HeadroomTrimCandidate));
+
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytes(payload);
+        ingest.OnMicPcmBytes(payload);
+
+        Assert.Equal(1, engine.ProcessedBlocks);
+        Assert.Equal(1, ingest.TotalTxBlocks);
+        Assert.Equal(0, ring.Count);
+        Assert.Null(lastP2);
+    }
+
     // WAV-over-air playback is exempt from the mute even while the window is
     // open: the operator already keyed and the clip head is position-locked, so
     // muting it would clip the intro. The WAV source path sets the recency
@@ -423,5 +519,22 @@ public class TxAudioIngestTests
         Assert.Equal(1, ingest.TotalTxBlocks);
         Assert.NotNull(lastP2);
         Assert.Contains(lastP2!, v => v == 0.5f);   // not muted
+    }
+
+    private static DspPipelineService.TxOutputHeadroomRuntime TxHeadroomRuntime(
+        DspPipelineService.TxOutputHeadroomProfile activeProfile,
+        bool pureSignalBypassed = false)
+    {
+        return new DspPipelineService.TxOutputHeadroomRuntime(
+            RequestedProfile: DspPipelineService.TxOutputHeadroomProfile.HeadroomTrimCandidate,
+            ActiveProfile: activeProfile,
+            Experimental: true,
+            PureSignalBypassed: pureSignalBypassed,
+            TrimDb: activeProfile == DspPipelineService.TxOutputHeadroomProfile.HeadroomTrimCandidate
+                ? DspPipelineService.TxOutputHeadroomCandidateTrimDb
+                : 0.0,
+            LinearScale: activeProfile == DspPipelineService.TxOutputHeadroomProfile.HeadroomTrimCandidate
+                ? DspPipelineService.TxOutputHeadroomCandidateScale
+                : 1.0f);
     }
 }

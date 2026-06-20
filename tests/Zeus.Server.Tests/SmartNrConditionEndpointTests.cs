@@ -393,6 +393,15 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Contains(artifacts, item => item.GetProperty("id").GetString() == "wdsp-runtime-artifact-audit");
         Assert.Contains(artifacts, item => item.GetProperty("source").GetString() == "/api/radio/diagnostics/dsp-scene");
         Assert.Contains(artifacts, item => item.GetProperty("id").GetString() == "offline-fixture-metrics");
+        Assert.Contains(artifacts, item =>
+            item.GetProperty("id").GetString() == "rx-audio-leveler-fixture-benchmark" &&
+            !item.GetProperty("required").GetBoolean() &&
+            item.GetProperty("source").GetString() == "tools/run-dsp-rx-leveler-fixture-benchmark.ps1");
+        Assert.Contains(artifacts, item =>
+            item.GetProperty("id").GetString() == "tx-output-headroom-ab-trace" &&
+            item.GetProperty("kind").GetString() == "diagnostics-ab-summary-json" &&
+            !item.GetProperty("required").GetBoolean() &&
+            item.GetProperty("source").GetString() == "tools/capture-tx-output-headroom-ab.ps1");
     }
 
     [Fact]

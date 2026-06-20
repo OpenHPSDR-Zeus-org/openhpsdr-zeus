@@ -326,6 +326,53 @@ public sealed class DspPipelineAudioSanitizerTests
     }
 
     [Fact]
+    public void BuildAudioPathDiagnostics_ReportsRxLevelerCandidateControlRms()
+    {
+        var diag = DspPipelineService.BuildAudioPathDiagnostics(
+            valid: true,
+            ageMs: 14,
+            lastSeq: 127,
+            framesBroadcast: 16,
+            source: "rx",
+            sampleRateHz: 48_000,
+            sampleCount: 1600,
+            rms: 0.11,
+            peak: 0.18,
+            txMonitorRequested: false,
+            squelchEnabled: false,
+            squelchOpen: true,
+            squelchTailActive: false,
+            squelchGain: 1.0,
+            monitorBacklogSamples: 0,
+            audioSinkCount: 2,
+            levelerValid: true,
+            levelerInputRmsDbfs: -39.6,
+            levelerOutputRmsDbfs: -22.2,
+            levelerInputPeakDbfs: -24.0,
+            levelerOutputPeakDbfs: -10.5,
+            levelerDesiredGainDb: 17.4,
+            levelerAppliedGainDb: 14.0,
+            levelerGainDeltaDb: 0.8,
+            levelerPeakHeadroomDb: 11.1,
+            levelerPreLimitPeakDbfs: -10.5,
+            levelerOutputLimitReductionDb: 0.0,
+            levelerRequestedProfile: "stable-speech-candidate",
+            levelerActiveProfile: "stable-speech-candidate",
+            levelerExperimental: true,
+            levelerControlRmsValid: true,
+            levelerControlRmsDbfs: -31.24,
+            levelerControlRmsHangDb: 8.36);
+
+        Assert.Equal("stable-speech-candidate", diag.RxAudioLevelerRequestedProfile);
+        Assert.Equal("stable-speech-candidate", diag.RxAudioLevelerActiveProfile);
+        Assert.True(diag.RxAudioLevelerExperimental);
+        Assert.True(diag.RxAudioLevelerControlRmsValid);
+        Assert.Equal(-31.2, diag.RxAudioLevelerControlRmsDbfs);
+        Assert.Equal(8.4, diag.RxAudioLevelerControlRmsHangDb);
+        Assert.Equal(0.8, diag.RxAudioLevelerGainDeltaDb);
+    }
+
+    [Fact]
     public void BuildRxListenabilityDiagnostics_FlagsFixedSquelchBlockingSignal()
     {
         var rxMeters = DspPipelineService.BuildRxMetersDiagnostics(
@@ -755,6 +802,333 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.Equal(0, state.OutputLimitSampleCount);
         Assert.InRange(state.AppliedGainDb, 3.8, 4.1);
         Assert.InRange(PeakAbs(block), 0.73f, 0.741f);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_StableSpeechCandidateKeepsLiveCrestBelowSoftKnee()
+    {
+        float[] currentBlock = new float[1024];
+        float[] candidateBlock = new float[1024];
+        Array.Fill(currentBlock, 0.102f);
+        Array.Fill(candidateBlock, 0.102f);
+        currentBlock[512] = 0.64f;
+        candidateBlock[512] = 0.64f;
+
+        var current = new DspPipelineService.RxAudioLevelerState();
+        var candidate = new DspPipelineService.RxAudioLevelerState();
+
+        DspPipelineService.ApplyRxAudioLeveler(currentBlock, ref current);
+        DspPipelineService.ApplyRxAudioLeveler(
+            candidateBlock,
+            ref candidate,
+            DspPipelineService.RxAudioLevelerProfile.StableSpeechCandidate);
+
+        Assert.True(current.PeakLimited);
+        Assert.True(candidate.PeakLimited);
+        Assert.False(current.OutputLimited);
+        Assert.False(candidate.OutputLimited);
+        Assert.True(PeakAbs(candidateBlock) < PeakAbs(currentBlock) - 0.04f);
+        Assert.InRange(PeakAbs(candidateBlock), 0.67f, 0.681f);
+        Assert.True(candidate.PreLimitPeakDbfs <= -3.3);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_CurrentProfileMatchesDefaultOverload()
+    {
+        var defaultState = new DspPipelineService.RxAudioLevelerState();
+        var currentState = new DspPipelineService.RxAudioLevelerState();
+        float[] defaultBlock = new float[1024];
+        float[] currentBlock = new float[1024];
+
+        foreach (float sample in new[] { 0.01f, 0.01f, 0.04f, 0.00001f, 0.9f, 0.003f })
+        {
+            Array.Fill(defaultBlock, sample);
+            Array.Fill(currentBlock, sample);
+
+            DspPipelineService.ApplyRxAudioLeveler(defaultBlock, ref defaultState);
+            DspPipelineService.ApplyRxAudioLeveler(
+                currentBlock,
+                ref currentState,
+                DspPipelineService.RxAudioLevelerProfile.Current);
+
+            Assert.Equal(defaultBlock, currentBlock);
+            Assert.Equal(defaultState.GainDb, currentState.GainDb, precision: 12);
+            Assert.Equal(defaultState.DesiredGainDb, currentState.DesiredGainDb, precision: 12);
+            Assert.Equal(defaultState.AppliedGainDb, currentState.AppliedGainDb, precision: 12);
+            Assert.Equal(defaultState.GainDeltaDb, currentState.GainDeltaDb, precision: 12);
+            Assert.Equal(defaultState.OutputLimited, currentState.OutputLimited);
+            Assert.False(currentState.ControlRmsValid);
+            Assert.Equal(0.0, currentState.ControlRmsHangDb, precision: 12);
+        }
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_StableSpeechCandidatePreservesWeakSyllablesWithBoundedGainMovement()
+    {
+        var current = new DspPipelineService.RxAudioLevelerState();
+        var candidate = new DspPipelineService.RxAudioLevelerState();
+        float[] currentBlock = new float[1024];
+        float[] candidateBlock = new float[1024];
+
+        for (int i = 0; i < 6; i++)
+        {
+            Array.Fill(currentBlock, 0.04f);
+            Array.Fill(candidateBlock, 0.04f);
+            DspPipelineService.ApplyRxAudioLeveler(currentBlock, ref current);
+            DspPipelineService.ApplyRxAudioLeveler(
+                candidateBlock,
+                ref candidate,
+                DspPipelineService.RxAudioLevelerProfile.StableSpeechCandidate);
+        }
+
+        double currentMaxGainMovement = 0.0;
+        double candidateMaxGainMovement = 0.0;
+        double candidateWeakHangDb = 0.0;
+        double currentMinOutput = double.PositiveInfinity;
+        double currentMaxOutput = double.NegativeInfinity;
+        double candidateMinOutput = double.PositiveInfinity;
+        double candidateMaxOutput = double.NegativeInfinity;
+        double currentWeakOutputSum = 0.0;
+        double candidateWeakOutputSum = 0.0;
+        int weakBlocks = 0;
+
+        for (int i = 0; i < 12; i++)
+        {
+            float sample = i % 2 == 0 ? 0.01f : 0.04f;
+            Array.Fill(currentBlock, sample);
+            Array.Fill(candidateBlock, sample);
+
+            DspPipelineService.ApplyRxAudioLeveler(currentBlock, ref current);
+            DspPipelineService.ApplyRxAudioLeveler(
+                candidateBlock,
+                ref candidate,
+                DspPipelineService.RxAudioLevelerProfile.StableSpeechCandidate);
+
+            currentMaxGainMovement = Math.Max(currentMaxGainMovement, Math.Abs(current.GainDeltaDb));
+            candidateMaxGainMovement = Math.Max(candidateMaxGainMovement, Math.Abs(candidate.GainDeltaDb));
+            currentMinOutput = Math.Min(currentMinOutput, current.OutputRmsDbfs);
+            currentMaxOutput = Math.Max(currentMaxOutput, current.OutputRmsDbfs);
+            candidateMinOutput = Math.Min(candidateMinOutput, candidate.OutputRmsDbfs);
+            candidateMaxOutput = Math.Max(candidateMaxOutput, candidate.OutputRmsDbfs);
+            if (sample < 0.02f)
+            {
+                candidateWeakHangDb = candidate.ControlRmsHangDb;
+                currentWeakOutputSum += current.OutputRmsDbfs;
+                candidateWeakOutputSum += candidate.OutputRmsDbfs;
+                weakBlocks++;
+            }
+
+            Assert.False(candidate.OutputLimited);
+            Assert.True(PeakAbs(candidateBlock) < 0.23f);
+        }
+
+        double currentOutputMovement = currentMaxOutput - currentMinOutput;
+        double candidateOutputMovement = candidateMaxOutput - candidateMinOutput;
+        double currentWeakAverage = currentWeakOutputSum / weakBlocks;
+        double candidateWeakAverage = candidateWeakOutputSum / weakBlocks;
+
+        Assert.True(currentMaxGainMovement < 0.1);
+        Assert.InRange(candidateMaxGainMovement, 0.1, 4.5);
+        Assert.True(candidateOutputMovement <= currentOutputMovement - 1.5);
+        Assert.True(candidateWeakAverage >= currentWeakAverage + 1.5);
+        Assert.True(candidate.ControlRmsValid);
+        Assert.True(candidateWeakHangDb >= 7.9);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_StableSpeechCandidateStillCatchesSustainedWeakSpeech()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState();
+        float[] block = new float[1024];
+
+        for (int i = 0; i < 6; i++)
+        {
+            Array.Fill(block, 0.04f);
+            DspPipelineService.ApplyRxAudioLeveler(
+                block,
+                ref state,
+                DspPipelineService.RxAudioLevelerProfile.StableSpeechCandidate);
+        }
+
+        for (int i = 0; i < 20; i++)
+        {
+            Array.Fill(block, 0.01f);
+            DspPipelineService.ApplyRxAudioLeveler(
+                block,
+                ref state,
+                DspPipelineService.RxAudioLevelerProfile.StableSpeechCandidate);
+        }
+
+        Assert.True(state.ControlRmsValid);
+        Assert.True(state.GainDb > 20.0);
+        Assert.True(state.ControlRmsHangDb < 1.0);
+        Assert.InRange(Rms(block), 0.10f, 0.15f);
+        Assert.False(state.OutputLimited);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_StableSpeechCandidateDoesNotPumpNearTargetSpeech()
+    {
+        var current = new DspPipelineService.RxAudioLevelerState();
+        var candidate = new DspPipelineService.RxAudioLevelerState();
+        float[] currentBlock = new float[1024];
+        float[] candidateBlock = new float[1024];
+
+        for (int i = 0; i < 4; i++)
+        {
+            Array.Fill(currentBlock, 0.16f);
+            Array.Fill(candidateBlock, 0.16f);
+            DspPipelineService.ApplyRxAudioLeveler(currentBlock, ref current);
+            DspPipelineService.ApplyRxAudioLeveler(
+                candidateBlock,
+                ref candidate,
+                DspPipelineService.RxAudioLevelerProfile.StableSpeechCandidate);
+        }
+
+        double currentMinOutput = double.PositiveInfinity;
+        double currentMaxOutput = double.NegativeInfinity;
+        double candidateMinOutput = double.PositiveInfinity;
+        double candidateMaxOutput = double.NegativeInfinity;
+        double currentMaxGainMovement = 0.0;
+        double candidateMaxGainMovement = 0.0;
+
+        for (int i = 0; i < 12; i++)
+        {
+            float sample = i % 3 == 0 ? 0.18f : 0.13f;
+            Array.Fill(currentBlock, sample);
+            Array.Fill(candidateBlock, sample);
+
+            DspPipelineService.ApplyRxAudioLeveler(currentBlock, ref current);
+            DspPipelineService.ApplyRxAudioLeveler(
+                candidateBlock,
+                ref candidate,
+                DspPipelineService.RxAudioLevelerProfile.StableSpeechCandidate);
+
+            currentMinOutput = Math.Min(currentMinOutput, current.OutputRmsDbfs);
+            currentMaxOutput = Math.Max(currentMaxOutput, current.OutputRmsDbfs);
+            candidateMinOutput = Math.Min(candidateMinOutput, candidate.OutputRmsDbfs);
+            candidateMaxOutput = Math.Max(candidateMaxOutput, candidate.OutputRmsDbfs);
+            currentMaxGainMovement = Math.Max(currentMaxGainMovement, Math.Abs(current.GainDeltaDb));
+            candidateMaxGainMovement = Math.Max(candidateMaxGainMovement, Math.Abs(candidate.GainDeltaDb));
+
+            Assert.False(candidate.OutputLimited);
+            Assert.False(candidate.ControlRmsValid);
+            Assert.Equal(0.0, candidate.ControlRmsHangDb, precision: 12);
+        }
+
+        Assert.True(candidateMaxOutput - candidateMinOutput <= currentMaxOutput - currentMinOutput + 0.25);
+        Assert.True(candidateMaxGainMovement <= currentMaxGainMovement + 0.25);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_StableSpeechCandidateStrongSignalAfterWeakSignalDoesNotBlast()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState();
+        float[] block = new float[1024];
+
+        for (int i = 0; i < 18; i++)
+        {
+            Array.Fill(block, 0.01f);
+            DspPipelineService.ApplyRxAudioLeveler(
+                block,
+                ref state,
+                DspPipelineService.RxAudioLevelerProfile.StableSpeechCandidate);
+        }
+
+        Assert.True(state.GainDb > 20.0);
+
+        Array.Fill(block, 0.9f);
+        DspPipelineService.ApplyRxAudioLeveler(
+            block,
+            ref state,
+            DspPipelineService.RxAudioLevelerProfile.StableSpeechCandidate);
+
+        Assert.InRange(Rms(block), 0.12f, 0.14f);
+        Assert.InRange(state.GainDb, -18.0, -16.0);
+        Assert.False(state.PeakLimited);
+        Assert.False(state.OutputLimited);
+        Assert.True(state.PeakHeadroomDb < -1.0);
+    }
+
+    [Fact]
+    public void BuildRxAudioLevelerFixtureBenchmark_DeclaresCandidateOptInAndPreservesDefault()
+    {
+        var report = DspRxAudioLevelerFixtureBenchmark.Build();
+
+        Assert.Equal(1, report.SchemaVersion);
+        Assert.Equal("rx-audio-leveler-profile-fixture", report.EvidenceKind);
+        Assert.Equal("current", report.DefaultProfile);
+        Assert.Equal("stable-speech-candidate", report.CandidateProfile);
+        Assert.True(report.ExperimentalOptIn);
+        Assert.False(report.DefaultBehaviorChanged);
+        Assert.Equal(4, report.Readiness.ScenarioCount);
+        Assert.Equal(4, report.Readiness.CandidatePassCount);
+        Assert.Equal(0, report.Readiness.CandidateFailCount);
+        Assert.True(report.Readiness.CandidateAllGatesPass);
+        Assert.True(report.Readiness.ReadyForLiveAb);
+        Assert.Equal("candidate-ready-for-live-g2-ab", report.Readiness.Recommendation);
+        Assert.Contains(report.AcceptanceGates, gate => gate.Contains("current profile remains", StringComparison.Ordinal));
+        Assert.Equal(4, report.Scenarios.Length);
+        Assert.All(report.Scenarios, scenario =>
+        {
+            Assert.Equal(scenario.Id, scenario.ScenarioId);
+            Assert.Equal("RX audio post-demod", scenario.SignalPath);
+            Assert.Equal("in-process-fixture-ready", scenario.FixtureStatus);
+            Assert.Equal("current", scenario.Current.Profile);
+            Assert.Equal("stable-speech-candidate", scenario.Candidate.Profile);
+            Assert.Contains(scenario.Comparisons, comparison => comparison.ComparisonId == "current-zeus");
+            Assert.Contains(scenario.Comparisons, comparison => comparison.ComparisonId == "candidate-under-test");
+        });
+    }
+
+    [Fact]
+    public void BuildRxAudioLevelerFixtureBenchmark_QuantifiesSyllablePumpingReduction()
+    {
+        var report = DspRxAudioLevelerFixtureBenchmark.Build();
+        var scenario = report.Scenarios.Single(item => item.Id == "ssb-syllable-step");
+
+        Assert.True(scenario.Comparison.CandidatePasses, JsonSerializer.Serialize(scenario));
+        Assert.True(scenario.Comparison.OutputRmsMovementReductionDb > 1.5);
+        Assert.True(scenario.Comparison.WeakOutputAverageDeltaDb > 1.5);
+        Assert.True(scenario.Candidate.MaxAbsGainDeltaDb <= 4.5);
+        Assert.True(scenario.Candidate.AppliedGainMovementDb <= 4.5);
+        Assert.Equal(0, scenario.Candidate.OutputLimitedBlockCount);
+        Assert.True(scenario.Candidate.ControlRmsValidBlockCount > 0);
+        Assert.True(scenario.Candidate.MaxControlRmsHangDb >= 7.9);
+    }
+
+    [Fact]
+    public void BuildRxAudioLevelerFixtureBenchmark_GatesNearTargetSpeechPumping()
+    {
+        var report = DspRxAudioLevelerFixtureBenchmark.Build();
+        var scenario = report.Scenarios.Single(item => item.Id == "near-target-speech");
+
+        Assert.True(scenario.Comparison.CandidatePasses, JsonSerializer.Serialize(scenario));
+        Assert.True(scenario.Comparison.OutputRmsMovementReductionDb >= -0.25, JsonSerializer.Serialize(scenario));
+        Assert.True(scenario.Comparison.AppliedGainMovementReductionDb >= -0.25, JsonSerializer.Serialize(scenario));
+        Assert.True(scenario.Candidate.MaxControlRmsHangDb <= 0.25);
+        Assert.Equal(0, scenario.Candidate.OutputLimitedBlockCount);
+    }
+
+    [Fact]
+    public void BuildRxAudioLevelerFixtureBenchmark_PreservesWeakSpeechAndStrongSignalSafety()
+    {
+        var report = DspRxAudioLevelerFixtureBenchmark.Build();
+        var weak = report.Scenarios.Single(item => item.Id == "sustained-weak-speech");
+        var strong = report.Scenarios.Single(item => item.Id == "strong-after-weak");
+
+        Assert.True(weak.Comparison.CandidatePasses, JsonSerializer.Serialize(weak));
+        Assert.InRange(weak.Candidate.FinalOutputRmsDbfs, -20.5, -16.5);
+        Assert.True(weak.Candidate.FinalGainDb > 20.0);
+        Assert.Equal(0, weak.Candidate.OutputLimitedBlockCount);
+        Assert.True(weak.Candidate.BlocksToTarget > 0);
+        Assert.True(weak.Comparison.WeakOutputAverageDeltaDb > -4.0);
+
+        Assert.True(strong.Comparison.CandidatePasses, JsonSerializer.Serialize(strong));
+        Assert.InRange(strong.Candidate.FinalOutputRmsDbfs, -18.5, -17.0);
+        Assert.True(strong.Candidate.FinalOutputPeakDbfs < -1.0);
+        Assert.Equal(0, strong.Candidate.OutputLimitedBlockCount);
+        Assert.True(strong.Comparison.CandidateLimitBlockDelta <= 0);
     }
 
     [Fact]

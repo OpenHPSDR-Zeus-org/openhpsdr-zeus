@@ -178,13 +178,11 @@ public sealed class RadioStateEntry
     public int TunePct { get; set; } = 10;
     // TX pre-key (MOX) delay ms (0..500). Default 0 = no delay. Issue #630.
     public int TxMoxPreKeyDelayMs { get; set; }
-    // Hardware NCO at last flush. Persisted so a restart retunes the radio
-    // to the same physical centre the operator was last looking at. Zero on
-    // legacy rows (pre-CTUN, or rows written by the old CTUN-off branch);
-    // RadioService snaps it to VfoHz on hydration in that case. The
-    // <c>CtunEnabled</c> field below was reintroduced when the click-tune
-    // toggle returned (operator request, 2026-06-13). Older rows missing it
-    // hydrate to false (classic "radio follows the dial").
+    // Hardware NCO at last flush. Used only when CtunEnabled hydrates true,
+    // because CTUN deliberately preserves a frozen physical centre while the
+    // dial roams. CTUN-off hydration derives LO from VfoHz + Mode (including
+    // CW pitch) so stale pan/LO state cannot retune the hardware off the dial.
+    // Zero on legacy rows falls back through the same derived-LO path.
     public long RadioLoHz { get; set; }
     public bool Rx2Enabled { get; set; }
     public long VfoBHz { get; set; } = 14_200_000;

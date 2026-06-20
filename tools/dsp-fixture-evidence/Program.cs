@@ -205,6 +205,9 @@ internal static class WdspFixtureEvidenceTool
                         ["gates"] = NewGateRecords(scenario, run),
                         ["nativeStageTiming"] = NewStageTimingRecord(run),
                         ["managedAllocation"] = NewManagedAllocationRecord(run),
+                        ["txStageMeters"] = run.TxMeters,
+                        ["clippingCount"] = run.ClippingCount,
+                        ["candidateDiagnostics"] = run.CandidateDiagnostics,
                         ["evidence"] = new Dictionary<string, object?>
                         {
                             ["audioPath"] = audioRelativePath,
@@ -406,6 +409,8 @@ internal static class WdspFixtureEvidenceTool
                 engine.SetTxMode(RxMode.USB);
                 engine.SetTxFilter(150, 2850);
                 engine.SetTxLeveling(rx, new TxLevelingConfig());
+                if (profile.HasTxPanelGainTrim)
+                    engine.SetTxPanelGain(profile.TxPanelGainLinear);
                 engine.SetMox(true);
             });
 
@@ -427,8 +432,8 @@ internal static class WdspFixtureEvidenceTool
                     int produced = engine.ProcessTxBlock(mic, iq);
                     for (int i = 0; i < produced; i++)
                     {
-                        output.Add(iq[2 * i]);
-                        output.Add(iq[2 * i + 1]);
+                        output.Add(iq[2 * i] * profile.TxOutputTrimLinear);
+                        output.Add(iq[2 * i + 1] * profile.TxOutputTrimLinear);
                     }
                 }
             });
@@ -440,6 +445,8 @@ internal static class WdspFixtureEvidenceTool
             double[] analysis = TailIq(output.ToArray(), Math.Min(AnalysisSamples, output.Count / 2));
             var metrics = MeasureStage(stages, "tx-analyze-iq", "TXA output analysis", () => DspBenchmarkAnalyzer.AnalyzeIq(analysis, AudioSampleRateHz, fixture.ExpectedTonesHz));
             var txMeters = MeasureStage(stages, "tx-fetch-stage-meters", "TXA stage meter fetch", engine.GetTxStageMeters);
+            var txMetersJson = BuildTxMeters(profile, txMeters, metrics);
+            object? candidateDiagnostics = BuildCandidateDiagnostics(profile, txMeters, metrics);
 
             return new FixtureRunResult(
                 Profile: profile.Label,
@@ -450,8 +457,8 @@ internal static class WdspFixtureEvidenceTool
                 ClippingCount: CountIqClips(analysis),
                 IntermodulationProxy: ComputeIntermodulationProxy(analysis, AudioSampleRateHz, fixture.ExpectedTonesHz),
                 SamplePreview: PreviewIq(analysis),
-                TxMeters: TxMetersToJson(txMeters),
-                CandidateDiagnostics: null,
+                TxMeters: txMetersJson,
+                CandidateDiagnostics: candidateDiagnostics,
                 StageProbes: stages);
         }
         finally
@@ -593,8 +600,8 @@ internal static class WdspFixtureEvidenceTool
             "txcfcgainreduction" => GetTxMeterValue(run, "cfcGainReductionDb"),
             "txcompressorpeak" => GetTxMeterValue(run, "compressorPkDbfs", -400.0),
             "txalcgainreduction" => GetTxMeterValue(run, "alcGainReductionDb"),
-            "txoutputpeak" => GetTxMeterValue(run, "outPkDbfs", ToDb(run.Metrics.Peak)),
-            "txoutputaverage" => GetTxMeterValue(run, "outAvDbfs", ToDb(run.Metrics.Rms)),
+            "txoutputpeak" => GetTxMeterValue(run, "effectiveOutPkDbfs", GetTxMeterValue(run, "outPkDbfs", ToDb(run.Metrics.Peak))),
+            "txoutputaverage" => GetTxMeterValue(run, "effectiveOutAvDbfs", GetTxMeterValue(run, "outAvDbfs", ToDb(run.Metrics.Rms))),
             _ => direction == "informational" ? run.Metrics.Rms : run.Metrics.WindowedRmsSpreadDb,
         };
     }
@@ -662,6 +669,81 @@ internal static class WdspFixtureEvidenceTool
         ["outPkDbfs"] = meters.OutPk,
         ["outAvDbfs"] = meters.OutAv,
     };
+
+    private static Dictionary<string, object?> BuildTxMeters(
+        ComparisonProfile profile,
+        TxStageMeters meters,
+        DspBenchmarkMetrics metrics)
+    {
+        var result = TxMetersToJson(meters);
+        if (profile.HasTxOutputTrim)
+        {
+            double effectivePeakDbfs = ToDb(metrics.Peak);
+            double effectiveAverageDbfs = ToDb(metrics.Rms);
+            result["rawOutPkDbfs"] = meters.OutPk;
+            result["rawOutAvDbfs"] = meters.OutAv;
+            result["effectiveOutPkDbfs"] = Math.Round(effectivePeakDbfs, 6);
+            result["effectiveOutAvDbfs"] = Math.Round(effectiveAverageDbfs, 6);
+            result["txOutputTrimDb"] = profile.TxOutputTrimDb;
+            result["txOutputTrimLinear"] = Math.Round(profile.TxOutputTrimLinear, 9);
+            return result;
+        }
+
+        if (!profile.HasTxPanelGainTrim)
+            return result;
+
+        result["rawOutPkDbfs"] = meters.OutPk;
+        result["rawOutAvDbfs"] = meters.OutAv;
+        result["txPanelGainTrimDb"] = profile.TxPanelGainTrimDb;
+        result["txPanelGainLinear"] = Math.Round(profile.TxPanelGainLinear, 9);
+        return result;
+    }
+
+    private static object? BuildCandidateDiagnostics(
+        ComparisonProfile profile,
+        TxStageMeters meters,
+        DspBenchmarkMetrics metrics)
+    {
+        if (!profile.HasTxOutputTrim && !profile.HasTxPanelGainTrim)
+            return null;
+
+        double effectivePeakDbfs = ToDb(metrics.Peak);
+        double effectiveAverageDbfs = ToDb(metrics.Rms);
+        if (profile.HasTxOutputTrim)
+        {
+            return new Dictionary<string, object?>
+            {
+                ["schemaVersion"] = 1,
+                ["profileKind"] = "fixture-only-post-wdsp-output-trim",
+                ["defaultBehaviorChanged"] = false,
+                ["requiresRuntimeOptIn"] = true,
+                ["txOutputTrimDb"] = profile.TxOutputTrimDb,
+                ["txOutputTrimLinear"] = Math.Round(profile.TxOutputTrimLinear, 9),
+                ["rawWdspOutPkDbfs"] = meters.OutPk,
+                ["rawWdspOutAvDbfs"] = meters.OutAv,
+                ["effectiveTxOutputPeakDbfs"] = Math.Round(effectivePeakDbfs, 6),
+                ["effectiveTxOutputAverageDbfs"] = Math.Round(effectiveAverageDbfs, 6),
+                ["headroomImprovementDb"] = Math.Round(Math.Max(0.0, meters.OutPk - effectivePeakDbfs), 6),
+                ["pureSignalPathStatus"] = "not-applied; fixture-only candidate must stay disabled while PureSignal is armed until hardware safe-bypass evidence exists",
+            };
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["schemaVersion"] = 1,
+            ["profileKind"] = "fixture-only-tx-panel-gain-trim",
+            ["defaultBehaviorChanged"] = false,
+            ["requiresRuntimeOptIn"] = true,
+            ["txPanelGainTrimDb"] = profile.TxPanelGainTrimDb,
+            ["txPanelGainLinear"] = Math.Round(profile.TxPanelGainLinear, 9),
+            ["rawWdspOutPkDbfs"] = meters.OutPk,
+            ["rawWdspOutAvDbfs"] = meters.OutAv,
+            ["analyzedTxOutputPeakDbfs"] = Math.Round(effectivePeakDbfs, 6),
+            ["analyzedTxOutputAverageDbfs"] = Math.Round(effectiveAverageDbfs, 6),
+            ["headroomTrimDb"] = Math.Abs(profile.TxPanelGainTrimDb),
+            ["pureSignalPathStatus"] = "not-applied; fixture-only candidate must stay disabled while PureSignal is armed until hardware safe-bypass evidence exists",
+        };
+    }
 
     private static double ComputeWantedSnrDb(DspBenchmarkMetrics metrics)
     {
@@ -1232,17 +1314,37 @@ internal static class WdspFixtureEvidenceTool
         string Sha256,
         string Status);
 
-    private sealed record ComparisonProfile(string Id, string Label, NrMode NrMode)
+    private sealed record ComparisonProfile(
+        string Id,
+        string Label,
+        NrMode NrMode,
+        double TxOutputTrimDb = 0.0,
+        double TxPanelGainTrimDb = 0.0)
     {
+        public bool HasTxOutputTrim => Math.Abs(TxOutputTrimDb) > 0.000_001;
+
+        public double TxOutputTrimLinear => HasTxOutputTrim
+            ? Math.Pow(10.0, TxOutputTrimDb / 20.0)
+            : 1.0;
+
+        public bool HasTxPanelGainTrim => Math.Abs(TxPanelGainTrimDb) > 0.000_001;
+
+        public double TxPanelGainLinear => HasTxPanelGainTrim
+            ? Math.Pow(10.0, TxPanelGainTrimDb / 20.0)
+            : 1.0;
+
         public static ComparisonProfile For(string comparisonId, DspBenchmarkPath path)
         {
             string normalized = NormalizeComparisonId(comparisonId);
             if (path == DspBenchmarkPath.TxAudio)
             {
+                if (TryGetTxPanelGainTrimDb(normalized, out double trimDb))
+                    return new(normalized, $"wdsp-txa-panel-gain-headroom-trim-{Math.Abs(trimDb):0.##}db-candidate", NrMode.Off, TxPanelGainTrimDb: trimDb);
+
                 return normalized switch
                 {
                     "thetis-parity" => new(normalized, "wdsp-txa-thetis-defaults", NrMode.Off),
-                    "candidate-under-test" => new(normalized, "wdsp-txa-current-safe-bypass", NrMode.Off),
+                    "candidate-under-test" => new(normalized, "wdsp-txa-output-headroom-trim-candidate", NrMode.Off, TxOutputTrimDb: -0.35),
                     _ => new(normalized, "wdsp-txa-current-defaults", NrMode.Off),
                 };
             }
@@ -1254,6 +1356,35 @@ internal static class WdspFixtureEvidenceTool
                 "candidate-external-engine-opt-in" => new(normalized, "post-demod-external-bypass", NrMode.Off),
                 _ => new(normalized, "wdsp-current-nr-off", NrMode.Off),
             };
+        }
+
+        private static bool TryGetTxPanelGainTrimDb(string normalizedComparisonId, out double trimDb)
+        {
+            trimDb = 0.0;
+            const string prefix = "candidate-tx-panel-trim-";
+            if (!normalizedComparisonId.StartsWith(prefix, StringComparison.Ordinal))
+                return false;
+
+            string suffix = normalizedComparisonId[prefix.Length..];
+            if (suffix.EndsWith("db", StringComparison.Ordinal))
+                suffix = suffix[..^2];
+
+            suffix = suffix.Replace('p', '.');
+            if (!double.TryParse(
+                    suffix,
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out double magnitude) ||
+                !double.IsFinite(magnitude) ||
+                magnitude <= 0.0 ||
+                magnitude > 3.0)
+            {
+                trimDb = 0.0;
+                return false;
+            }
+
+            trimDb = -magnitude;
+            return true;
         }
     }
 }

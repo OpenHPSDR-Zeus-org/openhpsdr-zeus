@@ -43,6 +43,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Zeus.Contracts.Tests" />
     <InternalsVisibleTo Include="Zeus.Server.Tests" />
+    <InternalsVisibleTo Include="Zeus.Tools.RxLevelerFixtureBenchmark" />
   </ItemGroup>
 
   <ItemGroup>

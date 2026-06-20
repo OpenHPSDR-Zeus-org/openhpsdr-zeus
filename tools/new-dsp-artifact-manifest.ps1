@@ -693,6 +693,21 @@ if (($IncludeOptionalArtifacts -or $RequireLiveAcceptanceArtifacts) -and -not $s
         -ComparisonIds @("off-baseline", "thetis-parity", "current-zeus", "candidate-under-test")
 }
 
+if (($IncludeOptionalArtifacts -or $RequireLiveAcceptanceArtifacts) -and -not $seenArtifactIds.ContainsKey("rx-leveler-ab-live-comparison")) {
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "rx-leveler-ab-live-comparison" `
+        -Kind "rx-leveler-ab-comparison-json" `
+        -Source "tools/summarize-dsp-rx-leveler-ab.ps1" `
+        -Purpose "Score guarded frontend-backed G2 RX leveler A/B evidence and require active audio, tuned passband proof, candidate control-memory safety, and material opt-in improvement before treating the stable-speech candidate as promotable evidence." `
+        -Cadence "once-after-g2-rx-leveler-active-audio-passband-ab" `
+        -Path "artifacts/rx-leveler-ab-live-comparison.json" `
+        -Required $false `
+        -ScenarioIds @("rx-audio-leveler-passband") `
+        -ComparisonIds @("current-zeus", "candidate-under-test")
+}
+
 if ($IncludeOptionalArtifacts -and -not $seenArtifactIds.ContainsKey("cross-radio-validation-report")) {
     Add-ArtifactRecord `
         -Artifacts $artifacts `
@@ -755,6 +770,8 @@ $output = [ordered]@{
         "The live-acceptance-cycle-summary artifact is optional because run-dsp-live-acceptance-cycle.ps1 writes it after strict validation; when present, strict validation verifies its wrapper identity and child report references.",
         "Use summarize-dsp-cross-radio-validation.ps1 with -BundleDir after a non-G2 validation pass to generate the optional cross-radio-validation-report artifact; it is evidence only and cannot approve default DSP behavior changes.",
         "Use summarize-dsp-puresignal-bench.ps1 after G2 TX bench captures to turn disabled and enabled PureSignal feedback traces into the required puresignal-safe-bypass-report artifact before TX profile graduation.",
+        "Use capture-tx-output-headroom-ab.ps1 with -PlanOnly first, then -AllowTransmit only under manual operator TX control, to collect optional current-vs-headroom-trim-candidate live diagnostics; the script never keys MOX, TUN, or two-tone and resets the TX profile to current.",
+        "Use summarize-dsp-rx-leveler-ab.ps1 with -BundleDir after guarded G2 RX leveler A/B capture to generate rx-leveler-ab-live-comparison.json; strict validation requires active audio, passband proof, candidate control-memory safety, and material improvement before this opt-in candidate can advance.",
         "Use compare-dsp-live-diagnostics-traces.ps1 with -BundleDir to compare baseline and candidate live traces before accepting a candidate window while keeping report paths portable.",
         "Use compare-dsp-live-diagnostics-matrix.ps1 with -BundleDir to compare baseline and candidate trace indexes across all captured live scenarios while keeping report paths portable; pass -BaselineComparisonId current-zeus and -CandidateComparisonId candidate-under-test for the required Zeus live acceptance comparison, then repeat with -BaselineComparisonId thetis-parity for the required WDSP authority comparison.",
         "live-diagnostics-trace-comparison reports carry capture-readiness comparison evidence into strict validation and validation triage, including hard-gate pass/fail, strict-preflight pass/fail, top soft constraints, and top hard gates.",

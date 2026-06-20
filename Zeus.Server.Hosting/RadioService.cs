@@ -380,11 +380,15 @@ public sealed class RadioService : IDisposable
                 ps?.MoxDelaySec ?? 0.2);
         }
 
+        long hydratedVfoHz = Math.Clamp(rsSnap?.VfoHz ?? 14_200_000, 0L, 60_000_000L);
+        var hydratedMode = rsSnap?.Mode ?? RxMode.USB;
+        long hydratedRadioLoHz = HydrateRadioLoHz(rsSnap, hydratedVfoHz, hydratedMode);
+
         _state = new(
             Status: ConnectionStatus.Disconnected,
             Endpoint: null,
-            VfoHz: rsSnap?.VfoHz ?? 14_200_000,
-            Mode: rsSnap?.Mode ?? RxMode.USB,
+            VfoHz: hydratedVfoHz,
+            Mode: hydratedMode,
             FilterLowHz: rsSnap?.FilterLowHz ?? 100,
             FilterHighHz: rsSnap?.FilterHighHz ?? 2850,
             SampleRate: 192_000,    // set at connect time; not in global snapshot
@@ -441,20 +445,15 @@ public sealed class RadioService : IDisposable
             DrivePct: Volatile.Read(ref _drivePct),
             TunePct: Volatile.Read(ref _tunePct),
             TxMoxPreKeyDelayMs: Volatile.Read(ref _txMoxPreKeyDelayMs),
-            // Hardware NCO — persisted in RadioStateStore so a restart resumes
-            // on the same physical centre. RadioLoHz snaps to VfoHz on legacy
-            // rows (RadioLoHz==0 — e.g. rows written by the old CTUN-off
-            // branch) so the panadapter centre is never zero on a fresh
-            // hydration. CTUN behaviour (frozen NCO, dial roams) is now
-            // unconditional — see docs/prd/panfall_behavior.md.
-            RadioLoHz: (rsSnap?.RadioLoHz ?? 0L) != 0L
-                ? rsSnap!.RadioLoHz
-                : (rsSnap?.VfoHz ?? 14_200_000),
+            // Hardware NCO. CTUN-on resumes the frozen physical centre; CTUN-off
+            // is classic "radio follows the dial", so derive LO from the saved
+            // dial/mode instead of replaying a stale pan/LO centre at startup.
+            RadioLoHz: hydratedRadioLoHz,
             Rx2Enabled: rsSnap?.Rx2Enabled ?? false,
             VfoBHz: (rsSnap?.VfoBHz ?? 0L) != 0L
                 ? rsSnap!.VfoBHz
-                : (rsSnap?.VfoHz ?? 14_200_000),
-            ModeB: rsSnap?.ModeB ?? rsSnap?.Mode ?? RxMode.USB,
+                : hydratedVfoHz,
+            ModeB: rsSnap?.ModeB ?? hydratedMode,
             FilterLowHzB: rsSnap?.FilterLowHzB ?? rsSnap?.FilterLowHz ?? 100,
             FilterHighHzB: rsSnap?.FilterHighHzB ?? rsSnap?.FilterHighHz ?? 2850,
             FilterPresetNameB: rsSnap?.FilterPresetNameB ?? rsSnap?.FilterPresetName ?? "VAR1",
@@ -471,6 +470,14 @@ public sealed class RadioService : IDisposable
         // during rapid VFO scroll or filter drags.
         if (_radioStateStore is not null)
             _stateFlushTimer = new System.Threading.Timer(_ => FlushState(), null, 1_000, 1_000);
+    }
+
+    private static long HydrateRadioLoHz(RadioStateEntry? snap, long vfoHz, RxMode mode)
+    {
+        if (snap is { CtunEnabled: true, RadioLoHz: > 0 })
+            return Math.Clamp(snap.RadioLoHz, 0L, 60_000_000L);
+
+        return CwOffset.EffectiveLoHz(mode, vfoHz);
     }
 
     /// <summary>
@@ -748,11 +755,11 @@ public sealed class RadioService : IDisposable
                     _state = _state with { SampleRate = hpsdrRate.SampleRateHz() };
             }
             await client.StartAsync(new StreamConfig(hpsdrRate, _preampOn, _atten), ct).ConfigureAwait(false);
-            // Retune the radio to the persisted hardware NCO (RadioLoHz). The
-            // dial (VfoHz) may sit elsewhere; WDSP's shift stage covers the
-            // gap. Hydration above already guarantees RadioLoHz != 0 by
-            // snapping to VfoHz on legacy rows, so a plain SetVfoAHz here is
-            // always valid. See docs/prd/panfall_behavior.md.
+            // Retune the radio to the hydrated hardware NCO (RadioLoHz). CTUN-on
+            // can restore a frozen centre away from the dial; CTUN-off derives
+            // RadioLoHz from the dial/mode so the radio follows the saved VFO.
+            // Hydration above guarantees a valid LO, so a plain SetVfoAHz here
+            // is always safe. See docs/prd/panfall_behavior.md.
             var connectSnap = Snapshot();
             client.SetVfoAHz(connectSnap.RadioLoHz);
 

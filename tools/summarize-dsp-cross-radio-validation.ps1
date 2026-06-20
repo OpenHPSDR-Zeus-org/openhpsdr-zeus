@@ -283,6 +283,15 @@ function Add-ScenarioIdsFromReport {
     foreach ($value in @(Get-JsonArray $Report "crossRadioValidationScenarioIds")) {
         Add-UniqueString $ScenarioIds ([string]$value)
     }
+    foreach ($value in @(Get-JsonArray $Report "benchmarkPlanScenarioIds")) {
+        Add-UniqueString $ScenarioIds ([string]$value)
+    }
+    foreach ($value in @(Get-JsonArray $Report "offlineFixtureMetricsScenarioIds")) {
+        Add-UniqueString $ScenarioIds ([string]$value)
+    }
+    foreach ($value in @(Get-JsonArray $Report "txFixtureSafetyScenarioIds")) {
+        Add-UniqueString $ScenarioIds ([string]$value)
+    }
     foreach ($value in @(Get-JsonArray $Report "scenarioIds")) {
         Add-UniqueString $ScenarioIds ([string]$value)
     }
@@ -300,12 +309,47 @@ function Add-ComparisonIdsFromReport {
     foreach ($value in @(Get-JsonArray $Report "crossRadioValidationComparisonIds")) {
         Add-UniqueString $ComparisonIds (ConvertTo-ComparisonId ([string]$value))
     }
+    foreach ($value in @(Get-JsonArray $Report "offlineFixtureMetricsComparisonIds")) {
+        Add-UniqueString $ComparisonIds (ConvertTo-ComparisonId ([string]$value))
+    }
+    foreach ($value in @(Get-JsonArray $Report "txFixtureSafetyComparisonIds")) {
+        Add-UniqueString $ComparisonIds (ConvertTo-ComparisonId ([string]$value))
+    }
     foreach ($value in @(Get-JsonArray $Report "comparisonIds")) {
         Add-UniqueString $ComparisonIds (ConvertTo-ComparisonId ([string]$value))
     }
     foreach ($record in @(Get-JsonArray $Report "artifactComparisonCoverage")) {
         Add-UniqueString $ComparisonIds (ConvertTo-ComparisonId ([string](Get-JsonValue $record "comparisonId")))
     }
+}
+
+function Get-MissingStrings {
+    param(
+        [string[]]$Required,
+        [string[]]$Actual
+    )
+
+    $missing = New-Object System.Collections.Generic.List[string]
+    foreach ($requiredValue in @($Required)) {
+        $required = [string]$requiredValue
+        if ([string]::IsNullOrWhiteSpace($required)) {
+            continue
+        }
+
+        $found = $false
+        foreach ($actualValue in @($Actual)) {
+            if ([string]::Equals([string]$actualValue, $required, [StringComparison]::OrdinalIgnoreCase)) {
+                $found = $true
+                break
+            }
+        }
+
+        if (-not $found) {
+            $missing.Add($required) | Out-Null
+        }
+    }
+
+    return @($missing.ToArray())
 }
 
 function Get-ReportHardwareTarget {
@@ -429,8 +473,30 @@ $resolvedMarkdownPath = if ($NoMarkdown) { "" } else { Get-BundlePath -BundlePat
 $hardwareTargets = New-Object System.Collections.Generic.List[string]
 $scenarioIds = New-Object System.Collections.Generic.List[string]
 $comparisonIds = New-Object System.Collections.Generic.List[string]
+$sourceBackedScenarioIds = New-Object System.Collections.Generic.List[string]
+$sourceBackedComparisonIds = New-Object System.Collections.Generic.List[string]
 $sourceReports = New-Object System.Collections.Generic.List[object]
 $blockers = New-Object System.Collections.Generic.List[object]
+
+$requiredSourceScenarioIds = @(
+    "weak-cw-carrier",
+    "ssb-like-speech",
+    "fading-carrier",
+    "impulse-noise",
+    "strong-adjacent",
+    "noise-only-gating",
+    "agc-level-step",
+    "squelch-transition",
+    "tx-two-tone",
+    "tx-voice-like",
+    "tx-puresignal-safe-bypass"
+)
+$requiredSourceComparisonIds = @(
+    "off-baseline",
+    "thetis-parity",
+    "current-zeus",
+    "candidate-under-test"
+)
 
 foreach ($target in @(Expand-DelimitedArgumentValues $HardwareTarget)) {
     Add-UniqueString $hardwareTargets ([string]$target)
@@ -462,19 +528,41 @@ foreach ($path in @($ValidationReportPath)) {
     if ([string]::IsNullOrWhiteSpace($hardwareStatus)) {
         $hardwareStatus = [string](Get-JsonValue $validation "liveAcceptanceCycleHardwareEvidenceStatus")
     }
+    $hardwareEvidenceReady = [string]::Equals($hardwareStatus, "cross-radio-hardware-evidence-ready", [StringComparison]::OrdinalIgnoreCase)
     $metricComparisonReady = Test-Truthy (Get-JsonValue $validation "metricComparisonReady")
     $liveTraceComparisonReady = Test-Truthy (Get-JsonValue $validation "liveTraceComparisonReady")
     $liveTraceThetisComparisonReady = Test-Truthy (Get-JsonValue $validation "liveTraceThetisComparisonReady")
+    $sourceScenarioIds = New-Object System.Collections.Generic.List[string]
+    $sourceComparisonIds = New-Object System.Collections.Generic.List[string]
+    Add-ScenarioIdsFromReport -Report $validation -ScenarioIds $sourceScenarioIds
+    Add-ComparisonIdsFromReport -Report $validation -ComparisonIds $sourceComparisonIds
+    $missingSourceScenarioIds = @(Get-MissingStrings -Required $requiredSourceScenarioIds -Actual @($sourceScenarioIds.ToArray()))
+    $missingSourceComparisonIds = @(Get-MissingStrings -Required $requiredSourceComparisonIds -Actual @($sourceComparisonIds.ToArray()))
     $sourceReadyForCrossRadio = $validationOk -and
     $errorCount -eq 0 -and
     $targetIsNonG2 -and
+    $hardwareEvidenceReady -and
     $metricComparisonReady -and
     $liveTraceComparisonReady -and
-    $liveTraceThetisComparisonReady
+    $liveTraceThetisComparisonReady -and
+    $missingSourceScenarioIds.Count -eq 0 -and
+    $missingSourceComparisonIds.Count -eq 0
 
     Add-UniqueString $hardwareTargets $target
-    Add-ScenarioIdsFromReport -Report $validation -ScenarioIds $scenarioIds
-    Add-ComparisonIdsFromReport -Report $validation -ComparisonIds $comparisonIds
+    foreach ($sourceScenarioId in @($sourceScenarioIds.ToArray())) {
+        Add-UniqueString $scenarioIds ([string]$sourceScenarioId)
+    }
+    foreach ($sourceComparisonId in @($sourceComparisonIds.ToArray())) {
+        Add-UniqueString $comparisonIds (ConvertTo-ComparisonId ([string]$sourceComparisonId))
+    }
+    if ($validationOk -and $errorCount -eq 0 -and $targetIsNonG2 -and $hardwareEvidenceReady -and $metricComparisonReady -and $liveTraceComparisonReady -and $liveTraceThetisComparisonReady) {
+        foreach ($sourceScenarioId in @($sourceScenarioIds.ToArray())) {
+            Add-UniqueString $sourceBackedScenarioIds ([string]$sourceScenarioId)
+        }
+        foreach ($sourceComparisonId in @($sourceComparisonIds.ToArray())) {
+            Add-UniqueString $sourceBackedComparisonIds (ConvertTo-ComparisonId ([string]$sourceComparisonId))
+        }
+    }
 
     if (-not $validationOk -or $errorCount -gt 0) {
         $blockers.Add((New-Blocker `
@@ -491,9 +579,14 @@ foreach ($path in @($ValidationReportPath)) {
             hardwareTarget = $target
             targetIsNonG2 = $targetIsNonG2
             hardwareEvidenceStatus = $hardwareStatus
+            hardwareEvidenceReady = $hardwareEvidenceReady
             metricComparisonReady = $metricComparisonReady
             liveTraceComparisonReady = $liveTraceComparisonReady
             liveTraceThetisComparisonReady = $liveTraceThetisComparisonReady
+            scenarioIds = @($sourceScenarioIds.ToArray())
+            comparisonIds = @($sourceComparisonIds.ToArray())
+            missingRequiredScenarioIds = @($missingSourceScenarioIds)
+            missingRequiredComparisonIds = @($missingSourceComparisonIds)
             readyForCrossRadio = $sourceReadyForCrossRadio
         }) | Out-Null
 }
@@ -515,6 +608,8 @@ $sourceWarningReports = @($sourceReportRecords | Where-Object {
 $sourceMetricReadyReports = @($sourceReportRecords | Where-Object { Test-Truthy (Get-JsonValue $_ "metricComparisonReady") })
 $sourceLiveTraceReadyReports = @($sourceReportRecords | Where-Object { Test-Truthy (Get-JsonValue $_ "liveTraceComparisonReady") })
 $sourceThetisLiveTraceReadyReports = @($sourceReportRecords | Where-Object { Test-Truthy (Get-JsonValue $_ "liveTraceThetisComparisonReady") })
+$missingRequiredSourceScenarioIds = @(Get-MissingStrings -Required $requiredSourceScenarioIds -Actual @($sourceBackedScenarioIds.ToArray()))
+$missingRequiredSourceComparisonIds = @(Get-MissingStrings -Required $requiredSourceComparisonIds -Actual @($sourceBackedComparisonIds.ToArray()))
 
 if ($hardwareTargets.Count -eq 0) {
     $blockers.Add((New-Blocker -Code "hardware-targets-missing" -Message "Provide at least one hardware target or source validation report.")) | Out-Null
@@ -547,13 +642,27 @@ foreach ($source in $nonG2SourceReports) {
     if (-not (Test-Truthy (Get-JsonValue $source "metricComparisonReady"))) {
         $blockers.Add((New-Blocker -Code "source-metric-comparison-not-ready" -Message "Non-G2 source validation report '$sourcePath' must have metricComparisonReady=true.")) | Out-Null
     }
+    if (-not (Test-Truthy (Get-JsonValue $source "hardwareEvidenceReady"))) {
+        $sourceHardwareStatus = [string](Get-JsonValue $source "hardwareEvidenceStatus")
+        $blockers.Add((New-Blocker -Code "source-hardware-evidence-not-ready" -Message "Non-G2 source validation report '$sourcePath' must have hardwareEvidenceStatus='cross-radio-hardware-evidence-ready' before cross-radio review; actual='$sourceHardwareStatus'.")) | Out-Null
+    }
     if (-not (Test-Truthy (Get-JsonValue $source "liveTraceComparisonReady"))) {
         $blockers.Add((New-Blocker -Code "source-live-trace-comparison-not-ready" -Message "Non-G2 source validation report '$sourcePath' must have liveTraceComparisonReady=true.")) | Out-Null
     }
     if (-not (Test-Truthy (Get-JsonValue $source "liveTraceThetisComparisonReady"))) {
         $blockers.Add((New-Blocker -Code "source-thetis-live-trace-comparison-not-ready" -Message "Non-G2 source validation report '$sourcePath' must have liveTraceThetisComparisonReady=true.")) | Out-Null
     }
+    $sourceMissingScenarios = @(Get-JsonArray $source "missingRequiredScenarioIds" | ForEach-Object { [string]$_ })
+    if ($sourceMissingScenarios.Count -gt 0) {
+        $blockers.Add((New-Blocker -Code "source-scenario-coverage-incomplete" -Message "Non-G2 source validation report '$sourcePath' is missing required scenario coverage: $($sourceMissingScenarios -join ', ').")) | Out-Null
+    }
+    $sourceMissingComparisons = @(Get-JsonArray $source "missingRequiredComparisonIds" | ForEach-Object { [string]$_ })
+    if ($sourceMissingComparisons.Count -gt 0) {
+        $blockers.Add((New-Blocker -Code "source-comparison-coverage-incomplete" -Message "Non-G2 source validation report '$sourcePath' is missing required comparison coverage: $($sourceMissingComparisons -join ', ').")) | Out-Null
+    }
 }
+
+$sourceBackedEvidenceReady = ($readyNonG2SourceReports.Count -gt 0 -and $missingRequiredSourceScenarioIds.Count -eq 0 -and $missingRequiredSourceComparisonIds.Count -eq 0)
 
 $readyForReview = ($blockers.Count -eq 0)
 $evidenceStatus = if ($readyForReview) { "cross-radio-evidence-ready" } else { "not-ready" }
@@ -597,7 +706,19 @@ $report = [ordered]@{
     sourceMetricComparisonReadyCount = $sourceMetricReadyReports.Count
     sourceLiveTraceComparisonReadyCount = $sourceLiveTraceReadyReports.Count
     sourceThetisLiveTraceComparisonReadyCount = $sourceThetisLiveTraceReadyReports.Count
-    sourceBackedEvidenceReady = ($readyNonG2SourceReports.Count -gt 0)
+    requiredSourceScenarioCount = $requiredSourceScenarioIds.Count
+    requiredSourceScenarioIds = @($requiredSourceScenarioIds)
+    sourceBackedScenarioCount = $sourceBackedScenarioIds.Count
+    sourceBackedScenarioIds = @($sourceBackedScenarioIds.ToArray())
+    missingRequiredSourceScenarioCount = $missingRequiredSourceScenarioIds.Count
+    missingRequiredSourceScenarioIds = @($missingRequiredSourceScenarioIds)
+    requiredSourceComparisonCount = $requiredSourceComparisonIds.Count
+    requiredSourceComparisonIds = @($requiredSourceComparisonIds)
+    sourceBackedComparisonCount = $sourceBackedComparisonIds.Count
+    sourceBackedComparisonIds = @($sourceBackedComparisonIds.ToArray())
+    missingRequiredSourceComparisonCount = $missingRequiredSourceComparisonIds.Count
+    missingRequiredSourceComparisonIds = @($missingRequiredSourceComparisonIds)
+    sourceBackedEvidenceReady = $sourceBackedEvidenceReady
     sourceReports = @($sourceReportRecords)
     blockerCount = $blockers.Count
     blockers = @($blockers.ToArray())

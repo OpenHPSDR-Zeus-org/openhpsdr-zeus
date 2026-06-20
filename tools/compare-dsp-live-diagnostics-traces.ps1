@@ -15,6 +15,8 @@ param(
 
     [string]$BundleDir = "",
 
+    [string]$ScenarioId = "",
+
     [double]$Tolerance = 0.000001,
 
     [switch]$FailOnRegression,
@@ -30,11 +32,69 @@ function Get-RepoRoot {
     return (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 }
 
+function ConvertTo-LongFileSystemPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if ([System.IO.Path]::DirectorySeparatorChar -ne "\") {
+        return $Path
+    }
+    if ($Path.StartsWith("\\?\", [StringComparison]::Ordinal)) {
+        return $Path
+    }
+    if ($Path.StartsWith("\\", [StringComparison]::Ordinal)) {
+        return "\\?\UNC\" + $Path.Substring(2)
+    }
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        return "\\?\" + $Path
+    }
+
+    return $Path
+}
+
+function Resolve-ExistingFilePath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    if (-not [System.IO.File]::Exists((ConvertTo-LongFileSystemPath -Path $fullPath))) {
+        throw "Cannot find path '$Path' because it does not exist."
+    }
+
+    return $fullPath
+}
+
+function Resolve-ExistingDirectoryPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    if (-not [System.IO.Directory]::Exists((ConvertTo-LongFileSystemPath -Path $fullPath))) {
+        throw "Cannot find directory '$Path' because it does not exist."
+    }
+
+    return $fullPath
+}
+
+function Write-TextFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)]$Value
+    )
+
+    $parent = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($parent)) {
+        [System.IO.Directory]::CreateDirectory((ConvertTo-LongFileSystemPath -Path ([System.IO.Path]::GetFullPath($parent)))) | Out-Null
+    }
+
+    [System.IO.File]::WriteAllText(
+        (ConvertTo-LongFileSystemPath -Path ([System.IO.Path]::GetFullPath($Path))),
+        ([string]::Join([Environment]::NewLine, @($Value))),
+        [System.Text.Encoding]::UTF8)
+}
+
 function Read-JsonFile {
     param([Parameter(Mandatory = $true)][string]$Path)
 
     try {
-        return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        return [System.IO.File]::ReadAllText((ConvertTo-LongFileSystemPath -Path ([System.IO.Path]::GetFullPath($Path)))) | ConvertFrom-Json
     }
     catch {
         throw "Failed to parse JSON file '$Path': $($_.Exception.Message)"
@@ -49,22 +109,21 @@ function Write-JsonFile {
 
     $parent = Split-Path -Parent $Path
     if (-not [string]::IsNullOrWhiteSpace($parent)) {
-        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+        [System.IO.Directory]::CreateDirectory((ConvertTo-LongFileSystemPath -Path ([System.IO.Path]::GetFullPath($parent)))) | Out-Null
     }
 
     $json = $Value | ConvertTo-Json -Depth 48
-    Set-Content -LiteralPath $Path -Value $json -Encoding UTF8
+    [System.IO.File]::WriteAllText(
+        (ConvertTo-LongFileSystemPath -Path ([System.IO.Path]::GetFullPath($Path))),
+        $json,
+        [System.Text.Encoding]::UTF8)
 }
 
 function Get-FileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
-        return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
-    }
-
-    $resolvedPath = (Resolve-Path -LiteralPath $Path).ProviderPath
-    $stream = [System.IO.File]::OpenRead($resolvedPath)
+    $resolvedPath = Resolve-ExistingFilePath -Path $Path
+    $stream = [System.IO.File]::OpenRead((ConvertTo-LongFileSystemPath -Path $resolvedPath))
     try {
         $sha256 = [System.Security.Cryptography.SHA256]::Create()
         try {
@@ -164,7 +223,7 @@ function ConvertTo-PortablePath {
     }
 
     try {
-        $rootFull = [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $Root).Path)
+        $rootFull = Resolve-ExistingDirectoryPath -Path $Root
         $pathFull = [System.IO.Path]::GetFullPath($Path)
         if (-not $rootFull.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
             $rootFull = $rootFull + [System.IO.Path]::DirectorySeparatorChar
@@ -445,6 +504,26 @@ function Get-RxAudioLevelerWatchValue {
     }
 }
 
+function Get-RxAudioLevelerWatchStatValue {
+    param(
+        $Report,
+        [Parameter(Mandatory = $true)][string]$Group,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $watch = Get-JsonValue $Report "rxAudioLevelerWatch"
+    if ($null -eq $watch) {
+        return $null
+    }
+
+    $stats = Get-JsonValue $watch $Group
+    if ($null -eq $stats) {
+        return $null
+    }
+
+    return Get-NumericValue (Get-JsonValue $stats $Name)
+}
+
 function Get-RxAudioLevelerWatchSamples {
     param(
         $Report,
@@ -708,6 +787,26 @@ function New-RxAudioLevelerComparison {
     $candidateOutputMovement = Get-StatValue $CandidateReport "rxAudioLevelerOutputRmsDbfs" "movement"
     $baselineGainMovement = Get-StatValue $BaselineReport "rxAudioLevelerAppliedGainDb" "movement"
     $candidateGainMovement = Get-StatValue $CandidateReport "rxAudioLevelerAppliedGainDb" "movement"
+    $baselineConstrainedMaxAbsGainDelta = Get-RxAudioLevelerWatchValue $BaselineReport "constrainedMaxAbsGainDeltaDb"
+    $candidateConstrainedMaxAbsGainDelta = Get-RxAudioLevelerWatchValue $CandidateReport "constrainedMaxAbsGainDeltaDb"
+    $baselineConstrainedPeakHeadroomMin = Get-RxAudioLevelerWatchStatValue $BaselineReport "constrainedPeakHeadroomDb" "min"
+    $candidateConstrainedPeakHeadroomMin = Get-RxAudioLevelerWatchStatValue $CandidateReport "constrainedPeakHeadroomDb" "min"
+    $baselineConstrainedPreLimitPeakMax = Get-RxAudioLevelerWatchStatValue $BaselineReport "constrainedPreLimitPeakDbfs" "max"
+    $candidateConstrainedPreLimitPeakMax = Get-RxAudioLevelerWatchStatValue $CandidateReport "constrainedPreLimitPeakDbfs" "max"
+    $movementImproved = (
+        (Test-NullableMetricRegression $baselineOutputMovement $candidateOutputMovement 0.5) -or
+        (Test-NullableMetricRegression $baselineGainMovement $candidateGainMovement 0.5))
+    $constraintSeverityBenign = $false
+    if ($null -ne $baselineConstrainedMaxAbsGainDelta -and $null -ne $candidateConstrainedMaxAbsGainDelta) {
+        $constraintSeverityBenign = (([double]$candidateConstrainedMaxAbsGainDelta - [double]$baselineConstrainedMaxAbsGainDelta) -le 0.5)
+    }
+    $limiterRegression = (
+        (Test-NullableMetricRegression $candidatePeakLimitedCount $baselinePeakLimitedCount 0.0) -or
+        (Test-NullableMetricRegression $candidateOutputLimitedCount $baselineOutputLimitedCount 0.0))
+    $suppressConstraintCountRegression = ($movementImproved -and $constraintSeverityBenign -and -not $limiterRegression)
+    $constrainedRegression = (Test-NullableMetricRegression $candidateConstrainedCount $baselineConstrainedCount 0.0) -and -not $suppressConstraintCountRegression
+    $constrainedPctRegression = (Test-NullableMetricRegression $candidateConstrainedPct $baselineConstrainedPct 1.0) -and -not $suppressConstraintCountRegression
+    $boostSlewRegression = (Test-NullableMetricRegression $candidateBoostSlewCount $baselineBoostSlewCount 0.0) -and -not $suppressConstraintCountRegression
 
     return [ordered]@{
         baselineDiagnosticSampleCount = Round-NullableMetric $baselineDiagnosticCount
@@ -733,9 +832,21 @@ function New-RxAudioLevelerComparison {
         baselineAppliedGainMovementDb = Round-NullableMetric $baselineGainMovement
         candidateAppliedGainMovementDb = Round-NullableMetric $candidateGainMovement
         appliedGainMovementDbDelta = Get-NullableDelta $candidateGainMovement $baselineGainMovement
-        constrainedRegression = Test-NullableMetricRegression $candidateConstrainedCount $baselineConstrainedCount 0.0
-        constrainedPctRegression = Test-NullableMetricRegression $candidateConstrainedPct $baselineConstrainedPct 1.0
-        boostSlewRegression = Test-NullableMetricRegression $candidateBoostSlewCount $baselineBoostSlewCount 0.0
+        baselineConstrainedMaxAbsGainDeltaDb = Round-NullableMetric $baselineConstrainedMaxAbsGainDelta
+        candidateConstrainedMaxAbsGainDeltaDb = Round-NullableMetric $candidateConstrainedMaxAbsGainDelta
+        constrainedMaxAbsGainDeltaDbDelta = Get-NullableDelta $candidateConstrainedMaxAbsGainDelta $baselineConstrainedMaxAbsGainDelta
+        baselineConstrainedPeakHeadroomMinDb = Round-NullableMetric $baselineConstrainedPeakHeadroomMin
+        candidateConstrainedPeakHeadroomMinDb = Round-NullableMetric $candidateConstrainedPeakHeadroomMin
+        constrainedPeakHeadroomMinDbDelta = Get-NullableDelta $candidateConstrainedPeakHeadroomMin $baselineConstrainedPeakHeadroomMin
+        baselineConstrainedPreLimitPeakMaxDbfs = Round-NullableMetric $baselineConstrainedPreLimitPeakMax
+        candidateConstrainedPreLimitPeakMaxDbfs = Round-NullableMetric $candidateConstrainedPreLimitPeakMax
+        constrainedPreLimitPeakMaxDbfsDelta = Get-NullableDelta $candidateConstrainedPreLimitPeakMax $baselineConstrainedPreLimitPeakMax
+        constraintCountRegressionSuppressed = $suppressConstraintCountRegression
+        constraintSeverityBenign = $constraintSeverityBenign
+        limiterRegression = $limiterRegression
+        constrainedRegression = $constrainedRegression
+        constrainedPctRegression = $constrainedPctRegression
+        boostSlewRegression = $boostSlewRegression
         peakLimitedRegression = Test-NullableMetricRegression $candidatePeakLimitedCount $baselinePeakLimitedCount 0.0
         outputLimitedRegression = Test-NullableMetricRegression $candidateOutputLimitedCount $baselineOutputLimitedCount 0.0
         candidateTopBoostSlewLimitedSamples = @(Get-RxAudioLevelerWatchSamples $CandidateReport "topBoostSlewLimitedSamples")
@@ -801,7 +912,7 @@ function Get-TraceSeverity {
 function Resolve-InputReport {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $resolved = (Resolve-Path -LiteralPath $Path).Path
+    $resolved = Resolve-ExistingFilePath -Path $Path
     $extension = [System.IO.Path]::GetExtension($resolved)
     if ($extension -ieq ".jsonl") {
         $watchScript = Join-Path (Get-RepoRoot) "tools\watch-dsp-live-diagnostics.ps1"
@@ -1412,6 +1523,13 @@ function Test-MetricNotApplicableForScenario {
         [Parameter(Mandatory = $true)][string]$ScenarioId
     )
 
+    if ($ScenarioId -eq "rx-audio-leveler-passband") {
+        switch ($MetricId) {
+            "agcVoiceLikeGainMovementDb" { return $true }
+            default { return $false }
+        }
+    }
+
     if ($ScenarioId -ne "noise-only-gating") {
         return $false
     }
@@ -1527,6 +1645,37 @@ function Test-BothTracesHaveSafeAdcHeadroom {
     return ([double]$baselineHeadroom -ge 30.0 -and [double]$candidateHeadroom -ge 30.0)
 }
 
+function Test-BenignRxAudioLevelerConstraintCountRegression {
+    param(
+        $BaselineReport,
+        $CandidateReport
+    )
+
+    $baselineOutputMovement = Get-StatValue $BaselineReport "rxAudioLevelerOutputRmsDbfs" "movement"
+    $candidateOutputMovement = Get-StatValue $CandidateReport "rxAudioLevelerOutputRmsDbfs" "movement"
+    $baselineGainMovement = Get-StatValue $BaselineReport "rxAudioLevelerAppliedGainDb" "movement"
+    $candidateGainMovement = Get-StatValue $CandidateReport "rxAudioLevelerAppliedGainDb" "movement"
+    $baselineConstrainedMaxAbsGainDelta = Get-RxAudioLevelerWatchValue $BaselineReport "constrainedMaxAbsGainDeltaDb"
+    $candidateConstrainedMaxAbsGainDelta = Get-RxAudioLevelerWatchValue $CandidateReport "constrainedMaxAbsGainDeltaDb"
+    $baselinePeakLimitedCount = Get-RxAudioLevelerWatchValue $BaselineReport "peakLimitedSampleCount"
+    $candidatePeakLimitedCount = Get-RxAudioLevelerWatchValue $CandidateReport "peakLimitedSampleCount"
+    $baselineOutputLimitedCount = Get-RxAudioLevelerWatchValue $BaselineReport "outputLimitedSampleCount"
+    $candidateOutputLimitedCount = Get-RxAudioLevelerWatchValue $CandidateReport "outputLimitedSampleCount"
+
+    $movementImproved = (
+        (Test-NullableMetricRegression $baselineOutputMovement $candidateOutputMovement 0.5) -or
+        (Test-NullableMetricRegression $baselineGainMovement $candidateGainMovement 0.5))
+    $constraintSeverityBenign = $false
+    if ($null -ne $baselineConstrainedMaxAbsGainDelta -and $null -ne $candidateConstrainedMaxAbsGainDelta) {
+        $constraintSeverityBenign = (([double]$candidateConstrainedMaxAbsGainDelta - [double]$baselineConstrainedMaxAbsGainDelta) -le 0.5)
+    }
+    $limiterRegression = (
+        (Test-NullableMetricRegression $candidatePeakLimitedCount $baselinePeakLimitedCount 0.0) -or
+        (Test-NullableMetricRegression $candidateOutputLimitedCount $baselineOutputLimitedCount 0.0))
+
+    return ($movementImproved -and $constraintSeverityBenign -and -not $limiterRegression)
+}
+
 function Get-AdjustedComparisonVerdict {
     param(
         [Parameter(Mandatory = $true)][string]$MetricId,
@@ -1621,10 +1770,32 @@ function Get-AdjustedComparisonVerdict {
             }
         }
         "rxAudioLevelerConstrainedSampleCount" {
+            if (Test-BenignRxAudioLevelerConstraintCountRegression $BaselineReport $CandidateReport) {
+                return [ordered]@{
+                    verdict = "tie"
+                    note = "constraint-count-increase-benign-severity-and-leveler-movement-improved"
+                }
+            }
             if ([double]$CandidateValue -le 2.0 -and (Test-SafeCandidateAudioHeadroom $CandidateReport)) {
                 return [ordered]@{
                     verdict = "tie"
                     note = "constrained-sample-with-safe-output-headroom"
+                }
+            }
+        }
+        "rxAudioLevelerConstrainedPct" {
+            if (Test-BenignRxAudioLevelerConstraintCountRegression $BaselineReport $CandidateReport) {
+                return [ordered]@{
+                    verdict = "tie"
+                    note = "constraint-percent-increase-benign-severity-and-leveler-movement-improved"
+                }
+            }
+        }
+        "rxAudioLevelerBoostSlewLimitedSampleCount" {
+            if (Test-BenignRxAudioLevelerConstraintCountRegression $BaselineReport $CandidateReport) {
+                return [ordered]@{
+                    verdict = "tie"
+                    note = "boost-slew-count-increase-benign-severity-and-leveler-movement-improved"
                 }
             }
         }
@@ -2061,7 +2232,12 @@ $rxAudioLevelerComparison = New-RxAudioLevelerComparison $baselineReport $candid
 $traceMetricDefinitions = @(Get-TraceMetricDefinitions)
 $baselineScenarioId = Get-ReportScenarioId $baselineReport
 $candidateScenarioId = Get-ReportScenarioId $candidateReport
-$comparisonScenarioId = Get-ComparisonScenarioId $baselineReport $candidateReport
+$comparisonScenarioId = if ([string]::IsNullOrWhiteSpace($ScenarioId)) {
+    Get-ComparisonScenarioId $baselineReport $candidateReport
+}
+else {
+    $ScenarioId
+}
 $candidateActivationComparison = New-CandidateActivationComparison $baselineReport $candidateReport $CandidateLabel
 $metricComparisons = Compare-Metrics $baselineReport $candidateReport $Tolerance $traceMetricDefinitions $comparisonScenarioId
 $hardConstraintComparisons = Compare-HardConstraints $baselineReport $candidateReport
@@ -2111,7 +2287,7 @@ if (-not $NoMarkdown -and [string]::IsNullOrWhiteSpace($MarkdownPath)) {
 
 $bundlePath = ""
 if (-not [string]::IsNullOrWhiteSpace($BundleDir)) {
-    $bundlePath = (Resolve-Path -LiteralPath $BundleDir).Path
+    $bundlePath = Resolve-ExistingDirectoryPath -Path $BundleDir
 }
 
 $recommendations = if ($readyForReview -and $notApplicableCount -gt 0) {
@@ -2212,7 +2388,7 @@ Write-JsonFile -Path $ReportPath -Value $report
 
 if (-not $NoMarkdown) {
     $markdown = Build-MarkdownReport $report
-    Set-Content -LiteralPath $MarkdownPath -Value $markdown -Encoding UTF8
+    Write-TextFile -Path $MarkdownPath -Value $markdown
 }
 
 if ($JsonOnly) {

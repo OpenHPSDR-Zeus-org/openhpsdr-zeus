@@ -101,6 +101,10 @@ public static class DspBenchmarkCaptureManifestService
 
     private static IEnumerable<string> RequiredSafetyScenarioIds(DspBenchmarkPlanDto plan)
     {
+        if (plan.Scenarios.Any(scenario => string.Equals(scenario.Id, "tx-two-tone", StringComparison.Ordinal)))
+            yield return "tx-two-tone";
+        if (plan.Scenarios.Any(scenario => string.Equals(scenario.Id, "tx-voice-like", StringComparison.Ordinal)))
+            yield return "tx-voice-like";
         if (plan.Scenarios.Any(scenario => string.Equals(scenario.Id, "tx-puresignal-safe-bypass", StringComparison.Ordinal)))
             yield return "tx-puresignal-safe-bypass";
     }
@@ -111,9 +115,28 @@ public static class DspBenchmarkCaptureManifestService
         var pureSignal = scenarioIds.Contains("tx-puresignal-safe-bypass", StringComparer.Ordinal)
             ? new[] { "tx-puresignal-safe-bypass" }
             : Array.Empty<string>();
+        var wdspLifecycle = scenarioIds.Contains("wdsp-channel-lifecycle", StringComparer.Ordinal)
+            ? new[] { "wdsp-channel-lifecycle" }
+            : Array.Empty<string>();
+        var txFixtureSafety = scenarioIds
+            .Where(static scenarioId => string.Equals(scenarioId, "tx-two-tone", StringComparison.Ordinal) ||
+                                        string.Equals(scenarioId, "tx-voice-like", StringComparison.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var txOutputHeadroom = txFixtureSafety
+            .Concat(pureSignal)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
         var externalBakeoff = requiredComparisons.Contains("candidate-external-engine-opt-in", StringComparer.Ordinal)
             ? all
             : Array.Empty<string>();
+        string[] rxAudioLevelerFixtureScenarioIds =
+        [
+            "ssb-syllable-step",
+            "near-target-speech",
+            "sustained-weak-speech",
+            "strong-after-weak",
+        ];
 
         List<DspBenchmarkCaptureArtifactDto> artifacts =
         [
@@ -238,6 +261,14 @@ public static class DspBenchmarkCaptureManifestService
                 true,
                 all),
             Artifact(
+                "rx-audio-leveler-fixture-benchmark",
+                "metrics-json",
+                "tools/run-dsp-rx-leveler-fixture-benchmark.ps1",
+                "Export targeted current-vs-stable-speech-candidate RX audio leveler fixture metrics for syllable pumping, near-target stability, sustained weak-speech recovery, and strong-after-weak safety.",
+                "once-per-rx-audio-leveler-candidate",
+                false,
+                rxAudioLevelerFixtureScenarioIds),
+            Artifact(
                 "native-stage-timing-report",
                 "native-stage-timing-report-json",
                 "tools/summarize-dsp-native-stage-timing.ps1",
@@ -245,6 +276,30 @@ public static class DspBenchmarkCaptureManifestService
                 "once-after-wdsp-offline-fixture-matrix",
                 true,
                 all),
+            Artifact(
+                "tx-fixture-safety-report",
+                "tx-fixture-safety-report-json",
+                "tools/summarize-dsp-tx-fixture-safety.ps1",
+                "Summarize WDSP TX two-tone and voice-like fixture safety: TX stage meter presence, clipping, output headroom, ALC/CFC/leveler gain reduction, runtime hash, and no default behavior changes before TX bench review.",
+                "once-after-wdsp-offline-fixture-matrix-tx-scenarios",
+                txFixtureSafety.Length > 0,
+                txFixtureSafety),
+            Artifact(
+                "tx-output-headroom-ab-trace",
+                "diagnostics-ab-summary-json",
+                "tools/capture-tx-output-headroom-ab.ps1",
+                "Capture guarded G2 current-vs-headroom-trim-candidate TX output headroom live diagnostics windows without keying TX from the script, including PureSignal bypass proof when armed.",
+                "once-per-tx-output-headroom-candidate-live-window",
+                false,
+                txOutputHeadroom),
+            Artifact(
+                "wdsp-channel-lifecycle-report",
+                "wdsp-channel-lifecycle-json",
+                "tools/run-dsp-wdsp-channel-lifecycle.ps1",
+                "Exercise Zeus WdspDspEngine OpenChannel, public wrapper configuration, SetMox state transitions, audio drain recovery, meter leakage, and CloseChannel/reopen behavior without radio hardware.",
+                "once-per-native-build-and-lifecycle-candidate",
+                wdspLifecycle.Length > 0,
+                wdspLifecycle),
             Artifact(
                 "audio-render-before-after",
                 "audio",
@@ -264,8 +319,8 @@ public static class DspBenchmarkCaptureManifestService
             Artifact(
                 "puresignal-feedback-trace",
                 "trace",
-                "g2-tx-feedback",
-                "Prove TX monitor and external DSP paths do not couple into PureSignal feedback correction.",
+                "tools/capture-dsp-puresignal-bench-trace.ps1",
+                "Capture read-only G2 TX/PureSignal disabled and enabled bench traces, then prove TX monitor and external DSP paths do not couple into PureSignal feedback correction.",
                 "before-and-after-tx-scenario",
                 pureSignal.Length > 0,
                 pureSignal),

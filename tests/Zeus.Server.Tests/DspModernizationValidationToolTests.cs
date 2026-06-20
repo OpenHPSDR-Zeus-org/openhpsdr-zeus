@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -16,6 +17,29 @@ namespace Zeus.Server.Tests;
 [Trait("Category", "DspModernization")]
 public sealed class DspModernizationValidationToolTests
 {
+    private const string ValidWdspRuntimeSha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    private static readonly string[] RequiredCrossRadioSourceScenarioIds =
+    [
+        "weak-cw-carrier",
+        "ssb-like-speech",
+        "fading-carrier",
+        "impulse-noise",
+        "strong-adjacent",
+        "noise-only-gating",
+        "agc-level-step",
+        "squelch-transition",
+        "tx-two-tone",
+        "tx-voice-like",
+        "tx-puresignal-safe-bypass"
+    ];
+    private static readonly string[] RequiredCrossRadioSourceComparisonIds =
+    [
+        "off-baseline",
+        "thetis-parity",
+        "current-zeus",
+        "candidate-under-test"
+    ];
+
     private static readonly JsonSerializerOptions CamelCaseJson = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -886,6 +910,643 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task ArtifactManifestScaffoldCanIncludeRxLevelerFixtureBenchmark()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell artifact scaffold smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-rx-leveler-artifact-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+
+            var manifestPath = Path.Combine(bundleDir, "artifact-manifest.json");
+            var scaffold = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "new-dsp-artifact-manifest.ps1"),
+                "-BundleDir", bundleDir,
+                "-OutputPath", manifestPath,
+                "-IncludeOptionalArtifacts",
+                "-Force");
+
+            Assert.Equal(0, scaffold.ExitCode);
+            Assert.True(File.Exists(manifestPath), scaffold.CombinedOutput);
+
+            using var manifestDoc = JsonDocument.Parse(await File.ReadAllTextAsync(manifestPath));
+            var artifact = manifestDoc.RootElement
+                .GetProperty("artifacts")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("id").GetString() == "rx-audio-leveler-fixture-benchmark");
+
+            Assert.False(artifact.GetProperty("required").GetBoolean());
+            Assert.Equal("metrics-json", artifact.GetProperty("kind").GetString());
+            Assert.Equal("tools/run-dsp-rx-leveler-fixture-benchmark.ps1", artifact.GetProperty("source").GetString());
+            Assert.Equal("artifacts/rx-audio-leveler-fixture-benchmark.json", artifact.GetProperty("path").GetString());
+            Assert.Equal(
+                ["ssb-syllable-step", "near-target-speech", "sustained-weak-speech", "strong-after-weak"],
+                artifact.GetProperty("scenarioIds").EnumerateArray().Select(item => item.GetString() ?? "").ToArray());
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ArtifactManifestScaffoldIncludesWdspChannelLifecycleReport()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell artifact scaffold smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-lifecycle-artifact-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteLifecycleScopeBundle(bundleDir);
+
+            var manifestPath = Path.Combine(bundleDir, "artifact-manifest.json");
+            var scaffold = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "new-dsp-artifact-manifest.ps1"),
+                "-BundleDir", bundleDir,
+                "-OutputPath", manifestPath,
+                "-Force");
+
+            Assert.Equal(0, scaffold.ExitCode);
+            Assert.True(File.Exists(manifestPath), scaffold.CombinedOutput);
+
+            using var manifestDoc = JsonDocument.Parse(await File.ReadAllTextAsync(manifestPath));
+            var artifact = manifestDoc.RootElement
+                .GetProperty("artifacts")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("id").GetString() == "wdsp-channel-lifecycle-report");
+
+            Assert.True(artifact.GetProperty("required").GetBoolean());
+            Assert.Equal("wdsp-channel-lifecycle-json", artifact.GetProperty("kind").GetString());
+            Assert.Equal("tools/run-dsp-wdsp-channel-lifecycle.ps1", artifact.GetProperty("source").GetString());
+            Assert.Equal("artifacts/wdsp-channel-lifecycle-report.json", artifact.GetProperty("path").GetString());
+            Assert.Equal(
+                ["wdsp-channel-lifecycle"],
+                artifact.GetProperty("scenarioIds").EnumerateArray().Select(item => item.GetString() ?? "").ToArray());
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ArtifactManifestScaffoldIncludesTxFixtureSafetyReport()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell artifact scaffold smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-tx-safety-artifact-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteTxFixtureScopeBundle(bundleDir);
+
+            var manifestPath = Path.Combine(bundleDir, "artifact-manifest.json");
+            var scaffold = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "new-dsp-artifact-manifest.ps1"),
+                "-BundleDir", bundleDir,
+                "-OutputPath", manifestPath,
+                "-Force");
+
+            Assert.Equal(0, scaffold.ExitCode);
+            Assert.True(File.Exists(manifestPath), scaffold.CombinedOutput);
+
+            using var manifestDoc = JsonDocument.Parse(await File.ReadAllTextAsync(manifestPath));
+            var artifact = manifestDoc.RootElement
+                .GetProperty("artifacts")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("id").GetString() == "tx-fixture-safety-report");
+
+            Assert.True(artifact.GetProperty("required").GetBoolean());
+            Assert.Equal("tx-fixture-safety-report-json", artifact.GetProperty("kind").GetString());
+            Assert.Equal("tools/summarize-dsp-tx-fixture-safety.ps1", artifact.GetProperty("source").GetString());
+            Assert.Equal("artifacts/tx-fixture-safety-report.json", artifact.GetProperty("path").GetString());
+            Assert.Equal(
+                ["tx-two-tone", "tx-voice-like"],
+                artifact.GetProperty("scenarioIds").EnumerateArray().Select(item => item.GetString() ?? "").ToArray());
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ArtifactManifestScaffoldCanIncludeTxOutputHeadroomAbTrace()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell artifact scaffold smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-tx-headroom-artifact-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteTxFixtureScopeBundle(bundleDir);
+
+            var manifestPath = Path.Combine(bundleDir, "artifact-manifest.json");
+            var scaffold = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "new-dsp-artifact-manifest.ps1"),
+                "-BundleDir", bundleDir,
+                "-OutputPath", manifestPath,
+                "-IncludeOptionalArtifacts",
+                "-Force");
+
+            Assert.Equal(0, scaffold.ExitCode);
+            Assert.True(File.Exists(manifestPath), scaffold.CombinedOutput);
+
+            using var manifestDoc = JsonDocument.Parse(await File.ReadAllTextAsync(manifestPath));
+            var artifact = manifestDoc.RootElement
+                .GetProperty("artifacts")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("id").GetString() == "tx-output-headroom-ab-trace");
+
+            Assert.False(artifact.GetProperty("required").GetBoolean());
+            Assert.Equal("diagnostics-ab-summary-json", artifact.GetProperty("kind").GetString());
+            Assert.Equal("tools/capture-tx-output-headroom-ab.ps1", artifact.GetProperty("source").GetString());
+            Assert.Equal("artifacts/tx-output-headroom-ab-trace.json", artifact.GetProperty("path").GetString());
+            Assert.Equal(
+                ["tx-two-tone", "tx-voice-like"],
+                artifact.GetProperty("scenarioIds").EnumerateArray().Select(item => item.GetString() ?? "").ToArray());
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task TxOutputHeadroomAbPreflightArtifactValidatesAsReadinessEvidence()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-tx-headroom-preflight-artifact-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteTxFixtureScopeBundle(bundleDir);
+            WriteTxOutputHeadroomAbArtifactManifest(bundleDir, required: false);
+            WriteTxOutputHeadroomAbTrace(bundleDir, preflightOnly: true, includeTxSamples: false);
+
+            var validationReport = Path.Combine(bundleDir, "validation-tx-headroom-preflight.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var root = validationDoc.RootElement;
+            Assert.True(root.GetProperty("txOutputHeadroomAbTracePresent").GetBoolean());
+            Assert.True(root.GetProperty("txOutputHeadroomAbTraceReady").GetBoolean());
+            Assert.Equal("preflight-ready", root.GetProperty("txOutputHeadroomAbTraceStatus").GetString());
+            Assert.Equal("preflight-only", root.GetProperty("txOutputHeadroomAbTraceMode").GetString());
+            Assert.True(root.GetProperty("txOutputHeadroomAbTraceNoKeyingByScript").GetBoolean());
+            Assert.True(root.GetProperty("txOutputHeadroomAbTraceLiveReadinessReady").GetBoolean());
+            Assert.True(root.GetProperty("txOutputHeadroomAbTraceProfileBeforeCurrent").GetBoolean());
+
+            var txIssueCodes = root.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .Where(code => code?.StartsWith("tx-output-headroom-ab-", StringComparison.Ordinal) == true)
+                .ToArray();
+            Assert.Empty(txIssueCodes);
+
+            var triageReport = Path.Combine(bundleDir, "validation-tx-headroom-preflight-triage.json");
+            var triage = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-modernization-validation-report.ps1"),
+                "-ValidationReportPath", validationReport,
+                "-ReportPath", triageReport,
+                "-JsonOnly");
+
+            Assert.Equal(0, triage.ExitCode);
+            Assert.True(File.Exists(triageReport), triage.CombinedOutput);
+
+            using var triageDoc = JsonDocument.Parse(await File.ReadAllTextAsync(triageReport));
+            var triageRoot = triageDoc.RootElement;
+            var headroomGate = triageRoot.GetProperty("evidenceGates")
+                .EnumerateArray()
+                .Single(gate => gate.GetProperty("gateId").GetString() == "tx-output-headroom-ab-trace");
+            Assert.True(headroomGate.GetProperty("ready").GetBoolean());
+            Assert.False(headroomGate.GetProperty("requiredForAcceptance").GetBoolean());
+            Assert.Equal("preflight-ready", headroomGate.GetProperty("status").GetString());
+            Assert.DoesNotContain("tx-output-headroom-ab-trace", ReadStringArray(triageRoot, "evidenceGateProblemIds"));
+            Assert.DoesNotContain("tx-output-headroom-ab-trace", ReadStringArray(triageRoot, "advisoryEvidenceGateProblemIds"));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task TxOutputHeadroomAbFullArtifactRejectsMissingTxSamples()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-tx-headroom-invalid-artifact-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteTxFixtureScopeBundle(bundleDir);
+            WriteTxOutputHeadroomAbArtifactManifest(bundleDir, required: true);
+            WriteTxOutputHeadroomAbTrace(bundleDir, preflightOnly: false, includeTxSamples: false);
+
+            var validationReport = Path.Combine(bundleDir, "validation-tx-headroom-invalid.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var root = validationDoc.RootElement;
+            Assert.True(root.GetProperty("txOutputHeadroomAbTracePresent").GetBoolean());
+            Assert.False(root.GetProperty("txOutputHeadroomAbTraceReady").GetBoolean());
+            Assert.Equal("not-ready", root.GetProperty("txOutputHeadroomAbTraceStatus").GetString());
+            Assert.Equal("headroom-trim-candidate", root.GetProperty("txOutputHeadroomAbTraceCandidateActiveProfile").GetString());
+            Assert.Equal(0, root.GetProperty("txOutputHeadroomAbTraceCandidateTxMonitorSampleCount").GetInt32());
+            Assert.Equal(0, root.GetProperty("txOutputHeadroomAbTraceCandidateExperimentalSampleCount").GetInt32());
+
+            var errorCodes = root.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.Contains("tx-output-headroom-ab-tx-samples-missing", errorCodes);
+
+            var triageReport = Path.Combine(bundleDir, "validation-tx-headroom-invalid-triage.json");
+            var triage = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-modernization-validation-report.ps1"),
+                "-ValidationReportPath", validationReport,
+                "-ReportPath", triageReport,
+                "-JsonOnly");
+
+            Assert.Equal(0, triage.ExitCode);
+            Assert.True(File.Exists(triageReport), triage.CombinedOutput);
+
+            using var triageDoc = JsonDocument.Parse(await File.ReadAllTextAsync(triageReport));
+            var triageRoot = triageDoc.RootElement;
+            var headroomGate = triageRoot.GetProperty("evidenceGates")
+                .EnumerateArray()
+                .Single(gate => gate.GetProperty("gateId").GetString() == "tx-output-headroom-ab-trace");
+            Assert.False(headroomGate.GetProperty("ready").GetBoolean());
+            Assert.False(headroomGate.GetProperty("requiredForAcceptance").GetBoolean());
+            Assert.Equal("not-ready", headroomGate.GetProperty("status").GetString());
+            Assert.Contains("tx-output-headroom-ab-trace", ReadStringArray(triageRoot, "advisoryEvidenceGateProblemIds"));
+
+            var action = triageRoot.GetProperty("acceptanceActionPlan")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("actionId").GetString() == "capture-tx-output-headroom-ab-trace");
+            Assert.False(action.GetProperty("requiredForAcceptance").GetBoolean());
+            Assert.True(action.GetProperty("blocksDefaultBehaviorChange").GetBoolean());
+            Assert.Equal("tx-puresignal", action.GetProperty("category").GetString());
+            Assert.Equal("artifacts/tx-output-headroom-ab-trace.json", action.GetProperty("expectedArtifact").GetString());
+            Assert.Contains("profileBucketReady=", action.GetProperty("reason").GetString(), StringComparison.Ordinal);
+            var commandSteps = ReadStringArray(action, "commandSteps");
+            Assert.Equal(2, commandSteps.Length);
+            Assert.All(commandSteps, step => Assert.DoesNotContain("-BundleDir", step, StringComparison.Ordinal));
+            Assert.Contains(commandSteps, step => step.Contains("-PreflightOnly", StringComparison.Ordinal));
+            Assert.Contains(commandSteps, step => step.Contains("-AllowTransmit", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task TxOutputHeadroomAbFullArtifactRejectsMissingWatcherSummaries()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-tx-headroom-watcher-missing-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteTxFixtureScopeBundle(bundleDir);
+            WriteTxOutputHeadroomAbArtifactManifest(bundleDir, required: true);
+            WriteTxOutputHeadroomAbTrace(bundleDir, preflightOnly: false, includeTxSamples: true, includeWatcherSummaries: false);
+
+            var validationReport = Path.Combine(bundleDir, "validation-tx-headroom-watcher-missing.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var root = validationDoc.RootElement;
+            Assert.True(root.GetProperty("txOutputHeadroomAbTraceWatcherSummaryRequired").GetBoolean());
+            Assert.False(root.GetProperty("txOutputHeadroomAbTraceWatcherSummaryReady").GetBoolean());
+            Assert.Equal(2, root.GetProperty("txOutputHeadroomAbTraceWatcherSummaryMissingCount").GetInt32());
+            Assert.Equal(0, root.GetProperty("txOutputHeadroomAbTraceWatcherSummaryMismatchCount").GetInt32());
+            Assert.False(root.GetProperty("txOutputHeadroomAbTraceWatcherProfileBucketReady").GetBoolean());
+            Assert.Equal(2, root.GetProperty("txOutputHeadroomAbTraceWatcherProfileBucketMissingCount").GetInt32());
+            Assert.Equal(0, root.GetProperty("txOutputHeadroomAbTraceWatcherProfileBucketMismatchCount").GetInt32());
+            Assert.False(root.GetProperty("txOutputHeadroomAbTraceReady").GetBoolean());
+            Assert.Equal("not-ready", root.GetProperty("txOutputHeadroomAbTraceStatus").GetString());
+
+            var errorCodes = root.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.Contains("tx-output-headroom-ab-watcher-summary-missing", errorCodes);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task TxOutputHeadroomAbFullArtifactRejectsCandidateWatcherCountMismatch()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-tx-headroom-watcher-mismatch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteTxFixtureScopeBundle(bundleDir);
+            WriteTxOutputHeadroomAbArtifactManifest(bundleDir, required: true);
+            WriteTxOutputHeadroomAbTrace(
+                bundleDir,
+                preflightOnly: false,
+                includeTxSamples: true,
+                candidateWatcherExperimentalSampleCount: 1);
+
+            var validationReport = Path.Combine(bundleDir, "validation-tx-headroom-watcher-mismatch.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var root = validationDoc.RootElement;
+            Assert.True(root.GetProperty("txOutputHeadroomAbTraceWatcherSummaryRequired").GetBoolean());
+            Assert.False(root.GetProperty("txOutputHeadroomAbTraceWatcherSummaryReady").GetBoolean());
+            Assert.Equal(0, root.GetProperty("txOutputHeadroomAbTraceWatcherSummaryMissingCount").GetInt32());
+            Assert.Equal(1, root.GetProperty("txOutputHeadroomAbTraceWatcherSummaryMismatchCount").GetInt32());
+            Assert.False(root.GetProperty("txOutputHeadroomAbTraceWatcherProfileBucketReady").GetBoolean());
+            Assert.Equal(0, root.GetProperty("txOutputHeadroomAbTraceWatcherProfileBucketMissingCount").GetInt32());
+            Assert.Equal(0, root.GetProperty("txOutputHeadroomAbTraceWatcherProfileBucketMismatchCount").GetInt32());
+            Assert.False(root.GetProperty("txOutputHeadroomAbTraceReady").GetBoolean());
+            Assert.Equal("not-ready", root.GetProperty("txOutputHeadroomAbTraceStatus").GetString());
+
+            var errorCodes = root.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.Contains("tx-output-headroom-ab-watcher-summary-count-mismatch", errorCodes);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task TxOutputHeadroomAbFullArtifactRejectsCandidateWatcherActiveProfileBucketMismatch()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-tx-headroom-profile-bucket-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteTxFixtureScopeBundle(bundleDir);
+            WriteTxOutputHeadroomAbArtifactManifest(bundleDir, required: true);
+            WriteTxOutputHeadroomAbTrace(
+                bundleDir,
+                preflightOnly: false,
+                includeTxSamples: true,
+                candidateWatcherActiveProfile: "current");
+
+            var validationReport = Path.Combine(bundleDir, "validation-tx-headroom-profile-bucket.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var root = validationDoc.RootElement;
+            Assert.True(root.GetProperty("txOutputHeadroomAbTraceWatcherSummaryRequired").GetBoolean());
+            Assert.True(root.GetProperty("txOutputHeadroomAbTraceWatcherSummaryReady").GetBoolean());
+            Assert.False(root.GetProperty("txOutputHeadroomAbTraceWatcherProfileBucketReady").GetBoolean());
+            Assert.Equal(0, root.GetProperty("txOutputHeadroomAbTraceWatcherProfileBucketMissingCount").GetInt32());
+            Assert.Equal(1, root.GetProperty("txOutputHeadroomAbTraceWatcherProfileBucketMismatchCount").GetInt32());
+            Assert.False(root.GetProperty("txOutputHeadroomAbTraceReady").GetBoolean());
+            Assert.Equal("not-ready", root.GetProperty("txOutputHeadroomAbTraceStatus").GetString());
+
+            var errorCodes = root.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.Contains("tx-output-headroom-ab-watcher-profile-bucket-mismatch", errorCodes);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task WdspChannelLifecyclePlanOnlyDeclaresOfflineWorkflow()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell lifecycle plan smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var plan = await RunPowerShellAsync(
+            powerShell,
+            repoRoot,
+            Path.Combine(repoRoot, "tools", "run-dsp-wdsp-channel-lifecycle.ps1"),
+            "-PlanOnly",
+            "-OutputPath", "artifacts/wdsp-channel-lifecycle-report.json",
+            "-Cycles", "2");
+
+        Assert.Equal(0, plan.ExitCode);
+        using var planDoc = JsonDocument.Parse(plan.StandardOutput);
+        var root = planDoc.RootElement;
+        Assert.Equal("run-dsp-wdsp-channel-lifecycle", root.GetProperty("tool").GetString());
+        Assert.Equal("plan-only", root.GetProperty("mode").GetString());
+        Assert.Equal("wdsp-channel-lifecycle", root.GetProperty("scenarioId").GetString());
+        Assert.Equal("wdsp-channel-lifecycle-json", root.GetProperty("evidenceKind").GetString());
+        Assert.Equal(2, root.GetProperty("cycles").GetInt32());
+
+        var safety = ReadStringArray(root, "safety");
+        Assert.Contains("offline-local-wdsp-wrapper-only", safety);
+        Assert.Contains("does not connect to radio hardware", safety);
+        Assert.Contains("does not tune VFO or LO", safety);
+        Assert.Contains("does not key hardware MOX or TUN", safety);
+
+        var actions = ReadStringArray(root, "actions");
+        Assert.Contains(actions, action => action.Contains("SetMox", StringComparison.Ordinal));
+        Assert.Contains(actions, action => action.Contains("CloseChannel", StringComparison.Ordinal));
+    }
+
+    [SkippableFact]
+    public async Task TxFixtureSafetyPlanOnlyDeclaresOfflineWorkflow()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell TX fixture safety plan smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var plan = await RunPowerShellAsync(
+            powerShell,
+            repoRoot,
+            Path.Combine(repoRoot, "tools", "summarize-dsp-tx-fixture-safety.ps1"),
+            "-PlanOnly",
+            "-BundleDir", "captures/dsp-modernization/tx-safety",
+            "-MetricsPath", "artifacts/offline-fixture-metrics.json",
+            "-ReportPath", "artifacts/tx-fixture-safety-report.json");
+
+        Assert.Equal(0, plan.ExitCode);
+        using var planDoc = JsonDocument.Parse(plan.StandardOutput);
+        var root = planDoc.RootElement;
+        Assert.Equal("summarize-dsp-tx-fixture-safety", root.GetProperty("tool").GetString());
+        Assert.Equal("plan-only", root.GetProperty("mode").GetString());
+        Assert.Equal("tx-fixture-safety-report-json", root.GetProperty("evidenceKind").GetString());
+        Assert.Equal(["tx-two-tone", "tx-voice-like"], ReadStringArray(root, "scenarioIds"));
+        Assert.Equal(["current-zeus", "thetis-parity"], ReadStringArray(root, "requiredComparisonIds"));
+
+        var safety = ReadStringArray(root, "safety");
+        Assert.Contains("offline-fixture-metrics-only", safety);
+        Assert.Contains("does not key MOX or TUN", safety);
+        Assert.Contains("does not connect to radio hardware", safety);
+        Assert.Contains("does not toggle PureSignal", safety);
+        Assert.Contains("does not change operator defaults", safety);
+
+        var actions = ReadStringArray(root, "actions");
+        Assert.Contains(actions, action => action.Contains("TX stage meter", StringComparison.Ordinal));
+        Assert.Contains(actions, action => action.Contains("clipping", StringComparison.Ordinal));
+    }
+
+    [SkippableFact]
     public async Task SourceBenchmarkPlanRecognizesCanonicalPureSignalSafeBypassScenario()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell validator smoke runs on Windows.");
@@ -989,8 +1650,8 @@ public sealed class DspModernizationValidationToolTests
         {
             WritePureSignalScopeBundle(bundleDir);
             WritePureSignalArtifactManifest(bundleDir);
-            WritePureSignalTrace(bundleDir, "artifacts/puresignal-disabled.json", enabled: false, feedbackStability: 0.991, txMonitorCoupling: 0.0, clippingCount: 0);
-            WritePureSignalTrace(bundleDir, "artifacts/puresignal-enabled.json", enabled: true, feedbackStability: 0.986, txMonitorCoupling: 0.01, clippingCount: 0);
+            WritePureSignalTrace(bundleDir, "artifacts/puresignal-disabled.json", enabled: false, feedbackStability: 0.991, txMonitorCoupling: 0.0, clippingCount: 0, liveReady: true);
+            WritePureSignalTrace(bundleDir, "artifacts/puresignal-enabled.json", enabled: true, feedbackStability: 0.986, txMonitorCoupling: 0.01, clippingCount: 0, liveReady: true);
 
             var reportPath = Path.Combine(bundleDir, "artifacts", "puresignal-safe-bypass-report.json");
             var summary = await RunPowerShellAsync(
@@ -1001,6 +1662,7 @@ public sealed class DspModernizationValidationToolTests
                 "-DisabledTracePath", "artifacts/puresignal-disabled.json",
                 "-EnabledTracePath", "artifacts/puresignal-enabled.json",
                 "-ReportPath", "artifacts/puresignal-safe-bypass-report.json",
+                "-RequireLiveReadinessEvidence",
                 "-NoMarkdown",
                 "-JsonOnly",
                 "-Force");
@@ -1017,6 +1679,14 @@ public sealed class DspModernizationValidationToolTests
                 Assert.True(reportRoot.GetProperty("enabledPathReady").GetBoolean());
                 Assert.Equal(2, reportRoot.GetProperty("capturedModeCount").GetInt32());
                 Assert.Equal(0, reportRoot.GetProperty("missingModeCount").GetInt32());
+                Assert.True(reportRoot.GetProperty("liveReadinessEvidenceRequired").GetBoolean());
+                Assert.True(reportRoot.GetProperty("liveReadinessReady").GetBoolean());
+                Assert.Equal(2, reportRoot.GetProperty("liveReadinessReadyCount").GetInt32());
+                Assert.Equal(0, reportRoot.GetProperty("liveReadinessMissingCount").GetInt32());
+                Assert.Equal(0, reportRoot.GetProperty("liveReadinessFailureCount").GetInt32());
+                Assert.True(reportRoot.GetProperty("modeConsistencyReady").GetBoolean());
+                Assert.Equal(0, reportRoot.GetProperty("modeMismatchCaptureCount").GetInt32());
+                Assert.Equal(0, reportRoot.GetProperty("modeMismatchSampleCount").GetInt32());
                 Assert.Equal(0, reportRoot.GetProperty("gateFailureCount").GetInt32());
                 Assert.False(reportRoot.GetProperty("defaultBehaviorChangeApproved").GetBoolean());
             }
@@ -1042,7 +1712,21 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(validationRoot.GetProperty("pureSignalSafeBypassDisabledPathReady").GetBoolean());
             Assert.True(validationRoot.GetProperty("pureSignalSafeBypassEnabledPathReady").GetBoolean());
             Assert.Equal(2, validationRoot.GetProperty("pureSignalSafeBypassCapturedModeCount").GetInt32());
+            Assert.True(validationRoot.GetProperty("pureSignalSafeBypassLiveReadinessEvidenceRequired").GetBoolean());
+            Assert.True(validationRoot.GetProperty("pureSignalSafeBypassLiveReadinessReady").GetBoolean());
+            Assert.Equal(2, validationRoot.GetProperty("pureSignalSafeBypassLiveReadinessReadyCount").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("pureSignalSafeBypassLiveReadinessMissingCount").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("pureSignalSafeBypassLiveReadinessFailureCount").GetInt32());
+            Assert.True(validationRoot.GetProperty("pureSignalSafeBypassModeConsistencyReady").GetBoolean());
+            Assert.Equal(0, validationRoot.GetProperty("pureSignalSafeBypassModeMismatchCaptureCount").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("pureSignalSafeBypassModeMismatchSampleCount").GetInt32());
             Assert.Equal(0, validationRoot.GetProperty("pureSignalSafeBypassGateFailureCount").GetInt32());
+            Assert.Equal(2, validationRoot.GetProperty("pureSignalSafeBypassCaptureRecordCount").GetInt32());
+            Assert.Equal(1, validationRoot.GetProperty("pureSignalSafeBypassDisabledCaptureRecordCount").GetInt32());
+            Assert.Equal(1, validationRoot.GetProperty("pureSignalSafeBypassEnabledCaptureRecordCount").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("pureSignalSafeBypassCaptureTraceMissingCount").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("pureSignalSafeBypassCaptureTraceHashMismatchCount").GetInt32());
+            Assert.True(validationRoot.GetProperty("pureSignalSafeBypassCaptureTraceProvenanceReady").GetBoolean());
 
             var pureSignalIssueCodes = validationRoot.GetProperty("errors")
                 .EnumerateArray()
@@ -1071,6 +1755,787 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(pureSignalGate.GetProperty("ready").GetBoolean());
             Assert.False(pureSignalGate.GetProperty("requiredForAcceptance").GetBoolean());
             Assert.DoesNotContain("puresignal-safe-bypass", ReadStringArray(summaryDoc.RootElement, "advisoryEvidenceGateProblemIds"));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task PureSignalBenchSummaryRejectsMixedModeSamples()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell PureSignal bench smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-puresignal-mode-mismatch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WritePureSignalScopeBundle(bundleDir);
+            WritePureSignalArtifactManifest(bundleDir);
+            WritePureSignalTrace(bundleDir, "artifacts/puresignal-disabled.json", enabled: false, feedbackStability: 0.991, txMonitorCoupling: 0.0, clippingCount: 0, liveReady: true);
+
+            var enabledTracePath = Path.Combine(bundleDir, "artifacts", "puresignal-enabled.json");
+            await File.WriteAllTextAsync(
+                enabledTracePath,
+                JsonSerializer.Serialize(new
+                {
+                    mode = "enabled",
+                    requiresLiveReady = true,
+                    liveReadinessBefore = new
+                    {
+                        ready = true,
+                        status = "ready-for-live-benchmark",
+                        readyForLiveBenchmark = true,
+                        wdspActive = true,
+                        frontendSceneFresh = true,
+                        runtimeStatus = "fresh",
+                        radioVfoHz = 14260000,
+                        radioMode = "USB",
+                        failureReasons = Array.Empty<string>()
+                    },
+                    pureSignal = new
+                    {
+                        pureSignalEnabled = true,
+                        bypassState = "enabled-feedback-correction",
+                        feedbackStability = 1.0,
+                        txMonitorCoupling = 0.0,
+                        clippingCount = 0,
+                        txOutputPeakDbfs = -6.0
+                    },
+                    samples = new[]
+                    {
+                        new { pureSignalEnabled = true },
+                        new { pureSignalEnabled = false }
+                    }
+                }, CamelCaseJson));
+
+            var reportPath = Path.Combine(bundleDir, "artifacts", "puresignal-safe-bypass-report.json");
+            var summary = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-puresignal-bench.ps1"),
+                "-BundleDir", bundleDir,
+                "-DisabledTracePath", "artifacts/puresignal-disabled.json",
+                "-EnabledTracePath", "artifacts/puresignal-enabled.json",
+                "-ReportPath", "artifacts/puresignal-safe-bypass-report.json",
+                "-RequireLiveReadinessEvidence",
+                "-NoMarkdown",
+                "-JsonOnly",
+                "-Force");
+
+            Assert.NotEqual(0, summary.ExitCode);
+            Assert.True(File.Exists(reportPath), summary.CombinedOutput);
+
+            using (var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath)))
+            {
+                var reportRoot = reportDoc.RootElement;
+                Assert.False(reportRoot.GetProperty("readyForReview").GetBoolean());
+                Assert.Equal("not-ready", reportRoot.GetProperty("status").GetString());
+                Assert.False(reportRoot.GetProperty("enabledPathReady").GetBoolean());
+                Assert.False(reportRoot.GetProperty("modeConsistencyReady").GetBoolean());
+                Assert.Equal(1, reportRoot.GetProperty("modeMismatchCaptureCount").GetInt32());
+                Assert.Equal(1, reportRoot.GetProperty("modeMismatchSampleCount").GetInt32());
+
+                var failedGateIds = reportRoot.GetProperty("gates")
+                    .EnumerateArray()
+                    .Where(gate => !gate.GetProperty("passed").GetBoolean())
+                    .Select(gate => gate.GetProperty("id").GetString())
+                    .ToArray();
+                Assert.Contains("mode-sample-consistency", failedGateIds);
+
+                var enabledCapture = reportRoot.GetProperty("captures")
+                    .EnumerateArray()
+                    .Single(capture => capture.GetProperty("mode").GetString() == "enabled");
+                Assert.False(enabledCapture.GetProperty("modeConsistent").GetBoolean());
+                Assert.Equal(1, enabledCapture.GetProperty("modeMismatchSampleCount").GetInt32());
+                Assert.Contains("puresignal-mode-sample-mismatch", ReadStringArray(enabledCapture, "issues"));
+            }
+
+            var validationReport = Path.Combine(bundleDir, "validation-puresignal-mode-mismatch.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.False(validationRoot.GetProperty("pureSignalSafeBypassReportReady").GetBoolean());
+            Assert.False(validationRoot.GetProperty("pureSignalSafeBypassModeConsistencyReady").GetBoolean());
+            Assert.Equal(1, validationRoot.GetProperty("pureSignalSafeBypassModeMismatchCaptureCount").GetInt32());
+            Assert.Equal(1, validationRoot.GetProperty("pureSignalSafeBypassModeMismatchSampleCount").GetInt32());
+
+            var errorCodes = validationRoot.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.Contains("puresignal-safe-bypass-mode-sample-mismatch", errorCodes);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ValidationReportRejectsPureSignalSafeBypassReportMissingCaptureRecords()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell PureSignal bench smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-puresignal-captures-missing-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WritePureSignalScopeBundle(bundleDir);
+            WritePureSignalArtifactManifest(bundleDir);
+            WritePureSignalTrace(bundleDir, "artifacts/puresignal-disabled.json", enabled: false, feedbackStability: 0.991, txMonitorCoupling: 0.0, clippingCount: 0, liveReady: true);
+            WritePureSignalTrace(bundleDir, "artifacts/puresignal-enabled.json", enabled: true, feedbackStability: 0.986, txMonitorCoupling: 0.01, clippingCount: 0, liveReady: true);
+
+            var reportPath = Path.Combine(bundleDir, "artifacts", "puresignal-safe-bypass-report.json");
+            var summary = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-puresignal-bench.ps1"),
+                "-BundleDir", bundleDir,
+                "-DisabledTracePath", "artifacts/puresignal-disabled.json",
+                "-EnabledTracePath", "artifacts/puresignal-enabled.json",
+                "-ReportPath", "artifacts/puresignal-safe-bypass-report.json",
+                "-RequireLiveReadinessEvidence",
+                "-NoMarkdown",
+                "-JsonOnly",
+                "-Force");
+
+            Assert.Equal(0, summary.ExitCode);
+            var reportNode = JsonNode.Parse(await File.ReadAllTextAsync(reportPath))!.AsObject();
+            Assert.True(reportNode.Remove("captures"));
+            await File.WriteAllTextAsync(reportPath, reportNode.ToJsonString(CamelCaseJson));
+
+            var validationReport = Path.Combine(bundleDir, "validation-puresignal-captures-missing.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.True(validationRoot.GetProperty("pureSignalSafeBypassReportPresent").GetBoolean());
+            Assert.False(validationRoot.GetProperty("pureSignalSafeBypassReportReady").GetBoolean());
+            Assert.Equal(0, validationRoot.GetProperty("pureSignalSafeBypassCaptureRecordCount").GetInt32());
+            Assert.False(validationRoot.GetProperty("pureSignalSafeBypassCaptureTraceProvenanceReady").GetBoolean());
+
+            var errorCodes = validationRoot.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.Contains("puresignal-safe-bypass-capture-provenance-not-ready", errorCodes);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ValidationReportRejectsPureSignalSafeBypassTraceHashMismatch()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell PureSignal bench smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-puresignal-hash-mismatch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WritePureSignalScopeBundle(bundleDir);
+            WritePureSignalArtifactManifest(bundleDir);
+            WritePureSignalTrace(bundleDir, "artifacts/puresignal-disabled.json", enabled: false, feedbackStability: 0.991, txMonitorCoupling: 0.0, clippingCount: 0, liveReady: true);
+            WritePureSignalTrace(bundleDir, "artifacts/puresignal-enabled.json", enabled: true, feedbackStability: 0.986, txMonitorCoupling: 0.01, clippingCount: 0, liveReady: true);
+
+            var reportPath = Path.Combine(bundleDir, "artifacts", "puresignal-safe-bypass-report.json");
+            var summary = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-puresignal-bench.ps1"),
+                "-BundleDir", bundleDir,
+                "-DisabledTracePath", "artifacts/puresignal-disabled.json",
+                "-EnabledTracePath", "artifacts/puresignal-enabled.json",
+                "-ReportPath", "artifacts/puresignal-safe-bypass-report.json",
+                "-RequireLiveReadinessEvidence",
+                "-NoMarkdown",
+                "-JsonOnly",
+                "-Force");
+
+            Assert.Equal(0, summary.ExitCode);
+            await File.AppendAllTextAsync(Path.Combine(bundleDir, "artifacts", "puresignal-enabled.json"), $"{Environment.NewLine} ");
+
+            var validationReport = Path.Combine(bundleDir, "validation-puresignal-hash-mismatch.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.True(validationRoot.GetProperty("pureSignalSafeBypassReportPresent").GetBoolean());
+            Assert.False(validationRoot.GetProperty("pureSignalSafeBypassReportReady").GetBoolean());
+            Assert.Equal(2, validationRoot.GetProperty("pureSignalSafeBypassCaptureRecordCount").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("pureSignalSafeBypassCaptureTraceMissingCount").GetInt32());
+            Assert.Equal(1, validationRoot.GetProperty("pureSignalSafeBypassCaptureTraceHashMismatchCount").GetInt32());
+            Assert.False(validationRoot.GetProperty("pureSignalSafeBypassCaptureTraceProvenanceReady").GetBoolean());
+
+            var errorCodes = validationRoot.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.Contains("puresignal-safe-bypass-capture-hash-mismatch", errorCodes);
+            Assert.Contains("puresignal-safe-bypass-capture-provenance-not-ready", errorCodes);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task PureSignalBenchSummaryRejectsMissingLiveReadinessEvidenceWhenRequired()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell PureSignal bench smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-puresignal-live-evidence-missing-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WritePureSignalScopeBundle(bundleDir);
+            WritePureSignalArtifactManifest(bundleDir);
+            WritePureSignalTrace(bundleDir, "artifacts/puresignal-disabled.json", enabled: false, feedbackStability: 0.991, txMonitorCoupling: 0.0, clippingCount: 0);
+            WritePureSignalTrace(bundleDir, "artifacts/puresignal-enabled.json", enabled: true, feedbackStability: 0.986, txMonitorCoupling: 0.01, clippingCount: 0);
+
+            var reportPath = Path.Combine(bundleDir, "artifacts", "puresignal-safe-bypass-report.json");
+            var summary = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-puresignal-bench.ps1"),
+                "-BundleDir", bundleDir,
+                "-DisabledTracePath", "artifacts/puresignal-disabled.json",
+                "-EnabledTracePath", "artifacts/puresignal-enabled.json",
+                "-ReportPath", "artifacts/puresignal-safe-bypass-report.json",
+                "-RequireLiveReadinessEvidence",
+                "-NoMarkdown",
+                "-JsonOnly",
+                "-Force");
+
+            Assert.NotEqual(0, summary.ExitCode);
+            Assert.True(File.Exists(reportPath), summary.CombinedOutput);
+
+            using (var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath)))
+            {
+                var reportRoot = reportDoc.RootElement;
+                Assert.False(reportRoot.GetProperty("readyForReview").GetBoolean());
+                Assert.Equal("not-ready", reportRoot.GetProperty("status").GetString());
+                Assert.True(reportRoot.GetProperty("liveReadinessEvidenceRequired").GetBoolean());
+                Assert.False(reportRoot.GetProperty("liveReadinessReady").GetBoolean());
+                Assert.Equal(0, reportRoot.GetProperty("liveReadinessReadyCount").GetInt32());
+                Assert.Equal(2, reportRoot.GetProperty("liveReadinessMissingCount").GetInt32());
+                Assert.Equal(0, reportRoot.GetProperty("liveReadinessFailureCount").GetInt32());
+
+                var gateIds = reportRoot.GetProperty("gates")
+                    .EnumerateArray()
+                    .Where(gate => !gate.GetProperty("passed").GetBoolean())
+                    .Select(gate => gate.GetProperty("id").GetString())
+                    .ToArray();
+                Assert.Contains("live-readiness-evidence-ready", gateIds);
+            }
+
+            var validationReport = Path.Combine(bundleDir, "validation-puresignal-live-evidence-missing.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.True(validationRoot.GetProperty("pureSignalSafeBypassLiveReadinessEvidenceRequired").GetBoolean());
+            Assert.False(validationRoot.GetProperty("pureSignalSafeBypassLiveReadinessReady").GetBoolean());
+            Assert.Equal(2, validationRoot.GetProperty("pureSignalSafeBypassLiveReadinessMissingCount").GetInt32());
+
+            var errorCodes = validationRoot.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.Contains("puresignal-safe-bypass-live-readiness-not-ready", errorCodes);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task PureSignalBenchTraceCapturePlanOnlyDeclaresReadOnlyWorkflow()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell PureSignal trace plan smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var plan = await RunPowerShellAsync(
+            powerShell,
+            repoRoot,
+            Path.Combine(repoRoot, "tools", "capture-dsp-puresignal-bench-trace.ps1"),
+            "-PlanOnly",
+            "-BaseUrl", "https://127.0.0.1:6443",
+            "-Mode", "enabled",
+            "-Samples", "2",
+            "-IntervalMs", "1",
+            "-RequireLiveReady",
+            "-OutputPath", "artifacts/puresignal-enabled.json");
+
+        Assert.Equal(0, plan.ExitCode);
+
+        using var planDoc = JsonDocument.Parse(plan.StandardOutput);
+        var root = planDoc.RootElement;
+        Assert.Equal("capture-dsp-puresignal-bench-trace", root.GetProperty("tool").GetString());
+        Assert.Equal("plan-only", root.GetProperty("mode").GetString());
+        Assert.Equal("enabled", root.GetProperty("pureSignalMode").GetString());
+        Assert.Equal("https://127.0.0.1:6443", root.GetProperty("baseUrl").GetString());
+        Assert.Equal(2, root.GetProperty("samples").GetInt32());
+        Assert.True(root.GetProperty("requiresLiveReady").GetBoolean());
+        Assert.Contains("/api/dsp/live-diagnostics", ReadStringArray(root, "endpoints"));
+        Assert.Contains("/api/radio/diagnostics", ReadStringArray(root, "endpoints"));
+        Assert.Contains("/api/tx/diag", ReadStringArray(root, "endpoints"));
+
+        var safety = ReadStringArray(root, "safety");
+        Assert.Contains(safety, item => item.Contains("GET requests only", StringComparison.Ordinal));
+        Assert.Contains(safety, item => item.Contains("Does not key MOX/TUN", StringComparison.Ordinal));
+        Assert.Contains(safety, item => item.Contains("does not toggle PureSignal", StringComparison.Ordinal));
+        Assert.Contains(safety, item => item.Contains("-RequireLiveReady", StringComparison.Ordinal));
+        Assert.Contains(safety, item => item.Contains("does not approve default DSP behavior", StringComparison.Ordinal));
+    }
+
+    [SkippableFact]
+    public async Task PureSignalBenchTraceCaptureRefusesWhenLiveDiagnosticsAreNotReady()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell PureSignal trace capture smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-puresignal-live-ready-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var tracePath = Path.Combine(bundleDir, "puresignal-disabled.json");
+            using var server = JsonRouteServer.Start(request =>
+            {
+                return request.Path switch
+                {
+                    "/api/dsp/live-diagnostics" => JsonSerializer.Serialize(new
+                    {
+                        status = "not-ready",
+                        readyForLiveBenchmark = false,
+                        wdspActive = true,
+                        frontendSceneFresh = false,
+                        runtimeEvidence = new
+                        {
+                            status = "stale"
+                        }
+                    }, CamelCaseJson),
+                    "/api/radio/diagnostics" => JsonSerializer.Serialize(new { }, CamelCaseJson),
+                    "/api/tx/diag" => JsonSerializer.Serialize(new { }, CamelCaseJson),
+                    _ => null
+                };
+            });
+
+            var capture = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-dsp-puresignal-bench-trace.ps1"),
+                "-BaseUrl", server.BaseUrl,
+                "-Mode", "disabled",
+                "-Samples", "1",
+                "-IntervalMs", "1",
+                "-RequireLiveReady",
+                "-OutputPath", tracePath,
+                "-JsonOnly");
+
+            Assert.NotEqual(0, capture.ExitCode);
+            Assert.False(File.Exists(tracePath), capture.CombinedOutput);
+            Assert.Contains("live diagnostics are not benchmark-ready", capture.CombinedOutput, StringComparison.OrdinalIgnoreCase);
+
+            var requestPaths = server.Requests.Select(request => request.Path).ToArray();
+            Assert.Contains("/api/dsp/live-diagnostics", requestPaths);
+            Assert.DoesNotContain("/api/radio/diagnostics", requestPaths);
+            Assert.DoesNotContain("/api/tx/diag", requestPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task PureSignalBenchTraceCaptureFeedsSafeBypassSummary()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell PureSignal trace capture smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-puresignal-trace-capture-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WritePureSignalScopeBundle(bundleDir);
+            WritePureSignalArtifactManifest(bundleDir);
+            var disabledTracePath = Path.Combine(bundleDir, "artifacts", "puresignal-disabled.json");
+            var enabledTracePath = Path.Combine(bundleDir, "artifacts", "puresignal-enabled.json");
+            var pureSignalEnabled = false;
+
+            using var server = JsonRouteServer.Start(request =>
+            {
+                return request.Path switch
+                {
+                    "/api/dsp/live-diagnostics" => JsonSerializer.Serialize(new
+                    {
+                        status = "ready-for-live-benchmark",
+                        readyForLiveBenchmark = true,
+                        wdspActive = true,
+                        frontendSceneFresh = true,
+                        radioVfoHz = 14260000,
+                        radioMode = "USB",
+                        runtimeEvidence = new
+                        {
+                            status = "fresh"
+                        }
+                    }, CamelCaseJson),
+                    "/api/radio/diagnostics" => JsonSerializer.Serialize(new
+                    {
+                        pureSignal = new
+                        {
+                            enabled = pureSignalEnabled,
+                            monitorEnabled = false,
+                            feedbackLevelRaw = pureSignalEnabled ? 128.0 : 0.0,
+                            feedbackSource = "Internal",
+                            healthStatus = pureSignalEnabled ? "centered-correcting" : "off",
+                            correcting = pureSignalEnabled,
+                            calibrationStalled = false
+                        }
+                    }, CamelCaseJson),
+                    "/api/tx/diag" => JsonSerializer.Serialize(new
+                    {
+                        stage = new
+                        {
+                            status = pureSignalEnabled ? "active" : "idle",
+                            outPkDbfs = pureSignalEnabled ? -6.0 : (double?)null,
+                            density = new
+                            {
+                                status = pureSignalEnabled ? "density-optimized" : "idle"
+                            }
+                        },
+                        audioPath = new
+                        {
+                            status = pureSignalEnabled ? "tx-audio-flowing" : "idle"
+                        },
+                        egress = new
+                        {
+                            status = pureSignalEnabled ? "tx-egress-live" : "idle"
+                        },
+                        txPlugins = new
+                        {
+                            masterBypassed = pureSignalEnabled
+                        },
+                        vstEngine = new
+                        {
+                            active = !pureSignalEnabled
+                        },
+                        rxVstEngine = new
+                        {
+                            active = true
+                        }
+                    }, CamelCaseJson),
+                    _ => null
+                };
+            });
+
+            var disabledCapture = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-dsp-puresignal-bench-trace.ps1"),
+                "-BaseUrl", server.BaseUrl,
+                "-Mode", "disabled",
+                "-Samples", "2",
+                "-IntervalMs", "1",
+                "-RequireLiveReady",
+                "-OutputPath", disabledTracePath,
+                "-JsonOnly");
+
+            Assert.Equal(0, disabledCapture.ExitCode);
+            pureSignalEnabled = true;
+
+            var enabledCapture = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-dsp-puresignal-bench-trace.ps1"),
+                "-BaseUrl", server.BaseUrl,
+                "-Mode", "enabled",
+                "-Samples", "2",
+                "-IntervalMs", "1",
+                "-RequireLiveReady",
+                "-OutputPath", enabledTracePath,
+                "-JsonOnly");
+
+            Assert.Equal(0, enabledCapture.ExitCode);
+
+            using (var disabledDoc = JsonDocument.Parse(await File.ReadAllTextAsync(disabledTracePath)))
+            {
+                Assert.True(disabledDoc.RootElement.GetProperty("requiresLiveReady").GetBoolean());
+                Assert.True(disabledDoc.RootElement.GetProperty("liveReadinessBefore").GetProperty("ready").GetBoolean());
+                var pureSignal = disabledDoc.RootElement.GetProperty("pureSignal");
+                Assert.False(pureSignal.GetProperty("pureSignalEnabled").GetBoolean());
+                Assert.False(pureSignal.GetProperty("expectedEnabled").GetBoolean());
+                Assert.True(pureSignal.GetProperty("modeConsistent").GetBoolean());
+                Assert.Equal(2, pureSignal.GetProperty("modeConsistentSampleCount").GetInt32());
+                Assert.Equal(0, pureSignal.GetProperty("modeMismatchSampleCount").GetInt32());
+                Assert.Equal(1.0, pureSignal.GetProperty("feedbackStability").GetDouble());
+                Assert.Equal(0.0, pureSignal.GetProperty("txMonitorCoupling").GetDouble());
+                Assert.Equal(0, pureSignal.GetProperty("clippingCount").GetInt32());
+                var sample = disabledDoc.RootElement.GetProperty("samples").EnumerateArray().First();
+                Assert.True(sample.GetProperty("txPluginActive").GetBoolean());
+                Assert.True(sample.GetProperty("vstEngineActive").GetBoolean());
+                Assert.True(sample.GetProperty("rxVstEngineActive").GetBoolean());
+                Assert.False(sample.GetProperty("txPathActive").GetBoolean());
+                Assert.False(sample.GetProperty("txMonitorCouplingFlag").GetBoolean());
+            }
+
+            using (var enabledDoc = JsonDocument.Parse(await File.ReadAllTextAsync(enabledTracePath)))
+            {
+                var pureSignal = enabledDoc.RootElement.GetProperty("pureSignal");
+                Assert.True(pureSignal.GetProperty("pureSignalEnabled").GetBoolean());
+                Assert.True(pureSignal.GetProperty("expectedEnabled").GetBoolean());
+                Assert.True(pureSignal.GetProperty("modeConsistent").GetBoolean());
+                Assert.Equal(2, pureSignal.GetProperty("modeConsistentSampleCount").GetInt32());
+                Assert.Equal(0, pureSignal.GetProperty("modeMismatchSampleCount").GetInt32());
+                Assert.Equal(1.0, pureSignal.GetProperty("feedbackStability").GetDouble());
+                Assert.Equal(0.0, pureSignal.GetProperty("txMonitorCoupling").GetDouble());
+                Assert.Equal(0, pureSignal.GetProperty("clippingCount").GetInt32());
+            }
+
+            var reportPath = Path.Combine(bundleDir, "artifacts", "puresignal-safe-bypass-report.json");
+            var summary = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-puresignal-bench.ps1"),
+                "-BundleDir", bundleDir,
+                "-DisabledTracePath", "artifacts/puresignal-disabled.json",
+                "-EnabledTracePath", "artifacts/puresignal-enabled.json",
+                "-ReportPath", "artifacts/puresignal-safe-bypass-report.json",
+                "-RequireLiveReadinessEvidence",
+                "-NoMarkdown",
+                "-JsonOnly",
+                "-Force");
+
+            Assert.Equal(0, summary.ExitCode);
+            Assert.True(File.Exists(reportPath), summary.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var reportRoot = reportDoc.RootElement;
+            Assert.True(reportRoot.GetProperty("readyForReview").GetBoolean());
+            Assert.Equal("ready", reportRoot.GetProperty("status").GetString());
+            Assert.True(reportRoot.GetProperty("disabledPathReady").GetBoolean());
+            Assert.True(reportRoot.GetProperty("enabledPathReady").GetBoolean());
+            Assert.True(reportRoot.GetProperty("liveReadinessEvidenceRequired").GetBoolean());
+            Assert.True(reportRoot.GetProperty("liveReadinessReady").GetBoolean());
+            Assert.Equal(2, reportRoot.GetProperty("liveReadinessReadyCount").GetInt32());
+            Assert.True(reportRoot.GetProperty("modeConsistencyReady").GetBoolean());
+            Assert.Equal(0, reportRoot.GetProperty("modeMismatchSampleCount").GetInt32());
+            Assert.Equal(0, reportRoot.GetProperty("gateFailureCount").GetInt32());
+
+            var requestPaths = server.Requests.Select(request => request.Path).ToArray();
+            Assert.Contains("/api/dsp/live-diagnostics", requestPaths);
+            Assert.Contains("/api/radio/diagnostics", requestPaths);
+            Assert.Contains("/api/tx/diag", requestPaths);
+            Assert.DoesNotContain("/api/tx/mox", requestPaths);
+            Assert.DoesNotContain("/api/tx/tune", requestPaths);
+            Assert.DoesNotContain("/api/ps", requestPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task PureSignalBenchTraceCaptureFlagsActiveTxPluginCoupling()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell PureSignal trace capture smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-puresignal-coupling-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var tracePath = Path.Combine(bundleDir, "puresignal-disabled-coupled.json");
+            using var server = JsonRouteServer.Start(request =>
+            {
+                return request.Path switch
+                {
+                    "/api/dsp/live-diagnostics" => JsonSerializer.Serialize(new
+                    {
+                        status = "ready-for-live-benchmark",
+                        readyForLiveBenchmark = true,
+                        wdspActive = true,
+                        frontendSceneFresh = true,
+                        radioVfoHz = 14260000,
+                        radioMode = "USB",
+                        runtimeEvidence = new
+                        {
+                            status = "fresh"
+                        }
+                    }, CamelCaseJson),
+                    "/api/radio/diagnostics" => JsonSerializer.Serialize(new
+                    {
+                        pureSignal = new
+                        {
+                            enabled = false,
+                            monitorEnabled = false,
+                            feedbackLevelRaw = 0.0,
+                            feedbackSource = "Internal",
+                            healthStatus = "off",
+                            correcting = false,
+                            calibrationStalled = false
+                        }
+                    }, CamelCaseJson),
+                    "/api/tx/diag" => JsonSerializer.Serialize(new
+                    {
+                        stage = new
+                        {
+                            status = "active",
+                            outPkDbfs = -6.0,
+                            density = new
+                            {
+                                status = "density-optimized"
+                            }
+                        },
+                        audioPath = new
+                        {
+                            status = "tx-audio-flowing"
+                        },
+                        egress = new
+                        {
+                            status = "tx-egress-live"
+                        },
+                        txPlugins = new
+                        {
+                            masterBypassed = false
+                        },
+                        vstEngine = new
+                        {
+                            active = false
+                        },
+                        rxVstEngine = new
+                        {
+                            active = false
+                        }
+                    }, CamelCaseJson),
+                    _ => null
+                };
+            });
+
+            var capture = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-dsp-puresignal-bench-trace.ps1"),
+                "-BaseUrl", server.BaseUrl,
+                "-Mode", "disabled",
+                "-Samples", "2",
+                "-IntervalMs", "1",
+                "-OutputPath", tracePath,
+                "-JsonOnly");
+
+            Assert.Equal(0, capture.ExitCode);
+
+            using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(tracePath));
+            var pureSignal = doc.RootElement.GetProperty("pureSignal");
+            Assert.Equal(1.0, pureSignal.GetProperty("feedbackStability").GetDouble());
+            Assert.Equal(1.0, pureSignal.GetProperty("txMonitorCoupling").GetDouble());
+            var sample = doc.RootElement.GetProperty("samples").EnumerateArray().First();
+            Assert.True(sample.GetProperty("txPluginActive").GetBoolean());
+            Assert.True(sample.GetProperty("txPathActive").GetBoolean());
+            Assert.True(sample.GetProperty("txMonitorCouplingFlag").GetBoolean());
         }
         finally
         {
@@ -1178,6 +2643,19 @@ public sealed class DspModernizationValidationToolTests
             Assert.False(pureSignalAction.GetProperty("requiredForAcceptance").GetBoolean());
             Assert.True(pureSignalAction.GetProperty("blocksDefaultBehaviorChange").GetBoolean());
             Assert.Equal("artifacts/puresignal-safe-bypass-report.json", pureSignalAction.GetProperty("expectedArtifact").GetString());
+            var commandSteps = ReadStringArray(pureSignalAction, "commandSteps");
+            Assert.Equal(3, commandSteps.Length);
+            Assert.Contains(commandSteps, step => step.Contains("capture-dsp-puresignal-bench-trace.ps1", StringComparison.Ordinal)
+                && step.Contains("-Mode disabled", StringComparison.Ordinal)
+                && step.Contains("-RequireLiveReady", StringComparison.Ordinal)
+                && step.Contains("puresignal-disabled.json", StringComparison.Ordinal));
+            Assert.Contains(commandSteps, step => step.Contains("capture-dsp-puresignal-bench-trace.ps1", StringComparison.Ordinal)
+                && step.Contains("-Mode enabled", StringComparison.Ordinal)
+                && step.Contains("-RequireLiveReady", StringComparison.Ordinal)
+                && step.Contains("puresignal-enabled.json", StringComparison.Ordinal));
+            Assert.Contains(commandSteps, step => step.Contains("summarize-dsp-puresignal-bench.ps1", StringComparison.Ordinal)
+                && step.Contains("-RequireLiveReadinessEvidence", StringComparison.Ordinal)
+                && step.Contains("puresignal-safe-bypass-report.json", StringComparison.Ordinal));
         }
         finally
         {
@@ -1215,7 +2693,7 @@ public sealed class DspModernizationValidationToolTests
                 Path.Combine(repoRoot, "tools", "run-dsp-offline-fixture-evidence.ps1"),
                 "-BundleDir", bundleDir,
                 "-ScenarioIds", "weak-cw-carrier,tx-two-tone",
-                "-ComparisonIds", "current-zeus,thetis-parity,candidate-under-test",
+                "-ComparisonIds", "current-zeus,thetis-parity,candidate-under-test,candidate-tx-panel-trim-0p25db",
                 "-Force",
                 "-NoMarkdown");
 
@@ -1248,6 +2726,34 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(weakCurrent.TryGetProperty("signal SINAD", out _));
             Assert.True(weakCurrent.TryGetProperty("processing elapsed ms", out _));
             Assert.True(weakCurrent.TryGetProperty("throughput ratio", out _));
+            var txTwoTone = metricsDoc.RootElement
+                .GetProperty("scenarios")
+                .EnumerateArray()
+                .Single(scenario => scenario.GetProperty("scenarioId").GetString() == "tx-two-tone");
+            var txCurrent = txTwoTone
+                .GetProperty("comparisons")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("comparisonId").GetString() == "current-zeus");
+            Assert.True(txCurrent.TryGetProperty("txStageMeters", out var txMeters));
+            Assert.True(txMeters.TryGetProperty("outPkDbfs", out _));
+            Assert.True(txMeters.TryGetProperty("alcGainReductionDb", out _));
+            Assert.True(txCurrent.TryGetProperty("clippingCount", out _));
+            var txCandidate = txTwoTone
+                .GetProperty("comparisons")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("comparisonId").GetString() == "candidate-under-test");
+            Assert.Equal("wdsp-txa-output-headroom-trim-candidate", txCandidate.GetProperty("profile").GetString());
+            Assert.Equal("fixture-only-post-wdsp-output-trim", txCandidate.GetProperty("candidateDiagnostics").GetProperty("profileKind").GetString());
+            Assert.False(txCandidate.GetProperty("candidateDiagnostics").GetProperty("defaultBehaviorChanged").GetBoolean());
+            var txCandidateMeters = txCandidate.GetProperty("txStageMeters");
+            Assert.True(txCandidateMeters.GetProperty("rawOutPkDbfs").GetDouble() > txCandidateMeters.GetProperty("effectiveOutPkDbfs").GetDouble());
+            Assert.Equal(-0.35, txCandidateMeters.GetProperty("txOutputTrimDb").GetDouble(), precision: 2);
+            var txSweepCandidate = txTwoTone
+                .GetProperty("comparisons")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("comparisonId").GetString() == "candidate-tx-panel-trim-0p25db");
+            Assert.Equal("fixture-only-tx-panel-gain-trim", txSweepCandidate.GetProperty("candidateDiagnostics").GetProperty("profileKind").GetString());
+            Assert.Equal(-0.25, txSweepCandidate.GetProperty("txStageMeters").GetProperty("txPanelGainTrimDb").GetDouble(), precision: 2);
 
             using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
             var metricIds = reportDoc.RootElement
@@ -1272,9 +2778,483 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
-    public async Task WdspFixtureMatrixCarriesExternalOptInBypassProfile()
+    public async Task RxLevelerFixtureBenchmarkToolExportsCandidateEvidence()
     {
-        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell WDSP fixture matrix smoke runs on Windows.");
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell RX leveler benchmark smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-fixture-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            var reportPath = Path.Combine(tempRoot, "rx-audio-leveler-fixture-benchmark.json");
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "run-dsp-rx-leveler-fixture-benchmark.ps1"),
+                "-OutputPath", reportPath);
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+            Assert.True(File.Exists(reportPath), run.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = reportDoc.RootElement;
+            Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal("rx-audio-leveler-profile-fixture", root.GetProperty("evidenceKind").GetString());
+            Assert.Equal("current", root.GetProperty("defaultProfile").GetString());
+            Assert.Equal("stable-speech-candidate", root.GetProperty("candidateProfile").GetString());
+            Assert.True(root.GetProperty("experimentalOptIn").GetBoolean());
+            Assert.False(root.GetProperty("defaultBehaviorChanged").GetBoolean());
+            var readiness = root.GetProperty("readiness");
+            Assert.Equal(4, readiness.GetProperty("scenarioCount").GetInt32());
+            Assert.Equal(4, readiness.GetProperty("candidatePassCount").GetInt32());
+            Assert.Equal(0, readiness.GetProperty("candidateFailCount").GetInt32());
+            Assert.True(readiness.GetProperty("candidateAllGatesPass").GetBoolean());
+            Assert.True(readiness.GetProperty("readyForLiveAb").GetBoolean());
+            Assert.Equal("candidate-ready-for-live-g2-ab", readiness.GetProperty("recommendation").GetString());
+
+            var scenarios = root.GetProperty("scenarios").EnumerateArray().ToArray();
+            Assert.Equal(4, scenarios.Length);
+            Assert.Contains(scenarios, scenario =>
+                scenario.GetProperty("id").GetString() == "ssb-syllable-step" &&
+                scenario.GetProperty("scenarioId").GetString() == "ssb-syllable-step" &&
+                scenario.GetProperty("comparison").GetProperty("candidatePasses").GetBoolean());
+            Assert.Contains(scenarios, scenario =>
+                scenario.GetProperty("id").GetString() == "near-target-speech" &&
+                scenario.GetProperty("comparison").GetProperty("candidatePasses").GetBoolean());
+            var syllableStep = scenarios.Single(scenario => scenario.GetProperty("id").GetString() == "ssb-syllable-step");
+            var syllableComparisons = syllableStep.GetProperty("comparisons").EnumerateArray().ToArray();
+            Assert.Contains(syllableComparisons, comparison =>
+                comparison.GetProperty("comparisonId").GetString() == "current-zeus" &&
+                comparison.GetProperty("metrics").TryGetProperty("maxAbsGainDeltaDb", out _) &&
+                comparison.GetProperty("gates").EnumerateArray().Any(gate => gate.GetProperty("passed").GetBoolean()));
+            Assert.Contains(syllableComparisons, comparison =>
+                comparison.GetProperty("comparisonId").GetString() == "candidate-under-test" &&
+                comparison.GetProperty("metrics").TryGetProperty("appliedGainMovementDb", out _) &&
+                comparison.GetProperty("gates").EnumerateArray().Any(gate => gate.GetProperty("passed").GetBoolean()));
+            Assert.Contains(scenarios, scenario =>
+                scenario.GetProperty("id").GetString() == "sustained-weak-speech" &&
+                scenario.GetProperty("candidate").GetProperty("finalOutputRmsDbfs").GetDouble() is >= -20.5 and <= -16.5);
+            Assert.Contains(scenarios, scenario =>
+                scenario.GetProperty("id").GetString() == "strong-after-weak" &&
+                scenario.GetProperty("candidate").GetProperty("outputLimitedBlockCount").GetInt32() == 0);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ValidatorAcceptsRxLevelerFixtureBenchmarkArtifactShape()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-validator-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var plan = WithoutExternalEngineBakeoff(DspBenchmarkPlanCatalog.Build());
+            await File.WriteAllTextAsync(
+                Path.Combine(bundleDir, "benchmark-plan.json"),
+                JsonSerializer.Serialize(plan, CamelCaseJson));
+            await File.WriteAllTextAsync(
+                Path.Combine(bundleDir, "bundle-index.json"),
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = 1,
+                    endpoints = new object[]
+                    {
+                        new { id = "benchmark-plan", file = "benchmark-plan.json", required = true, ok = true },
+                        new { id = "benchmark-capture-manifest", file = "benchmark-capture-manifest.json", required = true, ok = true }
+                    },
+                    requiredFailures = Array.Empty<string>()
+                }, CamelCaseJson));
+            await File.WriteAllTextAsync(
+                Path.Combine(bundleDir, "benchmark-capture-manifest.json"),
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = 1,
+                    hardwareTarget = "G2",
+                    scenarioIds = new[] { "weak-cw-carrier" },
+                    requiredComparisons = plan.RequiredComparisons,
+                    requiredArtifacts = new object[]
+                    {
+                        new { id = "live-diagnostics-json", kind = "endpoint-json", required = false },
+                        new { id = "benchmark-plan-json", kind = "endpoint-json", required = false },
+                        new { id = "wdsp-native-symbol-audit", kind = "symbol-audit-json", required = false },
+                        new { id = "wdsp-runtime-artifact-audit", kind = "runtime-audit-json", required = false },
+                        new { id = "offline-fixture-metrics", kind = "metrics-json", required = false },
+                        new
+                        {
+                            id = "rx-audio-leveler-fixture-benchmark",
+                            kind = "metrics-json",
+                            source = "tools/run-dsp-rx-leveler-fixture-benchmark.ps1",
+                            required = false,
+                            scenarioIds = new[] { "ssb-syllable-step", "near-target-speech", "sustained-weak-speech", "strong-after-weak" }
+                        }
+                    }
+                }, CamelCaseJson));
+
+            var artifactsDir = Path.Combine(bundleDir, "artifacts");
+            Directory.CreateDirectory(artifactsDir);
+            await File.WriteAllTextAsync(
+                Path.Combine(artifactsDir, "rx-audio-leveler-fixture-benchmark.json"),
+                JsonSerializer.Serialize(DspRxAudioLevelerFixtureBenchmark.Build(), CamelCaseJson));
+            var manifestPath = Path.Combine(bundleDir, "artifact-manifest.json");
+            await File.WriteAllTextAsync(
+                manifestPath,
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = 1,
+                    artifacts = new object[]
+                    {
+                        new
+                        {
+                            id = "rx-audio-leveler-fixture-benchmark",
+                            kind = "metrics-json",
+                            source = "tools/run-dsp-rx-leveler-fixture-benchmark.ps1",
+                            path = "artifacts/rx-audio-leveler-fixture-benchmark.json",
+                            required = false,
+                            scenarioIds = new[] { "ssb-syllable-step", "near-target-speech", "sustained-weak-speech", "strong-after-weak" }
+                        }
+                    }
+                }, CamelCaseJson));
+
+            var validationReport = Path.Combine(bundleDir, "validation-report.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", manifestPath,
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var root = validationDoc.RootElement;
+            var issueCodes = root.GetProperty("errors").EnumerateArray()
+                .Concat(root.GetProperty("warnings").EnumerateArray())
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+
+            Assert.DoesNotContain("artifact-not-in-capture-manifest", issueCodes);
+            Assert.DoesNotContain("artifact-metrics-missing", issueCodes);
+            Assert.DoesNotContain("artifact-gate-outcome-missing", issueCodes);
+            Assert.DoesNotContain("artifact-file-missing", issueCodes);
+            Assert.DoesNotContain("rx-leveler-fixture-readiness-missing", issueCodes);
+            Assert.DoesNotContain("rx-leveler-fixture-readiness-not-ready", issueCodes);
+
+            var artifact = root.GetProperty("artifactFiles")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("id").GetString() == "rx-audio-leveler-fixture-benchmark");
+            Assert.True(artifact.GetProperty("ok").GetBoolean());
+            Assert.True(artifact.GetProperty("bytes").GetInt64() > 0);
+            Assert.Equal(4, artifact.GetProperty("readinessScenarioCount").GetInt32());
+            Assert.Equal(4, artifact.GetProperty("readinessCandidatePassCount").GetInt32());
+            Assert.Equal(0, artifact.GetProperty("readinessCandidateFailCount").GetInt32());
+            Assert.True(artifact.GetProperty("readinessCandidateAllGatesPass").GetBoolean());
+            Assert.True(artifact.GetProperty("readinessExperimentalOptIn").GetBoolean());
+            Assert.False(artifact.GetProperty("readinessDefaultBehaviorChanged").GetBoolean());
+            Assert.True(artifact.GetProperty("readinessReadyForLiveAb").GetBoolean());
+
+            var triageReport = Path.Combine(bundleDir, "validation-triage-report.json");
+            var triage = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-modernization-validation-report.ps1"),
+                "-ValidationReportPath", validationReport,
+                "-ReportPath", triageReport,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.Equal(0, triage.ExitCode);
+            Assert.True(File.Exists(triageReport), triage.CombinedOutput);
+
+            using var triageDoc = JsonDocument.Parse(await File.ReadAllTextAsync(triageReport));
+            var levelerAction = triageDoc.RootElement
+                .GetProperty("acceptanceActionPlan")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("actionId").GetString() == "capture-g2-rx-leveler-active-audio-ab");
+            Assert.False(triageDoc.RootElement.GetProperty("rxLevelerOptInProofReady").GetBoolean());
+            Assert.Equal("blocked-g2-active-proof", triageDoc.RootElement.GetProperty("rxLevelerOptInProofStatus").GetString());
+            Assert.Contains("rx-leveler-ab-live-comparison", ReadStringArray(triageDoc.RootElement, "rxLevelerOptInProofBlockingGateIds"));
+
+            var rxLevelerStage = triageDoc.RootElement
+                .GetProperty("acceptanceReadiness")
+                .EnumerateArray()
+                .Single(stage => stage.GetProperty("stageId").GetString() == "rx-leveler-opt-in-proof");
+            Assert.False(rxLevelerStage.GetProperty("ready").GetBoolean());
+            Assert.True(rxLevelerStage.GetProperty("blocksDefaultBehaviorChange").GetBoolean());
+            Assert.Contains("rx-leveler-ab-live-comparison", ReadStringArray(rxLevelerStage, "blockingGateIds"));
+
+            Assert.False(levelerAction.GetProperty("requiredForAcceptance").GetBoolean());
+            Assert.True(levelerAction.GetProperty("blocksDefaultBehaviorChange").GetBoolean());
+            Assert.Equal("live-diagnostics", levelerAction.GetProperty("category").GetString());
+            Assert.Equal("artifacts/rx-leveler-ab/<timestamp>/g2-frontend-rx-leveler-ab-summary.json", levelerAction.GetProperty("expectedArtifact").GetString());
+
+            var levelerCommandSteps = ReadStringArray(levelerAction, "commandSteps");
+            Assert.Equal(3, levelerCommandSteps.Length);
+            Assert.Contains(levelerCommandSteps, step => step.Contains("capture-g2-frontend-rx-leveler-ab.ps1", StringComparison.Ordinal)
+                && step.Contains("-FrequencyHz 14266000", StringComparison.Ordinal)
+                && step.Contains("-UseCurrentRadioState", StringComparison.Ordinal)
+                && step.Contains("-RequireActiveAudio", StringComparison.Ordinal)
+                && step.Contains("-MinActiveAudioSamples 3", StringComparison.Ordinal)
+                && step.Contains("-ActiveAudioReadyTimeoutSec 60", StringComparison.Ordinal)
+                && step.Contains("-ActiveAudioThresholdDbfs -45", StringComparison.Ordinal)
+                && step.Contains("-RequirePassbandEvidence", StringComparison.Ordinal)
+                && step.Contains("-MinPassbandPeakSamples 3", StringComparison.Ordinal)
+                && step.Contains("-PassbandReadyTimeoutSec 60", StringComparison.Ordinal)
+                && step.Contains("-CaptureAttempts 3", StringComparison.Ordinal));
+            Assert.Contains(levelerCommandSteps, step => step.Contains("summarize-dsp-rx-leveler-ab.ps1", StringComparison.Ordinal)
+                && step.Contains("-FailOnNotReady", StringComparison.Ordinal)
+                && step.Contains("-BundleDir \"$bundleDir\"", StringComparison.Ordinal)
+                && step.Contains("rx-leveler-ab-live-comparison.json", StringComparison.Ordinal));
+            Assert.Contains(levelerCommandSteps, step => step.Contains("summarize-dsp-modernization-validation-report.ps1", StringComparison.Ordinal));
+
+            var levelerManualAction = levelerAction.GetProperty("manualAction").GetString() ?? "";
+            Assert.Contains("14.266", levelerManualAction, StringComparison.Ordinal);
+            Assert.Contains("another active stepped SSB frequency", levelerManualAction, StringComparison.Ordinal);
+            Assert.Contains("retry evidence-missing A/B windows", levelerManualAction, StringComparison.Ordinal);
+            Assert.Contains("silent, noise-only, or off-passband traces", levelerManualAction, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("off-passband traces are workflow proof only", levelerManualAction, StringComparison.Ordinal);
+            var expectedArtifacts = ReadStringArray(levelerAction, "expectedArtifacts");
+            Assert.Contains("artifacts/rx-leveler-ab-live-comparison.json", expectedArtifacts);
+            var followUp = levelerAction.GetProperty("followUp").GetString() ?? "";
+            Assert.Contains("activeAudioEvidence.ready", followUp, StringComparison.Ordinal);
+            Assert.Contains("passbandPreflight.ready", followUp, StringComparison.Ordinal);
+            Assert.Contains("passbandEvidence.ready", followUp, StringComparison.Ordinal);
+            Assert.Contains("rxLevelerAbPromotionReady=true", followUp, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ValidatorAcceptsRxLevelerAbLiveComparisonArtifactShape()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell RX leveler A/B validation smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-ab-validator-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteRxLevelerAbLiveComparisonArtifactManifest(bundleDir);
+            WriteRxLevelerAbLiveComparisonReport(bundleDir, promotionReady: true);
+
+            var validationReport = Path.Combine(bundleDir, "validation-report.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var root = validationDoc.RootElement;
+            var issueCodes = root.GetProperty("errors").EnumerateArray()
+                .Concat(root.GetProperty("warnings").EnumerateArray())
+                .Select(issue => issue.GetProperty("code").GetString() ?? "")
+                .ToArray();
+
+            Assert.DoesNotContain(issueCodes, code => code.StartsWith("rx-leveler-ab-", StringComparison.Ordinal));
+            Assert.DoesNotContain("artifact-not-in-capture-manifest", issueCodes);
+
+            var artifact = root.GetProperty("artifactFiles")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("id").GetString() == "rx-leveler-ab-live-comparison");
+            Assert.True(artifact.GetProperty("ok").GetBoolean(), validation.CombinedOutput);
+            Assert.True(root.GetProperty("rxLevelerAbLiveComparisonPresent").GetBoolean());
+            Assert.True(root.GetProperty("rxLevelerAbLiveComparisonReady").GetBoolean(), validation.CombinedOutput);
+            Assert.True(root.GetProperty("rxLevelerAbLiveComparisonPromotionReady").GetBoolean());
+            Assert.True(root.GetProperty("rxLevelerAbLiveComparisonActiveAudioReady").GetBoolean());
+            Assert.True(root.GetProperty("rxLevelerAbLiveComparisonPassbandReady").GetBoolean());
+            Assert.True(root.GetProperty("rxLevelerAbLiveComparisonControlMemoryReady").GetBoolean());
+            Assert.True(root.GetProperty("rxLevelerAbLiveComparisonOptimizationReady").GetBoolean());
+            Assert.True(root.GetProperty("rxLevelerAbLiveComparisonBundleRelativePaths").GetBoolean());
+            Assert.Equal(0, root.GetProperty("rxLevelerAbLiveComparisonAbsolutePathCount").GetInt32());
+            Assert.Equal(1, root.GetProperty("rxLevelerAbLiveComparisonMaterialImprovementCount").GetInt32());
+            Assert.Equal(0, root.GetProperty("rxLevelerAbLiveComparisonRegressionCount").GetInt32());
+            Assert.Equal(3, root.GetProperty("rxLevelerAbLiveComparisonCandidatePassbandPeakSampleCount").GetInt32());
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ValidatorRejectsRxLevelerAbLiveComparisonWithoutPromotionReady()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell RX leveler A/B validation smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-ab-validator-fail-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteRxLevelerAbLiveComparisonArtifactManifest(bundleDir);
+            WriteRxLevelerAbLiveComparisonReport(bundleDir, promotionReady: false);
+
+            var validationReport = Path.Combine(bundleDir, "validation-report.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var root = validationDoc.RootElement;
+            var issueCodes = root.GetProperty("errors").EnumerateArray()
+                .Concat(root.GetProperty("warnings").EnumerateArray())
+                .Select(issue => issue.GetProperty("code").GetString() ?? "")
+                .ToArray();
+
+            Assert.Contains("rx-leveler-ab-promotion-not-ready", issueCodes);
+            Assert.False(root.GetProperty("rxLevelerAbLiveComparisonReady").GetBoolean());
+            Assert.False(root.GetProperty("rxLevelerAbLiveComparisonPromotionReady").GetBoolean());
+
+            var artifact = root.GetProperty("artifactFiles")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("id").GetString() == "rx-leveler-ab-live-comparison");
+            Assert.False(artifact.GetProperty("ok").GetBoolean(), validation.CombinedOutput);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ValidationTriageSuppressesRxLevelerCaptureActionWhenLiveComparisonReady()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell RX leveler A/B validation smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-ab-triage-ready-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteRxLevelerAbLiveComparisonArtifactManifest(bundleDir, includeFixtureBenchmark: true);
+            await File.WriteAllTextAsync(
+                Path.Combine(bundleDir, "artifacts", "rx-audio-leveler-fixture-benchmark.json"),
+                JsonSerializer.Serialize(DspRxAudioLevelerFixtureBenchmark.Build(), CamelCaseJson));
+            WriteRxLevelerAbLiveComparisonReport(bundleDir, promotionReady: true);
+
+            var validationReport = Path.Combine(bundleDir, "validation-report.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            var triageReport = Path.Combine(bundleDir, "validation-triage-report.json");
+            var triage = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-modernization-validation-report.ps1"),
+                "-ValidationReportPath", validationReport,
+                "-ReportPath", triageReport,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.Equal(0, triage.ExitCode);
+            Assert.True(File.Exists(triageReport), triage.CombinedOutput);
+
+            using var triageDoc = JsonDocument.Parse(await File.ReadAllTextAsync(triageReport));
+            var root = triageDoc.RootElement;
+            var rxLevelerGate = root.GetProperty("evidenceGates")
+                .EnumerateArray()
+                .Single(gate => gate.GetProperty("gateId").GetString() == "rx-leveler-ab-live-comparison");
+            Assert.True(rxLevelerGate.GetProperty("ready").GetBoolean(), triage.CombinedOutput);
+            Assert.Equal("ready", rxLevelerGate.GetProperty("status").GetString());
+            Assert.True(root.GetProperty("rxLevelerOptInProofReady").GetBoolean());
+            Assert.Equal("ready-for-opt-in-review", root.GetProperty("rxLevelerOptInProofStatus").GetString());
+            Assert.Empty(ReadStringArray(root, "rxLevelerOptInProofBlockingGateIds"));
+
+            var rxLevelerStage = root.GetProperty("acceptanceReadiness")
+                .EnumerateArray()
+                .Single(stage => stage.GetProperty("stageId").GetString() == "rx-leveler-opt-in-proof");
+            Assert.True(rxLevelerStage.GetProperty("ready").GetBoolean(), triage.CombinedOutput);
+            Assert.True(rxLevelerStage.GetProperty("blocksDefaultBehaviorChange").GetBoolean());
+            Assert.Equal("ready-for-opt-in-review", rxLevelerStage.GetProperty("status").GetString());
+            Assert.Empty(ReadStringArray(rxLevelerStage, "blockingGateIds"));
+            Assert.Contains("promotion=True", rxLevelerStage.GetProperty("detail").GetString() ?? "", StringComparison.Ordinal);
+
+            Assert.DoesNotContain(
+                root.GetProperty("acceptanceActionPlan").EnumerateArray(),
+                action => action.GetProperty("actionId").GetString() == "capture-g2-rx-leveler-active-audio-ab");
+            Assert.DoesNotContain("rx-leveler-ab-live-comparison", ReadStringArray(root, "advisoryEvidenceGateProblemIds"));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task WdspFixtureEvidenceCarriesExternalOptInBypassProfile()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell WDSP fixture evidence smoke runs on Windows.");
 
         // Opt-in gate: this heavy WDSP fixture-matrix smoke shells out to
         // tools/run-dsp-wdsp-fixture-matrix.ps1 and, on an un-validated Windows
@@ -1340,26 +3320,21 @@ public sealed class DspModernizationValidationToolTests
                 }
                 """);
 
-            var matrix = await RunPowerShellAsync(
+            var evidence = await RunPowerShellAsync(
                 powerShell,
                 repoRoot,
-                Path.Combine(repoRoot, "tools", "run-dsp-wdsp-fixture-matrix.ps1"),
-                TimeSpan.FromMinutes(4),
+                Path.Combine(repoRoot, "tools", "run-dsp-wdsp-fixture-evidence.ps1"),
+                TimeSpan.FromMinutes(2),
                 "-BundleDir", bundleDir,
                 "-ScenarioIds", "ssb-like-speech,noise-only-gating",
                 "-ComparisonIds", "current-zeus,thetis-parity,candidate-external-engine-opt-in",
-                "-AllowRegression",
-                "-AllowRuntimeAuditPreflight",
-                "-NoMarkdown",
                 "-Force",
                 "-JsonOnly");
 
-            Assert.True(matrix.ExitCode == 0, matrix.CombinedOutput);
+            Assert.True(evidence.ExitCode == 0, evidence.CombinedOutput);
 
             var metricsPath = Path.Combine(bundleDir, "artifacts", "offline-fixture-metrics.json");
-            var summaryPath = Path.Combine(bundleDir, "artifacts", "wdsp-fixture-matrix-summary.json");
-            Assert.True(File.Exists(metricsPath), matrix.CombinedOutput);
-            Assert.True(File.Exists(summaryPath), matrix.CombinedOutput);
+            Assert.True(File.Exists(metricsPath), evidence.CombinedOutput);
 
             using var metricsDoc = JsonDocument.Parse(await File.ReadAllTextAsync(metricsPath));
             var metricsRoot = metricsDoc.RootElement;
@@ -1374,15 +3349,6 @@ public sealed class DspModernizationValidationToolTests
                     .Single(comparison => comparison.GetProperty("comparisonId").GetString() == "candidate-external-engine-opt-in");
                 Assert.Equal("post-demod-external-bypass", externalComparison.GetProperty("profile").GetString());
             }
-
-            using var summaryDoc = JsonDocument.Parse(await File.ReadAllTextAsync(summaryPath));
-            var summaryRoot = summaryDoc.RootElement;
-            Assert.Contains("candidate-external-engine-opt-in", ReadStringArray(summaryRoot, "comparisonIds"));
-            Assert.False(summaryRoot.GetProperty("acceptanceEvidenceReady").GetBoolean());
-
-            var limitations = ReadStringArray(summaryRoot, "acceptanceLimitations");
-            Assert.Contains(limitations, item => item.Contains("No default DSP behavior should change", StringComparison.Ordinal));
-            Assert.Contains(limitations, item => item.Contains("opt-in post-demod candidates", StringComparison.Ordinal));
         }
         finally
         {
@@ -1800,12 +3766,14 @@ public sealed class DspModernizationValidationToolTests
                 summaryDoc.RootElement.GetProperty("optInDspBuildOutStatus").GetString());
             Assert.Contains("wdsp-native-symbol-audit", ReadStringArray(summaryDoc.RootElement, "optInDspBuildOutBlockingGateIds"));
             Assert.Contains("wdsp-source-drift-report", ReadStringArray(summaryDoc.RootElement, "optInDspBuildOutBlockingGateIds"));
+            Assert.Contains("tx-fixture-safety-report", ReadStringArray(summaryDoc.RootElement, "optInDspBuildOutBlockingGateIds"));
 
             var buildOutStage = readinessStages.Single(stage => stage.GetProperty("stageId").GetString() == "opt-in-dsp-buildout-prerequisites");
             Assert.False(buildOutStage.GetProperty("ready").GetBoolean());
             Assert.False(buildOutStage.GetProperty("blocksDefaultBehaviorChange").GetBoolean());
             Assert.Contains("wdsp-native-symbol-audit", ReadStringArray(buildOutStage, "blockingGateIds"));
             Assert.Contains("wdsp-source-drift-report", ReadStringArray(buildOutStage, "blockingGateIds"));
+            Assert.Contains("tx-fixture-safety-report", ReadStringArray(buildOutStage, "blockingGateIds"));
 
             var g2Stage = readinessStages.Single(stage => stage.GetProperty("stageId").GetString() == "g2-first-pass-evidence");
             Assert.Contains("thetisLiveTraceReady", g2Stage.GetProperty("detail").GetString() ?? "", StringComparison.Ordinal);
@@ -2588,7 +4556,13 @@ public sealed class DspModernizationValidationToolTests
                         levelerOutputRmsDbfs: -18.4,
                         rxAudioLevelerCandidateHybridSpeechPrior: 0.72,
                         rxAudioLevelerCandidateNoSignalNoisePrior: 0.02,
-                        rxAudioLevelerCandidateNoiseProfilePrior: 0.03),
+                        rxAudioLevelerCandidateNoiseProfilePrior: 0.03,
+                        rxAudioLevelerRequestedProfile: "stable-speech-candidate",
+                        rxAudioLevelerActiveProfile: "stable-speech-candidate",
+                        rxAudioLevelerExperimental: true,
+                        rxAudioLevelerControlRmsValid: true,
+                        rxAudioLevelerControlRmsDbfs: -42.0,
+                        rxAudioLevelerControlRmsHangDb: 0.8),
                     CandidateLevelerAlignmentWatchSample(
                         1,
                         candidateInputDbfs: -41.5,
@@ -2597,7 +4571,13 @@ public sealed class DspModernizationValidationToolTests
                         levelerOutputRmsDbfs: -18.0,
                         rxAudioLevelerCandidateHybridSpeechPrior: 0.68,
                         rxAudioLevelerCandidateNoSignalNoisePrior: 0.03,
-                        rxAudioLevelerCandidateNoiseProfilePrior: 0.02),
+                        rxAudioLevelerCandidateNoiseProfilePrior: 0.02,
+                        rxAudioLevelerRequestedProfile: "stable-speech-candidate",
+                        rxAudioLevelerActiveProfile: "stable-speech-candidate",
+                        rxAudioLevelerExperimental: true,
+                        rxAudioLevelerControlRmsValid: true,
+                        rxAudioLevelerControlRmsDbfs: -41.8,
+                        rxAudioLevelerControlRmsHangDb: 0.6),
                     CandidateLevelerAlignmentWatchSample(
                         2,
                         candidateInputDbfs: -42.4,
@@ -2606,7 +4586,13 @@ public sealed class DspModernizationValidationToolTests
                         levelerOutputRmsDbfs: -18.6,
                         rxAudioLevelerCandidateHybridSpeechPrior: 0.75,
                         rxAudioLevelerCandidateNoSignalNoisePrior: 0.01,
-                        rxAudioLevelerCandidateNoiseProfilePrior: 0.04),
+                        rxAudioLevelerCandidateNoiseProfilePrior: 0.04,
+                        rxAudioLevelerRequestedProfile: "stable-speech-candidate",
+                        rxAudioLevelerActiveProfile: "stable-speech-candidate",
+                        rxAudioLevelerExperimental: true,
+                        rxAudioLevelerControlRmsValid: true,
+                        rxAudioLevelerControlRmsDbfs: -42.2,
+                        rxAudioLevelerControlRmsHangDb: 0.9),
                 });
 
             var reportPath = Path.Combine(bundleDir, "candidate-speech-continuity-stable.summary.json");
@@ -2633,6 +4619,207 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(speechWatch.GetProperty("outputMovementDb").GetDouble() < 1.0);
             Assert.True(speechWatch.GetProperty("appliedGainMovementDb").GetDouble() < 1.0);
             Assert.Equal(3, speechWatch.GetProperty("topSamples").GetArrayLength());
+
+            var levelerWatch = root.GetProperty("rxAudioLevelerWatch");
+            var profileCount = Assert.Single(levelerWatch.GetProperty("profileCounts").EnumerateArray().ToArray());
+            Assert.Equal("stable-speech-candidate", profileCount.GetProperty("name").GetString());
+            Assert.Equal(3, profileCount.GetProperty("count").GetInt32());
+            Assert.Equal(3, levelerWatch.GetProperty("experimentalSampleCount").GetInt32());
+            Assert.Equal(3, levelerWatch.GetProperty("controlRmsValidSampleCount").GetInt32());
+            Assert.Equal(3, levelerWatch.GetProperty("controlRmsDbfs").GetProperty("count").GetInt32());
+            Assert.InRange(levelerWatch.GetProperty("controlRmsDbfs").GetProperty("average").GetDouble(), -42.1, -41.9);
+            Assert.Equal(0, levelerWatch.GetProperty("normalStrengthControlRmsValidSampleCount").GetInt32());
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task WatchLiveDiagnosticsFlagsStableCandidateControlRmsOnNormalStrengthInput()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-leveler-control-rms-leak-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var jsonlPath = Path.Combine(bundleDir, "candidate-control-rms-normal-strength.jsonl");
+            await WriteAgcWatchJsonlAsync(
+                jsonlPath,
+                new[]
+                {
+                    CandidateLevelerAlignmentWatchSample(
+                        0,
+                        candidateInputDbfs: -18.0,
+                        candidateOutputDbfs: -18.0,
+                        levelerInputRmsDbfs: -18.0,
+                        levelerOutputRmsDbfs: -18.0,
+                        rxAudioLevelerRequestedProfile: "stable-speech-candidate",
+                        rxAudioLevelerActiveProfile: "stable-speech-candidate",
+                        rxAudioLevelerExperimental: true,
+                        rxAudioLevelerControlRmsValid: true,
+                        rxAudioLevelerControlRmsDbfs: -18.2,
+                        rxAudioLevelerControlRmsHangDb: 2.0),
+                    CandidateLevelerAlignmentWatchSample(
+                        1,
+                        candidateInputDbfs: -17.5,
+                        candidateOutputDbfs: -17.5,
+                        levelerInputRmsDbfs: -17.5,
+                        levelerOutputRmsDbfs: -17.5,
+                        rxAudioLevelerRequestedProfile: "stable-speech-candidate",
+                        rxAudioLevelerActiveProfile: "stable-speech-candidate",
+                        rxAudioLevelerExperimental: true,
+                        rxAudioLevelerControlRmsValid: true,
+                        rxAudioLevelerControlRmsDbfs: -17.7,
+                        rxAudioLevelerControlRmsHangDb: 2.5),
+                });
+
+            var reportPath = Path.Combine(bundleDir, "candidate-control-rms-normal-strength.summary.json");
+            var watch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", jsonlPath,
+                "-ReportPath", reportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, watch.ExitCode);
+            Assert.True(File.Exists(reportPath), watch.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = reportDoc.RootElement;
+            var levelerWatch = root.GetProperty("rxAudioLevelerWatch");
+
+            Assert.Equal(-24.0, levelerWatch.GetProperty("normalStrengthControlRmsThresholdDbfs").GetDouble(), precision: 3);
+            Assert.Equal(2, levelerWatch.GetProperty("normalStrengthControlRmsValidSampleCount").GetInt32());
+            var topSamples = levelerWatch.GetProperty("topNormalStrengthControlRmsSamples").EnumerateArray().ToArray();
+            Assert.Equal(2, topSamples.Length);
+            Assert.Equal(1, topSamples[0].GetProperty("sampleIndex").GetInt32());
+            Assert.Equal(-17.5, topSamples[0].GetProperty("inputRmsDbfs").GetDouble(), precision: 3);
+            Assert.Contains(
+                root.GetProperty("recommendations").EnumerateArray(),
+                recommendation => recommendation.GetString()?.Contains("normal-strength input", StringComparison.OrdinalIgnoreCase) == true);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task WatchLiveDiagnosticsWritesLongJsonlAndReportPaths()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics long-path smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-long-watch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            using var server = JsonRouteServer.Start(new Dictionary<string, string>
+            {
+                ["/api/dsp/live-diagnostics"] = TxHeadroomLiveDiagnosticsJson()
+            });
+
+            var longRoot = Path.Combine(
+                bundleDir,
+                new string('a', 80),
+                new string('b', 80),
+                "stable-speech-candidate");
+            var jsonlPath = Path.Combine(longRoot, "live-diagnostics-trace.jsonl");
+            var reportPath = Path.Combine(longRoot, "live-diagnostics-summary.json");
+            Assert.True(jsonlPath.Length > 260, $"Expected long JSONL path, got {jsonlPath.Length}: {jsonlPath}");
+            Assert.True(reportPath.Length > 260, $"Expected long report path, got {reportPath.Length}: {reportPath}");
+
+            var watch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                TimeSpan.FromSeconds(30),
+                "-BaseUrl", server.BaseUrl,
+                "-Samples", "1",
+                "-IntervalMs", "0",
+                "-TimeoutSec", "2",
+                "-JsonlPath", jsonlPath,
+                "-ReportPath", reportPath,
+                "-JsonOnly");
+
+            Assert.True(watch.ExitCode == 0, watch.CombinedOutput);
+            Assert.True(File.Exists(jsonlPath), watch.CombinedOutput);
+            Assert.True(File.Exists(reportPath), watch.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            Assert.Equal(1, reportDoc.RootElement.GetProperty("okSampleCount").GetInt32());
+            Assert.Contains("ready-for-live-benchmark", await File.ReadAllTextAsync(jsonlPath), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task WatchLiveDiagnosticsDoesNotInferLevelerProfileFromLegacyEvidence()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-leveler-profile-legacy-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var jsonlPath = Path.Combine(bundleDir, "legacy-leveler-without-profile.jsonl");
+            await WriteAgcWatchJsonlAsync(
+                jsonlPath,
+                new[]
+                {
+                    AgcWatchSample(0, agcGainDb: 0.0, audioRmsDbfs: -33.0)
+                });
+
+            var reportPath = Path.Combine(bundleDir, "legacy-leveler-without-profile.summary.json");
+            var watch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", jsonlPath,
+                "-ReportPath", reportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, watch.ExitCode);
+            Assert.True(File.Exists(reportPath), watch.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = reportDoc.RootElement;
+
+            Assert.Empty(root.GetProperty("rxAudioLevelerProfileCounts").EnumerateArray());
+
+            var levelerWatch = root.GetProperty("rxAudioLevelerWatch");
+            Assert.Empty(levelerWatch.GetProperty("profileCounts").EnumerateArray());
+            Assert.Equal(0, levelerWatch.GetProperty("experimentalSampleCount").GetInt32());
         }
         finally
         {
@@ -3107,6 +5294,87 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal(2, weakWatch.GetProperty("passbandQualifiedWeakInputSampleCount").GetInt32());
             Assert.Equal(3, weakWatch.GetProperty("passbandQualifiedStrongInputSampleCount").GetInt32());
             Assert.Equal(0.8, weakWatch.GetProperty("passbandQualifiedWeakStrongFinalAudioGapDb").GetDouble(), precision: 3);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task WatchLiveDiagnosticsReportsNearestSteppedPassbandRetuneTarget()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-nearest-retune-watch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var jsonlPath = Path.Combine(bundleDir, "nearest-retune.jsonl");
+            await WriteAgcWatchJsonlAsync(
+                jsonlPath,
+                new[]
+                {
+                    AgcWatchSample(
+                        0,
+                        agcGainDb: -51.0,
+                        audioRmsDbfs: -35.0,
+                        frontendTopPeaks:
+                        [
+                            FrontendTopPeak(14_195_500, -74_500, 28.6, -73.2, confidence: 0.94),
+                            FrontendTopPeak(14_265_063, -4_937, 16.9, -85.8, confidence: 0.83)
+                        ],
+                        rxChainFilterLowHz: 0,
+                        rxChainFilterHighHz: 4213,
+                        radioVfoHz: 14_270_000)
+                });
+
+            var reportPath = Path.Combine(bundleDir, "nearest-retune.summary.json");
+            var watch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", jsonlPath,
+                "-ReportPath", reportPath,
+                "-TuneStepHz", "1000",
+                "-JsonOnly");
+
+            Assert.Equal(0, watch.ExitCode);
+            Assert.True(File.Exists(reportPath), watch.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = reportDoc.RootElement;
+            var rankedCandidate = root.GetProperty("frontendTuneCandidates").EnumerateArray().First();
+            Assert.Equal(14_193_000, rankedCandidate.GetProperty("suggestedVfoHz").GetInt64());
+            Assert.Equal(-77_000, rankedCandidate.GetProperty("retuneDeltaHz").GetInt64());
+
+            var nearest = root.GetProperty("frontendNearestTuneCandidate");
+            Assert.Equal(14_263_000, nearest.GetProperty("suggestedVfoHz").GetInt64());
+            Assert.Equal(14.263, nearest.GetProperty("suggestedVfoMhz").GetDouble(), precision: 6);
+            Assert.Equal(1000, nearest.GetProperty("suggestedVfoStepHz").GetInt32());
+            Assert.Equal(14_262_956, nearest.GetProperty("exactSuggestedVfoHz").GetInt64());
+            Assert.Equal(44, nearest.GetProperty("tuneSnapDeltaHz").GetInt64());
+            Assert.Equal(14_270_000, nearest.GetProperty("currentVfoHz").GetInt64());
+            Assert.Equal(-7_000, nearest.GetProperty("retuneDeltaHz").GetInt64());
+            Assert.Equal(-7_044, nearest.GetProperty("exactRetuneDeltaHz").GetInt64());
+            Assert.Equal(14_265_063, nearest.GetProperty("peakFrequencyHz").GetInt64());
+            Assert.Equal(-4_937, nearest.GetProperty("peakOffsetHz").GetInt64());
+            Assert.Equal(4_937, nearest.GetProperty("filterDistanceHz").GetInt64());
+            Assert.Equal("retune-to-center-frontend-peak", nearest.GetProperty("reason").GetString());
+
+            var peakWatch = root.GetProperty("frontendTopPeakWatch");
+            Assert.Equal(14_263_000, peakWatch.GetProperty("nearestTuneCandidate").GetProperty("suggestedVfoHz").GetInt64());
+            Assert.Contains(
+                root.GetProperty("recommendations").EnumerateArray(),
+                recommendation => (recommendation.GetString() ?? "").Contains("14.263 MHz", StringComparison.Ordinal));
         }
         finally
         {
@@ -4014,6 +6282,94 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task ValidationTriageBuildsExecutableCrossRadioActionAfterG2Ready()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell validation summary smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-cross-radio-action-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var validationReport = Path.Combine(bundleDir, "validation-g2-ready-cross-radio-missing.json");
+            WriteSyntheticG2ReadyCrossRadioMissingValidationReport(validationReport);
+
+            var summaryReport = Path.Combine(bundleDir, "summary-g2-ready-cross-radio-missing.json");
+            var summary = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-modernization-validation-report.ps1"),
+                "-ValidationReportPath", validationReport,
+                "-ReportPath", summaryReport,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.Equal(0, summary.ExitCode);
+            Assert.True(File.Exists(summaryReport), summary.CombinedOutput);
+
+            using var summaryDoc = JsonDocument.Parse(await File.ReadAllTextAsync(summaryReport));
+            var root = summaryDoc.RootElement;
+            Assert.False(root.GetProperty("crossRadioValidationReady").GetBoolean());
+            Assert.False(root.GetProperty("defaultBehaviorChangeReady").GetBoolean());
+
+            var g2Stage = root.GetProperty("acceptanceReadiness")
+                .EnumerateArray()
+                .Single(stage => stage.GetProperty("stageId").GetString() == "g2-first-pass-evidence");
+            Assert.True(g2Stage.GetProperty("ready").GetBoolean());
+
+            var graduationStage = root.GetProperty("acceptanceReadiness")
+                .EnumerateArray()
+                .Single(stage => stage.GetProperty("stageId").GetString() == "default-dsp-graduation");
+            Assert.Equal("blocked-cross-radio-validation", graduationStage.GetProperty("status").GetString());
+
+            var crossRadioAction = root.GetProperty("acceptanceActionPlan")
+                .EnumerateArray()
+                .Single(action => action.GetProperty("actionId").GetString() == "capture-cross-radio-validation");
+            Assert.True(crossRadioAction.GetProperty("requiredForAcceptance").GetBoolean());
+            Assert.True(crossRadioAction.GetProperty("blocksDefaultBehaviorChange").GetBoolean());
+            Assert.Equal("default-dsp-graduation", crossRadioAction.GetProperty("stageId").GetString());
+            Assert.Equal("cross-radio-validation", crossRadioAction.GetProperty("category").GetString());
+            Assert.Equal(4, crossRadioAction.GetProperty("commandStepCount").GetInt32());
+            Assert.Equal("artifacts/cross-radio-validation-report.json", crossRadioAction.GetProperty("expectedArtifact").GetString());
+
+            var commandSteps = ReadStringArray(crossRadioAction, "commandSteps");
+            Assert.Contains(commandSteps, step => step.Contains("new-dsp-artifact-manifest.ps1", StringComparison.Ordinal)
+                && step.Contains("-IncludeOptionalArtifacts", StringComparison.Ordinal));
+            Assert.Contains(commandSteps, step => step.Contains("summarize-dsp-cross-radio-validation.ps1", StringComparison.Ordinal)
+                && step.Contains("$sourceValidationReportPath", StringComparison.Ordinal)
+                && step.Contains("-FailOnNotReady", StringComparison.Ordinal)
+                && step.Contains("cross-radio-validation-report.json", StringComparison.Ordinal));
+            Assert.Contains(commandSteps, step => step.Contains("validate-dsp-modernization-bundle.ps1", StringComparison.Ordinal)
+                && step.Contains("-RequireArtifactFiles", StringComparison.Ordinal));
+            Assert.Contains(commandSteps, step => step.Contains("summarize-dsp-modernization-validation-report.ps1", StringComparison.Ordinal)
+                && step.Contains("-FailOnIssues", StringComparison.Ordinal));
+
+            var expectedArtifacts = ReadStringArray(crossRadioAction, "expectedArtifacts");
+            Assert.Equal(5, expectedArtifacts.Length);
+            Assert.Contains("artifact-manifest.json", expectedArtifacts);
+            Assert.Contains("artifacts/cross-radio-validation-report.json", expectedArtifacts);
+            Assert.Contains("validation-report.json", expectedArtifacts);
+            Assert.Contains("validation-triage-report.json", expectedArtifacts);
+            Assert.Contains("validation-triage-report.md", expectedArtifacts);
+
+            var manualAction = crossRadioAction.GetProperty("manualAction").GetString() ?? "";
+            Assert.Contains("non-G2 radio target", manualAction, StringComparison.Ordinal);
+            Assert.Contains("source-backed cross-radio report", manualAction, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task ValidationReportAcceptsNonG2CrossRadioEvidenceArtifact()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell validator smoke runs on Windows.");
@@ -4053,6 +6409,10 @@ public sealed class DspModernizationValidationToolTests
                 Assert.Equal(1, crossRadioRoot.GetProperty("sourceReportCount").GetInt32());
                 Assert.Equal(1, crossRadioRoot.GetProperty("nonG2SourceReportCount").GetInt32());
                 Assert.Equal(1, crossRadioRoot.GetProperty("readyNonG2SourceReportCount").GetInt32());
+                Assert.Equal(RequiredCrossRadioSourceScenarioIds.Length, crossRadioRoot.GetProperty("sourceBackedScenarioCount").GetInt32());
+                Assert.Equal(0, crossRadioRoot.GetProperty("missingRequiredSourceScenarioCount").GetInt32());
+                Assert.Equal(RequiredCrossRadioSourceComparisonIds.Length, crossRadioRoot.GetProperty("sourceBackedComparisonCount").GetInt32());
+                Assert.Equal(0, crossRadioRoot.GetProperty("missingRequiredSourceComparisonCount").GetInt32());
             }
 
             var validationReport = Path.Combine(bundleDir, "validation-cross-radio-ready.json");
@@ -4078,15 +6438,25 @@ public sealed class DspModernizationValidationToolTests
                 Assert.Equal("summarize-dsp-cross-radio-validation", root.GetProperty("crossRadioValidationEvidence").GetProperty("tool").GetString());
                 Assert.Equal(1, root.GetProperty("crossRadioValidationNonG2TargetCount").GetInt32());
                 Assert.Contains("ANAN-7000DLE", ReadStringArray(root, "crossRadioValidationNonG2TargetIds"));
-                Assert.Equal(1, root.GetProperty("crossRadioValidationScenarioCount").GetInt32());
+                Assert.Equal(RequiredCrossRadioSourceScenarioIds.Length, root.GetProperty("crossRadioValidationScenarioCount").GetInt32());
                 Assert.Contains("weak-cw-carrier", ReadStringArray(root, "crossRadioValidationScenarioIds"));
-                Assert.Equal(2, root.GetProperty("crossRadioValidationComparisonCount").GetInt32());
+                Assert.Equal(RequiredCrossRadioSourceComparisonIds.Length, root.GetProperty("crossRadioValidationComparisonCount").GetInt32());
                 Assert.Contains("current-zeus", ReadStringArray(root, "crossRadioValidationComparisonIds"));
                 Assert.False(root.GetProperty("crossRadioValidationDefaultBehaviorChangeApproved").GetBoolean());
                 Assert.Equal(1, root.GetProperty("crossRadioValidationSourceReportCount").GetInt32());
                 Assert.Equal(1, root.GetProperty("crossRadioValidationNonG2SourceReportCount").GetInt32());
                 Assert.Equal(1, root.GetProperty("crossRadioValidationReadyNonG2SourceReportCount").GetInt32());
+                Assert.True(root.GetProperty("crossRadioValidationSourceReportProvenanceReady").GetBoolean());
+                Assert.Equal(1, root.GetProperty("crossRadioValidationSourceReportHashPresentCount").GetInt32());
+                Assert.Equal(0, root.GetProperty("crossRadioValidationSourceReportJsonInvalidCount").GetInt32());
+                Assert.Equal(0, root.GetProperty("crossRadioValidationSourceReportStrictValidationMarkerMissingCount").GetInt32());
+                Assert.Equal(0, root.GetProperty("crossRadioValidationSourceReportHashMismatchCount").GetInt32());
+                Assert.Equal(0, root.GetProperty("crossRadioValidationSourceReportSummaryMismatchCount").GetInt32());
                 Assert.True(root.GetProperty("crossRadioValidationSourceBackedEvidenceReady").GetBoolean());
+                Assert.Equal(RequiredCrossRadioSourceScenarioIds.Length, root.GetProperty("crossRadioValidationSourceBackedScenarioCount").GetInt32());
+                Assert.Equal(0, root.GetProperty("crossRadioValidationMissingRequiredSourceScenarioCount").GetInt32());
+                Assert.Equal(RequiredCrossRadioSourceComparisonIds.Length, root.GetProperty("crossRadioValidationSourceBackedComparisonCount").GetInt32());
+                Assert.Equal(0, root.GetProperty("crossRadioValidationMissingRequiredSourceComparisonCount").GetInt32());
             }
 
             var summaryReport = Path.Combine(bundleDir, "summary-cross-radio-ready.json");
@@ -4107,6 +6477,8 @@ public sealed class DspModernizationValidationToolTests
             Assert.Contains("ANAN-7000DLE", ReadStringArray(summaryRoot, "crossRadioValidationNonG2TargetIds"));
             Assert.Equal(1, summaryRoot.GetProperty("crossRadioValidationReadyNonG2SourceReportCount").GetInt32());
             Assert.True(summaryRoot.GetProperty("crossRadioValidationSourceBackedEvidenceReady").GetBoolean());
+            Assert.Equal(0, summaryRoot.GetProperty("crossRadioValidationMissingRequiredSourceScenarioCount").GetInt32());
+            Assert.Equal(0, summaryRoot.GetProperty("crossRadioValidationMissingRequiredSourceComparisonCount").GetInt32());
 
             var crossRadioGate = summaryRoot.GetProperty("evidenceGates")
                 .EnumerateArray()
@@ -4114,7 +6486,343 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(crossRadioGate.GetProperty("ready").GetBoolean());
             Assert.False(crossRadioGate.GetProperty("requiredForAcceptance").GetBoolean());
             Assert.Contains("readyNonG2Sources=1", crossRadioGate.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            Assert.Contains("sourceProvenance=True", crossRadioGate.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            Assert.Contains("sourceStrictMarkerMissing=0", crossRadioGate.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            Assert.Contains("sourceSummaryMismatches=0", crossRadioGate.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            Assert.Contains("missingSourceScenarios=0", crossRadioGate.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            Assert.Contains("missingSourceComparisons=0", crossRadioGate.GetProperty("detail").GetString(), StringComparison.Ordinal);
             Assert.False(summaryRoot.GetProperty("defaultBehaviorChangeReady").GetBoolean());
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ValidationReportRejectsCrossRadioSourceReportHashMismatch()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-cross-radio-source-hash-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteCrossRadioArtifactManifest(bundleDir);
+            const string sourceReportRelativePath = "artifacts/non-g2-validation-report.json";
+            await WriteCrossRadioSourceValidationReportAsync(
+                bundleDir,
+                sourceReportRelativePath,
+                "ANAN-7000DLE");
+
+            var crossRadio = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-cross-radio-validation.ps1"),
+                "-BundleDir", bundleDir,
+                "-ValidationReportPath", sourceReportRelativePath,
+                "-ReportPath", "artifacts/cross-radio-validation-report.json",
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.Equal(0, crossRadio.ExitCode);
+            await File.AppendAllTextAsync(
+                Path.Combine(bundleDir, sourceReportRelativePath.Replace('/', Path.DirectorySeparatorChar)),
+                Environment.NewLine);
+
+            var validationReport = Path.Combine(bundleDir, "validation-cross-radio-source-hash.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var root = validationDoc.RootElement;
+            Assert.True(root.GetProperty("crossRadioValidationPresent").GetBoolean());
+            Assert.False(root.GetProperty("crossRadioValidationReady").GetBoolean());
+            Assert.False(root.GetProperty("crossRadioValidationSourceReportProvenanceReady").GetBoolean());
+            Assert.False(root.GetProperty("crossRadioValidationSourceBackedEvidenceReady").GetBoolean());
+            Assert.Equal(1, root.GetProperty("crossRadioValidationSourceReportHashPresentCount").GetInt32());
+            Assert.Equal(1, root.GetProperty("crossRadioValidationSourceReportHashMismatchCount").GetInt32());
+
+            var errorCodes = root.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.Contains("cross-radio-validation-source-report-hash-mismatch", errorCodes);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ValidationReportRejectsCrossRadioSourceReportMissingStrictValidationMarker()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-cross-radio-source-marker-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteCrossRadioArtifactManifest(bundleDir);
+            const string sourceReportRelativePath = "artifacts/non-g2-validation-report.json";
+            await WriteCrossRadioSourceValidationReportAsync(
+                bundleDir,
+                sourceReportRelativePath,
+                "ANAN-7000DLE",
+                includeStrictValidationMarker: false);
+
+            var crossRadio = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-cross-radio-validation.ps1"),
+                "-BundleDir", bundleDir,
+                "-ValidationReportPath", sourceReportRelativePath,
+                "-ReportPath", "artifacts/cross-radio-validation-report.json",
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.Equal(0, crossRadio.ExitCode);
+
+            var validationReport = Path.Combine(bundleDir, "validation-cross-radio-source-marker.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var root = validationDoc.RootElement;
+            Assert.True(root.GetProperty("crossRadioValidationPresent").GetBoolean());
+            Assert.False(root.GetProperty("crossRadioValidationReady").GetBoolean());
+            Assert.False(root.GetProperty("crossRadioValidationSourceReportProvenanceReady").GetBoolean());
+            Assert.False(root.GetProperty("crossRadioValidationSourceBackedEvidenceReady").GetBoolean());
+            Assert.Equal(1, root.GetProperty("crossRadioValidationSourceReportHashPresentCount").GetInt32());
+            Assert.Equal(0, root.GetProperty("crossRadioValidationSourceReportHashMismatchCount").GetInt32());
+            Assert.Equal(1, root.GetProperty("crossRadioValidationSourceReportStrictValidationMarkerMissingCount").GetInt32());
+
+            var errorCodes = root.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.Contains("cross-radio-validation-source-report-strict-marker-missing", errorCodes);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ValidationReportRejectsCrossRadioSourceReportSummaryMismatch()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-cross-radio-source-summary-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteCrossRadioArtifactManifest(bundleDir);
+            const string sourceReportRelativePath = "artifacts/non-g2-validation-report.json";
+            await WriteCrossRadioSourceValidationReportAsync(
+                bundleDir,
+                sourceReportRelativePath,
+                "ANAN-7000DLE",
+                metricComparisonReady: false);
+
+            var crossRadioPath = Path.Combine(bundleDir, "artifacts", "cross-radio-validation-report.json");
+            var crossRadio = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-cross-radio-validation.ps1"),
+                "-BundleDir", bundleDir,
+                "-ValidationReportPath", sourceReportRelativePath,
+                "-ReportPath", "artifacts/cross-radio-validation-report.json",
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.Equal(0, crossRadio.ExitCode);
+
+            var crossRadioRoot = JsonNode.Parse(await File.ReadAllTextAsync(crossRadioPath))!.AsObject();
+            crossRadioRoot["readyForReview"] = true;
+            crossRadioRoot["evidenceStatus"] = "cross-radio-evidence-ready";
+            crossRadioRoot["readyNonG2SourceReportCount"] = 1;
+            crossRadioRoot["sourceBackedEvidenceReady"] = true;
+            var sourceReport = crossRadioRoot["sourceReports"]!.AsArray()[0]!.AsObject();
+            sourceReport["metricComparisonReady"] = true;
+            sourceReport["readyForCrossRadio"] = true;
+            await File.WriteAllTextAsync(crossRadioPath, crossRadioRoot.ToJsonString(CamelCaseJson));
+
+            var validationReport = Path.Combine(bundleDir, "validation-cross-radio-source-summary.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var root = validationDoc.RootElement;
+            Assert.True(root.GetProperty("crossRadioValidationPresent").GetBoolean());
+            Assert.False(root.GetProperty("crossRadioValidationReady").GetBoolean());
+            Assert.False(root.GetProperty("crossRadioValidationSourceReportProvenanceReady").GetBoolean());
+            Assert.False(root.GetProperty("crossRadioValidationSourceBackedEvidenceReady").GetBoolean());
+            Assert.Equal(1, root.GetProperty("crossRadioValidationSourceReportHashPresentCount").GetInt32());
+            Assert.Equal(0, root.GetProperty("crossRadioValidationSourceReportHashMismatchCount").GetInt32());
+            Assert.Equal(1, root.GetProperty("crossRadioValidationSourceReportSummaryMismatchCount").GetInt32());
+
+            var errorCodes = root.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.Contains("cross-radio-validation-source-report-summary-mismatch", errorCodes);
+            Assert.Contains("cross-radio-validation-source-metric-comparison-not-ready", errorCodes);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ValidationReportRejectsCrossRadioWrapperCoverageNotBackedBySourceReport()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-cross-radio-wrapper-inflated-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteCrossRadioArtifactManifest(bundleDir);
+            await WriteCrossRadioSourceValidationReportAsync(
+                bundleDir,
+                "artifacts/non-g2-validation-report.json",
+                "ANAN-7000DLE",
+                scenarioIds: ["weak-cw-carrier"],
+                comparisonIds: ["current-zeus"]);
+
+            var crossRadio = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-cross-radio-validation.ps1"),
+                "-BundleDir", bundleDir,
+                "-ValidationReportPath", "artifacts/non-g2-validation-report.json",
+                "-ReportPath", "artifacts/cross-radio-validation-report.json",
+                "-ScenarioId", string.Join(',', RequiredCrossRadioSourceScenarioIds),
+                "-ComparisonId", string.Join(',', RequiredCrossRadioSourceComparisonIds),
+                "-NoMarkdown",
+                "-JsonOnly",
+                "-FailOnNotReady");
+
+            Assert.NotEqual(0, crossRadio.ExitCode);
+            using (var crossRadioDoc = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(bundleDir, "artifacts", "cross-radio-validation-report.json"))))
+            {
+                var crossRadioRoot = crossRadioDoc.RootElement;
+                Assert.False(crossRadioRoot.GetProperty("readyForReview").GetBoolean());
+                Assert.False(crossRadioRoot.GetProperty("sourceBackedEvidenceReady").GetBoolean());
+                Assert.Equal(0, crossRadioRoot.GetProperty("readyNonG2SourceReportCount").GetInt32());
+                Assert.Equal(1, crossRadioRoot.GetProperty("sourceBackedScenarioCount").GetInt32());
+                Assert.Equal(RequiredCrossRadioSourceScenarioIds.Length - 1, crossRadioRoot.GetProperty("missingRequiredSourceScenarioCount").GetInt32());
+                Assert.Equal(1, crossRadioRoot.GetProperty("sourceBackedComparisonCount").GetInt32());
+                Assert.Equal(RequiredCrossRadioSourceComparisonIds.Length - 1, crossRadioRoot.GetProperty("missingRequiredSourceComparisonCount").GetInt32());
+                Assert.Contains("tx-puresignal-safe-bypass", ReadStringArray(crossRadioRoot, "scenarioIds"));
+                Assert.Contains("candidate-under-test", ReadStringArray(crossRadioRoot, "comparisonIds"));
+                Assert.Contains("tx-puresignal-safe-bypass", ReadStringArray(crossRadioRoot, "missingRequiredSourceScenarioIds"));
+                Assert.Contains("candidate-under-test", ReadStringArray(crossRadioRoot, "missingRequiredSourceComparisonIds"));
+
+                var source = crossRadioRoot.GetProperty("sourceReports").EnumerateArray().Single();
+                Assert.Contains("tx-puresignal-safe-bypass", ReadStringArray(source, "missingRequiredScenarioIds"));
+                Assert.Contains("candidate-under-test", ReadStringArray(source, "missingRequiredComparisonIds"));
+
+                var blockerCodes = crossRadioRoot.GetProperty("blockers")
+                    .EnumerateArray()
+                    .Select(blocker => blocker.GetProperty("code").GetString())
+                    .ToArray();
+                Assert.Contains("source-scenario-coverage-incomplete", blockerCodes);
+                Assert.Contains("source-comparison-coverage-incomplete", blockerCodes);
+            }
+
+            var validationReport = Path.Combine(bundleDir, "validation-cross-radio-wrapper-inflated.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var root = validationDoc.RootElement;
+            Assert.True(root.GetProperty("crossRadioValidationPresent").GetBoolean());
+            Assert.False(root.GetProperty("crossRadioValidationReady").GetBoolean());
+            Assert.False(root.GetProperty("crossRadioValidationSourceBackedEvidenceReady").GetBoolean());
+            Assert.Equal(RequiredCrossRadioSourceScenarioIds.Length - 1, root.GetProperty("crossRadioValidationMissingRequiredSourceScenarioCount").GetInt32());
+            Assert.Equal(RequiredCrossRadioSourceComparisonIds.Length - 1, root.GetProperty("crossRadioValidationMissingRequiredSourceComparisonCount").GetInt32());
+
+            var errorCodes = root.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.Contains("cross-radio-validation-source-scenario-coverage-incomplete", errorCodes);
+            Assert.Contains("cross-radio-validation-source-comparison-coverage-incomplete", errorCodes);
+            Assert.Contains("cross-radio-validation-source-backed-scenarios-missing", errorCodes);
+            Assert.Contains("cross-radio-validation-source-backed-comparisons-missing", errorCodes);
         }
         finally
         {
@@ -4261,6 +6969,95 @@ public sealed class DspModernizationValidationToolTests
                 .Select(issue => issue.GetProperty("code").GetString())
                 .ToArray();
             Assert.Contains("cross-radio-validation-source-thetis-live-trace-comparison-not-ready", errorCodes);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ValidationReportRejectsCrossRadioSourceMissingHardwareEvidence()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-cross-radio-hardware-missing-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteCrossRadioArtifactManifest(bundleDir);
+            await WriteCrossRadioSourceValidationReportAsync(
+                bundleDir,
+                "artifacts/non-g2-validation-report.json",
+                "ANAN-7000DLE",
+                hardwareEvidenceStatus: "diagnostics-missing");
+
+            var crossRadio = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-cross-radio-validation.ps1"),
+                "-BundleDir", bundleDir,
+                "-ValidationReportPath", "artifacts/non-g2-validation-report.json",
+                "-ReportPath", "artifacts/cross-radio-validation-report.json",
+                "-NoMarkdown",
+                "-JsonOnly",
+                "-FailOnNotReady");
+
+            Assert.NotEqual(0, crossRadio.ExitCode);
+            Assert.True(File.Exists(Path.Combine(bundleDir, "artifacts", "cross-radio-validation-report.json")), crossRadio.CombinedOutput);
+
+            using (var crossRadioDoc = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(bundleDir, "artifacts", "cross-radio-validation-report.json"))))
+            {
+                var crossRadioRoot = crossRadioDoc.RootElement;
+                Assert.False(crossRadioRoot.GetProperty("readyForReview").GetBoolean());
+                Assert.False(crossRadioRoot.GetProperty("sourceBackedEvidenceReady").GetBoolean());
+                Assert.Equal(0, crossRadioRoot.GetProperty("readyNonG2SourceReportCount").GetInt32());
+                var source = crossRadioRoot.GetProperty("sourceReports").EnumerateArray().Single();
+                Assert.Equal("diagnostics-missing", source.GetProperty("hardwareEvidenceStatus").GetString());
+                Assert.False(source.GetProperty("hardwareEvidenceReady").GetBoolean());
+                Assert.False(source.GetProperty("readyForCrossRadio").GetBoolean());
+
+                var blockerCodes = crossRadioRoot.GetProperty("blockers")
+                    .EnumerateArray()
+                    .Select(blocker => blocker.GetProperty("code").GetString())
+                    .ToArray();
+                Assert.Contains("source-hardware-evidence-not-ready", blockerCodes);
+            }
+
+            var validationReport = Path.Combine(bundleDir, "validation-cross-radio-hardware-missing.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var root = validationDoc.RootElement;
+            Assert.True(root.GetProperty("crossRadioValidationPresent").GetBoolean());
+            Assert.False(root.GetProperty("crossRadioValidationReady").GetBoolean());
+            Assert.Equal(1, root.GetProperty("crossRadioValidationNonG2SourceReportCount").GetInt32());
+            Assert.Equal(0, root.GetProperty("crossRadioValidationReadyNonG2SourceReportCount").GetInt32());
+            Assert.False(root.GetProperty("crossRadioValidationSourceBackedEvidenceReady").GetBoolean());
+
+            var errorCodes = root.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.Contains("cross-radio-validation-source-hardware-evidence-not-ready", errorCodes);
         }
         finally
         {
@@ -4742,6 +7539,391 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task WdspChannelLifecycleReportValidatesReadyLifecycleTelemetry()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell WDSP lifecycle validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-wdsp-channel-lifecycle-ready-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteLifecycleScopeBundle(bundleDir);
+            WriteWdspChannelLifecycleArtifactManifest(bundleDir);
+            WriteWdspChannelLifecycleReport(bundleDir);
+
+            var validationReport = Path.Combine(bundleDir, "validation-wdsp-channel-lifecycle-ready.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.True(validationRoot.GetProperty("wdspChannelLifecycleReportPresent").GetBoolean());
+            Assert.True(validationRoot.GetProperty("wdspChannelLifecycleReportReady").GetBoolean());
+            Assert.Equal("ready", validationRoot.GetProperty("wdspChannelLifecycleReportStatus").GetString());
+            Assert.Equal("run-dsp-wdsp-channel-lifecycle", validationRoot.GetProperty("wdspChannelLifecycleReportTool").GetString());
+            Assert.Equal("wdsp-channel-lifecycle", validationRoot.GetProperty("wdspChannelLifecycleScenarioId").GetString());
+            Assert.Equal(ValidWdspRuntimeSha256, validationRoot.GetProperty("wdspChannelLifecycleWdspRuntimeSha256").GetString());
+            Assert.Equal(2, validationRoot.GetProperty("wdspChannelLifecycleCycleCount").GetInt32());
+            Assert.Equal(23, validationRoot.GetProperty("wdspChannelLifecycleTransitionCount").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("wdspChannelLifecycleTransitionFailureCount").GetInt32());
+            Assert.True(validationRoot.GetProperty("wdspChannelLifecycleStateTransitionSuccess").GetBoolean());
+            Assert.Equal(0, validationRoot.GetProperty("wdspChannelLifecycleNativeExceptionCount").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("wdspChannelLifecycleMeterEscapeCount").GetInt32());
+            Assert.Equal(8192, validationRoot.GetProperty("wdspChannelLifecycleAudioDrainSamples").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("wdspChannelLifecycleAudioDrainFailureCount").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("wdspChannelLifecycleStaleAudioAfterCloseSamples").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("wdspChannelLifecycleGateFailureCount").GetInt32());
+            Assert.False(validationRoot.GetProperty("wdspChannelLifecycleDefaultBehaviorChanged").GetBoolean());
+
+            var errorCodes = validationRoot.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.DoesNotContain(errorCodes, code => code is not null && code.StartsWith("wdsp-channel-lifecycle-", StringComparison.Ordinal));
+            Assert.All(errorCodes, code => Assert.Contains(code, new[]
+            {
+                "benchmark-hardware-graduation-gates-incomplete",
+                "hardware-diagnostics-missing",
+                "snapshot-missing",
+                "live-diagnostics-missing",
+                "benchmark-gates-incomplete"
+            }));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task WdspChannelLifecycleReportRejectsMeterOrExceptionFailures()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell WDSP lifecycle validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-wdsp-channel-lifecycle-failed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteLifecycleScopeBundle(bundleDir);
+            WriteWdspChannelLifecycleArtifactManifest(bundleDir);
+            WriteWdspChannelLifecycleReport(
+                bundleDir,
+                ready: false,
+                meterEscapeCount: 1,
+                nativeExceptionCount: 1,
+                audioDrainFailureCount: 1,
+                staleAudioAfterCloseSamples: 64,
+                lifecycleGateFailureCount: 2,
+                defaultBehaviorChanged: true,
+                runtimeSha256: "bad-hash",
+                runtimeStatus: "not-found",
+                transitionFailureCount: 1,
+                stateTransitionSuccess: false);
+
+            var validationReport = Path.Combine(bundleDir, "validation-wdsp-channel-lifecycle-failed.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.True(validationRoot.GetProperty("wdspChannelLifecycleReportPresent").GetBoolean());
+            Assert.False(validationRoot.GetProperty("wdspChannelLifecycleReportReady").GetBoolean());
+            Assert.Equal("lifecycle-gate-failed", validationRoot.GetProperty("wdspChannelLifecycleReportStatus").GetString());
+            Assert.False(validationRoot.GetProperty("wdspChannelLifecycleStateTransitionSuccess").GetBoolean());
+            Assert.Equal(1, validationRoot.GetProperty("wdspChannelLifecycleTransitionFailureCount").GetInt32());
+            Assert.Equal(1, validationRoot.GetProperty("wdspChannelLifecycleNativeExceptionCount").GetInt32());
+            Assert.Equal(1, validationRoot.GetProperty("wdspChannelLifecycleMeterEscapeCount").GetInt32());
+            Assert.Equal(1, validationRoot.GetProperty("wdspChannelLifecycleAudioDrainFailureCount").GetInt32());
+            Assert.Equal(64, validationRoot.GetProperty("wdspChannelLifecycleStaleAudioAfterCloseSamples").GetInt32());
+            Assert.Equal(2, validationRoot.GetProperty("wdspChannelLifecycleGateFailureCount").GetInt32());
+            Assert.True(validationRoot.GetProperty("wdspChannelLifecycleDefaultBehaviorChanged").GetBoolean());
+
+            var errorCodes = validationRoot.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.Contains("wdsp-channel-lifecycle-not-ready", errorCodes);
+            Assert.Contains("wdsp-channel-lifecycle-state-transition-failed", errorCodes);
+            Assert.Contains("wdsp-channel-lifecycle-transition-failed", errorCodes);
+            Assert.Contains("wdsp-channel-lifecycle-native-exception", errorCodes);
+            Assert.Contains("wdsp-channel-lifecycle-meter-escape", errorCodes);
+            Assert.Contains("wdsp-channel-lifecycle-audio-drain-failed", errorCodes);
+            Assert.Contains("wdsp-channel-lifecycle-stale-audio-after-close", errorCodes);
+            Assert.Contains("wdsp-channel-lifecycle-gate-failed", errorCodes);
+            Assert.Contains("wdsp-channel-lifecycle-default-changed", errorCodes);
+            Assert.Contains("wdsp-channel-lifecycle-runtime-hash-invalid", errorCodes);
+            Assert.Contains("wdsp-channel-lifecycle-runtime-not-found", errorCodes);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task TxFixtureSafetyReportValidatesReadyWdspMetrics()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell TX fixture safety validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-tx-fixture-safety-ready-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteTxFixtureScopeBundle(bundleDir);
+            WriteTxFixtureArtifactManifest(bundleDir);
+            WriteTxFixtureMetrics(bundleDir);
+
+            var summary = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-tx-fixture-safety.ps1"),
+                "-BundleDir", bundleDir,
+                "-Force",
+                "-JsonOnly");
+
+            Assert.Equal(0, summary.ExitCode);
+            var reportPath = Path.Combine(bundleDir, "artifacts", "tx-fixture-safety-report.json");
+            Assert.True(File.Exists(reportPath), summary.CombinedOutput);
+
+            using (var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath)))
+            {
+                var reportRoot = reportDoc.RootElement;
+                Assert.True(reportRoot.GetProperty("readyForReview").GetBoolean());
+                Assert.Equal("ready", reportRoot.GetProperty("status").GetString());
+                Assert.Equal("wdsp", reportRoot.GetProperty("evidenceEngine").GetString());
+                Assert.True(reportRoot.GetProperty("wdspBackedEvidence").GetBoolean());
+                Assert.Equal(2, reportRoot.GetProperty("scenarioCount").GetInt32());
+                Assert.Equal(4, reportRoot.GetProperty("comparisonCount").GetInt32());
+                Assert.Equal(0, reportRoot.GetProperty("gateFailureCount").GetInt32());
+                Assert.Equal(0, reportRoot.GetProperty("clippingCountTotal").GetInt32());
+                Assert.True(reportRoot.GetProperty("maxTxOutputPeakDbfs").GetDouble() <= -0.25);
+                Assert.False(reportRoot.GetProperty("defaultBehaviorChanged").GetBoolean());
+            }
+
+            var validationReport = Path.Combine(bundleDir, "validation-tx-fixture-safety-ready.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.True(validationRoot.GetProperty("txFixtureSafetyReportPresent").GetBoolean());
+            Assert.True(validationRoot.GetProperty("txFixtureSafetyReportReady").GetBoolean());
+            Assert.Equal("ready", validationRoot.GetProperty("txFixtureSafetyReportStatus").GetString());
+            Assert.Equal("summarize-dsp-tx-fixture-safety", validationRoot.GetProperty("txFixtureSafetyReportTool").GetString());
+            Assert.Equal("match", validationRoot.GetProperty("txFixtureSafetyMetricsHashStatus").GetString());
+            Assert.Equal("match", validationRoot.GetProperty("txFixtureSafetyWdspRuntimeHashStatus").GetString());
+            Assert.Equal(2, validationRoot.GetProperty("txFixtureSafetyScenarioCount").GetInt32());
+            Assert.Equal(4, validationRoot.GetProperty("txFixtureSafetyComparisonCount").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("txFixtureSafetyGateFailureCount").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("txFixtureSafetyClippingCountTotal").GetInt32());
+
+            var errorCodes = validationRoot.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.DoesNotContain(errorCodes, code => code is not null && code.StartsWith("tx-fixture-safety-", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task TxFixtureSafetyReportRejectsClippingAndMissingMeters()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell TX fixture safety validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-tx-fixture-safety-failed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteTxFixtureScopeBundle(bundleDir);
+            WriteTxFixtureArtifactManifest(bundleDir);
+            WriteTxFixtureMetrics(bundleDir, failing: true, missingMeters: true);
+
+            var summary = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-tx-fixture-safety.ps1"),
+                "-BundleDir", bundleDir,
+                "-Force",
+                "-FailOnGate",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, summary.ExitCode);
+            var reportPath = Path.Combine(bundleDir, "artifacts", "tx-fixture-safety-report.json");
+            Assert.True(File.Exists(reportPath), summary.CombinedOutput);
+
+            using (var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath)))
+            {
+                var reportRoot = reportDoc.RootElement;
+                Assert.False(reportRoot.GetProperty("readyForReview").GetBoolean());
+                Assert.Equal("tx-fixture-gates-failed", reportRoot.GetProperty("status").GetString());
+                Assert.True(reportRoot.GetProperty("gateFailureCount").GetInt32() > 0);
+                Assert.True(reportRoot.GetProperty("clippingCountTotal").GetInt32() > 0);
+                Assert.True(reportRoot.GetProperty("maxTxOutputPeakDbfs").GetDouble() > -0.25);
+            }
+
+            var validationReport = Path.Combine(bundleDir, "validation-tx-fixture-safety-failed.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.True(validationRoot.GetProperty("txFixtureSafetyReportPresent").GetBoolean());
+            Assert.False(validationRoot.GetProperty("txFixtureSafetyReportReady").GetBoolean());
+            Assert.Equal("tx-fixture-gates-failed", validationRoot.GetProperty("txFixtureSafetyReportStatus").GetString());
+            Assert.True(validationRoot.GetProperty("txFixtureSafetyGateFailureCount").GetInt32() > 0);
+            Assert.True(validationRoot.GetProperty("txFixtureSafetyClippingCountTotal").GetInt32() > 0);
+
+            var errorCodes = validationRoot.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.Contains("tx-fixture-safety-not-ready", errorCodes);
+            Assert.Contains("tx-fixture-safety-gate-failed", errorCodes);
+            Assert.Contains("tx-fixture-safety-clipping", errorCodes);
+            Assert.Contains("tx-fixture-safety-output-peak", errorCodes);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task TxFixtureSafetyReportUsesCandidateEffectiveHeadroomWithoutApprovingDefaults()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell TX fixture safety validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-tx-fixture-safety-candidate-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteTxFixtureScopeBundle(bundleDir);
+            WriteTxFixtureArtifactManifest(bundleDir);
+            WriteTxFixtureMetrics(bundleDir, includeCandidate: true, candidateRawPeakHigh: true);
+
+            var summary = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-tx-fixture-safety.ps1"),
+                "-BundleDir", bundleDir,
+                "-RequiredComparisonIds", "current-zeus,thetis-parity,candidate-under-test",
+                "-Force",
+                "-JsonOnly");
+
+            Assert.Equal(0, summary.ExitCode);
+            var reportPath = Path.Combine(bundleDir, "artifacts", "tx-fixture-safety-report.json");
+            Assert.True(File.Exists(reportPath), summary.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var reportRoot = reportDoc.RootElement;
+            Assert.True(reportRoot.GetProperty("readyForReview").GetBoolean());
+            Assert.False(reportRoot.GetProperty("defaultBehaviorChanged").GetBoolean());
+            Assert.Equal(6, reportRoot.GetProperty("comparisonCount").GetInt32());
+            Assert.True(reportRoot.GetProperty("maxTxOutputPeakDbfs").GetDouble() <= -0.25);
+
+            var candidate = reportRoot.GetProperty("scenarios")
+                .EnumerateArray()
+                .Single(scenario => scenario.GetProperty("scenarioId").GetString() == "tx-two-tone")
+                .GetProperty("comparisons")
+                .EnumerateArray()
+                .Single(comparison => comparison.GetProperty("comparisonId").GetString() == "candidate-under-test");
+
+            Assert.Equal(0.05, candidate.GetProperty("rawTxOutputPeakDbfs").GetDouble(), precision: 2);
+            Assert.Equal(-0.30, candidate.GetProperty("effectiveTxOutputPeakDbfs").GetDouble(), precision: 2);
+            Assert.Equal(-0.35, candidate.GetProperty("txOutputTrimDb").GetDouble(), precision: 2);
+            Assert.Equal("fixture-only-post-wdsp-output-trim", candidate.GetProperty("candidateDiagnostics").GetProperty("profileKind").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task LiveDiagnosticsMatrixPlanOnlyIncludesAcceptanceCycle()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell plan-only smoke runs on Windows.");
@@ -4800,6 +7982,2798 @@ public sealed class DspModernizationValidationToolTests
         var outputs = ReadStringArray(root, "outputs");
         Assert.Contains(outputs, output => output.Contains("mixed weak/strong hunt scoring", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(outputs, output => output.Contains("speech-artifact advisory", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbCapturePlanOnlyDeclaresGuardedProfileWorkflow()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell plan-only smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var plan = await RunPowerShellAsync(
+            powerShell,
+            repoRoot,
+            Path.Combine(repoRoot, "tools", "capture-rx-leveler-ab.ps1"),
+            "-PlanOnly",
+            "-BaseUrl", "https://127.0.0.1:6443",
+            "-SkipCertificateCheck",
+            "-Samples", "2",
+            "-IntervalMs", "100",
+            "-SummaryPath", "artifacts/tx-output-headroom-ab-trace.json",
+            "-RequireActiveAudio",
+            "-MinActiveAudioSamples", "2",
+            "-TuneStepHz", "1000");
+
+        Assert.Equal(0, plan.ExitCode);
+
+        using var planDoc = JsonDocument.Parse(plan.StandardOutput);
+        var root = planDoc.RootElement;
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("capture-rx-leveler-ab", root.GetProperty("tool").GetString());
+        Assert.Equal("https://127.0.0.1:6443", root.GetProperty("baseUrl").GetString());
+        Assert.Equal("current", root.GetProperty("currentProfile").GetString());
+        Assert.Equal("stable-speech-candidate", root.GetProperty("candidateProfile").GetString());
+        Assert.Equal(2, root.GetProperty("samples").GetInt32());
+        Assert.Equal(100, root.GetProperty("intervalMs").GetInt32());
+        Assert.Equal(1000, root.GetProperty("tuneStepHz").GetInt32());
+        Assert.EndsWith("watch-dsp-live-diagnostics.ps1", root.GetProperty("watcher").GetString(), StringComparison.Ordinal);
+        Assert.EndsWith("rx-leveler-ab-summary.json", root.GetProperty("summaryPath").GetString(), StringComparison.Ordinal);
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbCaptureWritesDurableSummary()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell A/B capture smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-ab-summary-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        var watcherPath = Path.Combine(outputRoot, "fake-watch-dsp-live-diagnostics.ps1");
+
+        try
+        {
+            await WriteRxLevelerAbFakeWatcherAsync(watcherPath, requireExistingOutputParents: true);
+
+            using var server = JsonRouteServer.Start(new Dictionary<string, string>
+            {
+                ["/api/dsp/rx-audio-leveler-profile"] = JsonSerializer.Serialize(new
+                {
+                    profile = "current",
+                    activeProfile = "current",
+                    defaultProfile = "current",
+                    supportedProfiles = new[] { "current" },
+                    experimental = false
+                }, CamelCaseJson)
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(30),
+                "-BaseUrl", server.BaseUrl,
+                "-CandidateProfile", "current",
+                "-WatchScriptPath", watcherPath,
+                "-Samples", "2",
+                "-IntervalMs", "1",
+                "-TimeoutSec", "2",
+                "-OutputRoot", outputRoot);
+
+            Assert.Equal(0, run.ExitCode);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var stdoutRoot = stdoutDoc.RootElement;
+            var summaryPath = stdoutRoot.GetProperty("summaryPath").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(summaryPath));
+            Assert.True(File.Exists(summaryPath), run.CombinedOutput);
+            Assert.StartsWith(outputRoot, summaryPath, StringComparison.OrdinalIgnoreCase);
+
+            using var fileDoc = JsonDocument.Parse(await File.ReadAllTextAsync(summaryPath));
+            var fileRoot = fileDoc.RootElement;
+            Assert.Equal("capture-rx-leveler-ab", fileRoot.GetProperty("tool").GetString());
+            Assert.Equal(summaryPath, fileRoot.GetProperty("summaryPath").GetString());
+            Assert.Equal(2, fileRoot.GetProperty("current").GetProperty("okSampleCount").GetInt32());
+            Assert.Equal(2, fileRoot.GetProperty("candidate").GetProperty("okSampleCount").GetInt32());
+            Assert.True(fileRoot.GetProperty("ok").GetBoolean(), run.CombinedOutput);
+            Assert.True(File.Exists(fileRoot.GetProperty("current").GetProperty("reportPath").GetString()));
+            var candidateJsonlPath = fileRoot.GetProperty("candidate").GetProperty("jsonlPath").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(candidateJsonlPath));
+            Assert.Contains($"{Path.DirectorySeparatorChar}current{Path.DirectorySeparatorChar}", fileRoot.GetProperty("current").GetProperty("jsonlPath").GetString(), StringComparison.Ordinal);
+            Assert.Contains($"{Path.DirectorySeparatorChar}current{Path.DirectorySeparatorChar}", candidateJsonlPath, StringComparison.Ordinal);
+            Assert.True(File.Exists(candidateJsonlPath));
+            Assert.Contains(server.Requests, request => request.Method == "PUT" && request.Path == "/api/dsp/rx-audio-leveler-profile");
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbCaptureRequireActiveAudioRejectsSilentTrace()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell active-audio guard smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-ab-active-guard-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        var watcherPath = Path.Combine(outputRoot, "fake-watch-dsp-live-diagnostics.ps1");
+        const string profileEndpoint = "/api/dsp/rx-audio-leveler-profile";
+
+        try
+        {
+            await WriteRxLevelerAbFakeWatcherAsync(
+                watcherPath,
+                requireExistingOutputParents: true,
+                activeAudioSampleCount: 0);
+
+            var requestedProfile = "current";
+            using var server = JsonRouteServer.Start(request =>
+            {
+                if (!string.Equals(request.Path, profileEndpoint, StringComparison.Ordinal))
+                {
+                    return null;
+                }
+
+                if (string.Equals(request.Method, "PUT", StringComparison.OrdinalIgnoreCase))
+                {
+                    using var requestDoc = JsonDocument.Parse(request.Body);
+                    requestedProfile = requestDoc.RootElement.GetProperty("profile").GetString() ?? "current";
+                }
+
+                return JsonSerializer.Serialize(new
+                {
+                    profile = requestedProfile,
+                    activeProfile = requestedProfile,
+                    defaultProfile = "current",
+                    supportedProfiles = new[] { "current", "stable-speech-candidate" },
+                    experimental = !string.Equals(requestedProfile, "current", StringComparison.OrdinalIgnoreCase)
+                }, CamelCaseJson);
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-BaseUrl", server.BaseUrl,
+                "-CandidateProfile", "stable-speech-candidate",
+                "-WatchScriptPath", watcherPath,
+                "-Samples", "2",
+                "-IntervalMs", "1",
+                "-TimeoutSec", "2",
+                "-OutputRoot", outputRoot,
+                "-RequireActiveAudio",
+                "-MinActiveAudioSamples", "1");
+
+            Assert.NotEqual(0, run.ExitCode);
+            Assert.Contains("Active RX audio evidence is required", run.CombinedOutput, StringComparison.Ordinal);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.False(root.GetProperty("ok").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("requireActiveAudio").GetBoolean());
+            Assert.Equal(1, root.GetProperty("minActiveAudioSamples").GetInt32());
+            Assert.Equal("current", root.GetProperty("resetToCurrent").GetProperty("activeProfile").GetString());
+
+            var activeAudioEvidence = root.GetProperty("activeAudioEvidence");
+            Assert.True(activeAudioEvidence.GetProperty("required").GetBoolean());
+            Assert.False(activeAudioEvidence.GetProperty("ready").GetBoolean());
+            Assert.Equal(0, activeAudioEvidence.GetProperty("currentActiveAudioSampleCount").GetInt32());
+            Assert.Equal(0, activeAudioEvidence.GetProperty("candidateActiveAudioSampleCount").GetInt32());
+
+            var missingProfiles = ReadStringArray(activeAudioEvidence, "missingProfiles");
+            Assert.Contains("current", missingProfiles);
+            Assert.Contains("stable-speech-candidate", missingProfiles);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbCaptureRequireActiveAudioAcceptsActiveTrace()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell active-audio guard smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-ab-active-proof-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        var watcherPath = Path.Combine(outputRoot, "fake-watch-dsp-live-diagnostics.ps1");
+        const string profileEndpoint = "/api/dsp/rx-audio-leveler-profile";
+
+        try
+        {
+            await WriteRxLevelerAbFakeWatcherAsync(
+                watcherPath,
+                requireExistingOutputParents: true,
+                activeAudioSampleCount: 2);
+
+            var requestedProfile = "current";
+            using var server = JsonRouteServer.Start(request =>
+            {
+                if (!string.Equals(request.Path, profileEndpoint, StringComparison.Ordinal))
+                {
+                    return null;
+                }
+
+                if (string.Equals(request.Method, "PUT", StringComparison.OrdinalIgnoreCase))
+                {
+                    using var requestDoc = JsonDocument.Parse(request.Body);
+                    requestedProfile = requestDoc.RootElement.GetProperty("profile").GetString() ?? "current";
+                }
+
+                return JsonSerializer.Serialize(new
+                {
+                    profile = requestedProfile,
+                    activeProfile = requestedProfile,
+                    defaultProfile = "current",
+                    supportedProfiles = new[] { "current", "stable-speech-candidate" },
+                    experimental = !string.Equals(requestedProfile, "current", StringComparison.OrdinalIgnoreCase)
+                }, CamelCaseJson);
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-BaseUrl", server.BaseUrl,
+                "-CandidateProfile", "stable-speech-candidate",
+                "-WatchScriptPath", watcherPath,
+                "-Samples", "2",
+                "-IntervalMs", "1",
+                "-TimeoutSec", "2",
+                "-OutputRoot", outputRoot,
+                "-RequireActiveAudio",
+                "-MinActiveAudioSamples", "2");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.True(root.GetProperty("ok").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("requireActiveAudio").GetBoolean());
+            Assert.Equal(2, root.GetProperty("minActiveAudioSamples").GetInt32());
+
+            Assert.Equal(2, root.GetProperty("current").GetProperty("activeAudioSampleCount").GetInt32());
+            Assert.Equal(2, root.GetProperty("candidate").GetProperty("activeAudioSampleCount").GetInt32());
+
+            var activeAudioEvidence = root.GetProperty("activeAudioEvidence");
+            Assert.True(activeAudioEvidence.GetProperty("required").GetBoolean());
+            Assert.True(activeAudioEvidence.GetProperty("ready").GetBoolean());
+            Assert.Equal(2, activeAudioEvidence.GetProperty("currentActiveAudioSampleCount").GetInt32());
+            Assert.Equal(2, activeAudioEvidence.GetProperty("candidateActiveAudioSampleCount").GetInt32());
+            Assert.Empty(activeAudioEvidence.GetProperty("missingProfiles").EnumerateArray());
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbCaptureRequirePassbandEvidenceRejectsOffPassbandTrace()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell passband guard smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-ab-passband-guard-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        var watcherPath = Path.Combine(outputRoot, "fake-watch-dsp-live-diagnostics.ps1");
+        const string profileEndpoint = "/api/dsp/rx-audio-leveler-profile";
+
+        try
+        {
+            await WriteRxLevelerAbFakeWatcherAsync(
+                watcherPath,
+                requireExistingOutputParents: true,
+                activeAudioSampleCount: 2,
+                passbandPeakSampleCount: 0);
+
+            var requestedProfile = "current";
+            using var server = JsonRouteServer.Start(request =>
+            {
+                if (!string.Equals(request.Path, profileEndpoint, StringComparison.Ordinal))
+                {
+                    return null;
+                }
+
+                if (string.Equals(request.Method, "PUT", StringComparison.OrdinalIgnoreCase))
+                {
+                    using var requestDoc = JsonDocument.Parse(request.Body);
+                    requestedProfile = requestDoc.RootElement.GetProperty("profile").GetString() ?? "current";
+                }
+
+                return JsonSerializer.Serialize(new
+                {
+                    profile = requestedProfile,
+                    activeProfile = requestedProfile,
+                    defaultProfile = "current",
+                    supportedProfiles = new[] { "current", "stable-speech-candidate" },
+                    experimental = !string.Equals(requestedProfile, "current", StringComparison.OrdinalIgnoreCase)
+                }, CamelCaseJson);
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-BaseUrl", server.BaseUrl,
+                "-CandidateProfile", "stable-speech-candidate",
+                "-WatchScriptPath", watcherPath,
+                "-Samples", "2",
+                "-IntervalMs", "1",
+                "-TimeoutSec", "2",
+                "-OutputRoot", outputRoot,
+                "-RequireActiveAudio",
+                "-MinActiveAudioSamples", "1",
+                "-RequirePassbandEvidence",
+                "-MinPassbandPeakSamples", "1");
+
+            Assert.NotEqual(0, run.ExitCode);
+            Assert.Contains("Tuned passband evidence is required", run.CombinedOutput, StringComparison.Ordinal);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.False(root.GetProperty("ok").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("requirePassbandEvidence").GetBoolean());
+            Assert.Equal(0, root.GetProperty("current").GetProperty("passbandPeakSampleCount").GetInt32());
+            Assert.Equal(0, root.GetProperty("candidate").GetProperty("passbandPeakSampleCount").GetInt32());
+
+            var passbandEvidence = root.GetProperty("passbandEvidence");
+            Assert.True(passbandEvidence.GetProperty("required").GetBoolean());
+            Assert.False(passbandEvidence.GetProperty("ready").GetBoolean());
+            Assert.Equal(0, passbandEvidence.GetProperty("currentPassbandPeakSampleCount").GetInt32());
+            Assert.Equal(0, passbandEvidence.GetProperty("candidatePassbandPeakSampleCount").GetInt32());
+
+            var missingProfiles = ReadStringArray(passbandEvidence, "missingProfiles");
+            Assert.Contains("current", missingProfiles);
+            Assert.Contains("stable-speech-candidate", missingProfiles);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbCaptureRequirePassbandEvidenceAcceptsTunedTrace()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell passband guard smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-ab-passband-proof-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        var watcherPath = Path.Combine(outputRoot, "fake-watch-dsp-live-diagnostics.ps1");
+        const string profileEndpoint = "/api/dsp/rx-audio-leveler-profile";
+
+        try
+        {
+            await WriteRxLevelerAbFakeWatcherAsync(
+                watcherPath,
+                requireExistingOutputParents: true,
+                activeAudioSampleCount: 2,
+                passbandPeakSampleCount: 2);
+
+            var requestedProfile = "current";
+            using var server = JsonRouteServer.Start(request =>
+            {
+                if (!string.Equals(request.Path, profileEndpoint, StringComparison.Ordinal))
+                {
+                    return null;
+                }
+
+                if (string.Equals(request.Method, "PUT", StringComparison.OrdinalIgnoreCase))
+                {
+                    using var requestDoc = JsonDocument.Parse(request.Body);
+                    requestedProfile = requestDoc.RootElement.GetProperty("profile").GetString() ?? "current";
+                }
+
+                return JsonSerializer.Serialize(new
+                {
+                    profile = requestedProfile,
+                    activeProfile = requestedProfile,
+                    defaultProfile = "current",
+                    supportedProfiles = new[] { "current", "stable-speech-candidate" },
+                    experimental = !string.Equals(requestedProfile, "current", StringComparison.OrdinalIgnoreCase)
+                }, CamelCaseJson);
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-BaseUrl", server.BaseUrl,
+                "-CandidateProfile", "stable-speech-candidate",
+                "-WatchScriptPath", watcherPath,
+                "-Samples", "2",
+                "-IntervalMs", "1",
+                "-TimeoutSec", "2",
+                "-OutputRoot", outputRoot,
+                "-RequireActiveAudio",
+                "-MinActiveAudioSamples", "1",
+                "-RequirePassbandEvidence",
+                "-MinPassbandPeakSamples", "2");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.True(root.GetProperty("ok").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("requirePassbandEvidence").GetBoolean());
+            Assert.Equal(2, root.GetProperty("current").GetProperty("passbandPeakSampleCount").GetInt32());
+            Assert.Equal(2, root.GetProperty("candidate").GetProperty("passbandPeakSampleCount").GetInt32());
+
+            var passbandEvidence = root.GetProperty("passbandEvidence");
+            Assert.True(passbandEvidence.GetProperty("ready").GetBoolean());
+            Assert.Equal(2, passbandEvidence.GetProperty("currentPassbandPeakSampleCount").GetInt32());
+            Assert.Equal(2, passbandEvidence.GetProperty("candidatePassbandPeakSampleCount").GetInt32());
+            Assert.Empty(passbandEvidence.GetProperty("missingProfiles").EnumerateArray());
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbCaptureCreatesLongCandidateOutputPath()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell A/B capture long-path smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var baseRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-ab-long-{Guid.NewGuid():N}");
+        var outputRoot = Path.Combine(baseRoot, new string('x', 120));
+        Directory.CreateDirectory(outputRoot);
+        var watcherPath = Path.Combine(baseRoot, "fake-watch-dsp-live-diagnostics.ps1");
+        const string profileEndpoint = "/api/dsp/rx-audio-leveler-profile";
+
+        try
+        {
+            await WriteRxLevelerAbFakeWatcherAsync(
+                watcherPath,
+                requireExistingOutputParents: true,
+                activeAudioSampleCount: 1);
+
+            var requestedProfile = "current";
+            using var server = JsonRouteServer.Start(request =>
+            {
+                if (!string.Equals(request.Path, profileEndpoint, StringComparison.Ordinal))
+                {
+                    return null;
+                }
+
+                if (string.Equals(request.Method, "PUT", StringComparison.OrdinalIgnoreCase))
+                {
+                    using var requestDoc = JsonDocument.Parse(request.Body);
+                    requestedProfile = requestDoc.RootElement.GetProperty("profile").GetString() ?? "current";
+                }
+
+                return JsonSerializer.Serialize(new
+                {
+                    profile = requestedProfile,
+                    activeProfile = requestedProfile,
+                    defaultProfile = "current",
+                    supportedProfiles = new[] { "current", "stable-speech-candidate" },
+                    experimental = !string.Equals(requestedProfile, "current", StringComparison.OrdinalIgnoreCase)
+                }, CamelCaseJson);
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-BaseUrl", server.BaseUrl,
+                "-CandidateProfile", "stable-speech-candidate",
+                "-WatchScriptPath", watcherPath,
+                "-Samples", "1",
+                "-IntervalMs", "1",
+                "-TimeoutSec", "2",
+                "-OutputRoot", outputRoot,
+                "-RequireActiveAudio",
+                "-MinActiveAudioSamples", "1");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.True(root.GetProperty("ok").GetBoolean(), run.CombinedOutput);
+            var candidateJsonlPath = root.GetProperty("candidate").GetProperty("jsonlPath").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(candidateJsonlPath));
+            Assert.True(candidateJsonlPath.Length > 260, $"Expected a long-path candidate output, got {candidateJsonlPath.Length}: {candidateJsonlPath}");
+            Assert.True(File.Exists(candidateJsonlPath), run.CombinedOutput);
+        }
+        finally
+        {
+            if (Directory.Exists(baseRoot))
+            {
+                Directory.Delete(baseRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbEvidenceSummaryComparesLongActiveCapture()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell RX leveler A/B evidence summary smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var baseRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-evidence-long-{Guid.NewGuid():N}");
+        var outputRoot = Path.Combine(baseRoot, new string('x', 120));
+
+        try
+        {
+            var summaryPath = await WriteRxLevelerAbEvidenceFixtureAsync(outputRoot, activeAudioReady: true);
+            var reportPath = Path.Combine(outputRoot, "rx-leveler-ab-live-comparison.json");
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-SummaryPath", summaryPath,
+                "-ReportPath", reportPath,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+            Assert.True(File.Exists(reportPath), run.CombinedOutput);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.Equal("compare-dsp-live-diagnostics-traces", root.GetProperty("tool").GetString());
+            Assert.True(root.GetProperty("rxLevelerAbActiveAudioReady").GetBoolean(), run.CombinedOutput);
+            Assert.False(root.GetProperty("rxLevelerAbPassbandEvidenceReady").GetBoolean());
+            Assert.True(root.GetProperty("rxLevelerAbCandidateControlMemoryReady").GetBoolean(), run.CombinedOutput);
+            Assert.Equal("passband-evidence-missing", root.GetProperty("rxLevelerAbEvidenceStatus").GetString());
+            Assert.False(root.GetProperty("rxLevelerAbPromotionReady").GetBoolean());
+            Assert.True(root.GetProperty("rxLevelerAbSource").GetProperty("candidateInputPath").GetString()?.Length > 260);
+            Assert.Equal("stable-speech-candidate", root.GetProperty("candidateLabel").GetString());
+            Assert.True(root.TryGetProperty("rxAudioLevelerComparison", out var levelerComparison));
+            Assert.Equal(3, levelerComparison.GetProperty("candidateDiagnosticSampleCount").GetDouble(), precision: 3);
+            var passbandEvidence = root.GetProperty("rxLevelerAbPassbandEvidence");
+            Assert.Equal(0.0, passbandEvidence.GetProperty("candidatePassbandPeakSampleCount").GetDouble(), precision: 3);
+        }
+        finally
+        {
+            if (Directory.Exists(baseRoot))
+            {
+                Directory.Delete(baseRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbEvidenceSummaryUsesBundleRelativeSourcePaths()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell RX leveler A/B evidence summary smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-evidence-portable-{Guid.NewGuid():N}");
+
+        try
+        {
+            var summaryPath = await WriteRxLevelerAbEvidenceFixtureAsync(
+                outputRoot,
+                activeAudioReady: true,
+                passbandEvidenceReady: true,
+                currentOutputRmsMovementDb: 1.4,
+                candidateOutputRmsMovementDb: 0.4,
+                currentAppliedGainMovementDb: 1.2,
+                candidateAppliedGainMovementDb: 0.3);
+            var reportPath = Path.Combine(outputRoot, "artifacts", "rx-leveler-ab-live-comparison.json");
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-SummaryPath", summaryPath,
+                "-ReportPath", reportPath,
+                "-BundleDir", outputRoot,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+            Assert.True(File.Exists(reportPath), run.CombinedOutput);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.True(root.GetProperty("bundleRelativePaths").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("rxLevelerAbActiveAudioReady").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("rxLevelerAbPassbandEvidenceReady").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("rxLevelerAbCandidateControlMemoryReady").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("rxLevelerAbOptimizationReady").GetBoolean(), run.CombinedOutput);
+
+            var source = root.GetProperty("rxLevelerAbSource");
+            foreach (var property in source.EnumerateObject())
+            {
+                if (property.Value.ValueKind == JsonValueKind.Null)
+                {
+                    continue;
+                }
+
+                var value = property.Value.GetString() ?? "";
+                Assert.False(Path.IsPathRooted(value), $"{property.Name} should be bundle-relative: {value}");
+                Assert.DoesNotContain(outputRoot, value, StringComparison.OrdinalIgnoreCase);
+            }
+
+            Assert.StartsWith("rx-leveler-ab-20260620T000000Z/", source.GetProperty("summaryPath").GetString(), StringComparison.Ordinal);
+            Assert.Contains("/stable-speech-candidate/live-diagnostics-summary.json", source.GetProperty("candidateInputPath").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbEvidenceSummaryRejectsNormalStrengthControlMemory()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell RX leveler A/B evidence summary smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-evidence-control-{Guid.NewGuid():N}");
+
+        try
+        {
+            var summaryPath = await WriteRxLevelerAbEvidenceFixtureAsync(
+                outputRoot,
+                activeAudioReady: true,
+                passbandEvidenceReady: true,
+                candidateControlRmsValidSampleCount: 3,
+                candidateNormalStrengthControlRmsValidSampleCount: 3,
+                candidateInputRmsAverageDbfs: -18.0);
+            var reportPath = Path.Combine(outputRoot, "rx-leveler-ab-live-comparison.json");
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-SummaryPath", summaryPath,
+                "-ReportPath", reportPath,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+            Assert.True(File.Exists(reportPath), run.CombinedOutput);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.True(root.GetProperty("rxLevelerAbActiveAudioReady").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("rxLevelerAbPassbandEvidenceReady").GetBoolean(), run.CombinedOutput);
+            Assert.False(root.GetProperty("rxLevelerAbCandidateControlMemoryReady").GetBoolean());
+            Assert.Equal("normal-strength-control-memory-leak", root.GetProperty("rxLevelerAbEvidenceStatus").GetString());
+            Assert.False(root.GetProperty("rxLevelerAbPromotionReady").GetBoolean());
+
+            var controlEvidence = root.GetProperty("rxLevelerAbCandidateControlMemoryEvidence");
+            Assert.True(controlEvidence.GetProperty("normalStrengthInput").GetBoolean());
+            Assert.Equal(3.0, controlEvidence.GetProperty("controlRmsValidSampleCount").GetDouble(), precision: 3);
+            Assert.Equal(3.0, controlEvidence.GetProperty("normalStrengthControlRmsValidSampleCount").GetDouble(), precision: 3);
+            Assert.Equal(-18.0, controlEvidence.GetProperty("inputRmsAverageDbfs").GetDouble(), precision: 3);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbEvidenceSummaryRejectsPassbandTraceWithoutMaterialLevelerImprovement()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell RX leveler A/B optimization smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-evidence-no-win-{Guid.NewGuid():N}");
+
+        try
+        {
+            var summaryPath = await WriteRxLevelerAbEvidenceFixtureAsync(
+                outputRoot,
+                activeAudioReady: true,
+                passbandEvidenceReady: true,
+                candidateControlRmsValidSampleCount: 0,
+                candidateInputRmsAverageDbfs: -18.0,
+                currentOutputRmsMovementDb: 0.5,
+                candidateOutputRmsMovementDb: 0.5,
+                currentAppliedGainMovementDb: 0.2,
+                candidateAppliedGainMovementDb: 0.2);
+            var reportPath = Path.Combine(outputRoot, "rx-leveler-ab-live-comparison.json");
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-SummaryPath", summaryPath,
+                "-ReportPath", reportPath,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.True(root.GetProperty("rxLevelerAbActiveAudioReady").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("rxLevelerAbPassbandEvidenceReady").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("rxLevelerAbCandidateControlMemoryReady").GetBoolean(), run.CombinedOutput);
+            Assert.False(root.GetProperty("rxLevelerAbOptimizationReady").GetBoolean());
+            Assert.False(root.GetProperty("rxLevelerAbPromotionReady").GetBoolean());
+            Assert.Equal("leveler-optimization-not-proven", root.GetProperty("rxLevelerAbEvidenceStatus").GetString());
+
+            var optimization = root.GetProperty("rxLevelerAbOptimizationEvidence");
+            Assert.Equal(0, optimization.GetProperty("materialImprovementCount").GetInt32());
+            Assert.Equal(0, optimization.GetProperty("regressionCount").GetInt32());
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbEvidenceSummaryAllowsWeakDipControlMemoryInNormalAverageTrace()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell RX leveler A/B evidence summary smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-evidence-weak-dip-{Guid.NewGuid():N}");
+
+        try
+        {
+            var summaryPath = await WriteRxLevelerAbEvidenceFixtureAsync(
+                outputRoot,
+                activeAudioReady: true,
+                passbandEvidenceReady: true,
+                candidateControlRmsValidSampleCount: 3,
+                candidateNormalStrengthControlRmsValidSampleCount: 0,
+                candidateInputRmsAverageDbfs: -18.0);
+            var reportPath = Path.Combine(outputRoot, "rx-leveler-ab-live-comparison.json");
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-SummaryPath", summaryPath,
+                "-ReportPath", reportPath,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.True(root.GetProperty("rxLevelerAbCandidateControlMemoryReady").GetBoolean(), run.CombinedOutput);
+
+            var controlEvidence = root.GetProperty("rxLevelerAbCandidateControlMemoryEvidence");
+            Assert.Equal("weak-dip-control-memory-active", controlEvidence.GetProperty("status").GetString());
+            Assert.True(controlEvidence.GetProperty("normalStrengthInput").GetBoolean());
+            Assert.Equal(3.0, controlEvidence.GetProperty("controlRmsValidSampleCount").GetDouble(), precision: 3);
+            Assert.Equal(0.0, controlEvidence.GetProperty("normalStrengthControlRmsValidSampleCount").GetDouble(), precision: 3);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbEvidenceSummaryMarksMaterialLevelerImprovementBeforePromotion()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell RX leveler A/B optimization smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-evidence-win-{Guid.NewGuid():N}");
+
+        try
+        {
+            var summaryPath = await WriteRxLevelerAbEvidenceFixtureAsync(
+                outputRoot,
+                activeAudioReady: true,
+                passbandEvidenceReady: true,
+                candidateControlRmsValidSampleCount: 0,
+                candidateInputRmsAverageDbfs: -18.0,
+                currentOutputRmsMovementDb: 1.4,
+                candidateOutputRmsMovementDb: 0.4,
+                currentAppliedGainMovementDb: 1.2,
+                candidateAppliedGainMovementDb: 0.3);
+            var reportPath = Path.Combine(outputRoot, "rx-leveler-ab-live-comparison.json");
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-SummaryPath", summaryPath,
+                "-ReportPath", reportPath,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.True(root.GetProperty("rxLevelerAbOptimizationReady").GetBoolean(), run.CombinedOutput);
+            Assert.False(root.GetProperty("rxLevelerAbPromotionReady").GetBoolean(), run.CombinedOutput);
+            Assert.Equal("comparison-not-ready", root.GetProperty("rxLevelerAbEvidenceStatus").GetString());
+
+            var optimization = root.GetProperty("rxLevelerAbOptimizationEvidence");
+            Assert.Equal("optimization-ready", optimization.GetProperty("status").GetString());
+            Assert.False(optimization.GetProperty("comparisonReadyForReview").GetBoolean());
+            Assert.True(optimization.GetProperty("materialImprovementCount").GetInt32() >= 1);
+            Assert.Equal(0, optimization.GetProperty("regressionCount").GetInt32());
+            Assert.Contains(
+                optimization.GetProperty("materialImprovements").EnumerateArray(),
+                item => item.GetProperty("metric").GetString() == "outputRmsMovementDb" &&
+                    item.GetProperty("delta").GetDouble() <= -0.5);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbEvidenceSummaryClassifiesAgcWindowDrift()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell RX leveler A/B stability smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-evidence-agc-drift-{Guid.NewGuid():N}");
+
+        try
+        {
+            var summaryPath = await WriteRxLevelerAbEvidenceFixtureAsync(
+                outputRoot,
+                activeAudioReady: true,
+                passbandEvidenceReady: true,
+                currentOutputRmsMovementDb: 1.4,
+                candidateOutputRmsMovementDb: 0.4,
+                currentAppliedGainMovementDb: 1.2,
+                candidateAppliedGainMovementDb: 0.3,
+                currentAgcMovementDb: 2.0,
+                candidateAgcMovementDb: 4.5);
+            var reportPath = Path.Combine(outputRoot, "rx-leveler-ab-live-comparison.json");
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-SummaryPath", summaryPath,
+                "-ReportPath", reportPath,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+
+            Assert.False(root.GetProperty("readyForReview").GetBoolean());
+            Assert.True(root.GetProperty("rxLevelerAbOptimizationReady").GetBoolean(), run.CombinedOutput);
+            Assert.False(root.GetProperty("rxLevelerAbPromotionReady").GetBoolean(), run.CombinedOutput);
+            Assert.Equal("agc-window-drift", root.GetProperty("rxLevelerAbEvidenceStatus").GetString());
+
+            var stability = root.GetProperty("rxLevelerAbCaptureStabilityEvidence");
+            Assert.False(stability.GetProperty("ready").GetBoolean());
+            Assert.Equal("agc-window-drift", stability.GetProperty("status").GetString());
+            Assert.Equal(2, stability.GetProperty("agcRegressionCount").GetInt32());
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbEvidenceSummaryClassifiesPassbandWindowImbalance()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell RX leveler A/B stability smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-evidence-passband-drift-{Guid.NewGuid():N}");
+
+        try
+        {
+            var summaryPath = await WriteRxLevelerAbEvidenceFixtureAsync(
+                outputRoot,
+                activeAudioReady: true,
+                passbandEvidenceReady: true,
+                currentOutputRmsMovementDb: 16.1,
+                candidateOutputRmsMovementDb: 12.5,
+                currentAppliedGainMovementDb: 19.5,
+                candidateAppliedGainMovementDb: 18.6,
+                currentPassbandPeakSampleCount: 3,
+                candidatePassbandPeakSampleCount: 6,
+                currentPassbandAudioMovementDb: 1.2,
+                candidatePassbandAudioMovementDb: 11.8,
+                candidatePeakLimitedSampleCount: 1,
+                candidateConstrainedPeakHeadroomMinDb: 1.3,
+                candidateConstrainedPreLimitPeakMaxDbfs: -2.6);
+            var reportPath = Path.Combine(outputRoot, "rx-leveler-ab-live-comparison.json");
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-SummaryPath", summaryPath,
+                "-ReportPath", reportPath,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+
+            Assert.False(root.GetProperty("readyForReview").GetBoolean());
+            Assert.True(root.GetProperty("rxLevelerAbOptimizationReady").GetBoolean(), run.CombinedOutput);
+            Assert.False(root.GetProperty("rxLevelerAbPromotionReady").GetBoolean(), run.CombinedOutput);
+            Assert.Equal("passband-window-imbalance", root.GetProperty("rxLevelerAbEvidenceStatus").GetString());
+
+            var optimization = root.GetProperty("rxLevelerAbOptimizationEvidence");
+            Assert.True(optimization.GetProperty("peakGuardRegressionSuppressed").GetBoolean());
+            Assert.Equal(0, optimization.GetProperty("regressionCount").GetInt32());
+
+            var stability = root.GetProperty("rxLevelerAbCaptureStabilityEvidence");
+            Assert.False(stability.GetProperty("ready").GetBoolean());
+            Assert.Equal("passband-window-imbalance", stability.GetProperty("status").GetString());
+            Assert.True(stability.GetProperty("passbandPeakImbalanced").GetBoolean());
+            Assert.Equal(1.0, stability.GetProperty("passbandPeakImbalanceRatio").GetDouble(), precision: 3);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbEvidenceSummaryRejectsInactiveCaptureByDefault()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell RX leveler A/B evidence summary smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-evidence-inactive-{Guid.NewGuid():N}");
+
+        try
+        {
+            var summaryPath = await WriteRxLevelerAbEvidenceFixtureAsync(outputRoot, activeAudioReady: false);
+            var reportPath = Path.Combine(outputRoot, "rx-leveler-ab-live-comparison.json");
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-SummaryPath", summaryPath,
+                "-ReportPath", reportPath,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, run.ExitCode);
+            Assert.Contains("missing active audio evidence", run.CombinedOutput, StringComparison.OrdinalIgnoreCase);
+            Assert.False(File.Exists(reportPath));
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbCaptureWaitsForActiveProfileAlignmentBeforeCapture()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell A/B capture profile-settle smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-ab-settle-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        var watcherPath = Path.Combine(outputRoot, "fake-watch-dsp-live-diagnostics.ps1");
+        const string profileEndpoint = "/api/dsp/rx-audio-leveler-profile";
+
+        try
+        {
+            await WriteRxLevelerAbFakeWatcherAsync(watcherPath, requireExistingOutputParents: true);
+
+            var gate = new object();
+            var requestedProfile = "current";
+            var activeProfile = "current";
+            var pendingGetCount = 0;
+
+            string ProfileJson()
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    profile = requestedProfile,
+                    activeProfile,
+                    defaultProfile = "current",
+                    supportedProfiles = new[] { "current", "stable-speech-candidate" },
+                    experimental = !string.Equals(requestedProfile, "current", StringComparison.OrdinalIgnoreCase)
+                }, CamelCaseJson);
+            }
+
+            using var server = JsonRouteServer.Start(request =>
+            {
+                if (!string.Equals(request.Path, profileEndpoint, StringComparison.Ordinal))
+                {
+                    return null;
+                }
+
+                lock (gate)
+                {
+                    if (string.Equals(request.Method, "PUT", StringComparison.OrdinalIgnoreCase))
+                    {
+                        using var requestDoc = JsonDocument.Parse(request.Body);
+                        requestedProfile = requestDoc.RootElement.GetProperty("profile").GetString() ?? "current";
+                        if (!string.Equals(activeProfile, requestedProfile, StringComparison.OrdinalIgnoreCase))
+                        {
+                            pendingGetCount = 2;
+                        }
+
+                        return ProfileJson();
+                    }
+
+                    if (string.Equals(request.Method, "GET", StringComparison.OrdinalIgnoreCase)
+                        && pendingGetCount > 0)
+                    {
+                        pendingGetCount--;
+                        if (pendingGetCount == 0)
+                        {
+                            activeProfile = requestedProfile;
+                        }
+                    }
+
+                    return ProfileJson();
+                }
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-BaseUrl", server.BaseUrl,
+                "-CandidateProfile", "stable-speech-candidate",
+                "-WatchScriptPath", watcherPath,
+                "-Samples", "1",
+                "-IntervalMs", "1",
+                "-TimeoutSec", "2",
+                "-OutputRoot", outputRoot);
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var stdoutRoot = stdoutDoc.RootElement;
+            var candidateReady = stdoutRoot.GetProperty("candidateProfileReady");
+            Assert.True(candidateReady.GetProperty("ready").GetBoolean(), run.CombinedOutput);
+            Assert.True(candidateReady.GetProperty("profileAligned").GetBoolean(), run.CombinedOutput);
+            Assert.True(candidateReady.GetProperty("activeProfileAligned").GetBoolean(), run.CombinedOutput);
+            Assert.Equal("stable-speech-candidate", candidateReady.GetProperty("activeProfile").GetString());
+            Assert.True(stdoutRoot.GetProperty("ok").GetBoolean(), run.CombinedOutput);
+            var candidateJsonlPath = stdoutRoot.GetProperty("candidate").GetProperty("jsonlPath").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(candidateJsonlPath));
+            Assert.Contains($"{Path.DirectorySeparatorChar}stable-speech-candidate{Path.DirectorySeparatorChar}", candidateJsonlPath, StringComparison.Ordinal);
+            Assert.True(File.Exists(candidateJsonlPath));
+
+            var reset = stdoutRoot.GetProperty("resetToCurrent");
+            Assert.True(reset.GetProperty("ready").GetBoolean(), run.CombinedOutput);
+            Assert.True(reset.GetProperty("activeProfileAligned").GetBoolean(), run.CombinedOutput);
+            Assert.Equal("current", reset.GetProperty("activeProfile").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task G2FrontendRxLevelerAbCapturePlanOnlyDeclaresGuardedWorkflow()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell frontend-backed A/B plan smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var plan = await RunPowerShellAsync(
+            powerShell,
+            repoRoot,
+            Path.Combine(repoRoot, "tools", "capture-g2-frontend-rx-leveler-ab.ps1"),
+            "-PlanOnly",
+            "-BaseUrl", "http://127.0.0.1:6070",
+            "-FrontendUrl", "http://127.0.0.1:5173/?webgpuWaterfall=0",
+            "-FrequencyHz", "14260000",
+            "-Samples", "2",
+            "-IntervalMs", "1",
+            "-RequireActiveAudio",
+            "-MinActiveAudioSamples", "2",
+            "-ActiveAudioReadyTimeoutSec", "3",
+            "-ActiveAudioThresholdDbfs", "-45",
+            "-RequirePassbandEvidence",
+            "-MinPassbandPeakSamples", "2",
+            "-PassbandReadyTimeoutSec", "4",
+            "-FrontendNearPassbandThresholdHz", "2500",
+            "-TuneStepHz", "1000",
+            "-CaptureAttempts", "3");
+
+        Assert.Equal(0, plan.ExitCode);
+
+        using var planDoc = JsonDocument.Parse(plan.StandardOutput);
+        var root = planDoc.RootElement;
+        Assert.Equal("capture-g2-frontend-rx-leveler-ab", root.GetProperty("tool").GetString());
+        Assert.Equal("plan-only", root.GetProperty("mode").GetString());
+        Assert.Equal("http://127.0.0.1:6070", root.GetProperty("baseUrl").GetString());
+        Assert.Equal("http://127.0.0.1:5173/?webgpuWaterfall=0", root.GetProperty("frontendUrl").GetString());
+        Assert.Equal(14260000, root.GetProperty("frequencyHz").GetInt64());
+        Assert.False(root.GetProperty("useCurrentRadioState").GetBoolean());
+        Assert.Equal("stable-speech-candidate", root.GetProperty("candidateProfile").GetString());
+        Assert.Equal("current", root.GetProperty("currentProfile").GetString());
+        Assert.True(root.GetProperty("requireActiveAudio").GetBoolean());
+        Assert.Equal(2, root.GetProperty("minActiveAudioSamples").GetInt32());
+        Assert.Equal(3, root.GetProperty("activeAudioReadyTimeoutSec").GetInt32());
+        Assert.Equal(-45, root.GetProperty("activeAudioThresholdDbfs").GetDouble(), precision: 3);
+        Assert.True(root.GetProperty("requirePassbandEvidence").GetBoolean());
+        Assert.Equal(2, root.GetProperty("minPassbandPeakSamples").GetInt32());
+        Assert.Equal(4, root.GetProperty("passbandReadyTimeoutSec").GetInt32());
+        Assert.Equal(2500, root.GetProperty("frontendNearPassbandThresholdHz").GetInt32());
+        Assert.Equal(1000, root.GetProperty("tuneStepHz").GetInt32());
+        Assert.Equal(3, root.GetProperty("captureAttempts").GetInt32());
+        Assert.Equal(1025, root.GetProperty("p2ClientLocalPort").GetInt32());
+        Assert.False(root.GetProperty("skipP2SocketPreflight").GetBoolean());
+        Assert.EndsWith("capture-rx-leveler-ab.ps1", root.GetProperty("captureScriptPath").GetString(), StringComparison.Ordinal);
+
+        var safety = ReadStringArray(root, "safety");
+        Assert.Contains(safety, item => item.Contains("frontendSceneFresh", StringComparison.Ordinal));
+        Assert.Contains(safety, item => item.Contains("P2 client UDP socket", StringComparison.Ordinal));
+        Assert.Contains(safety, item => item.Contains("does not run peak-hunt retune", StringComparison.Ordinal));
+        Assert.Contains(safety, item => item.Contains("UseCurrentRadioState reuses the operator-tuned VFO/mode", StringComparison.Ordinal));
+        Assert.Contains(safety, item => item.Contains("No operator default DSP behavior", StringComparison.Ordinal));
+    }
+
+    [SkippableFact]
+    public async Task G2FrontendRxLevelerAbCaptureRefusesMissingBrowserBeforeBackendMutation()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell frontend browser guard smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-g2-frontend-browser-guard-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        using var server = JsonRouteServer.Start(_ => "{}");
+
+        try
+        {
+            var missingBrowser = Path.Combine(outputRoot, "missing-browser.exe");
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-g2-frontend-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(20),
+                "-BaseUrl", server.BaseUrl,
+                "-BrowserPath", missingBrowser,
+                "-OutputRoot", outputRoot,
+                "-FrontendReadyTimeoutSec", "1",
+                "-SettleMs", "0",
+                "-SkipP2SocketPreflight");
+
+            Assert.NotEqual(0, run.ExitCode);
+            Assert.Contains("Frontend browser executable not found", run.CombinedOutput, StringComparison.Ordinal);
+            Assert.Empty(server.Requests);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task G2FrontendRxLevelerAbCaptureSkipBrowserUsesFreshSceneAndCaptureScript()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell frontend-backed A/B orchestration smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-g2-frontend-ab-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        var captureScriptPath = Path.Combine(outputRoot, "fake-capture-rx-leveler-ab.ps1");
+
+        try
+        {
+            await WriteG2FrontendRxLevelerFakeCaptureAsync(captureScriptPath);
+
+            using var server = JsonRouteServer.Start(request =>
+            {
+                return request.Path switch
+                {
+                    "/api/dsp/rx-audio-leveler-profile" => JsonSerializer.Serialize(new
+                    {
+                        profile = "current",
+                        activeProfile = "current",
+                        supportedProfiles = new[] { "current", "stable-speech-candidate" }
+                    }, CamelCaseJson),
+                    "/api/dsp/live-diagnostics" => JsonSerializer.Serialize(new
+                    {
+                        status = "ready-for-live-benchmark",
+                        readyForLiveBenchmark = true,
+                        readinessScore = 92,
+                        frontendSceneFresh = true,
+                        frontendSceneStatus = "fresh",
+                        frontendSceneAgeMs = 20,
+                        wdspActive = true,
+                        radioVfoHz = 14260000,
+                        radioLoHz = 14260000,
+                        radioMode = "USB",
+                        radioSampleRate = 384000,
+                        rxChainFilterLowHz = 100,
+                        rxChainFilterHighHz = 2850,
+                        runtimeEvidence = new
+                        {
+                            audioFresh = true,
+                            audioRmsDbfs = -18.0,
+                            rxMetersFresh = true
+                        }
+                    }, CamelCaseJson),
+                    "/api/radio/diagnostics/dsp-scene" => JsonSerializer.Serialize(new
+                    {
+                        status = "fresh",
+                        fresh = true,
+                        ageMs = 25,
+                        topPeaks = new[]
+                        {
+                            new
+                            {
+                                frequencyHz = 14261200,
+                                offsetHz = 1200,
+                                snrDb = 18.4,
+                                dbfs = -77.0,
+                                confidence = 0.91
+                            }
+                        }
+                    }, CamelCaseJson),
+                    "/api/connect/p2" or "/api/radio/lo" or "/api/vfo" or "/api/mode" => JsonSerializer.Serialize(new { ok = true }, CamelCaseJson),
+                    _ => null
+                };
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-g2-frontend-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(30),
+                "-BaseUrl", server.BaseUrl,
+                "-FrontendUrl", "http://127.0.0.1:5173/?webgpuWaterfall=0",
+                "-SkipBrowserLaunch",
+                "-SkipP2SocketPreflight",
+                "-CaptureScriptPath", captureScriptPath,
+                "-OutputRoot", outputRoot,
+                "-FrequencyHz", "14260000",
+                "-Mode", "USB",
+                "-Samples", "2",
+                "-IntervalMs", "1",
+                "-RequireActiveAudio",
+                "-MinActiveAudioSamples", "1",
+                "-ActiveAudioReadyTimeoutSec", "2",
+                "-RequirePassbandEvidence",
+                "-MinPassbandPeakSamples", "1",
+                "-PassbandReadyTimeoutSec", "2",
+                "-SettleMs", "0",
+                "-FrontendReadyTimeoutSec", "2");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.True(root.GetProperty("ok").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("frontendReady").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("frontendScenePreflightReady").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("p2SocketPreflightReady").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("p2SocketPreflight").GetProperty("skipped").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("levelerProfileResetAligned").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("levelerProfileMutationStarted").GetBoolean(), run.CombinedOutput);
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("levelerProfileNoMutationAligned").ValueKind);
+            Assert.False(root.GetProperty("browserLaunched").GetBoolean());
+            Assert.Equal(14260000, root.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal("USB", root.GetProperty("modeName").GetString());
+            Assert.True(File.Exists(root.GetProperty("summaryPath").GetString()));
+            Assert.True(File.Exists(root.GetProperty("frontendProofPath").GetString()));
+            Assert.True(File.Exists(root.GetProperty("rxLevelerAbSummaryPath").GetString()));
+            Assert.Equal(2, root.GetProperty("current").GetProperty("okSampleCount").GetInt32());
+            Assert.Equal(2, root.GetProperty("candidate").GetProperty("okSampleCount").GetInt32());
+            Assert.True(root.GetProperty("resetToCurrent").GetProperty("activeProfileAligned").GetBoolean());
+            Assert.True(root.GetProperty("requireActiveAudio").GetBoolean());
+            var activeAudioPreflight = root.GetProperty("activeAudioPreflight");
+            Assert.True(activeAudioPreflight.GetProperty("ready").GetBoolean(), run.CombinedOutput);
+            Assert.Equal(1, activeAudioPreflight.GetProperty("activeSampleCount").GetInt32());
+            Assert.True(root.GetProperty("requirePassbandEvidence").GetBoolean());
+            var passbandPreflight = root.GetProperty("passbandPreflight");
+            Assert.True(passbandPreflight.GetProperty("ready").GetBoolean(), run.CombinedOutput);
+            Assert.Equal(1, passbandPreflight.GetProperty("passbandSampleCount").GetInt32());
+            Assert.Equal(1, passbandPreflight.GetProperty("samples")[0].GetProperty("filterPassbandPeakCount").GetInt32());
+            var passbandEvidence = root.GetProperty("passbandEvidence");
+            Assert.True(passbandEvidence.GetProperty("ready").GetBoolean(), run.CombinedOutput);
+            Assert.Equal(2, passbandEvidence.GetProperty("currentPassbandPeakSampleCount").GetInt32());
+            Assert.Equal(2, passbandEvidence.GetProperty("candidatePassbandPeakSampleCount").GetInt32());
+
+            var requestPaths = server.Requests.Select(request => request.Path).ToArray();
+            var profileIndex = Array.IndexOf(requestPaths, "/api/dsp/rx-audio-leveler-profile");
+            var connectIndex = Array.IndexOf(requestPaths, "/api/connect/p2");
+            var firstSceneIndex = Array.IndexOf(requestPaths, "/api/radio/diagnostics/dsp-scene");
+            Assert.True(profileIndex >= 0, run.CombinedOutput);
+            Assert.True(firstSceneIndex >= 0, run.CombinedOutput);
+            Assert.True(connectIndex >= 0, run.CombinedOutput);
+            Assert.True(profileIndex < connectIndex, run.CombinedOutput);
+            Assert.True(firstSceneIndex < connectIndex, run.CombinedOutput);
+            Assert.Contains("/api/connect/p2", requestPaths);
+            Assert.Contains("/api/radio/lo", requestPaths);
+            Assert.Contains("/api/vfo", requestPaths);
+            Assert.Contains("/api/mode", requestPaths);
+            Assert.Contains("/api/dsp/live-diagnostics", requestPaths);
+            Assert.Contains("/api/radio/diagnostics/dsp-scene", requestPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task G2FrontendRxLevelerAbCaptureUseCurrentRadioStateSkipsConnectAndTune()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell frontend-backed A/B orchestration smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-g2-frontend-current-state-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        var captureScriptPath = Path.Combine(outputRoot, "fake-capture-rx-leveler-ab.ps1");
+
+        try
+        {
+            await WriteG2FrontendRxLevelerFakeCaptureAsync(captureScriptPath);
+
+            using var server = JsonRouteServer.Start(request =>
+            {
+                return request.Path switch
+                {
+                    "/api/dsp/rx-audio-leveler-profile" => JsonSerializer.Serialize(new
+                    {
+                        profile = "current",
+                        activeProfile = "current",
+                        supportedProfiles = new[] { "current", "stable-speech-candidate" }
+                    }, CamelCaseJson),
+                    "/api/dsp/live-diagnostics" => JsonSerializer.Serialize(new
+                    {
+                        status = "ready-for-live-benchmark",
+                        readyForLiveBenchmark = true,
+                        readinessScore = 92,
+                        frontendSceneFresh = true,
+                        frontendSceneStatus = "fresh",
+                        frontendSceneAgeMs = 20,
+                        wdspActive = true,
+                        radioVfoHz = 14266000,
+                        radioLoHz = 14258065,
+                        radioCtunEnabled = true,
+                        radioMode = "USB",
+                        radioSampleRate = 384000,
+                        runtimeEvidence = new
+                        {
+                            audioFresh = true,
+                            audioRmsDbfs = -18.0,
+                            rxMetersFresh = true
+                        }
+                    }, CamelCaseJson),
+                    "/api/radio/diagnostics/dsp-scene" => JsonSerializer.Serialize(new
+                    {
+                        status = "fresh",
+                        fresh = true,
+                        ageMs = 25,
+                        topPeaks = new[]
+                        {
+                            new
+                            {
+                                frequencyHz = 14266128,
+                                offsetHz = 128,
+                                snrDb = 29.4,
+                                dbfs = -73.6,
+                                confidence = 0.94
+                            }
+                        }
+                    }, CamelCaseJson),
+                    _ => null
+                };
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-g2-frontend-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(30),
+                "-BaseUrl", server.BaseUrl,
+                "-FrontendUrl", "http://127.0.0.1:5173/?webgpuWaterfall=0",
+                "-SkipBrowserLaunch",
+                "-UseCurrentRadioState",
+                "-CaptureScriptPath", captureScriptPath,
+                "-OutputRoot", outputRoot,
+                "-FrequencyHz", "14260000",
+                "-Mode", "USB",
+                "-Samples", "2",
+                "-IntervalMs", "1",
+                "-RequireActiveAudio",
+                "-MinActiveAudioSamples", "1",
+                "-ActiveAudioReadyTimeoutSec", "2",
+                "-RequirePassbandEvidence",
+                "-MinPassbandPeakSamples", "1",
+                "-PassbandReadyTimeoutSec", "2",
+                "-SettleMs", "0",
+                "-FrontendReadyTimeoutSec", "2");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.True(root.GetProperty("ok").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("useCurrentRadioState").GetBoolean());
+            Assert.Equal(14260000, root.GetProperty("requestedFrequencyHz").GetInt64());
+            Assert.Equal(14266000, root.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal("USB", root.GetProperty("modeName").GetString());
+            Assert.True(root.GetProperty("p2SocketPreflight").GetProperty("skipped").GetBoolean(), run.CombinedOutput);
+
+            var currentRadioState = root.GetProperty("currentRadioState");
+            Assert.Equal(14266000, currentRadioState.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal(14258065, currentRadioState.GetProperty("radioLoHz").GetInt64());
+            Assert.True(currentRadioState.GetProperty("radioCtunEnabled").GetBoolean());
+
+            var passbandPreflight = root.GetProperty("passbandPreflight");
+            Assert.True(passbandPreflight.GetProperty("ready").GetBoolean(), run.CombinedOutput);
+            Assert.Equal(14266000, passbandPreflight.GetProperty("operatorFrequencyHz").GetInt64());
+
+            var requestPaths = server.Requests.Select(request => request.Path).ToArray();
+            Assert.Contains("/api/dsp/rx-audio-leveler-profile", requestPaths);
+            Assert.Contains("/api/dsp/live-diagnostics", requestPaths);
+            Assert.Contains("/api/radio/diagnostics/dsp-scene", requestPaths);
+            Assert.DoesNotContain("/api/connect/p2", requestPaths);
+            Assert.DoesNotContain("/api/radio/lo", requestPaths);
+            Assert.DoesNotContain("/api/vfo", requestPaths);
+            Assert.DoesNotContain("/api/mode", requestPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task G2FrontendRxLevelerAbCaptureRetriesRecoverablePassbandEvidenceMiss()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell frontend-backed A/B orchestration smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-g2-frontend-ab-retry-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        var captureScriptPath = Path.Combine(outputRoot, "fake-capture-rx-leveler-ab.ps1");
+
+        try
+        {
+            await WriteG2FrontendRxLevelerFakeCaptureAsync(
+                captureScriptPath,
+                failFirstPassbandAttempt: true);
+
+            using var server = JsonRouteServer.Start(request =>
+            {
+                return request.Path switch
+                {
+                    "/api/dsp/rx-audio-leveler-profile" => JsonSerializer.Serialize(new
+                    {
+                        profile = "current",
+                        activeProfile = "current",
+                        supportedProfiles = new[] { "current", "stable-speech-candidate" }
+                    }, CamelCaseJson),
+                    "/api/dsp/live-diagnostics" => JsonSerializer.Serialize(new
+                    {
+                        status = "ready-for-live-benchmark",
+                        readyForLiveBenchmark = true,
+                        readinessScore = 92,
+                        frontendSceneFresh = true,
+                        frontendSceneStatus = "fresh",
+                        frontendSceneAgeMs = 20,
+                        wdspActive = true,
+                        radioVfoHz = 14260000,
+                        radioLoHz = 14260000,
+                        radioMode = "USB",
+                        radioSampleRate = 384000,
+                        rxChainFilterLowHz = 100,
+                        rxChainFilterHighHz = 2850,
+                        runtimeEvidence = new
+                        {
+                            audioFresh = true,
+                            audioRmsDbfs = -18.0,
+                            rxMetersFresh = true
+                        }
+                    }, CamelCaseJson),
+                    "/api/radio/diagnostics/dsp-scene" => JsonSerializer.Serialize(new
+                    {
+                        status = "fresh",
+                        fresh = true,
+                        ageMs = 25,
+                        topPeaks = new[]
+                        {
+                            new
+                            {
+                                frequencyHz = 14261200,
+                                offsetHz = 1200,
+                                snrDb = 18.4,
+                                dbfs = -77.0,
+                                confidence = 0.91
+                            }
+                        }
+                    }, CamelCaseJson),
+                    "/api/connect/p2" or "/api/radio/lo" or "/api/vfo" or "/api/mode" => JsonSerializer.Serialize(new { ok = true }, CamelCaseJson),
+                    _ => null
+                };
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-g2-frontend-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(30),
+                "-BaseUrl", server.BaseUrl,
+                "-FrontendUrl", "http://127.0.0.1:5173/?webgpuWaterfall=0",
+                "-SkipBrowserLaunch",
+                "-SkipP2SocketPreflight",
+                "-CaptureScriptPath", captureScriptPath,
+                "-OutputRoot", outputRoot,
+                "-FrequencyHz", "14260000",
+                "-Mode", "USB",
+                "-Samples", "2",
+                "-IntervalMs", "1",
+                "-CaptureAttempts", "2",
+                "-RequireActiveAudio",
+                "-MinActiveAudioSamples", "1",
+                "-ActiveAudioReadyTimeoutSec", "2",
+                "-RequirePassbandEvidence",
+                "-MinPassbandPeakSamples", "1",
+                "-PassbandReadyTimeoutSec", "2",
+                "-SettleMs", "0",
+                "-FrontendReadyTimeoutSec", "2");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.True(root.GetProperty("ok").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("levelerProfileResetAligned").GetBoolean(), run.CombinedOutput);
+            Assert.Equal(2, root.GetProperty("captureAttemptsRequested").GetInt32());
+            Assert.Equal(2, root.GetProperty("captureAttemptCount").GetInt32());
+
+            var attempts = root.GetProperty("captureAttempts").EnumerateArray().ToArray();
+            Assert.Equal(2, attempts.Length);
+            Assert.False(attempts[0].GetProperty("ok").GetBoolean());
+            Assert.True(attempts[0].GetProperty("recoverable").GetBoolean());
+            Assert.True(attempts[0].GetProperty("resetAligned").GetBoolean());
+            Assert.False(attempts[0].GetProperty("passbandReady").GetBoolean());
+            Assert.Equal(0, attempts[0].GetProperty("candidatePassbandPeakSampleCount").GetInt32());
+            Assert.True(attempts[1].GetProperty("ok").GetBoolean());
+            Assert.False(attempts[1].GetProperty("recoverable").GetBoolean());
+            Assert.True(attempts[1].GetProperty("resetAligned").GetBoolean());
+            Assert.True(attempts[1].GetProperty("passbandReady").GetBoolean());
+            Assert.Equal(2, attempts[1].GetProperty("candidatePassbandPeakSampleCount").GetInt32());
+
+            Assert.True(File.Exists(root.GetProperty("rxLevelerAbSummaryPath").GetString()));
+            var passbandEvidence = root.GetProperty("passbandEvidence");
+            Assert.True(passbandEvidence.GetProperty("ready").GetBoolean(), run.CombinedOutput);
+            Assert.Equal(2, passbandEvidence.GetProperty("currentPassbandPeakSampleCount").GetInt32());
+            Assert.Equal(2, passbandEvidence.GetProperty("candidatePassbandPeakSampleCount").GetInt32());
+            Assert.True(root.GetProperty("resetToCurrent").GetProperty("activeProfileAligned").GetBoolean());
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task G2FrontendRxLevelerAbCaptureRequireActiveAudioRefusesQuietReceiverBeforeAb()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell active-audio preflight guard smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-g2-frontend-active-guard-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        var captureScriptPath = Path.Combine(outputRoot, "fake-capture-rx-leveler-ab.ps1");
+
+        try
+        {
+            await WriteG2FrontendRxLevelerFakeCaptureAsync(captureScriptPath);
+
+            using var server = JsonRouteServer.Start(request =>
+            {
+                return request.Path switch
+                {
+                    "/api/dsp/rx-audio-leveler-profile" => JsonSerializer.Serialize(new
+                    {
+                        profile = "current",
+                        activeProfile = "current",
+                        supportedProfiles = new[] { "current", "stable-speech-candidate" }
+                    }, CamelCaseJson),
+                    "/api/dsp/live-diagnostics" => JsonSerializer.Serialize(new
+                    {
+                        status = "ready-for-live-benchmark",
+                        readyForLiveBenchmark = true,
+                        readinessScore = 92,
+                        frontendSceneFresh = true,
+                        frontendSceneStatus = "fresh",
+                        frontendSceneAgeMs = 20,
+                        wdspActive = true,
+                        radioVfoHz = 14260000,
+                        radioLoHz = 14260000,
+                        radioMode = "USB",
+                        radioSampleRate = 384000,
+                        runtimeEvidence = new
+                        {
+                            audioFresh = true,
+                            audioSource = "rx",
+                            audioRmsDbfs = -72.0,
+                            rxMetersFresh = true
+                        }
+                    }, CamelCaseJson),
+                    "/api/radio/diagnostics/dsp-scene" => JsonSerializer.Serialize(new
+                    {
+                        status = "fresh",
+                        fresh = true,
+                        ageMs = 25,
+                        topPeaks = Array.Empty<object>()
+                    }, CamelCaseJson),
+                    "/api/connect/p2" or "/api/radio/lo" or "/api/vfo" or "/api/mode" => JsonSerializer.Serialize(new { ok = true }, CamelCaseJson),
+                    _ => null
+                };
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-g2-frontend-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(30),
+                "-BaseUrl", server.BaseUrl,
+                "-FrontendUrl", "http://127.0.0.1:5173/?webgpuWaterfall=0",
+                "-SkipBrowserLaunch",
+                "-SkipP2SocketPreflight",
+                "-CaptureScriptPath", captureScriptPath,
+                "-OutputRoot", outputRoot,
+                "-FrequencyHz", "14260000",
+                "-Mode", "USB",
+                "-Samples", "2",
+                "-IntervalMs", "1",
+                "-SettleMs", "0",
+                "-FrontendReadyTimeoutSec", "2",
+                "-RequireActiveAudio",
+                "-MinActiveAudioSamples", "1",
+                "-ActiveAudioReadyTimeoutSec", "1",
+                "-ContinueOnError");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+            Assert.Contains("Active RX audio did not become ready", run.CombinedOutput, StringComparison.Ordinal);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.False(root.GetProperty("ok").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("frontendReady").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("requireActiveAudio").GetBoolean());
+            Assert.False(root.GetProperty("levelerProfileMutationStarted").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("levelerProfileNoMutationAligned").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("levelerProfileResetAligned").GetBoolean(), run.CombinedOutput);
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("rxLevelerAbSummaryPath").ValueKind);
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("current").ValueKind);
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("candidate").ValueKind);
+
+            var activeAudioPreflight = root.GetProperty("activeAudioPreflight");
+            Assert.True(activeAudioPreflight.GetProperty("required").GetBoolean());
+            Assert.False(activeAudioPreflight.GetProperty("ready").GetBoolean());
+            Assert.Equal(0, activeAudioPreflight.GetProperty("activeSampleCount").GetInt32());
+            Assert.Equal(-45.0, activeAudioPreflight.GetProperty("activeAudioThresholdDbfs").GetDouble(), precision: 3);
+
+            var requestPaths = server.Requests.Select(request => request.Path).ToArray();
+            Assert.Contains("/api/connect/p2", requestPaths);
+            Assert.Contains("/api/dsp/live-diagnostics", requestPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task G2FrontendRxLevelerAbCaptureRequirePassbandEvidenceRefusesOffPassbandPeaksBeforeAb()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell passband preflight guard smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-g2-frontend-passband-guard-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        var captureScriptPath = Path.Combine(outputRoot, "fake-capture-rx-leveler-ab.ps1");
+
+        try
+        {
+            await WriteG2FrontendRxLevelerFakeCaptureAsync(captureScriptPath);
+
+            using var server = JsonRouteServer.Start(request =>
+            {
+                return request.Path switch
+                {
+                    "/api/dsp/rx-audio-leveler-profile" => JsonSerializer.Serialize(new
+                    {
+                        profile = "current",
+                        activeProfile = "current",
+                        supportedProfiles = new[] { "current", "stable-speech-candidate" }
+                    }, CamelCaseJson),
+                    "/api/dsp/live-diagnostics" => JsonSerializer.Serialize(new
+                    {
+                        status = "ready-for-live-benchmark",
+                        readyForLiveBenchmark = true,
+                        readinessScore = 92,
+                        frontendSceneFresh = true,
+                        frontendSceneStatus = "fresh",
+                        frontendSceneAgeMs = 20,
+                        wdspActive = true,
+                        radioVfoHz = 14260000,
+                        radioLoHz = 14260000,
+                        radioMode = "USB",
+                        radioSampleRate = 384000,
+                        rxChainFilterLowHz = 100,
+                        rxChainFilterHighHz = 2850,
+                        runtimeEvidence = new
+                        {
+                            audioFresh = true,
+                            audioSource = "rx",
+                            audioRmsDbfs = -18.0,
+                            rxMetersFresh = true
+                        }
+                    }, CamelCaseJson),
+                    "/api/radio/diagnostics/dsp-scene" => JsonSerializer.Serialize(new
+                    {
+                        status = "fresh",
+                        fresh = true,
+                        ageMs = 25,
+                        topPeaks = new[]
+                        {
+                            new
+                            {
+                                frequencyHz = 14232063,
+                                offsetHz = -27937,
+                                snrDb = 17.6,
+                                dbfs = -78.1,
+                                confidence = 0.839
+                            }
+                        }
+                    }, CamelCaseJson),
+                    "/api/connect/p2" or "/api/radio/lo" or "/api/vfo" or "/api/mode" => JsonSerializer.Serialize(new { ok = true }, CamelCaseJson),
+                    _ => null
+                };
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-g2-frontend-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(30),
+                "-BaseUrl", server.BaseUrl,
+                "-FrontendUrl", "http://127.0.0.1:5173/?webgpuWaterfall=0",
+                "-SkipBrowserLaunch",
+                "-SkipP2SocketPreflight",
+                "-CaptureScriptPath", captureScriptPath,
+                "-OutputRoot", outputRoot,
+                "-FrequencyHz", "14260000",
+                "-Mode", "USB",
+                "-Samples", "2",
+                "-IntervalMs", "1",
+                "-SettleMs", "0",
+                "-FrontendReadyTimeoutSec", "2",
+                "-RequireActiveAudio",
+                "-MinActiveAudioSamples", "1",
+                "-ActiveAudioReadyTimeoutSec", "1",
+                "-RequirePassbandEvidence",
+                "-MinPassbandPeakSamples", "1",
+                "-PassbandReadyTimeoutSec", "1",
+                "-ContinueOnError");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+            Assert.Contains("Tuned passband frontend evidence did not become ready", run.CombinedOutput, StringComparison.Ordinal);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.False(root.GetProperty("ok").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("frontendReady").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("requireActiveAudio").GetBoolean());
+            Assert.True(root.GetProperty("requirePassbandEvidence").GetBoolean());
+            Assert.False(root.GetProperty("levelerProfileMutationStarted").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("levelerProfileNoMutationAligned").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("levelerProfileResetAligned").GetBoolean(), run.CombinedOutput);
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("rxLevelerAbSummaryPath").ValueKind);
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("current").ValueKind);
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("candidate").ValueKind);
+
+            var activeAudioPreflight = root.GetProperty("activeAudioPreflight");
+            Assert.True(activeAudioPreflight.GetProperty("ready").GetBoolean(), run.CombinedOutput);
+
+            var passbandPreflight = root.GetProperty("passbandPreflight");
+            Assert.True(passbandPreflight.GetProperty("required").GetBoolean());
+            Assert.False(passbandPreflight.GetProperty("ready").GetBoolean());
+            Assert.Equal("manual-tuned-passband-incomplete", passbandPreflight.GetProperty("status").GetString());
+            Assert.Equal(0, passbandPreflight.GetProperty("passbandSampleCount").GetInt32());
+            Assert.True(passbandPreflight.GetProperty("manualTuningAuthoritative").GetBoolean());
+            Assert.True(passbandPreflight.GetProperty("retuneRecommendationSuppressed").GetBoolean());
+            Assert.Equal(14260000, passbandPreflight.GetProperty("operatorFrequencyHz").GetInt64());
+            Assert.Equal(14.26, passbandPreflight.GetProperty("operatorFrequencyMhz").GetDouble(), precision: 6);
+
+            var firstSample = passbandPreflight.GetProperty("samples").EnumerateArray().First();
+            Assert.True(firstSample.GetProperty("filterPassbandKnown").GetBoolean());
+            Assert.Equal(0, firstSample.GetProperty("filterPassbandPeakCount").GetInt32());
+            Assert.Equal(0, firstSample.GetProperty("nearPassbandPeakCount").GetInt32());
+            Assert.Equal(-27937.0, firstSample.GetProperty("nearestOffsetHz").GetDouble(), precision: 3);
+            var bestTuneCandidate = passbandPreflight.GetProperty("bestTuneCandidate");
+            Assert.Equal(1, bestTuneCandidate.GetProperty("rank").GetInt32());
+            Assert.Equal(14231000, bestTuneCandidate.GetProperty("suggestedVfoHz").GetInt64());
+            Assert.Equal(14.231, bestTuneCandidate.GetProperty("suggestedVfoMhz").GetDouble(), precision: 6);
+            Assert.Equal(1000, bestTuneCandidate.GetProperty("suggestedVfoStepHz").GetInt32());
+            Assert.Equal(14230588, bestTuneCandidate.GetProperty("exactSuggestedVfoHz").GetInt64());
+            Assert.Equal(412, bestTuneCandidate.GetProperty("tuneSnapDeltaHz").GetInt64());
+            Assert.Equal(-29000, bestTuneCandidate.GetProperty("retuneDeltaHz").GetInt64());
+            Assert.Equal(-29412, bestTuneCandidate.GetProperty("exactRetuneDeltaHz").GetInt64());
+            Assert.Equal(14232063, bestTuneCandidate.GetProperty("peakFrequencyHz").GetInt64());
+            Assert.Equal(-27937, bestTuneCandidate.GetProperty("peakOffsetHz").GetInt64());
+            Assert.Equal(1475.0, bestTuneCandidate.GetProperty("passbandCenterHz").GetDouble(), precision: 3);
+            Assert.Equal(28037, bestTuneCandidate.GetProperty("filterDistanceHz").GetInt64());
+            Assert.Equal("retune-to-center-frontend-peak", bestTuneCandidate.GetProperty("reason").GetString());
+            var nearestTuneCandidate = passbandPreflight.GetProperty("nearestTuneCandidate");
+            Assert.Equal(14231000, nearestTuneCandidate.GetProperty("suggestedVfoHz").GetInt64());
+            Assert.Equal(-29000, nearestTuneCandidate.GetProperty("retuneDeltaHz").GetInt64());
+            var recommendation = passbandPreflight.GetProperty("recommendation").GetString() ?? "";
+            Assert.Contains("Manual tuning is authoritative", recommendation, StringComparison.Ordinal);
+            Assert.Contains("14.26 MHz", recommendation, StringComparison.Ordinal);
+            Assert.Contains("diagnostic hints only", recommendation, StringComparison.Ordinal);
+            Assert.DoesNotContain("Tune VFO to 14.231 MHz", recommendation, StringComparison.Ordinal);
+            Assert.NotEmpty(passbandPreflight.GetProperty("tuneCandidates").EnumerateArray());
+            Assert.Equal(14231000, firstSample.GetProperty("bestTuneCandidate").GetProperty("suggestedVfoHz").GetInt64());
+            Assert.Equal(14231000, firstSample.GetProperty("nearestTuneCandidate").GetProperty("suggestedVfoHz").GetInt64());
+
+            var requestPaths = server.Requests.Select(request => request.Path).ToArray();
+            Assert.Contains("/api/connect/p2", requestPaths);
+            Assert.Contains("/api/dsp/live-diagnostics", requestPaths);
+            Assert.Contains("/api/radio/diagnostics/dsp-scene", requestPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task G2FrontendRxLevelerAbCaptureRefusesMissingProfileBeforeRadioMutation()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell profile preflight guard smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-g2-frontend-profile-guard-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        using var server = JsonRouteServer.Start(_ => null);
+
+        try
+        {
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-g2-frontend-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(20),
+                "-BaseUrl", server.BaseUrl,
+                "-SkipBrowserLaunch",
+                "-OutputRoot", outputRoot,
+                "-FrontendReadyTimeoutSec", "1",
+                "-SettleMs", "0",
+                "-SkipP2SocketPreflight");
+
+            Assert.NotEqual(0, run.ExitCode);
+            Assert.Contains("RX audio leveler profile API is not reachable", run.CombinedOutput, StringComparison.Ordinal);
+
+            var requestPaths = server.Requests.Select(request => request.Path).ToArray();
+            Assert.Contains("/api/dsp/rx-audio-leveler-profile", requestPaths);
+            Assert.DoesNotContain("/api/connect/p2", requestPaths);
+            Assert.DoesNotContain("/api/radio/lo", requestPaths);
+            Assert.DoesNotContain("/api/vfo", requestPaths);
+            Assert.DoesNotContain("/api/mode", requestPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task G2FrontendRxLevelerAbCaptureContinueOnStaleFrontendDoesNotCaptureOrReportOk()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell frontend preflight guard smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-g2-frontend-stale-guard-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        var captureScriptPath = Path.Combine(outputRoot, "fake-capture-rx-leveler-ab.ps1");
+
+        try
+        {
+            await WriteG2FrontendRxLevelerFakeCaptureAsync(captureScriptPath);
+
+            using var server = JsonRouteServer.Start(request =>
+            {
+                return request.Path switch
+                {
+                    "/api/dsp/rx-audio-leveler-profile" => JsonSerializer.Serialize(new
+                    {
+                        profile = "current",
+                        activeProfile = "current"
+                    }, CamelCaseJson),
+                    "/api/dsp/live-diagnostics" => JsonSerializer.Serialize(new
+                    {
+                        status = "stale-frontend",
+                        readyForLiveBenchmark = false,
+                        frontendSceneFresh = false,
+                        frontendSceneStatus = "stale",
+                        runtimeEvidence = new
+                        {
+                            audioFresh = false
+                        }
+                    }, CamelCaseJson),
+                    "/api/radio/diagnostics/dsp-scene" => JsonSerializer.Serialize(new
+                    {
+                        status = "stale",
+                        fresh = false
+                    }, CamelCaseJson),
+                    "/api/connect/p2" or "/api/radio/lo" or "/api/vfo" or "/api/mode" => JsonSerializer.Serialize(new { ok = true }, CamelCaseJson),
+                    _ => null
+                };
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-g2-frontend-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(30),
+                "-BaseUrl", server.BaseUrl,
+                "-SkipBrowserLaunch",
+                "-CaptureScriptPath", captureScriptPath,
+                "-OutputRoot", outputRoot,
+                "-FrontendReadyTimeoutSec", "1",
+                "-SettleMs", "0",
+                "-SkipP2SocketPreflight",
+                "-ContinueOnError");
+
+            Assert.Equal(0, run.ExitCode);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.False(root.GetProperty("ok").GetBoolean(), run.CombinedOutput);
+            Assert.False(root.GetProperty("frontendReady").GetBoolean(), run.CombinedOutput);
+            Assert.False(root.GetProperty("frontendScenePreflightReady").GetBoolean(), run.CombinedOutput);
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("rxLevelerAbSummaryPath").ValueKind);
+
+            var requestPaths = server.Requests.Select(request => request.Path).ToArray();
+            Assert.Contains("/api/dsp/rx-audio-leveler-profile", requestPaths);
+            Assert.DoesNotContain("/api/connect/p2", requestPaths);
+            Assert.DoesNotContain("/api/radio/lo", requestPaths);
+            Assert.DoesNotContain("/api/vfo", requestPaths);
+            Assert.DoesNotContain("/api/mode", requestPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task G2FrontendRxLevelerAbCaptureRefusesOccupiedP2SocketBeforeRadioMutation()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell P2 socket preflight smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        using var occupiedSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        occupiedSocket.Bind(new IPEndPoint(IPAddress.Any, 0));
+        var occupiedPort = ((IPEndPoint)occupiedSocket.LocalEndPoint!).Port;
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-g2-frontend-p2-socket-guard-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+
+        try
+        {
+            using var server = JsonRouteServer.Start(request =>
+            {
+                return request.Path switch
+                {
+                    "/api/dsp/rx-audio-leveler-profile" => JsonSerializer.Serialize(new
+                    {
+                        profile = "current",
+                        activeProfile = "current"
+                    }, CamelCaseJson),
+                    "/api/dsp/live-diagnostics" => JsonSerializer.Serialize(new
+                    {
+                        status = "ready-for-live-benchmark",
+                        readyForLiveBenchmark = true,
+                        frontendSceneFresh = true,
+                        frontendSceneStatus = "fresh",
+                        frontendSceneAgeMs = 20,
+                        runtimeEvidence = new
+                        {
+                            audioFresh = true
+                        }
+                    }, CamelCaseJson),
+                    "/api/radio/diagnostics/dsp-scene" => JsonSerializer.Serialize(new
+                    {
+                        status = "fresh",
+                        fresh = true,
+                        ageMs = 25
+                    }, CamelCaseJson),
+                    "/api/connect/p2" or "/api/radio/lo" or "/api/vfo" or "/api/mode" => JsonSerializer.Serialize(new { ok = true }, CamelCaseJson),
+                    _ => null
+                };
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-g2-frontend-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(30),
+                "-BaseUrl", server.BaseUrl,
+                "-SkipBrowserLaunch",
+                "-OutputRoot", outputRoot,
+                "-FrontendReadyTimeoutSec", "2",
+                "-SettleMs", "0",
+                "-P2ClientLocalPort", occupiedPort.ToString(CultureInfo.InvariantCulture));
+
+            Assert.NotEqual(0, run.ExitCode);
+            Assert.Contains($"P2 client UDP port {occupiedPort}", run.CombinedOutput, StringComparison.Ordinal);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.False(root.GetProperty("ok").GetBoolean(), run.CombinedOutput);
+            Assert.False(root.GetProperty("p2SocketPreflightReady").GetBoolean(), run.CombinedOutput);
+            Assert.NotEmpty(root.GetProperty("p2SocketPreflight").GetProperty("owners").EnumerateArray());
+
+            var requestPaths = server.Requests.Select(request => request.Path).ToArray();
+            Assert.DoesNotContain("/api/dsp/rx-audio-leveler-profile", requestPaths);
+            Assert.DoesNotContain("/api/radio/diagnostics/dsp-scene", requestPaths);
+            Assert.DoesNotContain("/api/dsp/live-diagnostics", requestPaths);
+            Assert.DoesNotContain("/api/connect/p2", requestPaths);
+            Assert.DoesNotContain("/api/radio/lo", requestPaths);
+            Assert.DoesNotContain("/api/vfo", requestPaths);
+            Assert.DoesNotContain("/api/mode", requestPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task G2FrontendRxLevelerAbCaptureFailsWhenDelegatedCaptureDoesNotResetCurrent()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell reset guard smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-g2-frontend-reset-guard-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        var captureScriptPath = Path.Combine(outputRoot, "fake-capture-rx-leveler-ab.ps1");
+
+        try
+        {
+            await WriteG2FrontendRxLevelerFakeCaptureAsync(captureScriptPath, resetAligned: false);
+
+            using var server = JsonRouteServer.Start(request =>
+            {
+                return request.Path switch
+                {
+                    "/api/dsp/rx-audio-leveler-profile" => JsonSerializer.Serialize(new
+                    {
+                        profile = "current",
+                        activeProfile = "current"
+                    }, CamelCaseJson),
+                    "/api/dsp/live-diagnostics" => JsonSerializer.Serialize(new
+                    {
+                        status = "ready-for-live-benchmark",
+                        readyForLiveBenchmark = true,
+                        readinessScore = 92,
+                        frontendSceneFresh = true,
+                        frontendSceneStatus = "fresh",
+                        frontendSceneAgeMs = 20,
+                        wdspActive = true,
+                        runtimeEvidence = new
+                        {
+                            audioFresh = true,
+                            audioRmsDbfs = -18.0,
+                            rxMetersFresh = true
+                        }
+                    }, CamelCaseJson),
+                    "/api/radio/diagnostics/dsp-scene" => JsonSerializer.Serialize(new
+                    {
+                        status = "fresh",
+                        fresh = true,
+                        ageMs = 25
+                    }, CamelCaseJson),
+                    "/api/connect/p2" or "/api/radio/lo" or "/api/vfo" or "/api/mode" => JsonSerializer.Serialize(new { ok = true }, CamelCaseJson),
+                    _ => null
+                };
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-g2-frontend-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(30),
+                "-BaseUrl", server.BaseUrl,
+                "-SkipBrowserLaunch",
+                "-SkipP2SocketPreflight",
+                "-CaptureScriptPath", captureScriptPath,
+                "-OutputRoot", outputRoot,
+                "-FrontendReadyTimeoutSec", "2",
+                "-SettleMs", "0");
+
+            Assert.NotEqual(0, run.ExitCode);
+            Assert.Contains("did not reset the active profile to current", run.CombinedOutput, StringComparison.Ordinal);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.False(root.GetProperty("ok").GetBoolean(), run.CombinedOutput);
+            Assert.False(root.GetProperty("levelerProfileResetAligned").GetBoolean(), run.CombinedOutput);
+            Assert.Equal("stable-speech-candidate", root.GetProperty("resetToCurrent").GetProperty("activeProfile").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task RxLevelerAbCaptureRefusesBackendWithoutProfileEndpoint()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell profile-endpoint guard smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-ab-refusal-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+
+        try
+        {
+            var closedPort = GetUnusedTcpPort();
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(20),
+                "-BaseUrl", $"http://127.0.0.1:{closedPort}",
+                "-Samples", "1",
+                "-IntervalMs", "100",
+                "-TimeoutSec", "2",
+                "-OutputRoot", outputRoot);
+
+            Assert.NotEqual(0, run.ExitCode);
+            Assert.Contains("RX audio leveler profile API is not reachable", run.CombinedOutput, StringComparison.Ordinal);
+            Assert.Contains("/api/dsp/rx-audio-leveler-profile", run.CombinedOutput, StringComparison.Ordinal);
+            Assert.DoesNotContain("watch-dsp-live-diagnostics failed", run.CombinedOutput, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task TxOutputHeadroomAbCapturePlanOnlyDeclaresGuardedProfileWorkflow()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell plan-only smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var plan = await RunPowerShellAsync(
+            powerShell,
+            repoRoot,
+            Path.Combine(repoRoot, "tools", "capture-tx-output-headroom-ab.ps1"),
+            "-PlanOnly",
+            "-BaseUrl", "https://127.0.0.1:6443",
+            "-SkipCertificateCheck",
+            "-Samples", "2",
+            "-IntervalMs", "100",
+            "-SummaryPath", "artifacts/tx-output-headroom-ab-trace.json",
+            "-TuneStepHz", "1000");
+
+        Assert.Equal(0, plan.ExitCode);
+
+        using var planDoc = JsonDocument.Parse(plan.StandardOutput);
+        var root = planDoc.RootElement;
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("capture-tx-output-headroom-ab", root.GetProperty("tool").GetString());
+        Assert.Equal("plan-only", root.GetProperty("mode").GetString());
+        Assert.Equal("https://127.0.0.1:6443", root.GetProperty("baseUrl").GetString());
+        Assert.Equal("current", root.GetProperty("currentProfile").GetString());
+        Assert.Equal("headroom-trim-candidate", root.GetProperty("candidateProfile").GetString());
+        Assert.Equal("headroom-trim-candidate", root.GetProperty("candidateExpectedActiveProfile").GetString());
+        Assert.False(root.GetProperty("allowTransmit").GetBoolean());
+        Assert.True(root.GetProperty("noKeyingByScript").GetBoolean());
+        Assert.True(root.GetProperty("requiresLiveReady").GetBoolean());
+        Assert.EndsWith("/api/dsp/live-diagnostics", root.GetProperty("liveDiagnosticsEndpoint").GetString(), StringComparison.Ordinal);
+        Assert.Equal(2, root.GetProperty("samples").GetInt32());
+        Assert.Equal(100, root.GetProperty("intervalMs").GetInt32());
+        Assert.Equal(1000, root.GetProperty("tuneStepHz").GetInt32());
+        Assert.Contains("never keys MOX, TUN, or two-tone", root.GetProperty("manualAction").GetString(), StringComparison.Ordinal);
+        Assert.EndsWith("watch-dsp-live-diagnostics.ps1", root.GetProperty("watcher").GetString(), StringComparison.Ordinal);
+        Assert.EndsWith(@"artifacts\tx-output-headroom-ab-trace.json", root.GetProperty("summaryPath").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [SkippableFact]
+    public async Task TxOutputHeadroomAbCapturePreflightOnlyWritesReadySummaryWithoutBackendMutation()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell TX preflight smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-tx-headroom-preflight-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        var stableSummaryPath = Path.Combine(outputRoot, "artifacts", "tx-output-headroom-ab-trace.json");
+        const string profileEndpoint = "/api/dsp/tx-output-headroom-profile";
+
+        using var server = JsonRouteServer.Start(request =>
+        {
+            return request.Path switch
+            {
+                "/api/dsp/live-diagnostics" => TxHeadroomLiveDiagnosticsJson(),
+                profileEndpoint => JsonSerializer.Serialize(new
+                {
+                    profile = "current",
+                    activeProfile = "current",
+                    defaultProfile = "current",
+                    supportedProfiles = new[] { "current", "headroom-trim-candidate" },
+                    experimental = false,
+                    trimDb = 0.0,
+                    pureSignalBypassActive = false
+                }, CamelCaseJson),
+                _ => null
+            };
+        });
+
+        try
+        {
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-tx-output-headroom-ab.ps1"),
+                TimeSpan.FromSeconds(20),
+                "-BaseUrl", server.BaseUrl,
+                "-PreflightOnly",
+                "-Samples", "1",
+                "-IntervalMs", "1",
+                "-TimeoutSec", "2",
+                "-SummaryPath", stableSummaryPath,
+                "-OutputRoot", outputRoot);
+
+            Assert.Equal(0, run.ExitCode);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.Equal("preflight-only", root.GetProperty("mode").GetString());
+            Assert.True(root.GetProperty("ready").GetBoolean(), run.CombinedOutput);
+            Assert.True(root.GetProperty("noKeyingByScript").GetBoolean());
+            Assert.False(root.GetProperty("allowTransmit").GetBoolean());
+            Assert.True(root.GetProperty("requiresLiveReady").GetBoolean());
+            Assert.True(root.GetProperty("liveReadiness").GetProperty("ready").GetBoolean());
+            Assert.Equal("current", root.GetProperty("profile").GetProperty("activeProfile").GetString());
+            Assert.Empty(root.GetProperty("failures").EnumerateArray());
+
+            var summaryPath = root.GetProperty("summaryPath").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(summaryPath));
+            Assert.True(File.Exists(summaryPath), run.CombinedOutput);
+            Assert.Equal(stableSummaryPath, summaryPath);
+
+            Assert.Contains(server.Requests, request => request.Method == "GET" && request.Path == "/api/dsp/live-diagnostics");
+            Assert.Contains(server.Requests, request => request.Method == "GET" && request.Path == profileEndpoint);
+            Assert.DoesNotContain(server.Requests, request => request.Method == "PUT" && request.Path == profileEndpoint);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task TxOutputHeadroomAbCaptureRefusesWithoutAllowTransmitBeforeBackendMutation()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell TX profile guard smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-tx-headroom-refusal-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        using var server = JsonRouteServer.Start(_ => "{}");
+
+        try
+        {
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-tx-output-headroom-ab.ps1"),
+                TimeSpan.FromSeconds(20),
+                "-BaseUrl", server.BaseUrl,
+                "-Samples", "1",
+                "-IntervalMs", "1",
+                "-TimeoutSec", "2",
+                "-OutputRoot", outputRoot);
+
+            Assert.NotEqual(0, run.ExitCode);
+            Assert.Contains("Refusing to select the TX output headroom candidate without -AllowTransmit", run.CombinedOutput, StringComparison.Ordinal);
+            Assert.Contains("this script never keys TX", run.CombinedOutput, StringComparison.Ordinal);
+            Assert.Empty(server.Requests);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task TxOutputHeadroomAbCaptureRefusesWithoutLiveBenchmarkReadyBeforeBackendMutation()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell TX live-readiness guard smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-tx-headroom-live-ready-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        const string profileEndpoint = "/api/dsp/tx-output-headroom-profile";
+
+        using var server = JsonRouteServer.Start(request =>
+        {
+            return request.Path switch
+            {
+                "/api/dsp/live-diagnostics" => TxHeadroomLiveDiagnosticsJson(ready: false),
+                profileEndpoint => "{}",
+                _ => null
+            };
+        });
+
+        try
+        {
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-tx-output-headroom-ab.ps1"),
+                TimeSpan.FromSeconds(20),
+                "-BaseUrl", server.BaseUrl,
+                "-AllowTransmit",
+                "-Samples", "1",
+                "-IntervalMs", "1",
+                "-TimeoutSec", "2",
+                "-OutputRoot", outputRoot);
+
+            Assert.NotEqual(0, run.ExitCode);
+            Assert.Contains("live diagnostics are not benchmark-ready", run.CombinedOutput, StringComparison.Ordinal);
+            Assert.Contains("frontendSceneFresh=false", run.CombinedOutput, StringComparison.Ordinal);
+            Assert.Contains(server.Requests, request => request.Method == "GET" && request.Path == "/api/dsp/live-diagnostics");
+            Assert.DoesNotContain(server.Requests, request => request.Method == "PUT" && request.Path == profileEndpoint);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task TxOutputHeadroomAbCaptureWritesDurableSummaryAndResetsCurrent()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell TX A/B capture smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-tx-headroom-ab-summary-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        var watcherPath = Path.Combine(outputRoot, "fake-watch-dsp-live-diagnostics.ps1");
+        const string profileEndpoint = "/api/dsp/tx-output-headroom-profile";
+
+        try
+        {
+            await WriteTxOutputHeadroomAbFakeWatcherAsync(watcherPath);
+
+            var gate = new object();
+            var requestedProfile = "current";
+
+            string ProfileJson()
+            {
+                var candidateRequested = !string.Equals(requestedProfile, "current", StringComparison.OrdinalIgnoreCase);
+                return JsonSerializer.Serialize(new
+                {
+                    profile = requestedProfile,
+                    activeProfile = requestedProfile,
+                    defaultProfile = "current",
+                    supportedProfiles = new[] { "current", "headroom-trim-candidate" },
+                    experimental = candidateRequested,
+                    trimDb = candidateRequested ? -0.35 : 0.0,
+                    pureSignalBypassActive = false
+                }, CamelCaseJson);
+            }
+
+            using var server = JsonRouteServer.Start(request =>
+            {
+                if (string.Equals(request.Path, "/api/dsp/live-diagnostics", StringComparison.Ordinal))
+                {
+                    return TxHeadroomLiveDiagnosticsJson();
+                }
+
+                if (!string.Equals(request.Path, profileEndpoint, StringComparison.Ordinal))
+                {
+                    return null;
+                }
+
+                lock (gate)
+                {
+                    if (string.Equals(request.Method, "PUT", StringComparison.OrdinalIgnoreCase))
+                    {
+                        using var requestDoc = JsonDocument.Parse(request.Body);
+                        requestedProfile = requestDoc.RootElement.GetProperty("profile").GetString() ?? "current";
+                    }
+
+                    return ProfileJson();
+                }
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-tx-output-headroom-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-BaseUrl", server.BaseUrl,
+                "-AllowTransmit",
+                "-WatchScriptPath", watcherPath,
+                "-Samples", "2",
+                "-IntervalMs", "1",
+                "-TimeoutSec", "2",
+                "-OutputRoot", outputRoot);
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            var summaryPath = root.GetProperty("summaryPath").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(summaryPath));
+            Assert.True(File.Exists(summaryPath), run.CombinedOutput);
+            Assert.StartsWith(outputRoot, summaryPath, StringComparison.OrdinalIgnoreCase);
+            Assert.True(root.GetProperty("allowTransmit").GetBoolean());
+            Assert.True(root.GetProperty("noKeyingByScript").GetBoolean());
+            Assert.False(root.GetProperty("expectPureSignalBypass").GetBoolean());
+            Assert.True(root.GetProperty("liveReadinessBefore").GetProperty("ready").GetBoolean());
+
+            var currentReady = root.GetProperty("currentProfileReady");
+            Assert.True(currentReady.GetProperty("ready").GetBoolean(), run.CombinedOutput);
+            Assert.Equal("current", currentReady.GetProperty("activeProfile").GetString());
+
+            var candidateReady = root.GetProperty("candidateProfileReady");
+            Assert.True(candidateReady.GetProperty("ready").GetBoolean(), run.CombinedOutput);
+            Assert.Equal("headroom-trim-candidate", candidateReady.GetProperty("profile").GetString());
+            Assert.Equal("headroom-trim-candidate", candidateReady.GetProperty("activeProfile").GetString());
+            Assert.False(candidateReady.GetProperty("pureSignalBypassActive").GetBoolean());
+
+            var candidate = root.GetProperty("candidate");
+            Assert.Equal(2, candidate.GetProperty("okSampleCount").GetInt32());
+            Assert.Equal(2, candidate.GetProperty("runtimeEvidenceSampleCount").GetInt32());
+            Assert.Equal(2, candidate.GetProperty("txMonitorSampleCount").GetInt32());
+            Assert.Equal(2, candidate.GetProperty("experimentalSampleCount").GetInt32());
+            Assert.Equal(0, candidate.GetProperty("pureSignalBypassedSampleCount").GetInt32());
+            Assert.Contains(
+                candidate.GetProperty("activeProfileCounts").EnumerateArray(),
+                count => count.GetProperty("name").GetString() == "headroom-trim-candidate"
+                    && count.GetProperty("count").GetInt32() == 2);
+            Assert.True(File.Exists(candidate.GetProperty("reportPath").GetString()));
+            Assert.True(File.Exists(candidate.GetProperty("jsonlPath").GetString()));
+
+            var reset = root.GetProperty("resetToCurrent");
+            Assert.True(reset.GetProperty("ready").GetBoolean(), run.CombinedOutput);
+            Assert.Equal("current", reset.GetProperty("activeProfile").GetString());
+            Assert.False(reset.GetProperty("pureSignalBypassActive").GetBoolean());
+
+            var putBodies = server.Requests
+                .Where(request => request.Method == "PUT" && request.Path == profileEndpoint)
+                .Select(request => request.Body)
+                .ToArray();
+            Assert.Contains(putBodies, body => body.Contains("headroom-trim-candidate", StringComparison.Ordinal));
+            Assert.Contains(putBodies, body => body.Contains("current", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task TxOutputHeadroomAbCaptureAcceptsExpectedPureSignalBypass()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell TX PureSignal-bypass profile smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-tx-headroom-puresignal-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        var watcherPath = Path.Combine(outputRoot, "fake-watch-dsp-live-diagnostics.ps1");
+        const string profileEndpoint = "/api/dsp/tx-output-headroom-profile";
+
+        try
+        {
+            await WriteTxOutputHeadroomAbFakeWatcherAsync(watcherPath, pureSignalBypassed: true);
+
+            var gate = new object();
+            var requestedProfile = "current";
+
+            string ProfileJson()
+            {
+                var candidateRequested = !string.Equals(requestedProfile, "current", StringComparison.OrdinalIgnoreCase);
+                return JsonSerializer.Serialize(new
+                {
+                    profile = requestedProfile,
+                    activeProfile = candidateRequested ? "current" : requestedProfile,
+                    defaultProfile = "current",
+                    supportedProfiles = new[] { "current", "headroom-trim-candidate" },
+                    experimental = candidateRequested,
+                    trimDb = candidateRequested ? 0.0 : 0.0,
+                    pureSignalBypassActive = candidateRequested
+                }, CamelCaseJson);
+            }
+
+            using var server = JsonRouteServer.Start(request =>
+            {
+                if (string.Equals(request.Path, "/api/dsp/live-diagnostics", StringComparison.Ordinal))
+                {
+                    return TxHeadroomLiveDiagnosticsJson();
+                }
+
+                if (!string.Equals(request.Path, profileEndpoint, StringComparison.Ordinal))
+                {
+                    return null;
+                }
+
+                lock (gate)
+                {
+                    if (string.Equals(request.Method, "PUT", StringComparison.OrdinalIgnoreCase))
+                    {
+                        using var requestDoc = JsonDocument.Parse(request.Body);
+                        requestedProfile = requestDoc.RootElement.GetProperty("profile").GetString() ?? "current";
+                    }
+
+                    return ProfileJson();
+                }
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-tx-output-headroom-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-BaseUrl", server.BaseUrl,
+                "-AllowTransmit",
+                "-ExpectPureSignalBypass",
+                "-WatchScriptPath", watcherPath,
+                "-Samples", "2",
+                "-IntervalMs", "1",
+                "-TimeoutSec", "2",
+                "-OutputRoot", outputRoot);
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+
+            using var stdoutDoc = JsonDocument.Parse(run.StandardOutput);
+            var root = stdoutDoc.RootElement;
+            Assert.True(root.GetProperty("expectPureSignalBypass").GetBoolean());
+
+            var candidateReady = root.GetProperty("candidateProfileReady");
+            Assert.True(candidateReady.GetProperty("ready").GetBoolean(), run.CombinedOutput);
+            Assert.Equal("headroom-trim-candidate", candidateReady.GetProperty("profile").GetString());
+            Assert.Equal("current", candidateReady.GetProperty("activeProfile").GetString());
+            Assert.True(candidateReady.GetProperty("pureSignalBypassActive").GetBoolean());
+            Assert.True(candidateReady.GetProperty("pureSignalBypassAligned").GetBoolean());
+
+            var candidate = root.GetProperty("candidate");
+            Assert.Equal(2, candidate.GetProperty("experimentalSampleCount").GetInt32());
+            Assert.Equal(2, candidate.GetProperty("pureSignalBypassedSampleCount").GetInt32());
+            Assert.Contains(
+                candidate.GetProperty("activeProfileCounts").EnumerateArray(),
+                count => count.GetProperty("name").GetString() == "current"
+                    && count.GetProperty("count").GetInt32() == 2);
+
+            var reset = root.GetProperty("resetToCurrent");
+            Assert.True(reset.GetProperty("ready").GetBoolean(), run.CombinedOutput);
+            Assert.Equal("current", reset.GetProperty("activeProfile").GetString());
+            Assert.False(reset.GetProperty("pureSignalBypassActive").GetBoolean());
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
     }
 
     [SkippableFact]
@@ -5549,7 +11523,9 @@ public sealed class DspModernizationValidationToolTests
             };
             var pureSignalCommandSteps = new[]
             {
-                "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\summarize-dsp-puresignal-bench.ps1 -BundleDir \"$bundleDir\" -DisabledTracePath \"$bundleDir\\artifacts\\puresignal-disabled.json\" -EnabledTracePath \"$bundleDir\\artifacts\\puresignal-enabled.json\" -ReportPath \"$bundleDir\\artifacts\\puresignal-safe-bypass-report.json\" -Force"
+                "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\capture-dsp-puresignal-bench-trace.ps1 -BaseUrl http://127.0.0.1:6070 -Mode disabled -Samples 12 -IntervalMs 500 -RequireLiveReady -OutputPath \"$bundleDir\\artifacts\\puresignal-disabled.json\"",
+                "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\capture-dsp-puresignal-bench-trace.ps1 -BaseUrl http://127.0.0.1:6070 -Mode enabled -Samples 12 -IntervalMs 500 -RequireLiveReady -OutputPath \"$bundleDir\\artifacts\\puresignal-enabled.json\"",
+                "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\summarize-dsp-puresignal-bench.ps1 -BundleDir \"$bundleDir\" -DisabledTracePath \"$bundleDir\\artifacts\\puresignal-disabled.json\" -EnabledTracePath \"$bundleDir\\artifacts\\puresignal-enabled.json\" -ReportPath \"$bundleDir\\artifacts\\puresignal-safe-bypass-report.json\" -RequireLiveReadinessEvidence -Force"
             };
             var pureSignalExpectedArtifacts = new[]
             {
@@ -5640,7 +11616,7 @@ public sealed class DspModernizationValidationToolTests
                             commandTemplate = pureSignalCommandSteps[0],
                             commandStepCount = pureSignalCommandSteps.Length,
                             commandSteps = pureSignalCommandSteps,
-                            manualAction = "On G2, capture TX/PureSignal bench traces with PureSignal disabled/bypassed and enabled before running the summary command. Do not route external DSP/ML, TX monitor audio, or default profile changes into the PureSignal feedback path.",
+                            manualAction = "Run the disabled capture with PureSignal manually disabled, then run the enabled capture only after the operator manually enables PureSignal and controls a safe TX bench window. These commands only read diagnostics; they never key MOX/TUN/two-tone or toggle PureSignal. Do not route external DSP/ML, TX monitor audio, or default profile changes into the PureSignal feedback path.",
                             expectedArtifact = "artifacts/puresignal-safe-bypass-report.json",
                             expectedArtifactCount = pureSignalExpectedArtifacts.Length,
                             expectedArtifacts = pureSignalExpectedArtifacts,
@@ -5799,7 +11775,7 @@ public sealed class DspModernizationValidationToolTests
                 triagePureSignalSafeBypassCommandTemplate = pureSignalCommandSteps[0],
                 triagePureSignalSafeBypassCommandStepCount = pureSignalCommandSteps.Length,
                 triagePureSignalSafeBypassCommandSteps = pureSignalCommandSteps,
-                triagePureSignalSafeBypassManualAction = "On G2, capture TX/PureSignal bench traces with PureSignal disabled/bypassed and enabled before running the summary command. Do not route external DSP/ML, TX monitor audio, or default profile changes into the PureSignal feedback path.",
+                triagePureSignalSafeBypassManualAction = "Run the disabled capture with PureSignal manually disabled, then run the enabled capture only after the operator manually enables PureSignal and controls a safe TX bench window. These commands only read diagnostics; they never key MOX/TUN/two-tone or toggle PureSignal. Do not route external DSP/ML, TX monitor audio, or default profile changes into the PureSignal feedback path.",
                 triagePureSignalSafeBypassExpectedArtifact = "artifacts/puresignal-safe-bypass-report.json",
                 triagePureSignalSafeBypassExpectedArtifactCount = pureSignalExpectedArtifacts.Length,
                 triagePureSignalSafeBypassExpectedArtifacts = pureSignalExpectedArtifacts,
@@ -5870,12 +11846,23 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal("tx-puresignal", validationRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassActionCategory").GetString());
             Assert.False(validationRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassActionRequired").GetBoolean());
             Assert.True(validationRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassActionManual").GetBoolean());
-            Assert.Equal(1, validationRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassCommandStepCount").GetInt32());
+            Assert.Equal(3, validationRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassCommandStepCount").GetInt32());
             Assert.Equal(1, validationRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassExpectedArtifactCount").GetInt32());
             Assert.Contains(
                 validationRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassCommandSteps").EnumerateArray(),
-                step => (step.GetString() ?? "").Contains("summarize-dsp-puresignal-bench.ps1", StringComparison.Ordinal));
-            Assert.Contains("PureSignal disabled", validationRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassManualAction").GetString(), StringComparison.Ordinal);
+                step => (step.GetString() ?? "").Contains("capture-dsp-puresignal-bench-trace.ps1", StringComparison.Ordinal)
+                    && (step.GetString() ?? "").Contains("-Mode disabled", StringComparison.Ordinal)
+                    && (step.GetString() ?? "").Contains("-RequireLiveReady", StringComparison.Ordinal));
+            Assert.Contains(
+                validationRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassCommandSteps").EnumerateArray(),
+                step => (step.GetString() ?? "").Contains("capture-dsp-puresignal-bench-trace.ps1", StringComparison.Ordinal)
+                    && (step.GetString() ?? "").Contains("-Mode enabled", StringComparison.Ordinal)
+                    && (step.GetString() ?? "").Contains("-RequireLiveReady", StringComparison.Ordinal));
+            Assert.Contains(
+                validationRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassCommandSteps").EnumerateArray(),
+                step => (step.GetString() ?? "").Contains("summarize-dsp-puresignal-bench.ps1", StringComparison.Ordinal)
+                    && (step.GetString() ?? "").Contains("-RequireLiveReadinessEvidence", StringComparison.Ordinal));
+            Assert.Contains("disabled capture", validationRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassManualAction").GetString(), StringComparison.Ordinal);
             Assert.Contains("defaultBehaviorChangeApproved remains false", validationRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassFollowUp").GetString(), StringComparison.Ordinal);
 
             var warningCodes = validationRoot
@@ -5921,7 +11908,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(summaryRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassActionPresent").GetBoolean());
             Assert.Equal("capture-puresignal-safe-bypass-bench", summaryRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassActionId").GetString());
             Assert.Equal("tx-puresignal", summaryRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassActionCategory").GetString());
-            Assert.Equal(1, summaryRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassCommandStepCount").GetInt32());
+            Assert.Equal(3, summaryRoot.GetProperty("liveAcceptanceCycleTriagePureSignalSafeBypassCommandStepCount").GetInt32());
 
             var markdown = await File.ReadAllTextAsync(summaryMarkdown);
             Assert.Contains("Triage external DSP/ML bakeoff action", markdown, StringComparison.Ordinal);
@@ -5930,7 +11917,10 @@ public sealed class DspModernizationValidationToolTests
             Assert.Contains("post-demod", markdown, StringComparison.Ordinal);
             Assert.Contains("Triage PureSignal safe-bypass action", markdown, StringComparison.Ordinal);
             Assert.Contains("capture-puresignal-safe-bypass-bench", markdown, StringComparison.Ordinal);
+            Assert.Contains("capture-dsp-puresignal-bench-trace.ps1", markdown, StringComparison.Ordinal);
+            Assert.Contains("-RequireLiveReady", markdown, StringComparison.Ordinal);
             Assert.Contains("summarize-dsp-puresignal-bench.ps1", markdown, StringComparison.Ordinal);
+            Assert.Contains("-RequireLiveReadinessEvidence", markdown, StringComparison.Ordinal);
 
             var staleSummary = JsonNode.Parse(await File.ReadAllTextAsync(summaryPath))?.AsObject()
                 ?? throw new InvalidOperationException("Could not parse live acceptance summary.");
@@ -6434,6 +12424,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.False(liveAcceptanceCycleSummary.GetProperty("required").GetBoolean());
             Assert.Equal("live-acceptance-cycle-summary-json", liveAcceptanceCycleSummary.GetProperty("kind").GetString());
             Assert.Equal("artifacts/live-acceptance-cycle-summary.json", liveAcceptanceCycleSummary.GetProperty("path").GetString());
+            AssertRxLevelerAbLiveComparisonArtifact(artifacts);
 
             Assert.DoesNotContain(
                 artifacts,
@@ -6467,6 +12458,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.DoesNotContain(unexpectedArtifactWarnings, message => message.Contains("live-diagnostics-matrix-report-off-baseline", StringComparison.Ordinal));
             Assert.DoesNotContain(unexpectedArtifactWarnings, message => message.Contains("live-diagnostics-history", StringComparison.Ordinal));
             Assert.DoesNotContain(unexpectedArtifactWarnings, message => message.Contains("live-acceptance-cycle-summary", StringComparison.Ordinal));
+            Assert.DoesNotContain(unexpectedArtifactWarnings, message => message.Contains("rx-leveler-ab-live-comparison", StringComparison.Ordinal));
 
             var summaryReport = Path.Combine(bundleDir, "validation-summary.json");
             var summaryMarkdown = Path.Combine(bundleDir, "validation-summary.md");
@@ -6666,6 +12658,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal("tools/run-dsp-g2-rx-peak-hunt.ps1", g2RxPeakHuntReport.GetProperty("source").GetString());
             Assert.Equal("artifacts/g2-rx-peak-hunt-report.json", g2RxPeakHuntReport.GetProperty("path").GetString());
             Assert.Equal(new[] { "candidate-under-test" }, ReadStringArray(g2RxPeakHuntReport, "comparisonIds"));
+            AssertRxLevelerAbLiveComparisonArtifact(artifacts);
 
             Assert.DoesNotContain(
                 artifacts,
@@ -9711,13 +15704,421 @@ public sealed class DspModernizationValidationToolTests
                 new { id = "benchmark-plan-json", kind = "endpoint-json", required = false },
                 new { id = "wdsp-native-symbol-audit", kind = "symbol-audit-json", required = false },
                 new { id = "wdsp-runtime-artifact-audit", kind = "runtime-audit-json", required = false },
-                new { id = "offline-fixture-metrics", kind = "metrics-json", required = false }
+                new { id = "offline-fixture-metrics", kind = "metrics-json", required = false },
+                new
+                {
+                    id = "rx-audio-leveler-fixture-benchmark",
+                    kind = "metrics-json",
+                    source = "tools/run-dsp-rx-leveler-fixture-benchmark.ps1",
+                    required = false,
+                    scenarioIds = new[] { "ssb-syllable-step", "near-target-speech", "sustained-weak-speech", "strong-after-weak" }
+                }
             }
         };
 
         File.WriteAllText(
             Path.Combine(bundleDir, "benchmark-capture-manifest.json"),
             JsonSerializer.Serialize(captureManifest, CamelCaseJson));
+    }
+
+    private static void WriteRxLevelerAbLiveComparisonArtifactManifest(string bundleDir, bool includeFixtureBenchmark = false)
+    {
+        Directory.CreateDirectory(Path.Combine(bundleDir, "artifacts"));
+
+        var fixtureArtifact = new
+        {
+            id = "rx-audio-leveler-fixture-benchmark",
+            kind = "metrics-json",
+            source = "tools/run-dsp-rx-leveler-fixture-benchmark.ps1",
+            path = "artifacts/rx-audio-leveler-fixture-benchmark.json",
+            required = false,
+            scenarioIds = new[] { "ssb-syllable-step", "near-target-speech", "sustained-weak-speech", "strong-after-weak" }
+        };
+        var liveComparisonArtifact = new
+        {
+            id = "rx-leveler-ab-live-comparison",
+            kind = "rx-leveler-ab-comparison-json",
+            source = "tools/summarize-dsp-rx-leveler-ab.ps1",
+            path = "artifacts/rx-leveler-ab-live-comparison.json",
+            required = false,
+            scenarioIds = new[] { "rx-audio-leveler-passband" },
+            comparisonIds = new[] { "current-zeus", "candidate-under-test" }
+        };
+        var manifest = new
+        {
+            schemaVersion = 1,
+            artifacts = includeFixtureBenchmark
+                ? new object[] { fixtureArtifact, liveComparisonArtifact }
+                : new object[] { liveComparisonArtifact }
+        };
+
+        File.WriteAllText(
+            Path.Combine(bundleDir, "artifact-manifest.json"),
+            JsonSerializer.Serialize(manifest, CamelCaseJson));
+    }
+
+    private static void WriteRxLevelerAbLiveComparisonReport(string bundleDir, bool promotionReady)
+    {
+        var report = new
+        {
+            schemaVersion = 1,
+            tool = "compare-dsp-live-diagnostics-traces",
+            readyForReview = true,
+            regressionCount = 0,
+            hardConstraintRegressionCount = 0,
+            gateFailureCount = 0,
+            missingMetricValueCount = 0,
+            candidateComparisonCount = 1,
+            bundleRelativePaths = true,
+            baselinePath = "rx-leveler-ab/current/live-diagnostics-summary.json",
+            candidatePath = "rx-leveler-ab/stable-speech-candidate/live-diagnostics-summary.json",
+            reportPath = "artifacts/rx-leveler-ab-live-comparison.json",
+            baselineLabel = "current-zeus",
+            candidateLabel = "candidate-under-test",
+            rxLevelerAbSource = new
+            {
+                summaryPath = "rx-leveler-ab/rx-leveler-ab-summary.json",
+                wrapperSummaryPath = (string?)null,
+                currentInputPath = "rx-leveler-ab/current/live-diagnostics-summary.json",
+                candidateInputPath = "rx-leveler-ab/stable-speech-candidate/live-diagnostics-summary.json"
+            },
+            rxLevelerAbActiveAudioReady = true,
+            rxLevelerAbPassbandEvidenceReady = true,
+            rxLevelerAbCandidateControlMemoryReady = true,
+            rxLevelerAbOptimizationReady = true,
+            rxLevelerAbPromotionReady = promotionReady,
+            rxLevelerAbEvidenceStatus = "ready",
+            rxLevelerAbPassbandEvidence = new
+            {
+                ready = true,
+                status = "ready",
+                baselinePassbandPeakSampleCount = 3,
+                candidatePassbandPeakSampleCount = 3
+            },
+            rxLevelerAbCandidateControlMemoryEvidence = new
+            {
+                ready = true,
+                status = "control-memory-inactive"
+            },
+            rxLevelerAbOptimizationEvidence = new
+            {
+                ready = true,
+                status = "optimization-ready",
+                materialImprovementCount = 1,
+                regressionCount = 0
+            }
+        };
+
+        File.WriteAllText(
+            Path.Combine(bundleDir, "artifacts", "rx-leveler-ab-live-comparison.json"),
+            JsonSerializer.Serialize(report, CamelCaseJson));
+    }
+
+    private static void WriteLifecycleScopeBundle(string bundleDir)
+    {
+        var plan = WithoutExternalEngineBakeoff(DspBenchmarkPlanCatalog.Build());
+        File.WriteAllText(
+            Path.Combine(bundleDir, "benchmark-plan.json"),
+            JsonSerializer.Serialize(plan, CamelCaseJson));
+
+        File.WriteAllText(
+            Path.Combine(bundleDir, "bundle-index.json"),
+            """
+            {
+              "schemaVersion": 1,
+              "endpoints": [
+                { "id": "benchmark-plan", "file": "benchmark-plan.json", "required": true, "ok": true },
+                { "id": "benchmark-capture-manifest", "file": "benchmark-capture-manifest.json", "required": true, "ok": true }
+              ],
+              "requiredFailures": []
+            }
+            """);
+
+        var captureManifest = new
+        {
+            schemaVersion = 1,
+            hardwareTarget = plan.FirstHardwareTarget,
+            scenarioIds = new[] { "wdsp-channel-lifecycle" },
+            requiredComparisons = plan.RequiredComparisons,
+            requiredArtifacts = new object[]
+            {
+                new { id = "live-diagnostics-json", kind = "endpoint-json", required = false },
+                new { id = "benchmark-plan-json", kind = "endpoint-json", required = false },
+                new { id = "wdsp-native-symbol-audit", kind = "symbol-audit-json", required = false },
+                new { id = "wdsp-runtime-artifact-audit", kind = "runtime-audit-json", required = false },
+                new { id = "offline-fixture-metrics", kind = "metrics-json", required = false },
+                new
+                {
+                    id = "wdsp-channel-lifecycle-report",
+                    kind = "wdsp-channel-lifecycle-json",
+                    source = "tools/run-dsp-wdsp-channel-lifecycle.ps1",
+                    purpose = "Exercise Zeus WdspDspEngine lifecycle state transitions.",
+                    cadence = "once-per-native-build-and-lifecycle-candidate",
+                    required = true,
+                    scenarioIds = new[] { "wdsp-channel-lifecycle" }
+                }
+            }
+        };
+
+        File.WriteAllText(
+            Path.Combine(bundleDir, "benchmark-capture-manifest.json"),
+            JsonSerializer.Serialize(captureManifest, CamelCaseJson));
+    }
+
+    private static void WriteTxFixtureScopeBundle(string bundleDir)
+    {
+        var plan = WithoutExternalEngineBakeoff(DspBenchmarkPlanCatalog.Build());
+        File.WriteAllText(
+            Path.Combine(bundleDir, "benchmark-plan.json"),
+            JsonSerializer.Serialize(plan, CamelCaseJson));
+
+        File.WriteAllText(
+            Path.Combine(bundleDir, "bundle-index.json"),
+            """
+            {
+              "schemaVersion": 1,
+              "endpoints": [
+                { "id": "benchmark-plan", "file": "benchmark-plan.json", "required": true, "ok": true },
+                { "id": "benchmark-capture-manifest", "file": "benchmark-capture-manifest.json", "required": true, "ok": true }
+              ],
+              "requiredFailures": []
+            }
+            """);
+
+        var captureManifest = new
+        {
+            schemaVersion = 1,
+            hardwareTarget = plan.FirstHardwareTarget,
+            scenarioIds = new[] { "tx-two-tone", "tx-voice-like" },
+            requiredComparisons = plan.RequiredComparisons,
+            requiredArtifacts = new object[]
+            {
+                new { id = "live-diagnostics-json", kind = "endpoint-json", required = false },
+                new { id = "benchmark-plan-json", kind = "endpoint-json", required = false },
+                new { id = "wdsp-native-symbol-audit", kind = "native-audit-json", required = false },
+                new { id = "wdsp-runtime-artifact-audit", kind = "runtime-audit-json", required = false },
+                new { id = "offline-fixture-metrics", kind = "metrics-json", source = "offline-dsp-benchmark-harness", required = true, scenarioIds = new[] { "tx-two-tone", "tx-voice-like" } },
+                new
+                {
+                    id = "tx-fixture-safety-report",
+                    kind = "tx-fixture-safety-report-json",
+                    source = "tools/summarize-dsp-tx-fixture-safety.ps1",
+                    purpose = "Summarize WDSP TX fixture safety.",
+                    cadence = "once-after-wdsp-offline-fixture-matrix-tx-scenarios",
+                    required = true,
+                    scenarioIds = new[] { "tx-two-tone", "tx-voice-like" }
+                },
+                new
+                {
+                    id = "tx-output-headroom-ab-trace",
+                    kind = "diagnostics-ab-summary-json",
+                    source = "tools/capture-tx-output-headroom-ab.ps1",
+                    purpose = "Capture guarded current-vs-headroom-trim-candidate TX output headroom live diagnostics windows without keying TX from the script.",
+                    cadence = "once-per-tx-output-headroom-candidate-live-window",
+                    required = false,
+                    scenarioIds = new[] { "tx-two-tone", "tx-voice-like" }
+                }
+            }
+        };
+
+        File.WriteAllText(
+            Path.Combine(bundleDir, "benchmark-capture-manifest.json"),
+            JsonSerializer.Serialize(captureManifest, CamelCaseJson));
+    }
+
+    private static void WriteTxOutputHeadroomAbArtifactManifest(string bundleDir, bool required)
+    {
+        Directory.CreateDirectory(Path.Combine(bundleDir, "artifacts"));
+
+        var manifest = new
+        {
+            schemaVersion = 1,
+            artifacts = new object[]
+            {
+                new
+                {
+                    id = "tx-output-headroom-ab-trace",
+                    kind = "diagnostics-ab-summary-json",
+                    source = "tools/capture-tx-output-headroom-ab.ps1",
+                    path = "artifacts/tx-output-headroom-ab-trace.json",
+                    required,
+                    scenarioIds = new[] { "tx-two-tone", "tx-voice-like" }
+                }
+            }
+        };
+
+        File.WriteAllText(
+            Path.Combine(bundleDir, "artifact-manifest.json"),
+            JsonSerializer.Serialize(manifest, CamelCaseJson));
+    }
+
+    private static void WriteTxOutputHeadroomAbTrace(
+        string bundleDir,
+        bool preflightOnly,
+        bool includeTxSamples,
+        bool includeWatcherSummaries = true,
+        int? candidateWatcherExperimentalSampleCount = null,
+        string? candidateWatcherActiveProfile = null)
+    {
+        var path = Path.Combine(bundleDir, "artifacts", "tx-output-headroom-ab-trace.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        const string currentReportPath = "artifacts/tx-output-headroom-ab/current/live-diagnostics-summary.json";
+        const string candidateReportPath = "artifacts/tx-output-headroom-ab/candidate/live-diagnostics-summary.json";
+        var txSampleCount = includeTxSamples ? 2 : 0;
+
+        object trace = preflightOnly
+            ? new
+            {
+                schemaVersion = 1,
+                tool = "capture-tx-output-headroom-ab",
+                mode = "preflight-only",
+                ready = true,
+                failures = Array.Empty<string>(),
+                noKeyingByScript = true,
+                allowTransmit = false,
+                requiresLiveReady = true,
+                liveReadiness = new
+                {
+                    ready = true,
+                    status = "ready-for-live-benchmark",
+                    readyForLiveBenchmark = true,
+                    wdspActive = true,
+                    frontendSceneFresh = true,
+                    runtimeStatus = "fresh",
+                    radioVfoHz = 14260000,
+                    radioMode = "USB"
+                },
+                profile = new
+                {
+                    profile = "current",
+                    activeProfile = "current",
+                    defaultProfile = "current",
+                    supportedProfiles = new[] { "current", "headroom-trim-candidate" },
+                    experimental = false,
+                    trimDb = 0.0,
+                    pureSignalBypassActive = false
+                },
+                candidateProfile = "headroom-trim-candidate"
+            }
+            : new
+            {
+                schemaVersion = 1,
+                tool = "capture-tx-output-headroom-ab",
+                noKeyingByScript = true,
+                allowTransmit = true,
+                expectPureSignalBypass = false,
+                profileBefore = new
+                {
+                    profile = "current",
+                    activeProfile = "current",
+                    defaultProfile = "current",
+                    supportedProfiles = new[] { "current", "headroom-trim-candidate" },
+                    experimental = false,
+                    trimDb = 0.0,
+                    pureSignalBypassActive = false
+                },
+                currentProfileReady = new
+                {
+                    ready = true,
+                    profile = "current",
+                    activeProfile = "current",
+                    pureSignalBypassActive = false
+                },
+                candidateProfileReady = new
+                {
+                    ready = true,
+                    profile = "headroom-trim-candidate",
+                    activeProfile = "headroom-trim-candidate",
+                    pureSignalBypassActive = false
+                },
+                current = new
+                {
+                    reportPath = currentReportPath,
+                    readyForBenchmarkTrace = true,
+                    okSampleCount = 2,
+                    runtimeEvidenceSampleCount = 2,
+                    txMonitorSampleCount = txSampleCount,
+                    experimentalSampleCount = 0,
+                    pureSignalBypassedSampleCount = 0
+                },
+                candidate = new
+                {
+                    reportPath = candidateReportPath,
+                    readyForBenchmarkTrace = true,
+                    okSampleCount = 2,
+                    runtimeEvidenceSampleCount = 2,
+                    txMonitorSampleCount = txSampleCount,
+                    experimentalSampleCount = txSampleCount,
+                    pureSignalBypassedSampleCount = 0
+                },
+                resetToCurrent = new
+                {
+                    ready = true,
+                    profile = "current",
+                    activeProfile = "current",
+                    pureSignalBypassActive = false
+                }
+            };
+
+        File.WriteAllText(path, JsonSerializer.Serialize(trace, CamelCaseJson));
+
+        if (!preflightOnly && includeWatcherSummaries)
+        {
+            WriteTxOutputHeadroomWatcherSummary(
+                bundleDir,
+                currentReportPath,
+                okSampleCount: 2,
+                runtimeEvidenceSampleCount: 2,
+                txMonitorSampleCount: txSampleCount,
+                experimentalSampleCount: 0,
+                pureSignalBypassedSampleCount: 0,
+                requestedProfile: "current",
+                activeProfile: "current");
+            WriteTxOutputHeadroomWatcherSummary(
+                bundleDir,
+                candidateReportPath,
+                okSampleCount: 2,
+                runtimeEvidenceSampleCount: 2,
+                txMonitorSampleCount: txSampleCount,
+                experimentalSampleCount: candidateWatcherExperimentalSampleCount ?? txSampleCount,
+                pureSignalBypassedSampleCount: 0,
+                requestedProfile: "headroom-trim-candidate",
+                activeProfile: candidateWatcherActiveProfile ?? "headroom-trim-candidate");
+        }
+    }
+
+    private static void WriteTxOutputHeadroomWatcherSummary(
+        string bundleDir,
+        string reportPath,
+        int okSampleCount,
+        int runtimeEvidenceSampleCount,
+        int txMonitorSampleCount,
+        int experimentalSampleCount,
+        int pureSignalBypassedSampleCount,
+        string requestedProfile,
+        string activeProfile)
+    {
+        var resolvedReportPath = Path.Combine(bundleDir, reportPath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(resolvedReportPath)!);
+
+        var summary = new
+        {
+            schemaVersion = 1,
+            tool = "watch-dsp-live-diagnostics",
+            readyForBenchmarkTrace = true,
+            okSampleCount,
+            runtimeEvidenceSampleCount,
+            txMonitorSampleCount,
+            txOutputHeadroomWatch = new
+            {
+                experimentalSampleCount,
+                pureSignalBypassedSampleCount,
+                requestedProfileCounts = new[] { new { name = requestedProfile, count = okSampleCount } },
+                activeProfileCounts = new[] { new { name = activeProfile, count = okSampleCount } }
+            }
+        };
+
+        File.WriteAllText(resolvedReportPath, JsonSerializer.Serialize(summary, CamelCaseJson));
     }
 
     private static DspBenchmarkPlanDto WithoutExternalEngineBakeoff(DspBenchmarkPlanDto plan) =>
@@ -9770,7 +16171,7 @@ public sealed class DspModernizationValidationToolTests
                 new { id = "wdsp-native-symbol-audit", kind = "native-audit-json", source = "tools/audit-wdsp-native-symbols.ps1", required = false, scenarioIds = new[] { "tx-puresignal-safe-bypass" } },
                 new { id = "wdsp-runtime-artifact-audit", kind = "runtime-audit-json", source = "tools/audit-wdsp-runtime-artifacts.ps1", required = false, scenarioIds = new[] { "tx-puresignal-safe-bypass" } },
                 new { id = "offline-fixture-metrics", kind = "metrics-json", source = "offline-dsp-benchmark-harness", required = false, scenarioIds = new[] { "tx-puresignal-safe-bypass" } },
-                new { id = "puresignal-feedback-trace", kind = "trace", source = "g2-tx-feedback", required = true, scenarioIds = new[] { "tx-puresignal-safe-bypass" } },
+                new { id = "puresignal-feedback-trace", kind = "trace", source = "tools/capture-dsp-puresignal-bench-trace.ps1", required = true, scenarioIds = new[] { "tx-puresignal-safe-bypass" } },
                 new
                 {
                     id = "puresignal-safe-bypass-report",
@@ -9821,7 +16222,8 @@ public sealed class DspModernizationValidationToolTests
         bool enabled,
         double feedbackStability,
         double txMonitorCoupling,
-        int clippingCount)
+        int clippingCount,
+        bool liveReady = false)
     {
         var path = Path.Combine(bundleDir, relativePath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -9829,6 +16231,21 @@ public sealed class DspModernizationValidationToolTests
         var trace = new
         {
             mode = enabled ? "enabled" : "disabled",
+            requiresLiveReady = liveReady,
+            liveReadinessBefore = liveReady
+                ? new
+                {
+                    ready = true,
+                    status = "ready-for-live-benchmark",
+                    readyForLiveBenchmark = true,
+                    wdspActive = true,
+                    frontendSceneFresh = true,
+                    runtimeStatus = "fresh",
+                    radioVfoHz = 14260000,
+                    radioMode = "USB",
+                    failureReasons = Array.Empty<string>()
+                }
+                : null,
             pureSignal = new
             {
                 pureSignalEnabled = enabled,
@@ -9865,6 +16282,160 @@ public sealed class DspModernizationValidationToolTests
             liveDiagnosticsHistoryLiveExperimentCoverageStatus = coverageStatus,
             liveDiagnosticsHistoryLiveExperimentCoverageMissingComparisonCount = missingComparisonCount,
             liveDiagnosticsHistoryLiveExperimentCoverageMissingComparisonIds = missingComparisonIds
+        };
+
+        File.WriteAllText(path, JsonSerializer.Serialize(report, CamelCaseJson));
+    }
+
+    private static void WriteSyntheticG2ReadyCrossRadioMissingValidationReport(string path)
+    {
+        var report = new
+        {
+            ok = true,
+            errorCount = 0,
+            warningCount = 0,
+            errors = Array.Empty<object>(),
+            warnings = Array.Empty<object>(),
+            artifactReferencedFiles = Array.Empty<object>(),
+            hardwareEvidenceStatus = "g2-hardware-evidence-ready",
+            hardwareTarget = "G2",
+            captureHardwareTarget = "G2",
+            hardwareDiagnosticsPresent = true,
+            nativeSymbolAuditReady = true,
+            nativeSymbolAuditPresent = true,
+            nativeSymbolAuditImportedSymbolCount = 165,
+            nativeSymbolAuditSourceMissingRequiredCount = 0,
+            nativeSymbolAuditSignatureMismatchCount = 0,
+            nativeSymbolAuditBinaryMissingRequiredCount = 0,
+            nativeRuntimeArtifactAuditPresent = true,
+            nativeRuntimeArtifactAuditReadyForWinX64Package = true,
+            nativeRuntimeArtifactAuditArtifactCount = 1,
+            nativeRuntimeArtifactAuditPendingRidCount = 0,
+            nativeRuntimeArtifactAuditWinX64NativeSha256 = ValidWdspRuntimeSha256,
+            nativeStageTimingReportPresent = true,
+            nativeStageTimingReportReady = true,
+            nativeStageTimingReportStatus = "ready",
+            nativeStageTimingRunCount = 3,
+            nativeStageTimingStageRecordCount = 9,
+            nativeStageTimingMissingStageTimingRunCount = 0,
+            nativeStageTimingMissingAllocationProbeRunCount = 0,
+            nativeStageTimingBudgetFailureCount = 0,
+            nativeStageTimingMetricsHashStatus = "match",
+            nativeStageTimingWdspRuntimeHashStatus = "match",
+            nativeStageTimingNativeCStageInstrumentationStatus = "not-instrumented",
+            nativeStageTimingNativeAllocationProbeStatus = "ready",
+            wdspSourceDriftReportPresent = true,
+            wdspSourceDriftReportReady = true,
+            wdspSourceDriftReportStatus = "ready",
+            wdspSourceDriftReportNormalizedLineEndings = true,
+            wdspSourceDriftReferenceFileCount = 2,
+            wdspSourceDriftCandidateFileCount = 2,
+            wdspSourceDriftFileCount = 2,
+            wdspSourceDriftDeltaCount = 0,
+            wdspSourceDriftLikelyDefectCount = 0,
+            benchmarkPlanStatus = "ready",
+            benchmarkPlanScenarioCount = 13,
+            benchmarkPlanRequiredAcceptanceScenarioFamilyCount = 12,
+            benchmarkPlanCoveredAcceptanceScenarioFamilyCount = 12,
+            benchmarkPlanMissingAcceptanceScenarioFamilyCount = 0,
+            benchmarkPlanMissingAcceptanceScenarioFamilyIds = Array.Empty<string>(),
+            benchmarkPlanScenarioMissingRequiredComparisonCount = 0,
+            benchmarkPlanScenarioMissingRequiredMetricCount = 0,
+            benchmarkPlanScenarioMissingAcceptanceGateCount = 0,
+            metricCatalogStatus = "ready",
+            metricCatalogMetricCount = 88,
+            metricCatalogRequiredMetricCount = 51,
+            metricCatalogMissingRequiredMetricCount = 0,
+            metricCatalogAcceptanceContractReady = true,
+            metricCatalogMissingThresholdCount = 0,
+            metricCatalogMissingComparatorCount = 0,
+            metricCatalogInvalidComparatorCount = 0,
+            metricCatalogMissingUnitCount = 0,
+            metricCatalogMissingSafetyClassCount = 0,
+            metricCatalogMissingAcceptanceScopeCount = 0,
+            metricCatalogContractProblemMetricIds = Array.Empty<string>(),
+            txFixtureSafetyReportPresent = true,
+            txFixtureSafetyReportReady = true,
+            txFixtureSafetyReportStatus = "ready",
+            txFixtureSafetyScenarioCount = 2,
+            txFixtureSafetyComparisonCount = 4,
+            txFixtureSafetyMissingScenarioCount = 0,
+            txFixtureSafetyMissingComparisonCount = 0,
+            txFixtureSafetyGateFailureCount = 0,
+            txFixtureSafetyClippingCountTotal = 0,
+            txFixtureSafetyMaxTxOutputPeakDbfs = -3.0,
+            txFixtureSafetyMaxTxAlcGainReductionDb = 2.0,
+            txFixtureSafetyMaxTxCfcGainReductionDb = 1.0,
+            txFixtureSafetyMaxTxLevelerGainReductionDb = 0.5,
+            txFixtureSafetyMetricsHashStatus = "match",
+            txFixtureSafetyWdspRuntimeHashStatus = "match",
+            metricComparisonPresent = true,
+            metricComparisonReady = true,
+            metricComparisonRegressionCount = 0,
+            metricComparisonGateFailureCount = 0,
+            metricComparisonMissingScenarioCount = 0,
+            metricComparisonMissingCurrentBaselineCount = 0,
+            metricComparisonMissingThetisBaselineCount = 0,
+            metricComparisonMissingCandidateCount = 0,
+            metricComparisonMissingMetricValueCount = 0,
+            liveTraceComparisonPresent = true,
+            liveTraceComparisonReady = true,
+            liveTraceComparisonRegressionCount = 0,
+            liveTraceComparisonGateFailureCount = 0,
+            liveTraceComparisonMissingMetricDetailCount = 0,
+            liveTraceComparisonCaptureReadinessCandidateHardGateFailCount = 0,
+            liveTraceComparisonCaptureReadinessCandidateStrictPreflightFailCount = 0,
+            liveTraceThetisComparisonPresent = true,
+            liveTraceThetisComparisonReady = true,
+            liveTraceThetisComparisonRegressionCount = 0,
+            liveTraceThetisComparisonGateFailureCount = 0,
+            liveTraceThetisComparisonCaptureReadinessCandidateHardGateFailCount = 0,
+            liveTraceThetisComparisonCaptureReadinessCandidateStrictPreflightFailCount = 0,
+            liveDiagnosticsHistoryPresent = true,
+            liveDiagnosticsHistoryReady = true,
+            liveDiagnosticsHistoryTraceSourceStatus = "hash-ready",
+            liveDiagnosticsHistoryTraceSourceCheckedCount = 4,
+            liveDiagnosticsHistoryLiveExperimentCoverageStatus = "complete",
+            liveDiagnosticsHistoryLiveExperimentCoverageMissingComparisonCount = 0,
+            liveDiagnosticsHistoryLiveExperimentCoverageMissingComparisonIds = Array.Empty<string>(),
+            liveDiagnosticsHistoryMixedWeakStrongEvidenceReady = true,
+            liveDiagnosticsHistoryMixedWeakStrongEvidenceStatus = "ready",
+            liveDiagnosticsHistoryMixedWeakStrongTraceCount = 1,
+            liveDiagnosticsHistoryMixedWeakStrongReadyTraceCount = 1,
+            liveDiagnosticsHistoryMixedWeakStrongMissingTraceCount = 0,
+            liveDiagnosticsHistoryMixedWeakStrongGapWatchTraceCount = 0,
+            externalEngineCandidateStatus = "opt-in-gated",
+            externalEngineCandidateCount = 4,
+            externalEngineCandidateMissingCount = 0,
+            externalEngineCandidateMissingIds = Array.Empty<string>(),
+            externalEngineCandidateUnsafeCount = 0,
+            externalEngineCandidateUnsafeIds = Array.Empty<string>(),
+            externalEngineCandidateIssueCounts = Array.Empty<object>(),
+            externalEngineCandidateSnapshotMismatchCount = 0,
+            externalEngineBakeoffRequiredByScope = false,
+            externalEngineBakeoffReportPresent = false,
+            externalEngineBakeoffReady = false,
+            externalEngineBakeoffMissingCandidateIds = Array.Empty<string>(),
+            externalEngineBakeoffUnsafeCandidateIds = Array.Empty<string>(),
+            externalEngineBakeoffBlockedCandidateIds = Array.Empty<string>(),
+            externalEngineBakeoffCandidateIssueCounts = Array.Empty<object>(),
+            externalEngineBakeoffScopeTriggers = Array.Empty<string>(),
+            crossRadioValidationPresent = false,
+            crossRadioValidationReady = false,
+            crossRadioValidationEvidenceStatus = "not-captured",
+            crossRadioValidationNonG2TargetCount = 0,
+            crossRadioValidationNonG2TargetIds = Array.Empty<string>(),
+            crossRadioValidationScenarioCount = 0,
+            crossRadioValidationScenarioIds = Array.Empty<string>(),
+            crossRadioValidationComparisonCount = 0,
+            crossRadioValidationComparisonIds = Array.Empty<string>(),
+            crossRadioValidationDefaultBehaviorChangeApproved = false,
+            crossRadioValidationSourceReportCount = 0,
+            crossRadioValidationSourceProblemReportCount = 0,
+            crossRadioValidationSourceWarningReportCount = 0,
+            crossRadioValidationNonG2SourceReportCount = 0,
+            crossRadioValidationReadyNonG2SourceReportCount = 0,
+            crossRadioValidationSourceBackedEvidenceReady = false
         };
 
         File.WriteAllText(path, JsonSerializer.Serialize(report, CamelCaseJson));
@@ -9966,6 +16537,259 @@ public sealed class DspModernizationValidationToolTests
             JsonSerializer.Serialize(manifest, CamelCaseJson));
     }
 
+    private static void WriteWdspChannelLifecycleArtifactManifest(string bundleDir)
+    {
+        Directory.CreateDirectory(Path.Combine(bundleDir, "artifacts"));
+
+        var manifest = new
+        {
+            schemaVersion = 1,
+            artifacts = new object[]
+            {
+                new
+                {
+                    id = "wdsp-channel-lifecycle-report",
+                    kind = "wdsp-channel-lifecycle-json",
+                    source = "tools/run-dsp-wdsp-channel-lifecycle.ps1",
+                    path = "artifacts/wdsp-channel-lifecycle-report.json",
+                    required = true,
+                    scenarioIds = new[] { "wdsp-channel-lifecycle" }
+                }
+            }
+        };
+
+        File.WriteAllText(
+            Path.Combine(bundleDir, "artifact-manifest.json"),
+            JsonSerializer.Serialize(manifest, CamelCaseJson));
+    }
+
+    private static void WriteTxFixtureArtifactManifest(string bundleDir)
+    {
+        Directory.CreateDirectory(Path.Combine(bundleDir, "artifacts"));
+
+        var manifest = new
+        {
+            schemaVersion = 1,
+            artifacts = new object[]
+            {
+                new
+                {
+                    id = "offline-fixture-metrics",
+                    kind = "metrics-json",
+                    source = "offline-dsp-benchmark-harness",
+                    path = "artifacts/offline-fixture-metrics.json",
+                    required = true,
+                    scenarioIds = new[] { "tx-two-tone", "tx-voice-like" }
+                },
+                new
+                {
+                    id = "tx-fixture-safety-report",
+                    kind = "tx-fixture-safety-report-json",
+                    source = "tools/summarize-dsp-tx-fixture-safety.ps1",
+                    path = "artifacts/tx-fixture-safety-report.json",
+                    required = true,
+                    scenarioIds = new[] { "tx-two-tone", "tx-voice-like" }
+                }
+            }
+        };
+
+        File.WriteAllText(
+            Path.Combine(bundleDir, "artifact-manifest.json"),
+            JsonSerializer.Serialize(manifest, CamelCaseJson));
+    }
+
+    private static void WriteWdspChannelLifecycleReport(
+        string bundleDir,
+        bool ready = true,
+        int meterEscapeCount = 0,
+        int nativeExceptionCount = 0,
+        int audioDrainFailureCount = 0,
+        int staleAudioAfterCloseSamples = 0,
+        int lifecycleGateFailureCount = 0,
+        bool defaultBehaviorChanged = false,
+        string runtimeSha256 = ValidWdspRuntimeSha256,
+        string runtimeStatus = "found",
+        int transitionFailureCount = 0,
+        bool stateTransitionSuccess = true)
+    {
+        var reportPath = Path.Combine(bundleDir, "artifacts", "wdsp-channel-lifecycle-report.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(reportPath)!);
+
+        var report = new
+        {
+            schemaVersion = 1,
+            tool = "run-dsp-wdsp-channel-lifecycle",
+            evidenceKind = "wdsp-channel-lifecycle-json",
+            scenarioId = "wdsp-channel-lifecycle",
+            status = ready ? "ready" : "lifecycle-gate-failed",
+            readyForReview = ready,
+            wdspRuntimeRid = "win-x64",
+            wdspRuntimeSha256 = runtimeSha256,
+            wdspRuntimeStatus = runtimeStatus,
+            cycleCount = 2,
+            transitionCount = 23,
+            transitionFailureCount,
+            stateTransitionSuccess,
+            nativeExceptionCount,
+            meterEscapeCount,
+            audioDrainSamples = 8192,
+            audioDrainFailureCount,
+            staleAudioAfterCloseSamples,
+            lifecycleGateFailureCount,
+            defaultBehaviorChanged,
+            transitions = new object[]
+            {
+                new { step = "open-rxa", ok = true },
+                new { step = "open-txa", ok = true },
+                new { step = "set-mox-on", ok = true },
+                new { step = "set-mox-off", ok = true },
+                new { step = "close-channels", ok = true },
+                new { step = "reopen-rxa", ok = true }
+            }
+        };
+
+        File.WriteAllText(reportPath, JsonSerializer.Serialize(report, CamelCaseJson));
+    }
+
+    private static void WriteTxFixtureMetrics(
+        string bundleDir,
+        bool failing = false,
+        bool missingMeters = false,
+        string runtimeSha256 = ValidWdspRuntimeSha256,
+        string runtimeStatus = "found",
+        bool includeCandidate = false,
+        bool candidateRawPeakHigh = false)
+    {
+        var metricsPath = Path.Combine(bundleDir, "artifacts", "offline-fixture-metrics.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(metricsPath)!);
+        var comparisonIds = includeCandidate
+            ? new[] { "current-zeus", "thetis-parity", "candidate-under-test" }
+            : new[] { "current-zeus", "thetis-parity" };
+
+        var metrics = new
+        {
+            schemaVersion = 1,
+            tool = "dsp-fixture-evidence",
+            evidenceEngine = "wdsp",
+            wdspRuntimeRid = "win-x64",
+            wdspRuntimeSha256 = runtimeSha256,
+            wdspRuntimeStatus = runtimeStatus,
+            scenarioCount = 2,
+            comparisonIds,
+            scenarios = new object[]
+            {
+                TxFixtureScenario("tx-two-tone", "TX two-tone", failing, missingMeters, includeCandidate, candidateRawPeakHigh),
+                TxFixtureScenario("tx-voice-like", "TX voice-like audio", failing, missingMeters, includeCandidate, candidateRawPeakHigh)
+            }
+        };
+
+        File.WriteAllText(metricsPath, JsonSerializer.Serialize(metrics, CamelCaseJson));
+    }
+
+    private static object TxFixtureScenario(
+        string scenarioId,
+        string scenarioName,
+        bool failing,
+        bool missingMeters,
+        bool includeCandidate = false,
+        bool candidateRawPeakHigh = false)
+    {
+        var comparisons = new List<object>
+        {
+            TxFixtureComparison("current-zeus", failing, missingMeters),
+            TxFixtureComparison("thetis-parity", failing, missingMeters)
+        };
+        if (includeCandidate)
+        {
+            comparisons.Add(TxFixtureComparison("candidate-under-test", failing: false, missingMeters: false, candidateRawPeakHigh));
+        }
+
+        return
+        new
+        {
+            scenarioId,
+            scenarioName,
+            fixtureStatus = "offline-fixture-ready",
+            signalPath = "TX audio/TXA",
+            comparisons = comparisons.ToArray()
+        };
+    }
+
+    private static Dictionary<string, object?> TxFixtureComparison(
+        string comparisonId,
+        bool failing,
+        bool missingMeters,
+        bool candidateRawPeakHigh = false)
+    {
+        var clippingCount = failing ? 3 : 0;
+        var rawOutputPeak = candidateRawPeakHigh ? 0.05 : failing ? 0.10 : -3.00;
+        var outputPeak = candidateRawPeakHigh ? -0.30 : rawOutputPeak;
+        var alcGainReduction = failing ? 18.0 : 2.0;
+        var cfcGainReduction = failing ? 14.0 : 1.0;
+        var levelerGainReduction = failing ? 22.0 : 0.5;
+        Dictionary<string, object?>? meters = missingMeters
+            ? null
+            : new Dictionary<string, object?>
+            {
+                ["outPkDbfs"] = rawOutputPeak,
+                ["outAvDbfs"] = -18.0,
+                ["alcGainReductionDb"] = alcGainReduction,
+                ["cfcGainReductionDb"] = cfcGainReduction,
+                ["levelerGainReductionDb"] = levelerGainReduction
+            };
+        Dictionary<string, object?>? candidateDiagnostics = null;
+        if (candidateRawPeakHigh && meters is not null)
+        {
+            meters["rawOutPkDbfs"] = rawOutputPeak;
+            meters["rawOutAvDbfs"] = -18.0;
+            meters["effectiveOutPkDbfs"] = outputPeak;
+            meters["effectiveOutAvDbfs"] = -18.35;
+            meters["txOutputTrimDb"] = -0.35;
+            meters["txOutputTrimLinear"] = 0.960505818;
+            candidateDiagnostics = new Dictionary<string, object?>
+            {
+                ["schemaVersion"] = 1,
+                ["profileKind"] = "fixture-only-post-wdsp-output-trim",
+                ["defaultBehaviorChanged"] = false,
+                ["requiresRuntimeOptIn"] = true,
+                ["txOutputTrimDb"] = -0.35,
+                ["txOutputTrimLinear"] = 0.960505818,
+                ["rawWdspOutPkDbfs"] = rawOutputPeak,
+                ["effectiveTxOutputPeakDbfs"] = outputPeak
+            };
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["comparisonId"] = comparisonId,
+            ["source"] = "wdsp-fixture-runner",
+            ["profile"] = comparisonId,
+            ["metrics"] = new Dictionary<string, object?>
+            {
+                ["clipping count"] = clippingCount,
+                ["TX output peak"] = outputPeak,
+                ["TX output average"] = -18.0,
+                ["TX ALC gain reduction"] = alcGainReduction,
+                ["TX CFC gain reduction"] = cfcGainReduction,
+                ["TX leveler gain reduction"] = levelerGainReduction,
+                ["TX compressor peak"] = failing ? 0.20 : -6.0,
+                ["processing elapsed ms"] = 4.25,
+                ["throughput ratio"] = 6.0,
+                ["intermodulation proxy"] = failing ? -35.0 : -68.0,
+                ["crest factor"] = 12.0,
+                ["peak"] = failing ? 1.05 : 0.45,
+                ["RMS"] = 0.05
+            },
+            ["gates"] = new object[]
+            {
+                new { id = "fixture-generated", passed = !failing, status = failing ? "fail" : "pass" }
+            },
+            ["txStageMeters"] = meters,
+            ["clippingCount"] = clippingCount,
+            ["candidateDiagnostics"] = candidateDiagnostics
+        };
+    }
+
     private static async Task WriteNativeStageTimingFixtureMetricsAsync(string bundleDir)
     {
         var metricsPath = Path.Combine(bundleDir, "artifacts", "offline-fixture-metrics.json");
@@ -10063,10 +16887,16 @@ public sealed class DspModernizationValidationToolTests
         string hardwareTarget,
         bool metricComparisonReady = true,
         bool liveTraceComparisonReady = true,
-        bool liveTraceThetisComparisonReady = true)
+        bool liveTraceThetisComparisonReady = true,
+        string hardwareEvidenceStatus = "cross-radio-hardware-evidence-ready",
+        string[]? scenarioIds = null,
+        string[]? comparisonIds = null,
+        bool includeStrictValidationMarker = true)
     {
         var path = Path.Combine(bundleDir, relativePath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        scenarioIds ??= RequiredCrossRadioSourceScenarioIds;
+        comparisonIds ??= RequiredCrossRadioSourceComparisonIds;
         var report = new
         {
             ok = true,
@@ -10075,12 +16905,13 @@ public sealed class DspModernizationValidationToolTests
             errors = Array.Empty<object>(),
             warnings = Array.Empty<object>(),
             hardwareTarget,
-            hardwareEvidenceStatus = "cross-radio-hardware-evidence-ready",
+            crossRadioValidationRequired = includeStrictValidationMarker,
+            hardwareEvidenceStatus,
             metricComparisonReady,
             liveTraceComparisonReady,
             liveTraceThetisComparisonReady,
-            scenarioIds = new[] { "weak-cw-carrier" },
-            comparisonIds = new[] { "current-zeus", "candidate-under-test" }
+            scenarioIds,
+            comparisonIds
         };
 
         await File.WriteAllTextAsync(path, JsonSerializer.Serialize(report, CamelCaseJson));
@@ -10157,6 +16988,21 @@ public sealed class DspModernizationValidationToolTests
             externalEngineBakeoffBlockedCandidateIds = Array.Empty<string>(),
             externalEngineBakeoffCandidateIssueCounts = Array.Empty<object>(),
             externalEngineBakeoffScopeTriggers = Array.Empty<string>(),
+            txFixtureSafetyReportPresent = true,
+            txFixtureSafetyReportReady = true,
+            txFixtureSafetyReportStatus = "ready",
+            txFixtureSafetyScenarioCount = 2,
+            txFixtureSafetyComparisonCount = 4,
+            txFixtureSafetyMissingScenarioCount = 0,
+            txFixtureSafetyMissingComparisonCount = 0,
+            txFixtureSafetyGateFailureCount = 0,
+            txFixtureSafetyClippingCountTotal = 0,
+            txFixtureSafetyMaxTxOutputPeakDbfs = -3.0,
+            txFixtureSafetyMaxTxAlcGainReductionDb = 2.0,
+            txFixtureSafetyMaxTxCfcGainReductionDb = 1.0,
+            txFixtureSafetyMaxTxLevelerGainReductionDb = 0.5,
+            txFixtureSafetyMetricsHashStatus = "match",
+            txFixtureSafetyWdspRuntimeHashStatus = "match",
             metricComparisonReady = false,
             liveTraceComparisonReady = false,
             liveTraceThetisComparisonReady = false,
@@ -10565,7 +17411,13 @@ public sealed class DspModernizationValidationToolTests
         double? rxAudioLevelerCandidateNoiseProfilePrior = null,
         bool rxAudioLevelerCandidateNoSignalNoiseCap = false,
         bool rxAudioLevelerCandidateFarPeakNoiseCap = false,
-        bool rxAudioLevelerCandidateNoProofNoiseCap = false)
+        bool rxAudioLevelerCandidateNoProofNoiseCap = false,
+        string rxAudioLevelerRequestedProfile = "current",
+        string rxAudioLevelerActiveProfile = "current",
+        bool rxAudioLevelerExperimental = false,
+        bool rxAudioLevelerControlRmsValid = false,
+        double? rxAudioLevelerControlRmsDbfs = null,
+        double? rxAudioLevelerControlRmsHangDb = null)
     {
         var runtimeStatus = txMonitorRequested ? "audio-tx-monitor" : "ready";
         var audioStatus = txMonitorRequested ? "tx-monitor" : "ready";
@@ -10645,7 +17497,13 @@ public sealed class DspModernizationValidationToolTests
                     rxAudioLevelerCandidateNoProofNoiseCap = txMonitorRequested ? (bool?)null : rxAudioLevelerCandidateNoProofNoiseCap,
                     rxAudioLevelerBoostSlewLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerBoostSlewLimited,
                     rxAudioLevelerPeakLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerPeakLimited,
-                    rxAudioLevelerOutputLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerOutputLimited
+                    rxAudioLevelerOutputLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerOutputLimited,
+                    rxAudioLevelerRequestedProfile = txMonitorRequested ? null : rxAudioLevelerRequestedProfile,
+                    rxAudioLevelerActiveProfile = txMonitorRequested ? null : rxAudioLevelerActiveProfile,
+                    rxAudioLevelerExperimental = txMonitorRequested ? (bool?)null : rxAudioLevelerExperimental,
+                    rxAudioLevelerControlRmsValid = txMonitorRequested ? (bool?)null : rxAudioLevelerControlRmsValid,
+                    rxAudioLevelerControlRmsDbfs = txMonitorRequested ? (double?)null : rxAudioLevelerControlRmsDbfs,
+                    rxAudioLevelerControlRmsHangDb = txMonitorRequested ? (double?)null : rxAudioLevelerControlRmsHangDb
                 },
                 candidateDspDiagnostics = new
                 {
@@ -10839,6 +17697,15 @@ public sealed class DspModernizationValidationToolTests
         return new ToolResult(process.ExitCode, output, error);
     }
 
+    private static int GetUnusedTcpPort()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
+    }
+
     private static string FindRepoRoot()
     {
         var overrideRoot = Environment.GetEnvironmentVariable("ZEUS_REPO_ROOT");
@@ -10926,6 +17793,17 @@ public sealed class DspModernizationValidationToolTests
         Assert.Equal(new[] { "candidate-external-engine-opt-in" }, ReadStringArray(artifact, "comparisonIds"));
     }
 
+    private static void AssertRxLevelerAbLiveComparisonArtifact(JsonElement[] artifacts)
+    {
+        var artifact = artifacts.Single(item => item.GetProperty("id").GetString() == "rx-leveler-ab-live-comparison");
+        Assert.False(artifact.GetProperty("required").GetBoolean());
+        Assert.Equal("rx-leveler-ab-comparison-json", artifact.GetProperty("kind").GetString());
+        Assert.Equal("tools/summarize-dsp-rx-leveler-ab.ps1", artifact.GetProperty("source").GetString());
+        Assert.Equal("artifacts/rx-leveler-ab-live-comparison.json", artifact.GetProperty("path").GetString());
+        Assert.Equal(new[] { "rx-audio-leveler-passband" }, ReadStringArray(artifact, "scenarioIds"));
+        Assert.Equal(new[] { "current-zeus", "candidate-under-test" }, ReadStringArray(artifact, "comparisonIds"));
+    }
+
     private static Task WriteReadyG2PeakHuntWatcherAsync(string watcherPath) =>
         File.WriteAllTextAsync(
             watcherPath,
@@ -11000,6 +17878,520 @@ public sealed class DspModernizationValidationToolTests
                 "Set-Content -LiteralPath $JsonlPath -Value '{\"ok\":true}' -Encoding UTF8",
                 "if ($JsonOnly) { $json }"));
 
+    private static Task WriteRxLevelerAbFakeWatcherAsync(
+        string watcherPath,
+        bool requireExistingOutputParents = false,
+        int? activeAudioSampleCount = null,
+        int? passbandPeakSampleCount = null)
+    {
+        var activeAudioSampleCountLiteral = activeAudioSampleCount.HasValue
+            ? activeAudioSampleCount.Value.ToString(CultureInfo.InvariantCulture)
+            : "$Samples";
+        var passbandPeakSampleCountLiteral = passbandPeakSampleCount.HasValue
+            ? passbandPeakSampleCount.Value.ToString(CultureInfo.InvariantCulture)
+            : "$Samples";
+        var outputParentLines = requireExistingOutputParents
+            ? new[]
+            {
+                "$reportParent = Split-Path -Parent $ReportPath",
+                "$jsonlParent = Split-Path -Parent $JsonlPath",
+                "if (-not [System.IO.Directory]::Exists((ConvertTo-LongFileSystemPath -Path $reportParent))) { throw \"Report parent missing: $reportParent\" }",
+                "if (-not [System.IO.Directory]::Exists((ConvertTo-LongFileSystemPath -Path $jsonlParent))) { throw \"JSONL parent missing: $jsonlParent\" }",
+            }
+            : new[]
+            {
+                "[System.IO.Directory]::CreateDirectory((ConvertTo-LongFileSystemPath -Path (Split-Path -Parent $ReportPath))) | Out-Null",
+            };
+
+        return File.WriteAllTextAsync(
+            watcherPath,
+            string.Join(
+                Environment.NewLine,
+                "param(",
+                "    [string]$BaseUrl,",
+                "    [int]$Samples = 1,",
+                "    [int]$IntervalMs = 1,",
+                "    [int]$TimeoutSec = 5,",
+                "    [string]$Label,",
+                "    [string]$ReportPath,",
+                "    [string]$JsonlPath,",
+                "    [int]$TuneStepHz = 1000,",
+                "    [switch]$JsonOnly,",
+                "    [switch]$ContinueOnError",
+                ")",
+                "function ConvertTo-LongFileSystemPath {",
+                "    param([Parameter(Mandatory = $true)][string]$Path)",
+                "    if ([System.IO.Path]::DirectorySeparatorChar -ne '\\') { return $Path }",
+                "    if ($Path.StartsWith('\\\\?\\', [StringComparison]::Ordinal)) { return $Path }",
+                "    if ($Path.StartsWith('\\\\', [StringComparison]::Ordinal)) { return '\\\\?\\UNC\\' + $Path.Substring(2) }",
+                "    if ([System.IO.Path]::IsPathRooted($Path)) { return '\\\\?\\' + $Path }",
+                "    return $Path",
+                "}",
+                "function Write-TextFile {",
+                "    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Value)",
+                "    $parent = Split-Path -Parent $Path",
+                "    if (-not [string]::IsNullOrWhiteSpace($parent)) {",
+                "        [System.IO.Directory]::CreateDirectory((ConvertTo-LongFileSystemPath -Path $parent)) | Out-Null",
+                "    }",
+                "    [System.IO.File]::WriteAllText((ConvertTo-LongFileSystemPath -Path $Path), $Value, [System.Text.Encoding]::UTF8)",
+                "}",
+                "$passbandPeakSampleCount = " + passbandPeakSampleCountLiteral,
+                "$passbandStatus = if ($passbandPeakSampleCount -gt 0) { 'passband-active-audio' } else { 'no-passband-peaks' }",
+                "$report = [ordered]@{",
+                "    trendStatus = 'ready-trace'",
+                "    readyForBenchmarkTrace = $true",
+                "    okSampleCount = $Samples",
+                "    signalOccupancyWatch = @{ activeAudioSampleCount = " + activeAudioSampleCountLiteral + " }",
+                "    passbandAudioWatch = @{",
+                "        status = $passbandStatus",
+                "        passbandPeakSampleCount = $passbandPeakSampleCount",
+                "        filterPassbandPeakSampleCount = $passbandPeakSampleCount",
+                "        legacyNearPassbandPeakSampleCount = $passbandPeakSampleCount",
+                "    }",
+                "    rxAudioLevelerWatch = @{",
+                "        profileCounts = @(@{ name = 'current'; count = $Samples })",
+                "        experimentalSampleCount = 0",
+                "        controlRmsValidSampleCount = 0",
+                "    }",
+                "}",
+                outputParentLines[0],
+                outputParentLines.Length > 1 ? outputParentLines[1] : string.Empty,
+                outputParentLines.Length > 2 ? outputParentLines[2] : string.Empty,
+                outputParentLines.Length > 3 ? outputParentLines[3] : string.Empty,
+                "$json = $report | ConvertTo-Json -Depth 8",
+                "Write-TextFile -Path $ReportPath -Value $json",
+                "Write-TextFile -Path $JsonlPath -Value '{\"ok\":true}'",
+                "if ($JsonOnly) { $json }"));
+    }
+
+    private static async Task<string> WriteRxLevelerAbEvidenceFixtureAsync(
+        string outputRoot,
+        bool activeAudioReady,
+        bool passbandEvidenceReady = false,
+        int candidateControlRmsValidSampleCount = 0,
+        int candidateNormalStrengthControlRmsValidSampleCount = 0,
+        double candidateInputRmsAverageDbfs = -18.0,
+        double currentOutputRmsMovementDb = 0.5,
+        double candidateOutputRmsMovementDb = 0.5,
+        double currentAppliedGainMovementDb = 0.2,
+        double candidateAppliedGainMovementDb = 0.2,
+        double currentAgcMovementDb = 0.2,
+        double candidateAgcMovementDb = 0.2,
+        int currentPassbandPeakSampleCount = 3,
+        int candidatePassbandPeakSampleCount = 3,
+        double currentPassbandAudioMovementDb = 0.5,
+        double candidatePassbandAudioMovementDb = 0.5,
+        int currentPeakLimitedSampleCount = 0,
+        int candidatePeakLimitedSampleCount = 0,
+        double currentConstrainedPeakHeadroomMinDb = 12.0,
+        double candidateConstrainedPeakHeadroomMinDb = 12.0,
+        double currentConstrainedPreLimitPeakMaxDbfs = -12.0,
+        double candidateConstrainedPreLimitPeakMaxDbfs = -12.0)
+    {
+        var runRoot = Path.Combine(outputRoot, "rx-leveler-ab-20260620T000000Z");
+        var currentDir = Path.Combine(runRoot, "current");
+        var candidateDir = Path.Combine(runRoot, "stable-speech-candidate");
+        Directory.CreateDirectory(currentDir);
+        Directory.CreateDirectory(candidateDir);
+
+        var currentReportPath = Path.Combine(currentDir, "live-diagnostics-summary.json");
+        var candidateReportPath = Path.Combine(candidateDir, "live-diagnostics-summary.json");
+        var currentJsonlPath = Path.Combine(currentDir, "live-diagnostics-trace.jsonl");
+        var candidateJsonlPath = Path.Combine(candidateDir, "live-diagnostics-trace.jsonl");
+        var activeCount = activeAudioReady ? 3 : 0;
+
+        await File.WriteAllTextAsync(
+            currentReportPath,
+            JsonSerializer.Serialize(
+                RxLevelerEvidenceWatcherReport(
+                    "current",
+                    experimental: false,
+                    activeAudioSampleCount: activeCount,
+                    passbandEvidenceReady: passbandEvidenceReady,
+                    controlRmsValidSampleCount: 0,
+                    normalStrengthControlRmsValidSampleCount: 0,
+                    inputRmsAverageDbfs: candidateInputRmsAverageDbfs,
+                    outputRmsMovementDb: currentOutputRmsMovementDb,
+                    appliedGainMovementDb: currentAppliedGainMovementDb,
+                    agcMovementDb: currentAgcMovementDb,
+                    passbandPeakSampleCount: currentPassbandPeakSampleCount,
+                    passbandAudioMovementDb: currentPassbandAudioMovementDb,
+                    peakLimitedSampleCount: currentPeakLimitedSampleCount,
+                    constrainedPeakHeadroomMinDb: currentConstrainedPeakHeadroomMinDb,
+                    constrainedPreLimitPeakMaxDbfs: currentConstrainedPreLimitPeakMaxDbfs),
+                CamelCaseJson));
+        await File.WriteAllTextAsync(
+            candidateReportPath,
+            JsonSerializer.Serialize(
+                RxLevelerEvidenceWatcherReport(
+                    "stable-speech-candidate",
+                    experimental: true,
+                    activeAudioSampleCount: activeCount,
+                    passbandEvidenceReady: passbandEvidenceReady,
+                    controlRmsValidSampleCount: candidateControlRmsValidSampleCount,
+                    normalStrengthControlRmsValidSampleCount: candidateNormalStrengthControlRmsValidSampleCount,
+                    inputRmsAverageDbfs: candidateInputRmsAverageDbfs,
+                    outputRmsMovementDb: candidateOutputRmsMovementDb,
+                    appliedGainMovementDb: candidateAppliedGainMovementDb,
+                    agcMovementDb: candidateAgcMovementDb,
+                    passbandPeakSampleCount: candidatePassbandPeakSampleCount,
+                    passbandAudioMovementDb: candidatePassbandAudioMovementDb,
+                    peakLimitedSampleCount: candidatePeakLimitedSampleCount,
+                    constrainedPeakHeadroomMinDb: candidateConstrainedPeakHeadroomMinDb,
+                    constrainedPreLimitPeakMaxDbfs: candidateConstrainedPreLimitPeakMaxDbfs),
+                CamelCaseJson));
+        await File.WriteAllTextAsync(currentJsonlPath, "{\"ok\":true}" + Environment.NewLine);
+        await File.WriteAllTextAsync(candidateJsonlPath, "{\"ok\":true}" + Environment.NewLine);
+
+        var summaryPath = Path.Combine(runRoot, "rx-leveler-ab-summary.json");
+        await File.WriteAllTextAsync(
+            summaryPath,
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = 1,
+                tool = "capture-rx-leveler-ab",
+                ok = true,
+                outputRoot = runRoot,
+                summaryPath,
+                requireActiveAudio = true,
+                minActiveAudioSamples = 1,
+                activeAudioEvidence = new
+                {
+                    required = true,
+                    minActiveAudioSamples = 1,
+                    ready = activeAudioReady,
+                    currentActiveAudioSampleCount = activeCount,
+                    candidateActiveAudioSampleCount = activeCount,
+                    missingProfiles = activeAudioReady
+                        ? Array.Empty<string>()
+                        : new[] { "current", "stable-speech-candidate" }
+                },
+                current = new
+                {
+                    profile = "current",
+                    jsonlPath = currentJsonlPath,
+                    reportPath = currentReportPath,
+                    trendStatus = "ready-trace",
+                    readyForBenchmarkTrace = true,
+                    okSampleCount = 3,
+                    activeAudioSampleCount = activeCount
+                },
+                candidate = new
+                {
+                    profile = "stable-speech-candidate",
+                    jsonlPath = candidateJsonlPath,
+                    reportPath = candidateReportPath,
+                    trendStatus = "ready-trace",
+                    readyForBenchmarkTrace = true,
+                    okSampleCount = 3,
+                    activeAudioSampleCount = activeCount
+                },
+                resetToCurrent = new
+                {
+                    ready = true,
+                    profile = "current",
+                    activeProfile = "current",
+                    profileAligned = true,
+                    activeProfileAligned = true
+                }
+            }, CamelCaseJson));
+
+        return summaryPath;
+    }
+
+    private static object RxLevelerEvidenceWatcherReport(
+        string profile,
+        bool experimental,
+        int activeAudioSampleCount,
+        bool passbandEvidenceReady,
+        int controlRmsValidSampleCount,
+        int normalStrengthControlRmsValidSampleCount,
+        double inputRmsAverageDbfs,
+        double outputRmsMovementDb,
+        double appliedGainMovementDb,
+        double agcMovementDb,
+        int passbandPeakSampleCount,
+        double passbandAudioMovementDb,
+        int peakLimitedSampleCount,
+        double constrainedPeakHeadroomMinDb,
+        double constrainedPreLimitPeakMaxDbfs)
+    {
+        var stats = new { count = 3, min = -20.0, max = -19.5, average = -19.8, movement = outputRmsMovementDb };
+        object passbandAudioWatch = passbandEvidenceReady
+            ? new
+            {
+                status = "ready",
+                passbandEvidenceMissing = false,
+                passbandPeakSampleCount,
+                passbandActiveAudioPct = 100.0,
+                passbandFloorAudioPct = 0.0,
+                passbandAudioRmsDbfs = new { count = 3, min = -20.0, max = -19.5, average = -19.8, movement = passbandAudioMovementDb },
+                offPassbandAudioRmsDbfs = new { count = 3, min = -35.0, max = -34.5, average = -34.8, movement = 0.5 }
+            }
+            : new
+            {
+                status = "no-passband-peaks",
+                passbandEvidenceMissing = true,
+                passbandPeakSampleCount = 0,
+                offPassbandPeakSampleCount = 3,
+                offPassbandAudioRmsDbfs = new { count = 3, min = -35.0, max = -34.5, average = -34.8, movement = 0.5 }
+            };
+
+        return new
+        {
+            schemaVersion = 1,
+            tool = "watch-dsp-live-diagnostics",
+            trendStatus = "ready-trace",
+            readyForBenchmarkTrace = true,
+            sampleCount = 3,
+            okSampleCount = 3,
+            failedSampleCount = 0,
+            readySampleCount = 3,
+            hardBlockerSampleCount = 0,
+            captureReadinessWatch = new
+            {
+                status = "ready",
+                preflightReady = true,
+                hardGatePass = true,
+                strictPreflightPass = true,
+                okSampleCount = 3,
+                failedSampleCount = 0,
+                readySampleCount = 3,
+                hardBlockerSampleCount = 0
+            },
+            signalOccupancyWatch = new
+            {
+                activeAudioSampleCount = activeAudioSampleCount,
+                activeAudioPct = activeAudioSampleCount == 0 ? 0.0 : 100.0
+            },
+            passbandAudioWatch,
+            audioRmsDbfs = stats,
+            audioPeakDbfs = new { max = -8.0 },
+            latencyMs = new { count = 3, min = 1.0, max = 2.0, avg = 1.5, movement = 1.0 },
+            readinessScore = new { count = 3, min = 92.0, max = 92.0, avg = 92.0, movement = 0.0 },
+            agcGainDb = new { count = 3, min = -70.0, max = -69.8, avg = -69.9, movement = agcMovementDb },
+            agcStabilityWatch = new
+            {
+                pumpingRisk = false,
+                activeAgcGainDb = new { movement = agcMovementDb },
+                voiceLikeAgcGainDb = new { movement = 0.1 }
+            },
+            runtimeEvidenceSampleCount = 3,
+            audioFreshSampleCount = 3,
+            rxMetersFreshSampleCount = 3,
+            squelchClosedPct = 0.0,
+            rxAudioLevelerInputRmsDbfs = new
+            {
+                count = 3,
+                min = inputRmsAverageDbfs - 0.2,
+                max = inputRmsAverageDbfs + 0.2,
+                average = inputRmsAverageDbfs,
+                movement = 0.4
+            },
+            rxAudioLevelerOutputRmsDbfs = stats,
+            rxAudioLevelerAppliedGainDb = new { count = 3, min = -2.0, max = -1.8, avg = -1.9, movement = appliedGainMovementDb },
+            rxAudioLevelerWatch = new
+            {
+                diagnosticSampleCount = 3,
+                profileCounts = new[] { new { name = profile, count = 3 } },
+                experimentalSampleCount = experimental ? 3 : 0,
+                controlRmsValidSampleCount = controlRmsValidSampleCount,
+                normalStrengthControlRmsThresholdDbfs = -24.0,
+                normalStrengthControlRmsValidSampleCount = normalStrengthControlRmsValidSampleCount,
+                constrainedMaxAbsGainDeltaDb = 0.2,
+                constrainedPeakHeadroomDb = new { min = constrainedPeakHeadroomMinDb, max = constrainedPeakHeadroomMinDb + 1.0 },
+                constrainedPreLimitPeakDbfs = new { max = constrainedPreLimitPeakMaxDbfs },
+                topNormalStrengthControlRmsSamples = normalStrengthControlRmsValidSampleCount == 0
+                    ? Array.Empty<object>()
+                    : new object[]
+                    {
+                        new
+                        {
+                            sampleIndex = 1,
+                            inputRmsDbfs = -18.0,
+                            controlRmsDbfs = -18.0,
+                            controlRmsHangDb = 0.0
+                        }
+                    },
+                constrainedSampleCount = 0,
+                constrainedPct = 0.0,
+                boostSlewLimitedSampleCount = 0,
+                peakLimitedSampleCount,
+                outputLimitedSampleCount = 0
+            }
+        };
+    }
+
+    private static Task WriteTxOutputHeadroomAbFakeWatcherAsync(string watcherPath, bool pureSignalBypassed = false)
+    {
+        var pureSignalBypassedLiteral = pureSignalBypassed ? "$true" : "$false";
+
+        return File.WriteAllTextAsync(
+            watcherPath,
+            string.Join(
+                Environment.NewLine,
+                "param(",
+                "    [string]$BaseUrl,",
+                "    [int]$Samples = 1,",
+                "    [int]$IntervalMs = 1,",
+                "    [int]$TimeoutSec = 5,",
+                "    [string]$Label,",
+                "    [string]$ReportPath,",
+                "    [string]$JsonlPath,",
+                "    [int]$TuneStepHz = 1000,",
+                "    [switch]$JsonOnly,",
+                "    [switch]$SkipCertificateCheck,",
+                "    [switch]$ContinueOnError",
+                ")",
+                "$candidateProfile = 'headroom-trim-candidate'",
+                "$isCandidate = $Label -like ('*' + $candidateProfile + '*')",
+                "$requestedProfile = if ($isCandidate) { $candidateProfile } else { 'current' }",
+                "$experimentalCount = if ($isCandidate) { $Samples } else { 0 }",
+                "if ($isCandidate -and " + pureSignalBypassedLiteral + ") {",
+                "    $activeProfile = 'current'",
+                "    $bypassedCount = $Samples",
+                "    $trimDb = 0.0",
+                "}",
+                "elseif ($isCandidate) {",
+                "    $activeProfile = $candidateProfile",
+                "    $bypassedCount = 0",
+                "    $trimDb = -0.35",
+                "}",
+                "else {",
+                "    $activeProfile = 'current'",
+                "    $bypassedCount = 0",
+                "    $trimDb = 0.0",
+                "}",
+                "$report = [ordered]@{",
+                "    trendStatus = 'ready-trace'",
+                "    readyForBenchmarkTrace = $true",
+                "    okSampleCount = $Samples",
+                "    runtimeEvidenceSampleCount = $Samples",
+                "    txMonitorSampleCount = $Samples",
+                "    txOutputHeadroomWatch = @{",
+                "        requestedProfileCounts = @(@{ name = $requestedProfile; count = $Samples })",
+                "        activeProfileCounts = @(@{ name = $activeProfile; count = $Samples })",
+                "        experimentalSampleCount = $experimentalCount",
+                "        pureSignalBypassedSampleCount = $bypassedCount",
+                "        trimDb = @{ count = $Samples; min = $trimDb; max = $trimDb; avg = $trimDb }",
+                "        recommendation = 'fake TX headroom watcher'",
+                "    }",
+                "}",
+                "New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ReportPath) | Out-Null",
+                "$json = $report | ConvertTo-Json -Depth 8",
+                "Set-Content -LiteralPath $ReportPath -Value $json -Encoding UTF8",
+                "Set-Content -LiteralPath $JsonlPath -Value '{\"ok\":true}' -Encoding UTF8",
+                "if ($JsonOnly) { $json }"));
+    }
+
+    private static string TxHeadroomLiveDiagnosticsJson(bool ready = true)
+    {
+        var diagnostics = new
+        {
+            status = ready ? "ready-for-live-benchmark" : "frontend-scene-missing",
+            readyForLiveBenchmark = ready,
+            wdspActive = ready,
+            frontendSceneFresh = ready,
+            radioVfoHz = 14260000,
+            radioMode = "USB",
+            generatedUtc = DateTimeOffset.UtcNow,
+            runtimeEvidence = new
+            {
+                status = ready ? "fresh" : "stale",
+            },
+        };
+
+        return JsonSerializer.Serialize(diagnostics, CamelCaseJson);
+    }
+
+    private static Task WriteG2FrontendRxLevelerFakeCaptureAsync(
+        string captureScriptPath,
+        bool resetAligned = true,
+        bool failFirstPassbandAttempt = false)
+    {
+        var resetReadyLiteral = resetAligned ? "$true" : "$false";
+        var resetActiveProfileLiteral = resetAligned ? "'current'" : "'stable-speech-candidate'";
+        var failFirstPassbandAttemptLiteral = failFirstPassbandAttempt ? "$true" : "$false";
+
+        return File.WriteAllTextAsync(
+            captureScriptPath,
+            string.Join(
+                Environment.NewLine,
+                "param(",
+                "    [string]$BaseUrl,",
+                "    [int]$Samples = 1,",
+                "    [int]$IntervalMs = 1,",
+                "    [int]$TimeoutSec = 5,",
+                "    [string]$OutputRoot,",
+                "    [string]$LabelPrefix = 'g2-frontend-rx-leveler-ab',",
+                "    [string]$CandidateProfile = 'stable-speech-candidate',",
+                "    [int]$TuneStepHz = 1000,",
+                "    [int]$MinActiveAudioSamples = 1,",
+                "    [int]$MinPassbandPeakSamples = 1,",
+                "    [switch]$RequireActiveAudio,",
+                "    [switch]$RequirePassbandEvidence,",
+                "    [switch]$SkipCertificateCheck,",
+                "    [switch]$ContinueOnError",
+                ")",
+                "if ([string]::IsNullOrWhiteSpace($OutputRoot)) {",
+                "    $OutputRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('zeus-rx-leveler-ab-fake-' + [Guid]::NewGuid().ToString('N'))",
+                "}",
+                "New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null",
+                "$attemptPath = Join-Path $OutputRoot 'fake-capture-attempt.txt'",
+                "$attempt = 1",
+                "if (Test-Path -LiteralPath $attemptPath) {",
+                "    $attempt = ([int](Get-Content -LiteralPath $attemptPath -Raw)) + 1",
+                "}",
+                "Set-Content -LiteralPath $attemptPath -Value ([string]$attempt) -Encoding UTF8",
+                $"$failFirstPassbandAttempt = {failFirstPassbandAttemptLiteral}",
+                "$passbandReady = -not ($failFirstPassbandAttempt -and $attempt -eq 1)",
+                "$currentPassbandCount = if ($passbandReady) { $Samples } else { $Samples }",
+                "$candidatePassbandCount = if ($passbandReady) { $Samples } else { 0 }",
+                "$captureOk = (-not [bool]$RequirePassbandEvidence) -or $passbandReady",
+                "$captureError = if ($captureOk) { $null } else { 'Tuned passband evidence is required but missing for profile(s): stable-speech-candidate. Minimum required passband peak samples per profile: ' + $MinPassbandPeakSamples + '.' }",
+                "$summaryPath = Join-Path $OutputRoot ($LabelPrefix + '-summary.json')",
+                "$report = [ordered]@{",
+                "    schemaVersion = 1",
+                "    tool = 'capture-rx-leveler-ab'",
+                "    ok = $captureOk",
+                "    error = $captureError",
+                "    baseUrl = $BaseUrl",
+                "    outputRoot = $OutputRoot",
+                "    summaryPath = $summaryPath",
+                "    current = @{",
+                "        profile = 'current'",
+                "        okSampleCount = $Samples",
+                "        activeAudioSampleCount = $Samples",
+                "        passbandPeakSampleCount = $currentPassbandCount",
+                "        readyForBenchmarkTrace = $true",
+                "        profileCounts = @(@{ name = 'current'; count = $Samples })",
+                "    }",
+                "    candidate = @{",
+                "        profile = $CandidateProfile",
+                "        okSampleCount = $Samples",
+                "        activeAudioSampleCount = $Samples",
+                "        passbandPeakSampleCount = $candidatePassbandCount",
+                "        readyForBenchmarkTrace = $true",
+                "        experimentalSampleCount = $Samples",
+                "        controlRmsValidSampleCount = $Samples",
+                "        profileCounts = @(@{ name = $CandidateProfile; count = $Samples })",
+                "    }",
+                "    resetToCurrent = @{",
+                $"        ready = {resetReadyLiteral}",
+                "        profile = 'current'",
+                $"        activeProfile = {resetActiveProfileLiteral}",
+                $"        profileAligned = {resetReadyLiteral}",
+                $"        activeProfileAligned = {resetReadyLiteral}",
+                "    }",
+                "    activeAudioEvidence = @{ required = [bool]$RequireActiveAudio; ready = $true; currentActiveAudioSampleCount = $Samples; candidateActiveAudioSampleCount = $Samples; minActiveAudioSamples = $MinActiveAudioSamples; missingProfiles = @() }",
+                "    passbandEvidence = @{ required = [bool]$RequirePassbandEvidence; ready = $passbandReady; currentPassbandPeakSampleCount = $currentPassbandCount; candidatePassbandPeakSampleCount = $candidatePassbandCount; minPassbandPeakSamples = $MinPassbandPeakSamples; missingProfiles = if ($passbandReady) { @() } else { @($CandidateProfile) } }",
+                "}",
+                "$json = $report | ConvertTo-Json -Depth 8",
+                "Set-Content -LiteralPath $summaryPath -Value $json -Encoding UTF8",
+                "$json",
+                "if (-not $captureOk -and -not $ContinueOnError) { exit 1 }"));
+    }
+
     private static string[] ReadStringArray(JsonElement element, string propertyName)
     {
         return element.GetProperty(propertyName)
@@ -11013,16 +18405,21 @@ public sealed class DspModernizationValidationToolTests
     private sealed class JsonRouteServer : IDisposable
     {
         private readonly TcpListener _listener;
-        private readonly IReadOnlyDictionary<string, string> _routes;
+        private readonly IReadOnlyDictionary<string, string>? _routes;
+        private readonly Func<RecordedRequest, string?>? _routeResponder;
         private readonly CancellationTokenSource _cts = new();
         private readonly Task _loop;
         private readonly object _requestsLock = new();
         private readonly List<RecordedRequest> _requests = new();
 
-        private JsonRouteServer(TcpListener listener, IReadOnlyDictionary<string, string> routes)
+        private JsonRouteServer(
+            TcpListener listener,
+            IReadOnlyDictionary<string, string>? routes,
+            Func<RecordedRequest, string?>? routeResponder)
         {
             _listener = listener;
             _routes = routes;
+            _routeResponder = routeResponder;
             var port = ((IPEndPoint)_listener.LocalEndpoint).Port;
             BaseUrl = $"http://127.0.0.1:{port}";
             _loop = Task.Run(AcceptLoopAsync);
@@ -11045,7 +18442,14 @@ public sealed class DspModernizationValidationToolTests
         {
             var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
-            return new JsonRouteServer(listener, routes);
+            return new JsonRouteServer(listener, routes, routeResponder: null);
+        }
+
+        public static JsonRouteServer Start(Func<RecordedRequest, string?> routeResponder)
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            return new JsonRouteServer(listener, routes: null, routeResponder);
         }
 
         public void Dispose()
@@ -11130,12 +18534,24 @@ public sealed class DspModernizationValidationToolTests
                 path = uri.IsAbsoluteUri ? uri.AbsolutePath : uri.OriginalString.Split('?', 2)[0];
             }
 
+            var recordedRequest = new RecordedRequest(method, path, requestBody);
             lock (_requestsLock)
             {
-                _requests.Add(new RecordedRequest(method, path, requestBody));
+                _requests.Add(recordedRequest);
             }
 
-            var found = _routes.TryGetValue(path, out var json);
+            var found = false;
+            string? json = null;
+            if (_routeResponder is not null)
+            {
+                json = _routeResponder(recordedRequest);
+                found = json is not null;
+            }
+            else if (_routes is not null)
+            {
+                found = _routes.TryGetValue(path, out json);
+            }
+
             var body = found ? json! : "{\"error\":\"not found\"}";
             var status = found ? "200 OK" : "404 Not Found";
             var bytes = Encoding.UTF8.GetBytes(body);

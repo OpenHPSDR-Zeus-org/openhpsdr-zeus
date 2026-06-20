@@ -2001,6 +2001,72 @@ public static class ZeusEndpoints
                 BuildSmartNrRxChainRuntime(state, radio.GetAdcProtectionStatus())));
         });
 
+        app.MapGet("/api/dsp/rx-audio-leveler-profile", (DspPipelineService dsp) =>
+        {
+            var (requested, active) = dsp.SnapshotRxAudioLevelerProfiles();
+            return Results.Ok(new
+            {
+                profile = DspPipelineService.RxAudioLevelerProfileId(requested),
+                activeProfile = DspPipelineService.RxAudioLevelerProfileId(active),
+                defaultProfile = "current",
+                supportedProfiles = new[] { "current", "stable-speech-candidate" },
+                experimental = requested != DspPipelineService.RxAudioLevelerProfile.Current,
+            });
+        });
+
+        app.MapPut("/api/dsp/rx-audio-leveler-profile", (DspRxAudioLevelerProfileSetRequest? body, DspPipelineService dsp) =>
+        {
+            if (!DspPipelineService.TryParseRxAudioLevelerProfile(body?.Profile, out var profile))
+                return Results.BadRequest(new { error = "profile must be 'current' or 'stable-speech-candidate'" });
+
+            dsp.SetRxAudioLevelerProfile(profile);
+            var (requested, active) = dsp.SnapshotRxAudioLevelerProfiles();
+            return Results.Ok(new
+            {
+                profile = DspPipelineService.RxAudioLevelerProfileId(requested),
+                activeProfile = DspPipelineService.RxAudioLevelerProfileId(active),
+                defaultProfile = "current",
+                supportedProfiles = new[] { "current", "stable-speech-candidate" },
+                experimental = requested != DspPipelineService.RxAudioLevelerProfile.Current,
+            });
+        });
+
+        app.MapGet("/api/dsp/tx-output-headroom-profile", (DspPipelineService dsp) =>
+        {
+            var runtime = dsp.SnapshotTxOutputHeadroomRuntime();
+            return Results.Ok(new
+            {
+                profile = DspPipelineService.TxOutputHeadroomProfileId(runtime.RequestedProfile),
+                activeProfile = DspPipelineService.TxOutputHeadroomProfileId(runtime.ActiveProfile),
+                defaultProfile = "current",
+                supportedProfiles = new[] { "current", "headroom-trim-candidate" },
+                experimental = runtime.Experimental,
+                trimDb = Math.Round(runtime.TrimDb, 2),
+                pureSignalBypassActive = runtime.PureSignalBypassed,
+                integrationPoint = "post-wdsp-mic-wire-output",
+            });
+        });
+
+        app.MapPut("/api/dsp/tx-output-headroom-profile", (DspTxOutputHeadroomProfileSetRequest? body, DspPipelineService dsp) =>
+        {
+            if (!DspPipelineService.TryParseTxOutputHeadroomProfile(body?.Profile, out var profile))
+                return Results.BadRequest(new { error = "profile must be 'current' or 'headroom-trim-candidate'" });
+
+            dsp.SetTxOutputHeadroomProfile(profile);
+            var runtime = dsp.SnapshotTxOutputHeadroomRuntime();
+            return Results.Ok(new
+            {
+                profile = DspPipelineService.TxOutputHeadroomProfileId(runtime.RequestedProfile),
+                activeProfile = DspPipelineService.TxOutputHeadroomProfileId(runtime.ActiveProfile),
+                defaultProfile = "current",
+                supportedProfiles = new[] { "current", "headroom-trim-candidate" },
+                experimental = runtime.Experimental,
+                trimDb = Math.Round(runtime.TrimDb, 2),
+                pureSignalBypassActive = runtime.PureSignalBypassed,
+                integrationPoint = "post-wdsp-mic-wire-output",
+            });
+        });
+
         app.MapGet("/api/dsp/live-diagnostics", (FrontendDspSceneDiagnosticsService scene, DspPipelineService dsp, RadioService radio) =>
         {
             var state = radio.Snapshot();
@@ -3859,6 +3925,8 @@ internal sealed record ChainMembershipSetRequest(bool Active);
 internal sealed record ScanVstDirectoryRequest(string Directory, string? Route = null);
 internal sealed record MasterBypassSetRequest(bool Bypassed);
 internal sealed record ProcessingModeSetRequest(string Mode);
+internal sealed record DspRxAudioLevelerProfileSetRequest(string Profile);
+internal sealed record DspTxOutputHeadroomProfileSetRequest(string Profile);
 internal sealed record TxStageDensityDiagnostics(
     double? OutputHeadroomDb,
     double? OutputCrestFactorDb,

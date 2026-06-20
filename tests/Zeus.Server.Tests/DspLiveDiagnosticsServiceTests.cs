@@ -135,6 +135,93 @@ public sealed class DspLiveDiagnosticsServiceTests
     }
 
     [Fact]
+    public void Build_RuntimeEvidenceCarriesRxLevelerCandidateProfile()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+        PublishScene(service, profile: "NR4", held: false, rxScore: 94, rxTone: "neutral", coherent: true);
+        var condition = service.SmartNrCondition(
+            Runtime("Sbnr", "Sbnr"),
+            RxChain(score: 94));
+
+        var runtime = RuntimeEvidence(
+            levelerRequestedProfile: "stable-speech-candidate",
+            levelerActiveProfile: "stable-speech-candidate",
+            levelerExperimental: true,
+            levelerControlRmsValid: true,
+            levelerControlRmsDbfs: -31.2,
+            levelerControlRmsHangDb: 8.4);
+
+        var diag = DspLiveDiagnosticsService.Build(condition, runtime);
+
+        Assert.NotNull(diag.RuntimeEvidence);
+        Assert.Equal(5, diag.RuntimeEvidence.SchemaVersion);
+        Assert.Equal("stable-speech-candidate", diag.RuntimeEvidence.RxAudioLevelerRequestedProfile);
+        Assert.Equal("stable-speech-candidate", diag.RuntimeEvidence.RxAudioLevelerActiveProfile);
+        Assert.True(diag.RuntimeEvidence.RxAudioLevelerExperimental);
+        Assert.True(diag.RuntimeEvidence.RxAudioLevelerControlRmsValid);
+        Assert.Equal(-31.2, diag.RuntimeEvidence.RxAudioLevelerControlRmsDbfs);
+        Assert.Equal(8.4, diag.RuntimeEvidence.RxAudioLevelerControlRmsHangDb);
+        Assert.Contains("rx-audio-leveler-stable-speech-candidate", diag.Evidence);
+        Assert.Contains("rx-audio-leveler-experimental-profile", diag.Evidence);
+        Assert.Contains("rx-audio-leveler-control-rms-evidence", diag.Evidence);
+        Assert.Contains("current-profile and candidate-profile", string.Join(" ", diag.RecommendedActions));
+    }
+
+    [Fact]
+    public void Build_RuntimeEvidenceCarriesTxOutputHeadroomCandidateProfile()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+        PublishScene(service, profile: "NR4", held: false, rxScore: 94, rxTone: "neutral", coherent: true);
+        var condition = service.SmartNrCondition(
+            Runtime("Sbnr", "Sbnr"),
+            RxChain(score: 94));
+
+        var runtime = RuntimeEvidence(
+            txOutputHeadroomRequestedProfile: "headroom-trim-candidate",
+            txOutputHeadroomActiveProfile: "headroom-trim-candidate",
+            txOutputHeadroomExperimental: true,
+            txOutputHeadroomTrimDb: -0.35);
+
+        var diag = DspLiveDiagnosticsService.Build(condition, runtime);
+
+        Assert.NotNull(diag.RuntimeEvidence);
+        Assert.Equal("headroom-trim-candidate", diag.RuntimeEvidence.TxOutputHeadroomRequestedProfile);
+        Assert.Equal("headroom-trim-candidate", diag.RuntimeEvidence.TxOutputHeadroomActiveProfile);
+        Assert.True(diag.RuntimeEvidence.TxOutputHeadroomExperimental);
+        Assert.Equal(-0.35, diag.RuntimeEvidence.TxOutputHeadroomTrimDb);
+        Assert.Contains("tx-output-headroom-requested-headroom-trim-candidate", diag.Evidence);
+        Assert.Contains("tx-output-headroom-active-headroom-trim-candidate", diag.Evidence);
+        Assert.Contains("tx-output-headroom-experimental-profile", diag.Evidence);
+        Assert.Contains("TX output headroom profile opt-in", string.Join(" ", diag.RecommendedActions));
+    }
+
+    [Fact]
+    public void Build_RuntimeEvidenceCarriesTxOutputHeadroomPureSignalBypass()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+        PublishScene(service, profile: "NR4", held: false, rxScore: 94, rxTone: "neutral", coherent: true);
+        var condition = service.SmartNrCondition(
+            Runtime("Sbnr", "Sbnr"),
+            RxChain(score: 94));
+
+        var runtime = RuntimeEvidence(
+            txOutputHeadroomRequestedProfile: "headroom-trim-candidate",
+            txOutputHeadroomActiveProfile: "current",
+            txOutputHeadroomExperimental: true,
+            txOutputHeadroomPureSignalBypassed: true);
+
+        var diag = DspLiveDiagnosticsService.Build(condition, runtime);
+
+        Assert.NotNull(diag.RuntimeEvidence);
+        Assert.Equal("current", diag.RuntimeEvidence.TxOutputHeadroomActiveProfile);
+        Assert.True(diag.RuntimeEvidence.TxOutputHeadroomPureSignalBypassed);
+        Assert.Contains("tx-output-headroom-requested-headroom-trim-candidate", diag.Evidence);
+        Assert.Contains("tx-output-headroom-puresignal-bypassed", diag.Evidence);
+        Assert.DoesNotContain("tx-output-headroom-active-headroom-trim-candidate", diag.Evidence);
+        Assert.Contains("PureSignal is armed", string.Join(" ", diag.RecommendedActions));
+    }
+
+    [Fact]
     public void Build_RxChainProtectBecomesProtectStatus()
     {
         var service = new FrontendDspSceneDiagnosticsService();
@@ -197,7 +284,12 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("TX output average", txVoiceLike.RequiredMetrics);
 
         var lifecycle = Assert.Single(plan.Scenarios, s => s.Id == "wdsp-channel-lifecycle");
+        Assert.Contains("state transition success", lifecycle.RequiredMetrics);
+        Assert.Contains("meter escape", lifecycle.RequiredMetrics);
+        Assert.Contains("audio drain", lifecycle.RequiredMetrics);
         Assert.Contains("native exception count", lifecycle.RequiredMetrics);
+        Assert.Contains("lifecycle test log", lifecycle.RequiredArtifacts);
+        Assert.Contains("diagnostics JSON", lifecycle.RequiredArtifacts);
     }
 
     [Fact]
@@ -358,13 +450,18 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Equal("/api/dsp/live-diagnostics", manifest.LiveDiagnosticsEndpoint);
         Assert.Equal("/api/dsp/benchmark-plan", manifest.BenchmarkPlanEndpoint);
         Assert.Contains("frontend-scene-freshness", manifest.ScenarioIds);
+        Assert.Contains("tx-two-tone", manifest.ScenarioIds);
+        Assert.Contains("tx-voice-like", manifest.ScenarioIds);
         Assert.Contains("wdsp-channel-lifecycle", manifest.ScenarioIds);
         Assert.Contains("capture-preflight-not-ready", manifest.Constraints);
         Assert.Contains(manifest.RequiredArtifacts, artifact => artifact.Id == "live-diagnostics-json" && artifact.Required);
         Assert.Contains(manifest.RequiredArtifacts, artifact => artifact.Id == "wdsp-native-symbol-audit" && artifact.Required);
         Assert.Contains(manifest.RequiredArtifacts, artifact => artifact.Id == "wdsp-runtime-artifact-audit" && artifact.Required);
         Assert.Contains(manifest.RequiredArtifacts, artifact => artifact.Id == "offline-fixture-metrics" && artifact.Required);
+        Assert.Contains(manifest.RequiredArtifacts, artifact => artifact.Id == "rx-audio-leveler-fixture-benchmark" && !artifact.Required);
         Assert.Contains(manifest.RequiredArtifacts, artifact => artifact.Id == "native-stage-timing-report" && artifact.Required);
+        Assert.Contains(manifest.RequiredArtifacts, artifact => artifact.Id == "tx-fixture-safety-report" && artifact.Required);
+        Assert.Contains(manifest.RequiredArtifacts, artifact => artifact.Id == "wdsp-channel-lifecycle-report" && artifact.Required);
         Assert.DoesNotContain(manifest.RequiredArtifacts, artifact => artifact.Id == "external-engine-bakeoff-report");
         Assert.Contains(manifest.StopConditions, item => item.Contains("weak-signal loss", StringComparison.Ordinal));
     }
@@ -386,6 +483,8 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Equal("G2", manifest.HardwareTarget);
         Assert.Contains("weak-cw-carrier", manifest.ScenarioIds);
         Assert.Contains("agc-level-step", manifest.ScenarioIds);
+        Assert.Contains("tx-two-tone", manifest.ScenarioIds);
+        Assert.Contains("tx-voice-like", manifest.ScenarioIds);
         Assert.Contains("wdsp-channel-lifecycle", manifest.ScenarioIds);
         Assert.Contains("thetis-parity", manifest.RequiredComparisons);
         Assert.Contains("candidate-under-test", manifest.RequiredComparisons);
@@ -427,6 +526,32 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.True(nativeStageTimingArtifact.Required);
         Assert.Equal("native-stage-timing-report-json", nativeStageTimingArtifact.Kind);
         Assert.Contains("summarize-dsp-native-stage-timing.ps1", nativeStageTimingArtifact.Source);
+        var txFixtureSafetyArtifact = Assert.Single(manifest.RequiredArtifacts, artifact => artifact.Id == "tx-fixture-safety-report");
+        Assert.True(txFixtureSafetyArtifact.Required);
+        Assert.Equal("tx-fixture-safety-report-json", txFixtureSafetyArtifact.Kind);
+        Assert.Contains("summarize-dsp-tx-fixture-safety.ps1", txFixtureSafetyArtifact.Source);
+        Assert.Contains("TX stage meter", txFixtureSafetyArtifact.Purpose, StringComparison.Ordinal);
+        Assert.Equal(["tx-two-tone", "tx-voice-like"], txFixtureSafetyArtifact.ScenarioIds);
+        var txHeadroomAbArtifact = Assert.Single(manifest.RequiredArtifacts, artifact => artifact.Id == "tx-output-headroom-ab-trace");
+        Assert.False(txHeadroomAbArtifact.Required);
+        Assert.Equal("diagnostics-ab-summary-json", txHeadroomAbArtifact.Kind);
+        Assert.Contains("capture-tx-output-headroom-ab.ps1", txHeadroomAbArtifact.Source);
+        Assert.Contains("without keying TX", txHeadroomAbArtifact.Purpose, StringComparison.Ordinal);
+        Assert.Equal(["tx-two-tone", "tx-voice-like", "tx-puresignal-safe-bypass"], txHeadroomAbArtifact.ScenarioIds);
+        var lifecycleArtifact = Assert.Single(manifest.RequiredArtifacts, artifact => artifact.Id == "wdsp-channel-lifecycle-report");
+        Assert.True(lifecycleArtifact.Required);
+        Assert.Equal("wdsp-channel-lifecycle-json", lifecycleArtifact.Kind);
+        Assert.Contains("run-dsp-wdsp-channel-lifecycle.ps1", lifecycleArtifact.Source);
+        Assert.Contains("SetMox", lifecycleArtifact.Purpose, StringComparison.Ordinal);
+        Assert.Equal(["wdsp-channel-lifecycle"], lifecycleArtifact.ScenarioIds);
+        var rxLevelerFixtureArtifact = Assert.Single(manifest.RequiredArtifacts, artifact => artifact.Id == "rx-audio-leveler-fixture-benchmark");
+        Assert.False(rxLevelerFixtureArtifact.Required);
+        Assert.Equal("metrics-json", rxLevelerFixtureArtifact.Kind);
+        Assert.Contains("run-dsp-rx-leveler-fixture-benchmark.ps1", rxLevelerFixtureArtifact.Source);
+        Assert.Contains("strong-after-weak", rxLevelerFixtureArtifact.Purpose, StringComparison.Ordinal);
+        Assert.Equal(
+            ["ssb-syllable-step", "near-target-speech", "sustained-weak-speech", "strong-after-weak"],
+            rxLevelerFixtureArtifact.ScenarioIds);
         Assert.Contains(manifest.OperatorNotes, item => item.Contains("Cross-radio validation", StringComparison.Ordinal));
     }
 
@@ -455,6 +580,7 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("live-diagnostics-json", snapshot.IncludedArtifacts);
         Assert.Contains("wdsp-native-symbol-audit", snapshot.IncludedArtifacts);
         Assert.Contains("wdsp-runtime-artifact-audit", snapshot.IncludedArtifacts);
+        Assert.DoesNotContain("rx-audio-leveler-fixture-benchmark", snapshot.IncludedArtifacts);
         Assert.DoesNotContain("external-engine-bakeoff-report", snapshot.IncludedArtifacts);
         Assert.DoesNotContain("live-diagnostics-history", snapshot.IncludedArtifacts);
         Assert.Contains("frontend-dsp-scene", snapshot.MissingEvidence);
@@ -492,6 +618,7 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("offline-fixture-metrics", snapshot.IncludedArtifacts);
         Assert.Contains("wdsp-native-symbol-audit", snapshot.IncludedArtifacts);
         Assert.Contains("wdsp-runtime-artifact-audit", snapshot.IncludedArtifacts);
+        Assert.DoesNotContain("rx-audio-leveler-fixture-benchmark", snapshot.IncludedArtifacts);
         Assert.DoesNotContain("external-engine-bakeoff-report", snapshot.IncludedArtifacts);
         Assert.DoesNotContain("live-diagnostics-history", snapshot.IncludedArtifacts);
         Assert.Contains(snapshot.NextActions, action => action.Contains("Save this modernization snapshot", StringComparison.Ordinal));
@@ -724,9 +851,20 @@ public sealed class DspLiveDiagnosticsServiceTests
         string status = "fresh",
         string audioStatus = "fresh",
         double? audioPeakDbfs = -12.0,
-        double? adcHeadroomDb = 24.0) =>
+        double? adcHeadroomDb = 24.0,
+        string levelerRequestedProfile = "current",
+        string levelerActiveProfile = "current",
+        bool levelerExperimental = false,
+        bool? levelerControlRmsValid = null,
+        double? levelerControlRmsDbfs = null,
+        double? levelerControlRmsHangDb = null,
+        string? txOutputHeadroomRequestedProfile = null,
+        string? txOutputHeadroomActiveProfile = null,
+        bool? txOutputHeadroomExperimental = null,
+        double? txOutputHeadroomTrimDb = null,
+        bool? txOutputHeadroomPureSignalBypassed = null) =>
         new(
-            SchemaVersion: 4,
+            SchemaVersion: 5,
             GeneratedUtc: DateTimeOffset.UtcNow,
             Status: status,
             RxMetersFresh: true,
@@ -766,6 +904,17 @@ public sealed class DspLiveDiagnosticsServiceTests
             RxAudioLevelerBoostSlewLimited: false,
             RxAudioLevelerPeakLimited: false,
             RxAudioLevelerOutputLimited: false,
+            RxAudioLevelerRequestedProfile: levelerRequestedProfile,
+            RxAudioLevelerActiveProfile: levelerActiveProfile,
+            RxAudioLevelerExperimental: levelerExperimental,
+            RxAudioLevelerControlRmsValid: levelerControlRmsValid,
+            RxAudioLevelerControlRmsDbfs: levelerControlRmsDbfs,
+            RxAudioLevelerControlRmsHangDb: levelerControlRmsHangDb,
+            TxOutputHeadroomRequestedProfile: txOutputHeadroomRequestedProfile,
+            TxOutputHeadroomActiveProfile: txOutputHeadroomActiveProfile,
+            TxOutputHeadroomExperimental: txOutputHeadroomExperimental,
+            TxOutputHeadroomTrimDb: txOutputHeadroomTrimDb,
+            TxOutputHeadroomPureSignalBypassed: txOutputHeadroomPureSignalBypassed,
             MonitorBacklogSamples: 0,
             AudioSinkCount: 1,
             DiagnosticRecommendation: "test evidence");

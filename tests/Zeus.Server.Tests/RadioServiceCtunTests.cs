@@ -192,4 +192,97 @@ public sealed class RadioServiceCtunTests : IDisposable
         store2.Dispose();
         try { if (File.Exists(storePath)) File.Delete(storePath); } catch { }
     }
+
+    [Fact]
+    public void CtunOff_PersistedOffCenterRadioLo_RehydratesAtDial()
+    {
+        const long dialHz = 14_275_000;
+        const long staleLoHz = 14_258_065;
+        var storePath = _dbPath + $".rs-{Guid.NewGuid():N}";
+
+        var store1 = new RadioStateStore(NullLogger<RadioStateStore>.Instance, storePath);
+        store1.Save(new RadioStateEntry
+        {
+            VfoHz = dialHz,
+            Mode = RxMode.USB,
+            RadioLoHz = staleLoHz,
+            CtunEnabled = false,
+            UpdatedUtc = DateTime.UtcNow,
+        });
+        store1.Dispose();
+
+        var store2 = new RadioStateStore(NullLogger<RadioStateStore>.Instance, storePath);
+        using (var reborn = new RadioService(
+            NullLoggerFactory.Instance, _dspStore, _paStore, radioStateStore: store2))
+        {
+            var snap = reborn.Snapshot();
+            Assert.False(snap.CtunEnabled);
+            Assert.Equal(dialHz, snap.VfoHz);
+            Assert.Equal(dialHz, snap.RadioLoHz);
+        }
+        store2.Dispose();
+        try { if (File.Exists(storePath)) File.Delete(storePath); } catch { }
+    }
+
+    [Fact]
+    public void CtunOff_CwPersistedOffCenterRadioLo_RehydratesAtEffectiveDial()
+    {
+        const long dialHz = 14_046_000;
+        const long staleLoHz = 14_258_065;
+        var storePath = _dbPath + $".rs-{Guid.NewGuid():N}";
+
+        var store1 = new RadioStateStore(NullLogger<RadioStateStore>.Instance, storePath);
+        store1.Save(new RadioStateEntry
+        {
+            VfoHz = dialHz,
+            Mode = RxMode.CWU,
+            RadioLoHz = staleLoHz,
+            CtunEnabled = false,
+            UpdatedUtc = DateTime.UtcNow,
+        });
+        store1.Dispose();
+
+        var store2 = new RadioStateStore(NullLogger<RadioStateStore>.Instance, storePath);
+        using (var reborn = new RadioService(
+            NullLoggerFactory.Instance, _dspStore, _paStore, radioStateStore: store2))
+        {
+            var snap = reborn.Snapshot();
+            Assert.False(snap.CtunEnabled);
+            Assert.Equal(dialHz, snap.VfoHz);
+            Assert.Equal(dialHz - CwOffset.CwPitchHz, snap.RadioLoHz);
+        }
+        store2.Dispose();
+        try { if (File.Exists(storePath)) File.Delete(storePath); } catch { }
+    }
+
+    [Fact]
+    public void CtunOn_PersistedOffCenterRadioLo_RehydratesFrozenCenter()
+    {
+        const long dialHz = 14_275_000;
+        const long frozenLoHz = 14_258_065;
+        var storePath = _dbPath + $".rs-{Guid.NewGuid():N}";
+
+        var store1 = new RadioStateStore(NullLogger<RadioStateStore>.Instance, storePath);
+        store1.Save(new RadioStateEntry
+        {
+            VfoHz = dialHz,
+            Mode = RxMode.USB,
+            RadioLoHz = frozenLoHz,
+            CtunEnabled = true,
+            UpdatedUtc = DateTime.UtcNow,
+        });
+        store1.Dispose();
+
+        var store2 = new RadioStateStore(NullLogger<RadioStateStore>.Instance, storePath);
+        using (var reborn = new RadioService(
+            NullLoggerFactory.Instance, _dspStore, _paStore, radioStateStore: store2))
+        {
+            var snap = reborn.Snapshot();
+            Assert.True(snap.CtunEnabled);
+            Assert.Equal(dialHz, snap.VfoHz);
+            Assert.Equal(frozenLoHz, snap.RadioLoHz);
+        }
+        store2.Dispose();
+        try { if (File.Exists(storePath)) File.Delete(storePath); } catch { }
+    }
 }

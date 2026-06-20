@@ -21,6 +21,8 @@ param(
 
     [bool]$DefaultBehaviorChangeApproved = $false,
 
+    [switch]$RequireLiveReadinessEvidence,
+
     [switch]$Force,
 
     [switch]$NoMarkdown,
@@ -160,6 +162,24 @@ function Get-NestedJsonValue {
     return $null
 }
 
+function Get-JsonArray {
+    param(
+        $Object,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $value = Get-JsonValue $Object $Name
+    if ($null -eq $value) {
+        return @()
+    }
+
+    if ($value -is [System.Array]) {
+        return @($value)
+    }
+
+    return @($value)
+}
+
 function Get-NumericValue {
     param($Value)
 
@@ -268,11 +288,38 @@ function New-CaptureRecord {
 
     $enabledValue = Get-NestedJsonValue $json @("pureSignalEnabled", "psEnabled", "puresignalEnabled", "enabled")
     $psEnabled = if ($null -ne $enabledValue) { Test-Truthy $enabledValue } else { [string]::Equals($Mode, "enabled", [StringComparison]::OrdinalIgnoreCase) }
+    $expectedEnabled = [string]::Equals($Mode, "enabled", [StringComparison]::OrdinalIgnoreCase)
+    $sampleEnabledValues = New-Object System.Collections.Generic.List[bool]
+    foreach ($sample in (Get-JsonArray $json "samples")) {
+        $sampleEnabledValue = Get-JsonValue $sample "pureSignalEnabled"
+        if ($null -ne $sampleEnabledValue) {
+            $sampleEnabledValues.Add((Test-Truthy $sampleEnabledValue)) | Out-Null
+        }
+    }
+    if ($sampleEnabledValues.Count -eq 0) {
+        $sampleEnabledValues.Add($psEnabled) | Out-Null
+    }
+    $modeConsistentSampleCount = @($sampleEnabledValues.ToArray() | Where-Object { $_ -eq $expectedEnabled }).Count
+    $modeMismatchSampleCount = $sampleEnabledValues.Count - $modeConsistentSampleCount
+    $modeConsistent = ($sampleEnabledValues.Count -gt 0 -and $modeMismatchSampleCount -eq 0)
     $bypassState = ([string](Get-NestedJsonValue $json @("bypassState", "pureSignalBypassState", "puresignalBypassState", "psBypassState"))).Trim()
     $feedbackStability = [double](Get-NumericValueOrDefault (Get-NestedJsonValue $json @("feedbackStability", "feedbackStabilityScore", "pureSignalFeedbackStability", "feedbackStabilityMetric")) -Default 1.0)
     $txMonitorCoupling = [double](Get-NumericValueOrDefault (Get-NestedJsonValue $json @("txMonitorCoupling", "monitorCoupling", "txMonitorCouplingScore", "pureSignalTxMonitorCoupling")) -Default 0.0)
     $clippingCount = [int](Get-NumericValueOrDefault (Get-NestedJsonValue $json @("clippingCount", "txClippingCount", "clipCount")) -Default 0.0)
     $txOutputPeakDbfs = Get-NumericValue (Get-NestedJsonValue $json @("txOutputPeakDbfs", "outPkDbfs", "outputPeakDbfs"))
+    $requiresLiveReady = Test-Truthy (Get-JsonValue $json "requiresLiveReady")
+    $liveReadinessBefore = Get-JsonValue $json "liveReadinessBefore"
+    $liveReadinessReadyValue = Get-JsonValue $json "liveReadinessReady"
+    if ($null -eq $liveReadinessReadyValue -and $null -ne $liveReadinessBefore) {
+        $liveReadinessReadyValue = Get-JsonValue $liveReadinessBefore "ready"
+    }
+    $liveReadinessReady = if ($null -eq $liveReadinessReadyValue) { $null } else { Test-Truthy $liveReadinessReadyValue }
+    $liveReadinessFailureReasons = if ($null -ne $liveReadinessBefore) {
+        @(Get-JsonArray $liveReadinessBefore "failureReasons" | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+    else {
+        @()
+    }
 
     $issues = New-Object System.Collections.Generic.List[string]
     if ([string]::Equals($Mode, "disabled", [StringComparison]::OrdinalIgnoreCase) -and $psEnabled) {
@@ -280,6 +327,9 @@ function New-CaptureRecord {
     }
     if ([string]::Equals($Mode, "enabled", [StringComparison]::OrdinalIgnoreCase) -and -not $psEnabled) {
         $issues.Add("enabled-capture-does-not-have-puresignal-enabled") | Out-Null
+    }
+    if (-not $modeConsistent) {
+        $issues.Add("puresignal-mode-sample-mismatch") | Out-Null
     }
     if ($feedbackStability -lt $FeedbackStabilityThreshold) {
         $issues.Add("feedback-stability-below-threshold") | Out-Null
@@ -289,6 +339,17 @@ function New-CaptureRecord {
     }
     if ($clippingCount -gt $MaxClippingCount) {
         $issues.Add("clipping-count-above-threshold") | Out-Null
+    }
+    if ($RequireLiveReadinessEvidence) {
+        if (-not $requiresLiveReady) {
+            $issues.Add("live-readiness-evidence-not-required-by-capture") | Out-Null
+        }
+        if ($null -eq $liveReadinessBefore) {
+            $issues.Add("live-readiness-snapshot-missing") | Out-Null
+        }
+        if ($true -ne $liveReadinessReady) {
+            $issues.Add("live-readiness-not-ready") | Out-Null
+        }
     }
 
     $ready = $issues.Count -eq 0
@@ -303,7 +364,21 @@ function New-CaptureRecord {
         txMonitorCoupling = [Math]::Round($txMonitorCoupling, 6)
         clippingCount = $clippingCount
         txOutputPeakDbfs = if ($null -ne $txOutputPeakDbfs) { [Math]::Round([double]$txOutputPeakDbfs, 6) } else { $null }
+        requiresLiveReady = $requiresLiveReady
+        liveReadinessReady = $liveReadinessReady
+        liveReadinessStatus = if ($null -ne $liveReadinessBefore) { [string](Get-JsonValue $liveReadinessBefore "status") } else { "" }
+        liveReadinessWdspActive = if ($null -ne $liveReadinessBefore) { Test-Truthy (Get-JsonValue $liveReadinessBefore "wdspActive") } else { $null }
+        liveReadinessFrontendSceneFresh = if ($null -ne $liveReadinessBefore) { Test-Truthy (Get-JsonValue $liveReadinessBefore "frontendSceneFresh") } else { $null }
+        liveReadinessRuntimeStatus = if ($null -ne $liveReadinessBefore) { [string](Get-JsonValue $liveReadinessBefore "runtimeStatus") } else { "" }
+        liveReadinessRadioVfoHz = if ($null -ne $liveReadinessBefore) { Get-JsonValue $liveReadinessBefore "radioVfoHz" } else { $null }
+        liveReadinessRadioMode = if ($null -ne $liveReadinessBefore) { [string](Get-JsonValue $liveReadinessBefore "radioMode") } else { "" }
+        liveReadinessFailureReasons = @($liveReadinessFailureReasons)
         ready = $ready
+        expectedPureSignalEnabled = $expectedEnabled
+        modeConsistent = $modeConsistent
+        modeConsistentSampleCount = $modeConsistentSampleCount
+        modeMismatchSampleCount = $modeMismatchSampleCount
+        modeSampleCount = $sampleEnabledValues.Count
         issues = @($issues.ToArray())
     }
 }
@@ -383,6 +458,24 @@ $couplingValues = @($captureRecords | ForEach-Object { [double](Get-NumericValue
 $clippingCountTotal = [int](@($captureRecords | ForEach-Object { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "clippingCount")) } | Measure-Object -Sum).Sum)
 $feedbackStabilityMin = if ($feedbackValues.Count -gt 0) { [double]($feedbackValues | Measure-Object -Minimum).Minimum } else { 0.0 }
 $txMonitorCouplingMax = if ($couplingValues.Count -gt 0) { [double]($couplingValues | Measure-Object -Maximum).Maximum } else { 0.0 }
+$liveReadinessReadyCount = @($captureRecords | Where-Object { Test-Truthy (Get-JsonValue $_ "liveReadinessReady") }).Count
+$liveReadinessMissingCount = @($captureRecords | Where-Object {
+        (-not (Test-Truthy (Get-JsonValue $_ "requiresLiveReady"))) -or
+        ($null -eq (Get-JsonValue $_ "liveReadinessReady"))
+    }).Count
+$liveReadinessFailureCount = @($captureRecords | Where-Object {
+        (Test-Truthy (Get-JsonValue $_ "requiresLiveReady")) -and
+        ($null -ne (Get-JsonValue $_ "liveReadinessReady")) -and
+        (-not (Test-Truthy (Get-JsonValue $_ "liveReadinessReady")))
+    }).Count
+$liveReadinessEvidenceReady = (-not [bool]$RequireLiveReadinessEvidence) -or (
+    $captureRecords.Count -gt 0 -and
+    $liveReadinessMissingCount -eq 0 -and
+    $liveReadinessFailureCount -eq 0
+)
+$modeMismatchCaptureCount = @($captureRecords | Where-Object { -not (Test-Truthy (Get-JsonValue $_ "modeConsistent")) }).Count
+$modeMismatchSampleCountTotal = [int](@($captureRecords | ForEach-Object { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "modeMismatchSampleCount")) } | Measure-Object -Sum).Sum)
+$modeConsistencyReady = ($captureRecords.Count -gt 0 -and $modeMismatchCaptureCount -eq 0 -and $modeMismatchSampleCountTotal -eq 0)
 
 $gates = @(
     (New-Gate "disabled-path-captured" ($disabledCaptures.Count -gt 0) "PureSignal disabled/bypass TX bench capture must be present.")
@@ -394,6 +487,8 @@ $gates = @(
     (New-Gate "feedback-stability-bounded" ($feedbackStabilityMin -ge $FeedbackStabilityThreshold) "Minimum feedback stability must meet threshold.")
     (New-Gate "tx-monitor-coupling-bounded" ($txMonitorCouplingMax -le $TxMonitorCouplingThreshold) "TX monitor or external DSP audio must not couple into feedback.")
     (New-Gate "no-clipping" ($clippingCountTotal -le $MaxClippingCount) "TX/PureSignal bench captures must not clip.")
+    (New-Gate "live-readiness-evidence-ready" $liveReadinessEvidenceReady "When required, every PureSignal bench trace must include ready G2/frontend/WDSP live diagnostics evidence.")
+    (New-Gate "mode-sample-consistency" $modeConsistencyReady "Every PureSignal bench sample must match its requested disabled/enabled mode.")
 )
 
 $gateFailureCount = @($gates | Where-Object { -not (Test-Truthy (Get-JsonValue $_ "passed")) }).Count
@@ -414,6 +509,14 @@ $report = [ordered]@{
     missingModes = @($missingModes.ToArray())
     pureSignalDefaultStatePreserved = [bool]$PureSignalDefaultStatePreserved
     defaultBehaviorChangeApproved = [bool]$DefaultBehaviorChangeApproved
+    liveReadinessEvidenceRequired = [bool]$RequireLiveReadinessEvidence
+    liveReadinessReady = $liveReadinessEvidenceReady
+    liveReadinessReadyCount = $liveReadinessReadyCount
+    liveReadinessMissingCount = $liveReadinessMissingCount
+    liveReadinessFailureCount = $liveReadinessFailureCount
+    modeConsistencyReady = $modeConsistencyReady
+    modeMismatchCaptureCount = $modeMismatchCaptureCount
+    modeMismatchSampleCount = $modeMismatchSampleCountTotal
     feedbackStabilityMin = [Math]::Round($feedbackStabilityMin, 6)
     feedbackStabilityThreshold = [Math]::Round($FeedbackStabilityThreshold, 6)
     txMonitorCouplingMax = [Math]::Round($txMonitorCouplingMax, 6)
@@ -426,6 +529,8 @@ $report = [ordered]@{
         "feedback stability" = [Math]::Round($feedbackStabilityMin, 6)
         "TX monitor coupling" = [Math]::Round($txMonitorCouplingMax, 6)
         "clipping count" = $clippingCountTotal
+        "live readiness evidence" = if ($liveReadinessEvidenceReady) { "ready" } else { "not-ready" }
+        "mode sample consistency" = if ($modeConsistencyReady) { "ready" } else { "not-ready" }
     }
     gates = @($gates)
     captures = @($captureRecords)
@@ -448,6 +553,10 @@ if (-not $NoMarkdown) {
     $lines.Add("- Feedback stability min: $($report.feedbackStabilityMin)") | Out-Null
     $lines.Add("- TX monitor coupling max: $($report.txMonitorCouplingMax)") | Out-Null
     $lines.Add("- Clipping count total: $($report.clippingCountTotal)") | Out-Null
+    $lines.Add("- Live readiness evidence required: $($report.liveReadinessEvidenceRequired)") | Out-Null
+    $lines.Add("- Live readiness evidence ready: $($report.liveReadinessReady)") | Out-Null
+    $lines.Add("- Mode consistency ready: $($report.modeConsistencyReady)") | Out-Null
+    $lines.Add("- Mode mismatch samples: $($report.modeMismatchSampleCount)") | Out-Null
     $lines.Add("") | Out-Null
     $lines.Add("## Gates") | Out-Null
     foreach ($gate in $gates) {
@@ -467,6 +576,11 @@ $summary = [ordered]@{
     gateFailureCount = $gateFailureCount
     disabledPathReady = $disabledPathReady
     enabledPathReady = $enabledPathReady
+    liveReadinessEvidenceRequired = [bool]$RequireLiveReadinessEvidence
+    liveReadinessReady = $liveReadinessEvidenceReady
+    modeConsistencyReady = $modeConsistencyReady
+    modeMismatchCaptureCount = $modeMismatchCaptureCount
+    modeMismatchSampleCount = $modeMismatchSampleCountTotal
 }
 
 if ($JsonOnly) {

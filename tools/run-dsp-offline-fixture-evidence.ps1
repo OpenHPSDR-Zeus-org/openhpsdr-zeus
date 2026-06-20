@@ -13,7 +13,7 @@ param(
 
     [string[]]$ScenarioIds = @(),
 
-    [string[]]$ComparisonIds = @("off-baseline", "thetis-parity", "current-zeus", "candidate-under-test", "candidate-under-test"),
+    [string[]]$ComparisonIds = @("off-baseline", "thetis-parity", "current-zeus", "candidate-under-test"),
 
     [switch]$IncludeNonFixtureScenarios,
 
@@ -126,6 +126,29 @@ function ConvertTo-MetricId {
     return ($Value.Trim().ToLowerInvariant() -replace "[^a-z0-9]+", "")
 }
 
+function Get-MapNumericOrDefault {
+    param(
+        $Map,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [double]$Default = 0.0
+    )
+
+    if ($null -eq $Map -or -not $Map.Contains($Name)) {
+        return $Default
+    }
+
+    $parsed = 0.0
+    if ([double]::TryParse(
+            [string]$Map[$Name],
+            [System.Globalization.NumberStyles]::Float,
+            [System.Globalization.CultureInfo]::InvariantCulture,
+            [ref]$parsed)) {
+        return $parsed
+    }
+
+    return $Default
+}
+
 function ConvertTo-ComparisonId {
     param([string]$Value)
 
@@ -137,8 +160,6 @@ function ConvertTo-ComparisonId {
         "current" { return "current-zeus" }
         "zeus-current" { return "current-zeus" }
         "zeus" { return "current-zeus" }
-        "candidate" { return "candidate-under-test" }
-        "candidate" { return "candidate-under-test" }
         "candidate" { return "candidate-under-test" }
         default { return $normalized }
     }
@@ -240,6 +261,121 @@ function ConvertTo-Db {
     }
 
     return 20.0 * [Math]::Log10($Value)
+}
+
+function Test-TxHeadroomCandidate {
+    param(
+        [string]$ScenarioId,
+        [string]$ComparisonId
+    )
+
+    if ($ScenarioId -notlike "tx-*") {
+        return $false
+    }
+
+    return ((ConvertTo-ComparisonId $ComparisonId) -eq "candidate-under-test" -or
+        (Test-TxPanelTrimCandidate -ScenarioId $ScenarioId -ComparisonId $ComparisonId))
+}
+
+function Test-TxPanelTrimCandidate {
+    param(
+        [string]$ScenarioId,
+        [string]$ComparisonId
+    )
+
+    if ($ScenarioId -notlike "tx-*") {
+        return $false
+    }
+
+    $ignored = 0.0
+    return (TryGet-TxPanelTrimDb -ComparisonId $ComparisonId -TrimDb ([ref]$ignored))
+}
+
+function Test-TxOutputTrimCandidate {
+    param(
+        [string]$ScenarioId,
+        [string]$ComparisonId
+    )
+
+    return ($ScenarioId -like "tx-*" -and (ConvertTo-ComparisonId $ComparisonId) -eq "candidate-under-test")
+}
+
+function Get-TxHeadroomCandidatePanelGainTrimDb {
+    param([string]$ComparisonId)
+
+    $trimDb = 0.0
+    if (TryGet-TxPanelTrimDb -ComparisonId $ComparisonId -TrimDb ([ref]$trimDb)) {
+        return $trimDb
+    }
+
+    return 0.0
+}
+
+function Get-TxHeadroomCandidateOutputTrimDb {
+    return -0.35
+}
+
+function TryGet-TxPanelTrimDb {
+    param(
+        [string]$ComparisonId,
+        [ref]$TrimDb
+    )
+
+    $TrimDb.Value = 0.0
+    $comparison = ConvertTo-ComparisonId $ComparisonId
+    $prefix = "candidate-tx-panel-trim-"
+    if (-not $comparison.StartsWith($prefix, [StringComparison]::Ordinal)) {
+        return $false
+    }
+
+    $suffix = $comparison.Substring($prefix.Length)
+    if ($suffix.EndsWith("db", [StringComparison]::Ordinal)) {
+        $suffix = $suffix.Substring(0, $suffix.Length - 2)
+    }
+    $suffix = $suffix.Replace("p", ".")
+    $magnitude = 0.0
+    if (-not [double]::TryParse(
+            $suffix,
+            [System.Globalization.NumberStyles]::Float,
+            [System.Globalization.CultureInfo]::InvariantCulture,
+            [ref]$magnitude) -or
+        [double]::IsNaN($magnitude) -or
+        [double]::IsInfinity($magnitude) -or
+        $magnitude -le 0.0 -or
+        $magnitude -gt 3.0) {
+        return $false
+    }
+
+    $TrimDb.Value = -1.0 * $magnitude
+    return $true
+}
+
+function Get-ComparisonProfileLabel {
+    param(
+        [string]$ScenarioId,
+        [string]$ComparisonId
+    )
+
+    $comparison = ConvertTo-ComparisonId $ComparisonId
+    if ($ScenarioId -like "tx-*") {
+        $trimDb = 0.0
+        if (TryGet-TxPanelTrimDb -ComparisonId $ComparisonId -TrimDb ([ref]$trimDb)) {
+            return "wdsp-txa-panel-gain-headroom-trim-$([Math]::Abs($trimDb).ToString('0.##', [System.Globalization.CultureInfo]::InvariantCulture))db-candidate"
+        }
+
+        switch ($comparison) {
+            "thetis-parity" { return "wdsp-txa-thetis-defaults" }
+            "candidate-under-test" { return "wdsp-txa-output-headroom-trim-candidate" }
+            default { return "wdsp-txa-current-defaults" }
+        }
+    }
+
+    switch ($comparison) {
+        "thetis-parity" { return "wdsp-emnr-nr2-thetis-parity" }
+        "candidate-under-test" { return "wdsp-current-safe-bypass" }
+        "candidate-external-engine-opt-in" { return "post-demod-external-bypass" }
+        default { return "wdsp-current-nr-off" }
+    }
 }
 
 function Get-SignalSinadDb {
@@ -548,6 +684,60 @@ foreach ($scenario in (Get-JsonArray $plan "scenarios")) {
             $metrics[[string]$metricName] = Get-MetricValue -MetricId $metricId -Direction $direction -ScenarioId $scenarioId -ComparisonId $comparisonId -Descriptor $descriptor
         }
 
+        $candidateDiagnostics = $null
+        $candidateOutputTrimDb = 0.0
+        $candidatePanelTrimDb = 0.0
+        $rawTxOutputPeak = $null
+        $rawTxOutputAverage = $null
+        $candidateTxOutputPeak = $null
+        $candidateTxOutputAverage = $null
+        if (Test-TxOutputTrimCandidate -ScenarioId $scenarioId -ComparisonId $comparisonId) {
+            $candidateOutputTrimDb = Get-TxHeadroomCandidateOutputTrimDb
+            $rawTxOutputPeak = Get-MapNumericOrDefault -Map $metrics -Name "TX output peak" -Default (ConvertTo-Db ([double]$descriptor.peak))
+            $rawTxOutputAverage = Get-MapNumericOrDefault -Map $metrics -Name "TX output average" -Default (ConvertTo-Db ([double]$descriptor.rms))
+            $candidateTxOutputPeak = [Math]::Round(([double]$rawTxOutputPeak + $candidateOutputTrimDb), 6)
+            $candidateTxOutputAverage = [Math]::Round(([double]$rawTxOutputAverage + $candidateOutputTrimDb), 6)
+            if ($metrics.Contains("TX output peak")) { $metrics["TX output peak"] = $candidateTxOutputPeak }
+            if ($metrics.Contains("TX output average")) { $metrics["TX output average"] = $candidateTxOutputAverage }
+            $candidateDiagnostics = [ordered]@{
+                schemaVersion = 1
+                profileKind = "fixture-only-post-wdsp-output-trim"
+                defaultBehaviorChanged = $false
+                requiresRuntimeOptIn = $true
+                txOutputTrimDb = $candidateOutputTrimDb
+                txOutputTrimLinear = [Math]::Round([Math]::Pow(10.0, $candidateOutputTrimDb / 20.0), 9)
+                rawWdspOutPkDbfs = $rawTxOutputPeak
+                rawWdspOutAvDbfs = $rawTxOutputAverage
+                effectiveTxOutputPeakDbfs = $candidateTxOutputPeak
+                effectiveTxOutputAverageDbfs = $candidateTxOutputAverage
+                headroomImprovementDb = [Math]::Round(([double]$rawTxOutputPeak - [double]$candidateTxOutputPeak), 6)
+                pureSignalPathStatus = "not-applied; fixture-only candidate must stay disabled while PureSignal is armed until hardware safe-bypass evidence exists"
+            }
+        }
+        elseif (Test-TxPanelTrimCandidate -ScenarioId $scenarioId -ComparisonId $comparisonId) {
+            $candidatePanelTrimDb = Get-TxHeadroomCandidatePanelGainTrimDb -ComparisonId $comparisonId
+            $rawTxOutputPeak = Get-MapNumericOrDefault -Map $metrics -Name "TX output peak" -Default (ConvertTo-Db ([double]$descriptor.peak))
+            $rawTxOutputAverage = Get-MapNumericOrDefault -Map $metrics -Name "TX output average" -Default (ConvertTo-Db ([double]$descriptor.rms))
+            $candidateTxOutputPeak = [Math]::Round(([double]$rawTxOutputPeak + $candidatePanelTrimDb), 6)
+            $candidateTxOutputAverage = [Math]::Round(([double]$rawTxOutputAverage + $candidatePanelTrimDb), 6)
+            if ($metrics.Contains("TX output peak")) { $metrics["TX output peak"] = $candidateTxOutputPeak }
+            if ($metrics.Contains("TX output average")) { $metrics["TX output average"] = $candidateTxOutputAverage }
+            $candidateDiagnostics = [ordered]@{
+                schemaVersion = 1
+                profileKind = "fixture-only-tx-panel-gain-trim"
+                defaultBehaviorChanged = $false
+                requiresRuntimeOptIn = $true
+                txPanelGainTrimDb = $candidatePanelTrimDb
+                txPanelGainLinear = [Math]::Round([Math]::Pow(10.0, $candidatePanelTrimDb / 20.0), 9)
+                untrimmedEstimatedOutPkDbfs = $rawTxOutputPeak
+                untrimmedEstimatedOutAvDbfs = $rawTxOutputAverage
+                analyzedTxOutputPeakDbfs = $candidateTxOutputPeak
+                analyzedTxOutputAverageDbfs = $candidateTxOutputAverage
+                headroomTrimDb = [Math]::Abs($candidatePanelTrimDb)
+                pureSignalPathStatus = "not-applied; fixture-only candidate must stay disabled while PureSignal is armed until hardware safe-bypass evidence exists"
+            }
+        }
+
         $audioEvidencePath = Join-Path $bundlePath "artifacts\offline-fixtures\audio\$scenarioId\$comparisonId.json"
         $spectrumEvidencePath = Join-Path $bundlePath "artifacts\offline-fixtures\spectrum\$scenarioId\$comparisonId.json"
         $audioEvidence = [ordered]@{
@@ -567,6 +757,7 @@ foreach ($scenario in (Get-JsonArray $plan "scenarios")) {
             windowedRmsSpreadDb = [double]$descriptor.spreadDb
             expectedTonesHz = @($descriptor.tones)
             samplePreview = @(New-SamplePreview $descriptor)
+            candidateDiagnostics = $candidateDiagnostics
             notes = @(
                 "Deterministic offline fixture evidence; it does not prove hardware or on-air acceptance.",
                 "Use G2 live diagnostics, TX/PureSignal traces, and cross-radio validation before default DSP changes."
@@ -595,6 +786,35 @@ foreach ($scenario in (Get-JsonArray $plan "scenarios")) {
         $spectrumSha = New-EvidenceFile -Path $spectrumEvidencePath -Value $spectrumEvidence
         $audioRelativePath = ConvertTo-PortablePath -Root $bundlePath -Path $audioEvidencePath
         $spectrumRelativePath = ConvertTo-PortablePath -Root $bundlePath -Path $spectrumEvidencePath
+        $txStageMeters = $null
+        if ($scenarioId -in @("tx-two-tone", "tx-voice-like")) {
+            $meterOutPk = Get-MapNumericOrDefault -Map $metrics -Name "TX output peak" -Default -3.0
+            $meterOutAv = Get-MapNumericOrDefault -Map $metrics -Name "TX output average" -Default -18.0
+            $txStageMeters = [ordered]@{
+                outPkDbfs = $meterOutPk
+                outAvDbfs = $meterOutAv
+                alcGainReductionDb = Get-MapNumericOrDefault -Map $metrics -Name "TX ALC gain reduction" -Default 0.0
+                cfcGainReductionDb = Get-MapNumericOrDefault -Map $metrics -Name "TX CFC gain reduction" -Default 0.0
+                levelerGainReductionDb = Get-MapNumericOrDefault -Map $metrics -Name "TX leveler gain reduction" -Default 0.0
+            }
+            if ($null -ne $candidateTxOutputPeak) {
+                if (Test-TxOutputTrimCandidate -ScenarioId $scenarioId -ComparisonId $comparisonId) {
+                    $txStageMeters["rawOutPkDbfs"] = $rawTxOutputPeak
+                    $txStageMeters["rawOutAvDbfs"] = $rawTxOutputAverage
+                    $txStageMeters["effectiveOutPkDbfs"] = $candidateTxOutputPeak
+                    $txStageMeters["effectiveOutAvDbfs"] = $candidateTxOutputAverage
+                    $txStageMeters["txOutputTrimDb"] = $candidateOutputTrimDb
+                    $txStageMeters["txOutputTrimLinear"] = [Math]::Round([Math]::Pow(10.0, $candidateOutputTrimDb / 20.0), 9)
+                }
+                else {
+                    $txStageMeters["untrimmedEstimatedOutPkDbfs"] = $rawTxOutputPeak
+                    $txStageMeters["untrimmedEstimatedOutAvDbfs"] = $rawTxOutputAverage
+                    $txStageMeters["txPanelGainTrimDb"] = $candidatePanelTrimDb
+                    $txStageMeters["txPanelGainLinear"] = [Math]::Round([Math]::Pow(10.0, $candidatePanelTrimDb / 20.0), 9)
+                }
+            }
+        }
+        $clippingCount = [int](Get-MapNumericOrDefault -Map $metrics -Name "clipping count" -Default 0.0)
 
         $audioFiles.Add([ordered]@{
             path = $audioRelativePath
@@ -617,8 +837,12 @@ foreach ($scenario in (Get-JsonArray $plan "scenarios")) {
         $scenarioComparisons.Add([ordered]@{
             comparisonId = $comparisonId
             source = "deterministic-fixture-generator"
+            profile = Get-ComparisonProfileLabel -ScenarioId $scenarioId -ComparisonId $comparisonId
             metrics = $metrics
             gates = @(New-GateRecords $scenario)
+            txStageMeters = $txStageMeters
+            clippingCount = $clippingCount
+            candidateDiagnostics = $candidateDiagnostics
             evidence = [ordered]@{
                 audioPath = $audioRelativePath
                 spectrumPath = $spectrumRelativePath

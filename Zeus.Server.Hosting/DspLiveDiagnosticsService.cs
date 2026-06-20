@@ -193,6 +193,44 @@ public static class DspLiveDiagnosticsService
                 evidence.Add($"audio-rms-{rms:0.0}dbfs");
             if (runtimeEvidence.AudioPeakDbfs is { } peak)
                 evidence.Add($"audio-peak-{peak:0.0}dbfs");
+            var rxAudioLevelerExperimental = runtimeEvidence.RxAudioLevelerExperimental == true;
+            if (!string.IsNullOrWhiteSpace(runtimeEvidence.RxAudioLevelerActiveProfile) &&
+                (rxAudioLevelerExperimental ||
+                 !string.Equals(runtimeEvidence.RxAudioLevelerActiveProfile, "current", StringComparison.OrdinalIgnoreCase)))
+            {
+                evidence.Add($"rx-audio-leveler-{runtimeEvidence.RxAudioLevelerActiveProfile}");
+            }
+
+            if (rxAudioLevelerExperimental)
+            {
+                evidence.Add("rx-audio-leveler-experimental-profile");
+                actions.Add("Capture matched current-profile and candidate-profile live diagnostics traces before promoting RX leveler changes.");
+            }
+            if (runtimeEvidence.RxAudioLevelerControlRmsValid == true)
+                evidence.Add("rx-audio-leveler-control-rms-evidence");
+
+            var txOutputHeadroomExperimental = runtimeEvidence.TxOutputHeadroomExperimental == true;
+            if (!string.IsNullOrWhiteSpace(runtimeEvidence.TxOutputHeadroomRequestedProfile) &&
+                (txOutputHeadroomExperimental ||
+                 !string.Equals(runtimeEvidence.TxOutputHeadroomRequestedProfile, "current", StringComparison.OrdinalIgnoreCase)))
+            {
+                evidence.Add($"tx-output-headroom-requested-{runtimeEvidence.TxOutputHeadroomRequestedProfile}");
+            }
+            if (!string.IsNullOrWhiteSpace(runtimeEvidence.TxOutputHeadroomActiveProfile) &&
+                !string.Equals(runtimeEvidence.TxOutputHeadroomActiveProfile, "current", StringComparison.OrdinalIgnoreCase))
+            {
+                evidence.Add($"tx-output-headroom-active-{runtimeEvidence.TxOutputHeadroomActiveProfile}");
+            }
+            if (txOutputHeadroomExperimental)
+            {
+                evidence.Add("tx-output-headroom-experimental-profile");
+                actions.Add("Keep the TX output headroom profile opt-in until TX voice, two-tone, PureSignal, and on-air G2 evidence are reviewed.");
+            }
+            if (runtimeEvidence.TxOutputHeadroomPureSignalBypassed == true)
+            {
+                evidence.Add("tx-output-headroom-puresignal-bypassed");
+                actions.Add("PureSignal is armed, so the TX output headroom candidate is bypassed by design; collect separate PureSignal-safe evidence before promotion.");
+            }
 
             if (!runtimeEvidence.AudioFresh)
             {
