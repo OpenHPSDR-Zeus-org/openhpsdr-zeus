@@ -281,7 +281,7 @@ function layoutFromDragStart(
   return next;
 }
 
-function compactMagnetUp(
+export function compactMagnetUp(
   layout: Layout,
   priorityId?: string,
   preservePriority = false,
