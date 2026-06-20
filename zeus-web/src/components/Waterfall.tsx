@@ -224,6 +224,9 @@ export function Waterfall({
     let enhBuf: Float32Array | null = null;
     let terrainBuf: Float32Array | null = null;
     let stitchBuf: Float32Array | null = null;
+    // Scroll speed is a rare toggle; cache the last value pushed to the renderer
+    // so a steady redraw loop skips the store read + GL uniform update per frame.
+    let lastScrollSpeed = -1;
     // Visibility gating: skip the rAF redraw when the waterfall tile is
     // scrolled offscreen or the tab is hidden. We still push frames into
     // the history texture so when visibility resumes the operator sees a
@@ -241,7 +244,8 @@ export function Waterfall({
 
     const redraw = () => {
       if (contextLost || !renderer) return;
-      const { wfDbMin, wfDbMax, wfTxDbMin, wfTxDbMax } = useDisplaySettingsStore.getState();
+      const { wfDbMin, wfDbMax, wfTxDbMin, wfTxDbMax, waterfallScrollSpeed } =
+        useDisplaySettingsStore.getState();
       const { moxOn, tunOn } = useTxStore.getState();
       const keyed = moxOn || tunOn;
       const pop = useSignalEnhanceStore.getState();
@@ -253,7 +257,10 @@ export function Waterfall({
       const popIntensity = popOn ? Math.max(0, Math.min(1, pop.popRenderIntensity / 100)) : 0;
       const reliefDepth = rxRenderable ? Math.max(0, Math.min(1, pop.waterfallReliefDepth / 100)) : 0;
       const smoothness = rxRenderable ? Math.max(0, Math.min(1, pop.waterfallSmoothness / 100)) : 0;
-      renderer.setScrollSpeed(useDisplaySettingsStore.getState().waterfallScrollSpeed);
+      if (waterfallScrollSpeed !== lastScrollSpeed) {
+        renderer.setScrollSpeed(waterfallScrollSpeed);
+        lastScrollSpeed = waterfallScrollSpeed;
+      }
       // Mirror DbScale.tsx — keyed (MOX/TUN) renders the TX waterfall
       // window so the operator's RX noise-floor view stays put.
       const dbMin = popOn ? 0 : keyed ? wfTxDbMin : wfDbMin;
