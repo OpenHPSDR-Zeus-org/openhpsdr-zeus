@@ -1443,6 +1443,22 @@ jobs:
             printf '{ "schema": 1, "updatedAt": null, "latest": null, "versions": [] }\n' > existing-manifest.json
           fi
 
+      - name: Render release notes from CHANGELOG
+        run: |
+          # Extract THIS release's section from CHANGELOG.md — the block from the
+          # first '## [' heading to the next — matching the create-release job's
+          # convention, then render it to HTML for the website download panel.
+          # This job only runs for a published tagged release (is-release &&
+          # !is-draft gating), so draft/dev notes never reach the site.
+          awk '/^## \[/{c++} c==2{exit} c{print}' CHANGELOG.md > whats-new.md
+          if [ -s whats-new.md ]; then
+            npx --yes marked@12.0.2 -i whats-new.md -o release-notes.html
+            echo "ZEUS_RELEASE_NOTES_HTML_FILE=$PWD/release-notes.html" >> "$GITHUB_ENV"
+            echo "Rendered $(wc -c < release-notes.html) bytes of release notes for the download page."
+          else
+            echo "::warning::CHANGELOG.md produced no notes section; publishing without notes."
+          fi
+
       - name: Generate download manifest
         run: node tools/update-download-manifest.mjs release-artifacts existing-manifest.json manifest.json
 

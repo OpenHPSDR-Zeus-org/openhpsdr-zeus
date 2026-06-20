@@ -46,6 +46,11 @@ const versionEntry = {
       : null,
   },
   assets,
+  // Rendered HTML of this release's CHANGELOG section, surfaced in the website
+  // download panel. Populated only when the publish job renders it (tagged
+  // public releases); null otherwise. Older versions keep whatever they were
+  // published with — this tool only sets it on the new entry.
+  notesHtml: loadNotesHtml(),
 };
 
 const versions = [
@@ -95,6 +100,18 @@ function loadManifest(file) {
   } catch {
     return { schema: 1, versions: [] };
   }
+}
+
+// Read the pre-rendered release-notes HTML (produced by the publish job from
+// CHANGELOG.md) if the publish step pointed us at one. Trusted content — it is
+// our own CHANGELOG rendered by the CI, not user input. Returns null when no
+// notes were rendered (e.g. an empty CHANGELOG section), so the website simply
+// omits the panel rather than showing an empty box.
+function loadNotesHtml() {
+  const file = process.env.ZEUS_RELEASE_NOTES_HTML_FILE;
+  if (!file || !existsSync(file)) return null;
+  const html = readFileSync(file, "utf8").trim();
+  return html.length > 0 ? html : null;
 }
 
 function inferVersion(filesToInspect) {
