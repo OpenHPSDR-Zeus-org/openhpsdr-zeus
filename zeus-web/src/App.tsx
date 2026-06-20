@@ -260,9 +260,10 @@ export default function App() {
     const ctrl = new AbortController();
     fetchUpdateStatus(true, ctrl.signal)
       .then((next) => {
+        // A newer production build (from the download domain) is available and
+        // we have somewhere to send the operator — prompt on startup.
         const actionableRelease =
-          !next.isGitRepo
-          && next.updateAvailable
+          next.updateAvailable
           && (next.updateAction === 'download' || next.updateAction === 'openRelease');
         if (actionableRelease) setStartupUpdate(next);
       })

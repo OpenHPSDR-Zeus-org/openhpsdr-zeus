@@ -354,13 +354,13 @@ public static class ZeusHost
         // Localhost proxy to the HamClock sidecar's propagation engine. The first
         // P.533-14 prediction for a cold path can take ~20 s upstream; allow for it.
         builder.Services.AddHttpClient("Propagation", c => c.Timeout = TimeSpan.FromSeconds(25));
-        // Public GitHub release metadata for packaged-app update checks.
+        // Production download manifest (downloads.openhpsdrzeus.com) for in-app
+        // update checks. Plain JSON — no GitHub API headers.
         builder.Services.AddHttpClient("ZeusUpdates", c =>
         {
             c.Timeout = TimeSpan.FromSeconds(15);
             c.DefaultRequestHeaders.UserAgent.ParseAdd("OpenHPSDR-Zeus-Updater/1.0");
-            c.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
-            c.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
+            c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
         });
         builder.Services.AddSingleton<CredentialStore>();
         builder.Services.AddSingleton<BandMemoryStore>();

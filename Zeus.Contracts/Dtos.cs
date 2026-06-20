@@ -1970,18 +1970,20 @@ public sealed record TxFidelityPolicyDto(
     int TargetSpectralDensity);
 
 /// <summary>Status of the local install relative to the latest available Zeus
-/// update, for the Settings -> Updates panel (GET /api/system/update).
-/// <para>When <see cref="IsGitRepo"/> is false the app is running from a
-/// packaged build; release fields describe the matching GitHub Release asset
-/// when a network check has completed. All SHAs are short form.
-/// <see cref="Behind"/>/<see cref="Ahead"/> count commits relative to
-/// <see cref="UpstreamRef"/> (e.g. "upstream/main"). <see cref="CanFastForward"/>
-/// is true only when behind &gt; 0, HEAD is an ancestor of the upstream tip, and
-/// the working tree is clean. <see cref="UpdateAction"/> is "pull" for git
-/// checkouts, "download" for packaged builds with a matching asset,
-/// "openRelease" when only the release page is available, or "none".
-/// <see cref="Error"/> carries a human message when a git or release check
-/// failed; the rest of the fields hold the last locally-known values.</para></summary>
+/// PRODUCTION build, for the Settings -> Updates panel (GET /api/system/update).
+/// <para>The latest build is read from the download domain
+/// (downloads.openhpsdrzeus.com), published from <c>main</c> only. The
+/// <c>Release*</c> fields describe the platform-matched download asset when a
+/// network check has completed: <see cref="ReleaseDownloadUrl"/> +
+/// <see cref="ReleaseAssetName"/> + <see cref="ReleaseAssetDigest"/> (sha256).
+/// <see cref="UpdateAction"/> is "download" when a matching asset exists,
+/// "openRelease" when only the website is available, or "none".
+/// <see cref="IsGitRepo"/>/<see cref="Branch"/>/<see cref="CurrentShortSha"/> are
+/// diagnostics for source checkouts; the git fast-forward path was removed, so
+/// <see cref="Behind"/>/<see cref="Ahead"/>/<see cref="CanFastForward"/>/
+/// <see cref="UpstreamRef"/> are always 0/false/null. <see cref="Error"/> carries
+/// a human message when the network check failed; the rest of the fields hold the
+/// last locally-known values.</para></summary>
 public sealed record RepoUpdateStatus(
     bool IsGitRepo,
     string? Branch,
@@ -2014,13 +2016,3 @@ public sealed record RepoUpdateStatus(
     public long? ReleaseAssetSizeBytes { get; init; }
     public string? ReleaseAssetDigest { get; init; }
 }
-
-/// <summary>Result of a fast-forward pull (POST /api/system/update/pull).
-/// <see cref="RequiresRebuild"/> is true whenever source actually changed —
-/// the running binaries are stale until the operator rebuilds and restarts
-/// (see scripts/update.*). <see cref="Message"/> is operator-facing.</summary>
-public sealed record RepoUpdateResult(
-    bool Ok,
-    string? NewSha,
-    bool RequiresRebuild,
-    string Message);

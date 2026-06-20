@@ -4985,10 +4985,10 @@ export function restartApp(
   );
 }
 
-export type UpdateAction = 'none' | 'pull' | 'download' | 'openRelease';
+export type UpdateAction = 'none' | 'download' | 'openRelease';
 
-/** Status of the local install vs its configured update source
- *  (GET /api/system/update). Mirrors Zeus.Contracts.RepoUpdateStatus. */
+/** Status of the local install vs the latest production build on the download
+ *  domain (GET /api/system/update). Mirrors Zeus.Contracts.RepoUpdateStatus. */
 export interface RepoUpdateStatus {
   isGitRepo: boolean;
   branch: string | null;
@@ -5021,16 +5021,8 @@ export interface RepoUpdateStatus {
   releaseAssetDigest: string | null;
 }
 
-/** Result of POST /api/system/update/pull. Mirrors Zeus.Contracts.RepoUpdateResult. */
-export interface RepoUpdateResult {
-  ok: boolean;
-  newSha: string | null;
-  requiresRebuild: boolean;
-  message: string;
-}
-
-/** Check how far the running checkout is behind upstream. `fetch=false` skips
- *  the network and reports the last-known counts. */
+/** Read the latest production build vs the installed version. `fetch=false`
+ *  skips the network and reports the last-known local version. */
 export function fetchUpdateStatus(
   fetch = true,
   signal?: AbortSignal,
@@ -5039,16 +5031,6 @@ export function fetchUpdateStatus(
     `/api/system/update?fetch=${fetch ? 'true' : 'false'}`,
     { signal },
     (raw) => raw as RepoUpdateStatus,
-  );
-}
-
-/** Fast-forward the checkout to upstream. Source only — a rebuild + restart is
- *  still required (result.requiresRebuild). */
-export function pullUpdate(signal?: AbortSignal): Promise<RepoUpdateResult> {
-  return jsonFetch(
-    '/api/system/update/pull',
-    { method: 'POST', signal },
-    (raw) => raw as RepoUpdateResult,
   );
 }
 

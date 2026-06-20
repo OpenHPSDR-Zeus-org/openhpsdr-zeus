@@ -84,22 +84,14 @@ public static class ZeusEndpoints
                 return Results.Ok(saved);
             });
 
-        // Self-update status. Git checkouts report upstream fast-forward state;
-        // packaged builds report the latest GitHub Release asset for this
-        // platform. POST is git-checkout-only and fast-forwards source; packaged
-        // installs download their installer/DMG/AppImage from the GET response.
+        // Self-update status. The latest PRODUCTION build is read from the Zeus
+        // download domain (downloads.openhpsdrzeus.com), which is published from
+        // `main` only — never develop/nightly. The GET response carries the
+        // platform-matched installer/DMG/AppImage/tarball URL + its SHA-256; the
+        // app opens that download. Zeus never pulls/rebuilds/restarts itself.
         app.MapGet("/api/system/update",
             async (RepoUpdateService updates, bool? fetch, CancellationToken ct) =>
                 Results.Ok(await updates.GetStatusAsync(fetch ?? true, ct)));
-
-        app.MapPost("/api/system/update/pull",
-            async (RepoUpdateService updates, CancellationToken ct) =>
-            {
-                var result = await updates.PullAsync(ct);
-                log.LogInformation("api.system.update.pull ok={Ok} newSha={Sha} msg={Msg}",
-                    result.Ok, result.NewSha, result.Message);
-                return Results.Ok(result);
-            });
 
         // Native RX audio (miniaudio) — desktop-mode mute control. The
         // Mute/Unmute button in the Photino window POSTs here to silence
