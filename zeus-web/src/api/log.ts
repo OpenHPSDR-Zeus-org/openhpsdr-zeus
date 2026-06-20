@@ -49,7 +49,7 @@ export type LogEntry = {
   qsoDateTimeUtc: string;
   callsign: string;
   name: string | null;
-  frequencyMhz: number;
+  frequencyMhz: number | null;
   band: string;
   mode: string;
   rstSent: string;
@@ -93,7 +93,7 @@ export type WorkedCallsignRecentQso = {
   qsoDateTimeUtc: string;
   band: string | null;
   mode: string | null;
-  frequencyMhz: number;
+  frequencyMhz: number | null;
   rstSent: string | null;
   rstRcvd: string | null;
   name: string | null;
@@ -126,6 +126,19 @@ export type WorkedCallsignSummary = {
 
 export type QrzPublishRequest = {
   logEntryIds: string[];
+};
+
+export type AdifImportError = {
+  recordNumber: number;
+  message: string;
+};
+
+export type AdifImportResponse = {
+  totalRecords: number;
+  importedCount: number;
+  duplicateCount: number;
+  skippedCount: number;
+  errors: AdifImportError[];
 };
 
 export type QrzPublishResponse = {
@@ -192,6 +205,28 @@ export async function exportToAdif(signal?: AbortSignal): Promise<void> {
   a.click();
   window.URL.revokeObjectURL(url);
   document.body.removeChild(a);
+}
+
+export async function importAdif(file: File, signal?: AbortSignal): Promise<AdifImportResponse> {
+  const adif = await file.text();
+  const response = await fetch('/api/log/import/adif', {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: adif,
+    signal,
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    let message = text;
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown };
+      if (typeof parsed.error === 'string') message = parsed.error;
+    } catch {
+      /* keep the raw response text */
+    }
+    throw new Error(message || `HTTP ${response.status}`);
+  }
+  return await response.json();
 }
 
 export async function publishToQrz(

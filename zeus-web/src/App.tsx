@@ -42,8 +42,8 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import { ChevronLeft, ChevronRight, Download, Upload } from 'lucide-react';
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
 import { WorkspaceErrorBoundary } from './layout/WorkspaceErrorBoundary';
@@ -428,24 +428,39 @@ export default function App() {
   const logPublishInFlight = useLoggerStore((s) => s.publishInFlight);
   const logPublishResult = useLoggerStore((s) => s.lastPublishResult);
   const logPublishError = useLoggerStore((s) => s.publishError);
+  const logImportInFlight = useLoggerStore((s) => s.importInFlight);
+  const logImportResult = useLoggerStore((s) => s.lastImportResult);
+  const logImportError = useLoggerStore((s) => s.importError);
   const logSelectedIds = useLoggerStore((s) => s.selectedIds);
   const logPublishSelected = useLoggerStore((s) => s.publishSelectedToQrz);
   const logExportAdif = useLoggerStore((s) => s.exportAdif);
+  const logImportAdifFile = useLoggerStore((s) => s.importAdifFile);
   const workedSummary = useLoggerStore((s) => s.workedSummary);
   const workedSummaryLoading = useLoggerStore((s) => s.workedSummaryLoading);
   const loadWorkedSummary = useLoggerStore((s) => s.loadWorkedSummary);
   const clearWorkedSummary = useLoggerStore((s) => s.clearWorkedSummary);
   const qrzHasApiKey = useQrzStore((s) => s.hasApiKey);
 
-  const logbookTitle = logPublishInFlight
-    ? 'Logbook · Uploading…'
-    : logPublishError
-      ? `Logbook · ${logPublishError.length > 28 ? 'Publish failed' : logPublishError}`
-      : logPublishResult
-        ? logPublishResult.failedCount > 0
-          ? `Logbook · ${logPublishResult.successCount} ok, ${logPublishResult.failedCount} failed`
-          : `Logbook · Published ${logPublishResult.successCount}`
-        : 'Logbook';
+  const logImportInputRef = useRef<HTMLInputElement | null>(null);
+  let logbookTitle = 'Logbook';
+  if (logImportInFlight) {
+    logbookTitle = 'Logbook · Importing…';
+  } else if (logImportError) {
+    logbookTitle = `Logbook · ${logImportError.length > 28 ? 'Import failed' : logImportError}`;
+  } else if (logImportResult) {
+    const importParts = [`Imported ${logImportResult.importedCount}`];
+    if (logImportResult.duplicateCount > 0) importParts.push(`${logImportResult.duplicateCount} duplicates`);
+    if (logImportResult.skippedCount > 0) importParts.push(`${logImportResult.skippedCount} skipped`);
+    logbookTitle = `Logbook · ${importParts.join(', ')}`;
+  } else if (logPublishInFlight) {
+    logbookTitle = 'Logbook · Uploading…';
+  } else if (logPublishError) {
+    logbookTitle = `Logbook · ${logPublishError.length > 28 ? 'Publish failed' : logPublishError}`;
+  } else if (logPublishResult) {
+    logbookTitle = logPublishResult.failedCount > 0
+      ? `Logbook · ${logPublishResult.successCount} ok, ${logPublishResult.failedCount} failed`
+      : `Logbook · Published ${logPublishResult.successCount}`;
+  }
 
   const logSelectedCount = logSelectedIds.size;
   const publishDisabled = logSelectedCount === 0 || logPublishInFlight || !qrzHasApiKey;
@@ -455,8 +470,32 @@ export default function App() {
       ? 'Select one or more rows to publish'
       : 'Publish selected QSOs to QRZ logbook';
 
+  const handleLogImportFile = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (file) void logImportAdifFile(file);
+  }, [logImportAdifFile]);
+
   const logbookActions = useMemo(() => (
     <>
+      <input
+        ref={logImportInputRef}
+        type="file"
+        accept=".adi,.adif,.txt,text/plain"
+        onChange={handleLogImportFile}
+        style={{ display: 'none' }}
+      />
+      <button
+        type="button"
+        className="btn ghost sm"
+        onClick={() => logImportInputRef.current?.click()}
+        disabled={logImportInFlight}
+        title="Import an ADIF logbook file"
+        aria-label="Import ADIF logbook file"
+      >
+        <Upload size={13} strokeWidth={2.2} aria-hidden="true" />
+        {logImportInFlight ? 'Importing…' : 'Import'}
+      </button>
       <button
         type="button"
         className="btn ghost sm"
@@ -472,11 +511,14 @@ export default function App() {
         onClick={() => void logExportAdif()}
         title="Export all log entries to ADIF file"
       >
+        <Download size={13} strokeWidth={2.2} aria-hidden="true" />
         Export
       </button>
     </>
   ), [
+    handleLogImportFile,
     logExportAdif,
+    logImportInFlight,
     logPublishInFlight,
     logPublishSelected,
     logSelectedCount,

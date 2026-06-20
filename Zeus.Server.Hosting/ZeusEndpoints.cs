@@ -2511,6 +2511,27 @@ public static class ZeusEndpoints
                 fileName);
         });
 
+        app.MapPost("/api/log/import/adif", async (LogService logService, HttpContext ctx) =>
+        {
+            using var reader = new StreamReader(
+                ctx.Request.Body,
+                System.Text.Encoding.UTF8,
+                detectEncodingFromByteOrderMarks: true);
+            var adif = await reader.ReadToEndAsync(ctx.RequestAborted);
+            if (string.IsNullOrWhiteSpace(adif))
+                return Results.BadRequest(new { error = "ADIF file is empty" });
+
+            try
+            {
+                var response = await logService.ImportAdifAsync(adif, ctx.RequestAborted);
+                return Results.Ok(response);
+            }
+            catch (FormatException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
         app.MapPost("/api/log/publish/qrz", async (QrzPublishRequest req, QrzService qrz, LogService logService, HttpContext ctx) =>
         {
             if (req.LogEntryIds == null || !req.LogEntryIds.Any())
