@@ -293,6 +293,71 @@ export function QrzCard({
 
   return (
     <div className="qrz-card">
+      <div className="qrz-footer">
+        <span className="mono" style={{ color: 'var(--fg-2)', fontSize: 10 }}>
+          {contact.email}
+        </span>
+        <span style={{ flex: 1 }} />
+        {rotConnected && qrzHome?.lat != null && qrzHome?.lon != null
+          && contact.lat != null && contact.lon != null && (() => {
+          const sp = bearingDeg(qrzHome.lat, qrzHome.lon, contact.lat, contact.lon);
+          const lp = (sp + 180) % 360;
+          return (
+            <>
+              <button
+                type="button"
+                onClick={() => { void setRotatorAz(Math.round(sp)); }}
+                className="rc-btn rc-btn--path qrz-footer-rotate-btn"
+                title="Rotate short-path"
+              >
+                SP {fmtBearing(sp)}
+              </button>
+              <button
+                type="button"
+                onClick={() => { void setRotatorAz(Math.round(lp)); }}
+                className="rc-btn rc-btn--path qrz-footer-rotate-btn"
+                title="Rotate long-path"
+              >
+                LP {fmtBearing(lp)}
+              </button>
+            </>
+          );
+        })()}
+        {onClear && canClear && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="rc-btn rc-btn--neutral qrz-footer-rotate-btn"
+          >
+            Clear
+          </button>
+        )}
+        {onLogQso && canLogQso && (
+          <button
+            type="button"
+            onClick={onLogQso}
+            className="rc-btn rc-btn--neutral qrz-footer-rotate-btn"
+          >
+            Log QSO
+          </button>
+        )}
+        {contact.qrzUrl ? (
+          <a
+            className="mono"
+            href={contact.qrzUrl}
+            target="_blank"
+            rel="noreferrer"
+            style={{ color: 'var(--accent)', fontSize: 10, fontWeight: 700, textDecoration: 'none' }}
+          >
+            QRZ.COM ↗
+          </a>
+        ) : (
+          <span className="mono" style={{ color: 'var(--accent)', fontSize: 10, fontWeight: 700 }}>
+            QRZ.COM ✓
+          </span>
+        )}
+      </div>
+
       <div className="qrz-card-main">
         <div className="qrz-info-col">
           <div className="qrz-id">
@@ -413,71 +478,6 @@ export function QrzCard({
           </div>
         </div>
       )}
-
-      <div className="qrz-footer">
-        <span className="mono" style={{ color: 'var(--fg-2)', fontSize: 10 }}>
-          {contact.email}
-        </span>
-        <span style={{ flex: 1 }} />
-        {rotConnected && qrzHome?.lat != null && qrzHome?.lon != null
-          && contact.lat != null && contact.lon != null && (() => {
-          const sp = bearingDeg(qrzHome.lat, qrzHome.lon, contact.lat, contact.lon);
-          const lp = (sp + 180) % 360;
-          return (
-            <>
-              <button
-                type="button"
-                onClick={() => { void setRotatorAz(Math.round(sp)); }}
-                className="rc-btn rc-btn--path qrz-footer-rotate-btn"
-                title="Rotate short-path"
-              >
-                SP {fmtBearing(sp)}
-              </button>
-              <button
-                type="button"
-                onClick={() => { void setRotatorAz(Math.round(lp)); }}
-                className="rc-btn rc-btn--path qrz-footer-rotate-btn"
-                title="Rotate long-path"
-              >
-                LP {fmtBearing(lp)}
-              </button>
-            </>
-          );
-        })()}
-        {onClear && canClear && (
-          <button
-            type="button"
-            onClick={onClear}
-            className="rc-btn rc-btn--neutral qrz-footer-rotate-btn"
-          >
-            Clear
-          </button>
-        )}
-        {onLogQso && canLogQso && (
-          <button
-            type="button"
-            onClick={onLogQso}
-            className="rc-btn rc-btn--neutral qrz-footer-rotate-btn"
-          >
-            Log QSO
-          </button>
-        )}
-        {contact.qrzUrl ? (
-          <a
-            className="mono"
-            href={contact.qrzUrl}
-            target="_blank"
-            rel="noreferrer"
-            style={{ color: 'var(--accent)', fontSize: 10, fontWeight: 700, textDecoration: 'none' }}
-          >
-            QRZ.COM ↗
-          </a>
-        ) : (
-          <span className="mono" style={{ color: 'var(--accent)', fontSize: 10, fontWeight: 700 }}>
-            QRZ.COM ✓
-          </span>
-        )}
-      </div>
     </div>
   );
 }
