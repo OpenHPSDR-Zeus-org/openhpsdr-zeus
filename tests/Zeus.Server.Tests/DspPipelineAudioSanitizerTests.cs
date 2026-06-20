@@ -1061,14 +1061,15 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.Equal("stable-speech-candidate", report.CandidateProfile);
         Assert.True(report.ExperimentalOptIn);
         Assert.False(report.DefaultBehaviorChanged);
-        Assert.Equal(4, report.Readiness.ScenarioCount);
-        Assert.Equal(4, report.Readiness.CandidatePassCount);
+        Assert.Equal(5, report.Readiness.ScenarioCount);
+        Assert.Equal(5, report.Readiness.CandidatePassCount);
         Assert.Equal(0, report.Readiness.CandidateFailCount);
         Assert.True(report.Readiness.CandidateAllGatesPass);
         Assert.True(report.Readiness.ReadyForLiveAb);
         Assert.Equal("candidate-ready-for-live-g2-ab", report.Readiness.Recommendation);
         Assert.Contains(report.AcceptanceGates, gate => gate.Contains("current profile remains", StringComparison.Ordinal));
-        Assert.Equal(4, report.Scenarios.Length);
+        Assert.Contains(report.AcceptanceGates, gate => gate.Contains("crest headroom", StringComparison.Ordinal));
+        Assert.Equal(5, report.Scenarios.Length);
         Assert.All(report.Scenarios, scenario =>
         {
             Assert.Equal(scenario.Id, scenario.ScenarioId);
@@ -1108,6 +1109,21 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.True(scenario.Comparison.AppliedGainMovementReductionDb >= -0.25, JsonSerializer.Serialize(scenario));
         Assert.True(scenario.Candidate.MaxControlRmsHangDb <= 0.25);
         Assert.Equal(0, scenario.Candidate.OutputLimitedBlockCount);
+    }
+
+    [Fact]
+    public void BuildRxAudioLevelerFixtureBenchmark_GatesLiveCrestHeadroom()
+    {
+        var report = DspRxAudioLevelerFixtureBenchmark.Build();
+        var scenario = report.Scenarios.Single(item => item.Id == "live-crest-headroom");
+
+        Assert.True(scenario.Comparison.CandidatePasses, JsonSerializer.Serialize(scenario));
+        Assert.Equal(0, scenario.Candidate.OutputLimitedBlockCount);
+        Assert.True(scenario.Candidate.PeakLimitedBlockCount <= scenario.Current.PeakLimitedBlockCount);
+        Assert.True(scenario.Candidate.MaxOutputPeakDbfs <= -3.2, JsonSerializer.Serialize(scenario));
+        Assert.True(scenario.Comparison.CandidatePeakRegressionDb <= -0.5, JsonSerializer.Serialize(scenario));
+        Assert.True(scenario.Comparison.AppliedGainMovementReductionDb >= -0.25, JsonSerializer.Serialize(scenario));
+        Assert.True(scenario.Comparison.OutputRmsMovementReductionDb >= -0.25, JsonSerializer.Serialize(scenario));
     }
 
     [Fact]

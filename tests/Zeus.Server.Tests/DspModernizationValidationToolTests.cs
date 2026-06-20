@@ -949,7 +949,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal("tools/run-dsp-rx-leveler-fixture-benchmark.ps1", artifact.GetProperty("source").GetString());
             Assert.Equal("artifacts/rx-audio-leveler-fixture-benchmark.json", artifact.GetProperty("path").GetString());
             Assert.Equal(
-                ["ssb-syllable-step", "near-target-speech", "sustained-weak-speech", "strong-after-weak"],
+                ["ssb-syllable-step", "near-target-speech", "live-crest-headroom", "sustained-weak-speech", "strong-after-weak"],
                 artifact.GetProperty("scenarioIds").EnumerateArray().Select(item => item.GetString() ?? "").ToArray());
         }
         finally
@@ -2810,21 +2810,25 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(root.GetProperty("experimentalOptIn").GetBoolean());
             Assert.False(root.GetProperty("defaultBehaviorChanged").GetBoolean());
             var readiness = root.GetProperty("readiness");
-            Assert.Equal(4, readiness.GetProperty("scenarioCount").GetInt32());
-            Assert.Equal(4, readiness.GetProperty("candidatePassCount").GetInt32());
+            Assert.Equal(5, readiness.GetProperty("scenarioCount").GetInt32());
+            Assert.Equal(5, readiness.GetProperty("candidatePassCount").GetInt32());
             Assert.Equal(0, readiness.GetProperty("candidateFailCount").GetInt32());
             Assert.True(readiness.GetProperty("candidateAllGatesPass").GetBoolean());
             Assert.True(readiness.GetProperty("readyForLiveAb").GetBoolean());
             Assert.Equal("candidate-ready-for-live-g2-ab", readiness.GetProperty("recommendation").GetString());
 
             var scenarios = root.GetProperty("scenarios").EnumerateArray().ToArray();
-            Assert.Equal(4, scenarios.Length);
+            Assert.Equal(5, scenarios.Length);
             Assert.Contains(scenarios, scenario =>
                 scenario.GetProperty("id").GetString() == "ssb-syllable-step" &&
                 scenario.GetProperty("scenarioId").GetString() == "ssb-syllable-step" &&
                 scenario.GetProperty("comparison").GetProperty("candidatePasses").GetBoolean());
             Assert.Contains(scenarios, scenario =>
                 scenario.GetProperty("id").GetString() == "near-target-speech" &&
+                scenario.GetProperty("comparison").GetProperty("candidatePasses").GetBoolean());
+            Assert.Contains(scenarios, scenario =>
+                scenario.GetProperty("id").GetString() == "live-crest-headroom" &&
+                scenario.GetProperty("candidate").GetProperty("maxOutputPeakDbfs").GetDouble() <= -3.2 &&
                 scenario.GetProperty("comparison").GetProperty("candidatePasses").GetBoolean());
             var syllableStep = scenarios.Single(scenario => scenario.GetProperty("id").GetString() == "ssb-syllable-step");
             var syllableComparisons = syllableStep.GetProperty("comparisons").EnumerateArray().ToArray();
@@ -2903,7 +2907,7 @@ public sealed class DspModernizationValidationToolTests
                             kind = "metrics-json",
                             source = "tools/run-dsp-rx-leveler-fixture-benchmark.ps1",
                             required = false,
-                            scenarioIds = new[] { "ssb-syllable-step", "near-target-speech", "sustained-weak-speech", "strong-after-weak" }
+                            scenarioIds = new[] { "ssb-syllable-step", "near-target-speech", "live-crest-headroom", "sustained-weak-speech", "strong-after-weak" }
                         }
                     }
                 }, CamelCaseJson));
@@ -2928,7 +2932,7 @@ public sealed class DspModernizationValidationToolTests
                             source = "tools/run-dsp-rx-leveler-fixture-benchmark.ps1",
                             path = "artifacts/rx-audio-leveler-fixture-benchmark.json",
                             required = false,
-                            scenarioIds = new[] { "ssb-syllable-step", "near-target-speech", "sustained-weak-speech", "strong-after-weak" }
+                            scenarioIds = new[] { "ssb-syllable-step", "near-target-speech", "live-crest-headroom", "sustained-weak-speech", "strong-after-weak" }
                         }
                     }
                 }, CamelCaseJson));
@@ -2964,8 +2968,8 @@ public sealed class DspModernizationValidationToolTests
                 .Single(item => item.GetProperty("id").GetString() == "rx-audio-leveler-fixture-benchmark");
             Assert.True(artifact.GetProperty("ok").GetBoolean());
             Assert.True(artifact.GetProperty("bytes").GetInt64() > 0);
-            Assert.Equal(4, artifact.GetProperty("readinessScenarioCount").GetInt32());
-            Assert.Equal(4, artifact.GetProperty("readinessCandidatePassCount").GetInt32());
+            Assert.Equal(5, artifact.GetProperty("readinessScenarioCount").GetInt32());
+            Assert.Equal(5, artifact.GetProperty("readinessCandidatePassCount").GetInt32());
             Assert.Equal(0, artifact.GetProperty("readinessCandidateFailCount").GetInt32());
             Assert.True(artifact.GetProperty("readinessCandidateAllGatesPass").GetBoolean());
             Assert.True(artifact.GetProperty("readinessExperimentalOptIn").GetBoolean());
@@ -15711,7 +15715,7 @@ public sealed class DspModernizationValidationToolTests
                     kind = "metrics-json",
                     source = "tools/run-dsp-rx-leveler-fixture-benchmark.ps1",
                     required = false,
-                    scenarioIds = new[] { "ssb-syllable-step", "near-target-speech", "sustained-weak-speech", "strong-after-weak" }
+                    scenarioIds = new[] { "ssb-syllable-step", "near-target-speech", "live-crest-headroom", "sustained-weak-speech", "strong-after-weak" }
                 }
             }
         };
@@ -15732,7 +15736,7 @@ public sealed class DspModernizationValidationToolTests
             source = "tools/run-dsp-rx-leveler-fixture-benchmark.ps1",
             path = "artifacts/rx-audio-leveler-fixture-benchmark.json",
             required = false,
-            scenarioIds = new[] { "ssb-syllable-step", "near-target-speech", "sustained-weak-speech", "strong-after-weak" }
+            scenarioIds = new[] { "ssb-syllable-step", "near-target-speech", "live-crest-headroom", "sustained-weak-speech", "strong-after-weak" }
         };
         var liveComparisonArtifact = new
         {

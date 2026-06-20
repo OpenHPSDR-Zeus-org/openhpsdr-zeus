@@ -134,6 +134,7 @@ public static class DspBenchmarkCaptureManifestService
         [
             "ssb-syllable-step",
             "near-target-speech",
+            "live-crest-headroom",
             "sustained-weak-speech",
             "strong-after-weak",
         ];
@@ -264,7 +265,7 @@ public static class DspBenchmarkCaptureManifestService
                 "rx-audio-leveler-fixture-benchmark",
                 "metrics-json",
                 "tools/run-dsp-rx-leveler-fixture-benchmark.ps1",
-                "Export targeted current-vs-stable-speech-candidate RX audio leveler fixture metrics for syllable pumping, near-target stability, sustained weak-speech recovery, and strong-after-weak safety.",
+                "Export targeted current-vs-stable-speech-candidate RX audio leveler fixture metrics for syllable pumping, near-target stability, live crest headroom, sustained weak-speech recovery, and strong-after-weak safety.",
                 "once-per-rx-audio-leveler-candidate",
                 false,
                 rxAudioLevelerFixtureScenarioIds),

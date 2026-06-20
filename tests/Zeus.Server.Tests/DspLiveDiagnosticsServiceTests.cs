@@ -549,8 +549,9 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Equal("metrics-json", rxLevelerFixtureArtifact.Kind);
         Assert.Contains("run-dsp-rx-leveler-fixture-benchmark.ps1", rxLevelerFixtureArtifact.Source);
         Assert.Contains("strong-after-weak", rxLevelerFixtureArtifact.Purpose, StringComparison.Ordinal);
+        Assert.Contains("live crest headroom", rxLevelerFixtureArtifact.Purpose, StringComparison.Ordinal);
         Assert.Equal(
-            ["ssb-syllable-step", "near-target-speech", "sustained-weak-speech", "strong-after-weak"],
+            ["ssb-syllable-step", "near-target-speech", "live-crest-headroom", "sustained-weak-speech", "strong-after-weak"],
             rxLevelerFixtureArtifact.ScenarioIds);
         Assert.Contains(manifest.OperatorNotes, item => item.Contains("Cross-radio validation", StringComparison.Ordinal));
     }

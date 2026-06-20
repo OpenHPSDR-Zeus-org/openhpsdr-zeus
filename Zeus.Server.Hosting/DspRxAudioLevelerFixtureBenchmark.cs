@@ -23,6 +23,12 @@ internal static class DspRxAudioLevelerFixtureBenchmark
                 NearTargetSpeechBlocks(),
                 CandidatePassesNearTargetSpeech),
             BuildScenario(
+                "live-crest-headroom",
+                "Live crest headroom guard",
+                "Moderate active speech with sparse crest peaks must keep extra headroom without final limiting.",
+                LiveCrestHeadroomBlocks(),
+                CandidatePassesLiveCrestHeadroom),
+            BuildScenario(
                 "sustained-weak-speech",
                 "Sustained weak speech catch-up",
                 "Weak audio after a stronger speech pre-roll must still reach the RX listen level.",
@@ -62,6 +68,7 @@ internal static class DspRxAudioLevelerFixtureBenchmark
                 "current profile remains byte-for-byte equivalent to the default overload",
                 "candidate bounds syllable gain movement while preserving weak syllables without final limiting",
                 "candidate does not add pumping to already-readable active speech",
+                "candidate preserves additional crest headroom on live-like active speech without final limiting",
                 "candidate reaches weak speech target after sustained weak audio",
                 "candidate handles strong audio after weak boost without clipping or limiter pressure",
             ],
@@ -238,6 +245,16 @@ internal static class DspRxAudioLevelerFixtureBenchmark
         candidate.OutputLimitedBlockCount == 0 &&
         candidate.MaxOutputPeakDbfs < -4.0;
 
+    private static bool CandidatePassesLiveCrestHeadroom(
+        RxAudioLevelerFixtureProfileMetricsDto current,
+        RxAudioLevelerFixtureProfileMetricsDto candidate) =>
+        candidate.OutputLimitedBlockCount == 0 &&
+        candidate.PeakLimitedBlockCount <= current.PeakLimitedBlockCount &&
+        candidate.MaxOutputPeakDbfs <= -3.2 &&
+        candidate.MaxOutputPeakDbfs <= current.MaxOutputPeakDbfs - 0.5 &&
+        candidate.AppliedGainMovementDb <= current.AppliedGainMovementDb + 0.25 &&
+        candidate.OutputRmsMovementDb <= current.OutputRmsMovementDb + 0.25;
+
     private static bool CandidatePassesSustainedWeakSpeech(
         RxAudioLevelerFixtureProfileMetricsDto current,
         RxAudioLevelerFixtureProfileMetricsDto candidate) =>
@@ -282,6 +299,20 @@ internal static class DspRxAudioLevelerFixtureBenchmark
         return blocks.ToArray();
     }
 
+    private static LevelerFixtureBlock[] LiveCrestHeadroomBlocks()
+    {
+        var blocks = new List<LevelerFixtureBlock>();
+        for (int i = 0; i < 5; i++)
+            blocks.Add(CrestBlock("crest-pre-roll", 0.04f, 0.4f, measure: false, weak: false));
+        for (int i = 0; i < 10; i++)
+        {
+            float baseValue = i % 2 == 0 ? 0.038f : 0.042f;
+            blocks.Add(CrestBlock("live-crest-active", baseValue, 0.4f, measure: true, weak: false));
+        }
+
+        return blocks.ToArray();
+    }
+
     private static LevelerFixtureBlock[] SustainedWeakSpeechBlocks()
     {
         var blocks = new List<LevelerFixtureBlock>();
@@ -303,6 +334,14 @@ internal static class DspRxAudioLevelerFixtureBenchmark
 
     private static LevelerFixtureBlock ConstantBlock(string segment, float value, bool measure, bool weak) =>
         new(segment, measure, weak, samples => Array.Fill(samples, value));
+
+    private static LevelerFixtureBlock CrestBlock(string segment, float baseValue, float crestValue, bool measure, bool weak) =>
+        new(segment, measure, weak, samples =>
+        {
+            Array.Fill(samples, baseValue);
+            for (int i = 320; i < samples.Length; i += 256)
+                samples[i] = crestValue;
+        });
 
     private static double Round(double value) =>
         double.IsFinite(value) ? Math.Round(value, 6) : value;
