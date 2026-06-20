@@ -64,6 +64,41 @@ public sealed class ChatEnabledStore : IDisposable
         }
     }
 
+    /// <summary>Whether the operator's frequency may be shared (eye toggle).
+    /// Defaults to true (visible to friends) when unset.</summary>
+    public bool GetFreqPublic()
+    {
+        lock (_sync)
+        {
+            var entry = _state.FindAll().FirstOrDefault();
+            return entry?.FreqPublic ?? true;
+        }
+    }
+
+    public void SetFreqPublic(bool freqPublic)
+    {
+        lock (_sync)
+        {
+            var existing = _state.FindAll().FirstOrDefault();
+            var nowUtc = DateTime.UtcNow;
+            if (existing is null)
+            {
+                _state.Insert(new ChatEnabledEntry
+                {
+                    Enabled = false,
+                    FreqPublic = freqPublic,
+                    UpdatedUtc = nowUtc,
+                });
+            }
+            else
+            {
+                existing.FreqPublic = freqPublic;
+                existing.UpdatedUtc = nowUtc;
+                _state.Update(existing);
+            }
+        }
+    }
+
     public void Dispose() => _db.Dispose();
 }
 
@@ -71,5 +106,8 @@ public sealed class ChatEnabledEntry
 {
     public int Id { get; set; }
     public bool Enabled { get; set; }
+    // Nullable so rows written before this field default to "visible" (null → true)
+    // rather than LiteDB's bool default of false, which would silently hide freq.
+    public bool? FreqPublic { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

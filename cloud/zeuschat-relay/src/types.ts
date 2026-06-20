@@ -23,4 +23,11 @@ export interface Env {
    * WebSocket clients cannot set request headers.
    */
   QRZ_VERIFY?: string;
+
+  /**
+   * Comma-separated callsigns with moderator powers (create/delete private
+   * rooms, add/remove members, ban/unban). Defaults to "N9WAR,KB2UKA" when
+   * unset. Case-insensitive.
+   */
+  ADMINS?: string;
 }

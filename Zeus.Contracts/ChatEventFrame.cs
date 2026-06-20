@@ -17,7 +17,10 @@ namespace Zeus.Contracts;
 /// {"kind":"status","status":{...ChatStatusDto...}}
 /// {"kind":"roster","roster":[{...ChatOperator...}, ...]}
 /// {"kind":"message","message":{...ChatMessage...}}
-/// {"kind":"history","messages":[{...ChatMessage...}, ...]}
+/// {"kind":"history","room":"lobby","messages":[{...ChatMessage...}, ...]}
+/// {"kind":"friends","friends":{...ChatFriendsDto...}}
+/// {"kind":"rooms","rooms":[{...ChatRoomDto...}, ...]}
+/// {"kind":"banned","message":"..."}
 /// </code>
 ///
 /// JSON (rather than fixed binary) because the payload is small, low-rate, and
@@ -45,9 +48,21 @@ public static class ChatEventFrame
     public static byte[] Message(ChatMessage message) =>
         Encode(new MessageEnvelope(message));
 
-    /// <summary>Encodes a history (message list) envelope into a 0x35 frame.</summary>
-    public static byte[] History(IReadOnlyList<ChatMessage> messages) =>
-        Encode(new HistoryEnvelope(messages));
+    /// <summary>Encodes a history (message list) envelope for a room into a 0x35 frame.</summary>
+    public static byte[] History(string room, IReadOnlyList<ChatMessage> messages) =>
+        Encode(new HistoryEnvelope(room, messages));
+
+    /// <summary>Encodes a friend-graph envelope into a 0x35 frame.</summary>
+    public static byte[] Friends(ChatFriendsDto friends) =>
+        Encode(new FriendsEnvelope(friends));
+
+    /// <summary>Encodes the operator's visible-rooms list into a 0x35 frame.</summary>
+    public static byte[] Rooms(IReadOnlyList<ChatRoomDto> rooms) =>
+        Encode(new RoomsEnvelope(rooms));
+
+    /// <summary>Encodes a ban/kick notice into a 0x35 frame.</summary>
+    public static byte[] Banned(string message) =>
+        Encode(new BannedEnvelope(message));
 
     /// <summary>Serialises <paramref name="envelope"/> to UTF-8 JSON and
     /// prefixes the ChatEvent type byte.</summary>
@@ -90,8 +105,23 @@ public static class ChatEventFrame
         public string Kind => "message";
     }
 
-    public sealed record HistoryEnvelope(IReadOnlyList<ChatMessage> Messages)
+    public sealed record HistoryEnvelope(string Room, IReadOnlyList<ChatMessage> Messages)
     {
         public string Kind => "history";
+    }
+
+    public sealed record FriendsEnvelope(ChatFriendsDto Friends)
+    {
+        public string Kind => "friends";
+    }
+
+    public sealed record RoomsEnvelope(IReadOnlyList<ChatRoomDto> Rooms)
+    {
+        public string Kind => "rooms";
+    }
+
+    public sealed record BannedEnvelope(string Message)
+    {
+        public string Kind => "banned";
     }
 }
