@@ -189,50 +189,6 @@ export function resolveResizeOverlaps(
   return next;
 }
 
-/**
- * Operator-invoked "Tidy": pack movable tiles upward to close vertical gaps,
- * keeping each tile's column (x) and never moving a locked (static) tile. This
- * is the only function that compacts — it runs on an explicit button press, not
- * as a side effect of a drag.
- */
-export function tidyWorkspacePlacements(layout: Layout): Layout {
-  const next = cloneLayout(layout);
-  const order = new Map(next.map((item, index) => [item.i, index]));
-  const statics = next.filter((item) => item.static);
-  const movers = next
-    .filter((item) => !item.static)
-    .sort(
-      (a, b) =>
-        a.y - b.y ||
-        a.x - b.x ||
-        (order.get(a.i) ?? 0) - (order.get(b.i) ?? 0),
-    );
-
-  // Seed the obstacle set with the static tiles so movers magnet up *around*
-  // them rather than through them.
-  const placed: LayoutItem[] = [...statics];
-  for (const item of movers) {
-    item.y = Math.max(0, item.y);
-    // Pull up while the cell above is clear.
-    while (item.y > 0) {
-      const trial = { ...item, y: item.y - 1 };
-      if (placed.some((p) => collides(trial, p))) break;
-      item.y -= 1;
-    }
-    // If it still overlaps something (e.g. landed on a static tile), push it
-    // just below the obstacle.
-    let guard = 0;
-    let hit = placed.find((p) => collides(item, p));
-    while (hit && guard < placed.length + 1) {
-      item.y = hit.y + hit.h;
-      hit = placed.find((p) => collides(item, p));
-      guard += 1;
-    }
-    placed.push(item);
-  }
-  return clearMovedFlags(next);
-}
-
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
