@@ -112,6 +112,29 @@ describe('deriveWorkspaceLayout — locking is inert', () => {
   });
 });
 
+describe('deriveWorkspaceLayout — locking preserves gaps', () => {
+  it('does not pull tiles up to close a gap when a panel is locked', () => {
+    // The free grid allows gaps. Locking must NOT magnet the other tiles up to
+    // close them — that was the "everything jumps when I lock a panel" bug.
+    const base: DeriveTile[] = [
+      tile({ uid: 'a', x: 0, y: 0, w: 12, h: 6 }),
+      // Deliberate gap: b sits at y=12, not y=6.
+      tile({ uid: 'b', x: 0, y: 12, w: 12, h: 6 }),
+    ];
+    const before = deriveWorkspaceLayout(base, opts(900));
+    const capturedPx = renderedPx(before, 'a');
+    const after = deriveWorkspaceLayout(
+      base.map((t) =>
+        t.uid === 'a' ? { ...t, locked: true, lockedHeightPx: capturedPx } : t,
+      ),
+      opts(900),
+    );
+    // The gap survives — b stays at its stored row, not pulled up under a.
+    expect(byUid(after, 'a')).toMatchObject({ x: 0, y: 0 });
+    expect(byUid(after, 'b')).toMatchObject({ x: 0, y: 12 });
+  });
+});
+
 describe('deriveWorkspaceLayout — locking is inert (short layout)', () => {
   it('does not grow unlocked tiles when the layout fits below authored density', () => {
     // A short docked column: layoutRows (12) < target (48), so the no-lock
