@@ -238,7 +238,7 @@ function expectNoReactDragLoop(pageErrors: string[]) {
   );
 }
 
-test('dragging a panel into an occupied workspace slot swaps without blanking the grid', async ({
+test('dragging a panel into an occupied workspace slot swaps on drop without blanking the grid', async ({
   page,
 }) => {
   const { pageErrors, layoutWrites } = await openStubbedWorkspace(page);
@@ -261,15 +261,14 @@ test('dragging a panel into an occupied workspace slot swaps without blanking th
   await page.mouse.down();
   await page.mouse.move(target.x, target.y, { steps: 12 });
   await waitForRectNear(page, 'tile-filterpresets', targetBefore);
-  await waitForRectNear(page, 'tile-tx', draggedBefore);
   await page.waitForTimeout(1100);
   expect(layoutWrites.count).toBe(0);
 
   const duringDrag = await tileRects(page);
   expect(duringDrag).toHaveLength(8);
-  expect(overlapPairs(duringDrag)).toEqual([]);
+  expect(overlapPairs(duringDrag)).toContainEqual(['tile-filterpresets', 'tile-tx']);
   expectRectNear(rectFor(duringDrag, 'tile-filterpresets'), targetBefore);
-  expectRectNear(rectFor(duringDrag, 'tile-tx'), draggedBefore);
+  expectRectNear(rectFor(duringDrag, 'tile-tx'), targetBefore);
 
   await page.mouse.up();
   await waitForRectNear(page, 'tile-filterpresets', targetBefore);
