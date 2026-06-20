@@ -268,3 +268,56 @@ describe('TX display analyzer params', () => {
     });
   });
 });
+
+describe('TX auto-range', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })));
+    useDisplaySettingsStore.setState({
+      txAutoRange: true,
+      txDbMin: -80,
+      txDbMax: 20,
+      wfTxDbMin: -80,
+      wfTxDbMax: 20,
+    });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  // Synthetic TX frame: a wide noise floor with a passband block ~12% of the
+  // width — the shape the WDSP TX analyzer produces (signal occupies only a
+  // fraction of the full-span display).
+  function txFrame(floorDb: number, peakDb: number): Float32Array {
+    const n = 1024;
+    const px = new Float32Array(n).fill(floorDb);
+    for (let i = 450; i < 574; i++) px[i] = peakDb;
+    return px;
+  }
+
+  it('fits both TX windows to the signal instead of clamping at full-scale', () => {
+    const px = txFrame(-50, -10);
+    const s = useDisplaySettingsStore.getState();
+    for (let k = 0; k < 80; k++) s.updateTxAutoRange(px);
+    const r = useDisplaySettingsStore.getState();
+    // Ceiling settles just above the -10 dB peak — far below the +20 that was
+    // saturating the whole passband — so the signal is visible, not maxed out.
+    expect(r.txDbMax).toBeGreaterThan(-10);
+    expect(r.txDbMax).toBeLessThan(6);
+    // Floor sits below the signal so the passband fills the window.
+    expect(r.txDbMin).toBeLessThan(-10);
+    // Panadapter and waterfall windows track together.
+    expect(r.wfTxDbMax).toBeCloseTo(r.txDbMax, 0);
+    expect(r.wfTxDbMin).toBeCloseTo(r.txDbMin, 0);
+  });
+
+  it('is a no-op while turned off', () => {
+    useDisplaySettingsStore.setState({ txAutoRange: false });
+    useDisplaySettingsStore.getState().updateTxAutoRange(txFrame(-50, -10));
+    const r = useDisplaySettingsStore.getState();
+    expect(r.txDbMin).toBe(-80);
+    expect(r.txDbMax).toBe(20);
+  });
+
+  it('a manual TX window edit switches auto-range off', () => {
+    useDisplaySettingsStore.getState().setTxDbRange(-76, 14);
+    expect(useDisplaySettingsStore.getState().txAutoRange).toBe(false);
+  });
+});

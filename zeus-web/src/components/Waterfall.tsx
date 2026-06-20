@@ -399,8 +399,12 @@ export function Waterfall({
         // No refill hold here any more (issue #597 Phase 2): rows are
         // stamped with the LO their data was captured at, so the shared
         // shift planner places them correctly even mid-retune.
-        // Feed the auto-range tracker — it's a no-op when AUTO is off.
-        if (receiver === 'A') useDisplaySettingsStore.getState().updateAutoRange(wfDb);
+        // Feed the RX auto-range tracker — it's a no-op when AUTO is off, and
+        // while keyed (TX pixels are a hotter domain; the Panadapter ingest
+        // owns the TX auto-range fit so it works on every waterfall renderer).
+        if (receiver === 'A' && !useTxStore.getState().moxOn && !useTxStore.getState().tunOn) {
+          useDisplaySettingsStore.getState().updateAutoRange(wfDb);
+        }
       }
       // RX only: substitute the per-bin floor-subtracted texture row so weak
       // coherent carriers get shape before the colormap. Gated off while keyed

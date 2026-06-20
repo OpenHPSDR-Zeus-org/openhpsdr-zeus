@@ -129,6 +129,8 @@ export function SpectrumScaleSettingsPanel() {
   const txAvgTauMs = useDisplaySettingsStore((s) => s.txDisplayAvgTauMs);
   const setTxDisplayParams = useDisplaySettingsStore((s) => s.setTxDisplayParams);
   const resetTxDisplayParams = useDisplaySettingsStore((s) => s.resetTxDisplayParams);
+  const txAutoRange = useDisplaySettingsStore((s) => s.txAutoRange);
+  const setTxAutoRange = useDisplaySettingsStore((s) => s.setTxAutoRange);
 
   return (
     <section>
@@ -208,6 +210,22 @@ export function SpectrumScaleSettingsPanel() {
       </div>
 
       <div style={card}>
+        <div style={autoRow}>
+          <label style={switchLabel}>
+            <input
+              type="checkbox"
+              checked={txAutoRange}
+              onChange={(event) => setTxAutoRange(event.currentTarget.checked)}
+              style={{ accentColor: 'var(--accent)' }}
+            />
+            Auto-range TX
+          </label>
+          <span style={autoHint}>
+            Fits the TX panadapter + waterfall to the live signal while keyed so it
+            isn't slammed to full-scale. A manual TX window edit (or scale drag)
+            turns this off.
+          </span>
+        </div>
         <div style={rangeRow}>
           <div style={rangeText}>
             <span style={rangeTitle}>Cal Offset</span>

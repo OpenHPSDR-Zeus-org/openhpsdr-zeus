@@ -914,6 +914,8 @@ public class DspPipelineService : BackgroundService,
     // the freeze is backend (pan pixout never goes fresh); if both advance like
     // RX1, the freeze is frontend rendering.
     private long _dispFlagLogMs;
+    // 1 Hz throttle for the TX pixel dB-range diagnostic (see Tick).
+    private long _txPixelDbgMs;
     private int _dispTicks, _rx1PanCnt, _rx1WfCnt, _rx2PanCnt, _rx2WfCnt;
     private readonly float[] _audioBuf = new float[AudioDrainCapacity];
     private readonly float[] _rx2AudioBuf = new float[AudioDrainCapacity];
@@ -4555,6 +4557,33 @@ public class DspPipelineService : BackgroundService,
             {
                 if (pan && (panSource == "tx" || panSource == "ps-feedback")) AddDbOffset(panBuf, txCal);
                 if (wf && (wfSource == "tx" || wfSource == "ps-feedback")) AddDbOffset(wfBuf, txCal);
+            }
+
+            // Diagnostic (1 Hz): log the actual TX panadapter pixel dB range so
+            // we can confirm where the transmitted signal sits relative to the
+            // display window (the TX analyzer reads far hotter than RX). Helps
+            // verify the frontend TX auto-range is fitting sane values.
+            if (pan && panSource == "tx")
+            {
+                long txDbgNow = Environment.TickCount64;
+                if (txDbgNow - _txPixelDbgMs >= 1000)
+                {
+                    _txPixelDbgMs = txDbgNow;
+                    float pmin = float.PositiveInfinity, pmax = float.NegativeInfinity;
+                    double psum = 0; int pcnt = 0;
+                    for (int i = 0; i < panBuf.Length; i++)
+                    {
+                        float v = panBuf[i];
+                        if (!float.IsFinite(v)) continue;
+                        if (v < pmin) pmin = v;
+                        if (v > pmax) pmax = v;
+                        psum += v; pcnt++;
+                    }
+                    if (pcnt > 0)
+                        _log.LogInformation(
+                            "tx.display.pixels min={Min:F1} max={Max:F1} mean={Mean:F1} dB (window default {Lo}..{Hi}; calOffset={Cal:F1})",
+                            pmin, pmax, psum / pcnt, -80, 20, txCal);
+                }
             }
 
             // Flip to display order (low freq left, high freq right). WDSP emits
