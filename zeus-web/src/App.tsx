@@ -75,6 +75,7 @@ import { SmartNrController } from './components/SmartNrController';
 import { DspSceneDiagnosticsPublisher } from './components/DspSceneDiagnosticsPublisher';
 import { AudioPlaybackDiagnosticsPublisher } from './components/AudioPlaybackDiagnosticsPublisher';
 import { useTxAudioProfileDirtyTracker } from './state/tx-audio-profile-tracker';
+import { useEasterEggStore } from './state/easter-egg-store';
 import { ThemeApplier } from './components/ThemeApplier';
 import { StartupUpdatePrompt } from './components/StartupUpdatePrompt';
 import { StepFavorites } from './components/toolbar/StepFavorites';
@@ -198,6 +199,12 @@ export default function App() {
 
   const topbarControlsRef = useRef<HTMLDivElement | null>(null);
   const [topbarScroll, setTopbarScroll] = useState({ canLeft: false, canRight: false });
+
+  // Hidden HARDWARE diagnostics folder — easter egg. Tapping the brand-mark
+  // lightning bolt unlocks the folder for this session (it re-locks on the next
+  // launch; counting + threshold live in easter-egg-store). Deliberately exposes
+  // no hover, cursor, or title affordance so the bolt never advertises itself.
+  const registerBoltClick = useEasterEggStore((s) => s.registerBoltClick);
   const syncTopbarScroll = useCallback(() => {
     const el = topbarControlsRef.current;
     if (!el) return;
@@ -878,7 +885,11 @@ export default function App() {
                 className="brand-mark-wave brand-mark-wave--bottom"
                 d="M3.2 15.8c1.55 1.2 3.1 1.2 4.65 0l.75-.58c1.55-1.2 3.1-1.2 4.65 0l.75.58c1.55 1.2 3.1 1.2 4.65 0l1.15-.88"
               />
-              <path className="brand-mark-bolt" d="M13.4 2.5 7 12.1h4.15l-1.2 9.4L17 10.55h-4.25l.65-8.05Z" />
+              <path
+                className="brand-mark-bolt"
+                d="M13.4 2.5 7 12.1h4.15l-1.2 9.4L17 10.55h-4.25l.65-8.05Z"
+                onClick={registerBoltClick}
+              />
             </svg>
           </div>
           <div className="brand-text">
