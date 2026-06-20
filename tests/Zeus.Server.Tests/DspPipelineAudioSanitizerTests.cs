@@ -425,9 +425,9 @@ public sealed class DspPipelineAudioSanitizerTests
     public void ApplyRxAudioLeveler_GentlyLiftsWeakAudioToBoostCap()
     {
         // #733: weak -40 dBFS audio is still lifted, but only by the softened
-        // +10 dB boost cap, so it lands near -30 dBFS instead of being pumped
-        // all the way to the -18 dB speech target. The big boost toward target
-        // was the above-noise-floor crackle.
+        // +3 dB boost cap, so it lands near -37 dBFS instead of being pumped all
+        // the way to the -18 dB speech target. The big boost toward target was the
+        // above-noise-floor crackle.
         var state = new DspPipelineService.RxAudioLevelerState();
         float[] block = new float[1024];
 
@@ -437,11 +437,11 @@ public sealed class DspPipelineAudioSanitizerTests
             DspPipelineService.ApplyRxAudioLeveler(block, ref state);
         }
 
-        Assert.InRange(Rms(block), 0.031f, 0.032f);
-        Assert.Equal(10.0, state.GainDb, precision: 6);
+        Assert.InRange(Rms(block), 0.0140f, 0.0142f);
+        Assert.Equal(3.0, state.GainDb, precision: 6);
         Assert.True(state.DiagnosticsValid);
         Assert.Equal(state.GainDb, state.AppliedGainDb, precision: 6);
-        Assert.InRange(state.OutputRmsDbfs, -30.5, -29.5);
+        Assert.InRange(state.OutputRmsDbfs, -37.5, -36.5);
         Assert.False(state.OutputLimited);
         Assert.Equal(0, state.OutputLimitSampleCount);
         Assert.Equal(0.0, state.OutputLimitReductionDb, precision: 6);
@@ -456,10 +456,12 @@ public sealed class DspPipelineAudioSanitizerTests
         Array.Fill(block, 0.01f);
         DspPipelineService.ApplyRxAudioLeveler(block, ref state);
 
-        // #733: the very-fast boost slew was backed off 6 -> 3 dB/block, so the
-        // first block ramps to +3 dB (not +6) and the second to +6 dB (not +12).
+        // #733: the very-fast boost slew (3 dB/block) now equals the +3 dB boost
+        // cap, so weak audio reaches the cap in a single block — the gain ramps
+        // across the samples of this first block (b0 ~unchanged, settling to the
+        // +3 dB level by b255) and is not slew-limited.
         Assert.Equal(3.0, state.GainDb, precision: 6);
-        Assert.True(state.BoostSlewLimited);
+        Assert.False(state.BoostSlewLimited);
         Assert.Equal(3.0, state.GainDeltaDb, precision: 6);
         Assert.InRange(block[0], 0.0099f, 0.0102f);
         Assert.InRange(block[255], 0.0140f, 0.0142f);
@@ -468,11 +470,12 @@ public sealed class DspPipelineAudioSanitizerTests
         Array.Fill(block, 0.01f);
         DspPipelineService.ApplyRxAudioLeveler(block, ref state);
 
-        Assert.Equal(6.0, state.GainDb, precision: 6);
-        Assert.True(state.BoostSlewLimited);
-        Assert.InRange(block[0], 0.0140f, 0.0143f);
-        Assert.InRange(block[255], 0.0198f, 0.0201f);
-        Assert.InRange(block[^1], 0.0198f, 0.0201f);
+        // Second block holds at the cap — no further boost, uniform across block.
+        Assert.Equal(3.0, state.GainDb, precision: 6);
+        Assert.False(state.BoostSlewLimited);
+        Assert.InRange(block[0], 0.0140f, 0.0142f);
+        Assert.InRange(block[255], 0.0140f, 0.0142f);
+        Assert.InRange(block[^1], 0.0140f, 0.0142f);
     }
 
     [Fact]
@@ -499,13 +502,17 @@ public sealed class DspPipelineAudioSanitizerTests
     [Fact]
     public void ApplyRxAudioLeveler_RampsSmallCutsAcrossBlock()
     {
-        var state = new DspPipelineService.RxAudioLevelerState { GainDb = 6.0 };
+        // Start at the +3 dB boost cap, then feed -19 dBFS audio (asks for only
+        // +1 dB): the leveler ramps the small 2 dB cut smoothly across the block
+        // (b0 still near the +3 dB level, settling to the +1 dB target by b255)
+        // rather than stepping it.
+        var state = new DspPipelineService.RxAudioLevelerState { GainDb = 3.0 };
         float[] block = new float[1024];
 
-        Array.Fill(block, 0.07943282f); // -22 dBFS, so target level asks for +4 dB.
+        Array.Fill(block, 0.11220185f); // -19 dBFS, so target level asks for +1 dB.
         DspPipelineService.ApplyRxAudioLeveler(block, ref state);
 
-        Assert.Equal(4.0, state.GainDb, precision: 3);
+        Assert.Equal(1.0, state.GainDb, precision: 3);
         Assert.False(state.BoostSlewLimited);
         Assert.Equal(-2.0, state.GainDeltaDb, precision: 3);
         Assert.InRange(block[0], 0.157f, 0.159f);
@@ -541,8 +548,8 @@ public sealed class DspPipelineAudioSanitizerTests
         }
 
         double heldGainDb = state.GainDb;
-        // #733: weak audio now banks the +10 dB boost cap (was >20 dB pre-#733).
-        Assert.Equal(10.0, heldGainDb, precision: 6);
+        // #733: weak audio now banks the +3 dB boost cap (was >20 dB pre-#733).
+        Assert.Equal(3.0, heldGainDb, precision: 6);
         Assert.True(state.PauseHoldBlocks > 0);
 
         Array.Fill(block, 0.00001f);
@@ -559,7 +566,7 @@ public sealed class DspPipelineAudioSanitizerTests
 
         Assert.False(state.BoostSlewLimited);
         Assert.Equal(heldGainDb, state.AppliedGainDb, precision: 6);
-        Assert.InRange(Rms(block), 0.031f, 0.032f);
+        Assert.InRange(Rms(block), 0.0140f, 0.0142f);
     }
 
     [Fact]
@@ -575,7 +582,7 @@ public sealed class DspPipelineAudioSanitizerTests
         }
 
         double heldGainDb = state.GainDb;
-        Assert.Equal(10.0, heldGainDb, precision: 6); // #733: capped at +10 dB boost.
+        Assert.Equal(3.0, heldGainDb, precision: 6); // #733: capped at +3 dB boost.
 
         for (int i = 0; i < 14; i++)
         {
@@ -593,7 +600,7 @@ public sealed class DspPipelineAudioSanitizerTests
 
         Assert.False(state.BoostSlewLimited);
         Assert.Equal(heldGainDb, state.AppliedGainDb, precision: 6);
-        Assert.InRange(Rms(block), 0.031f, 0.032f);
+        Assert.InRange(Rms(block), 0.0140f, 0.0142f);
     }
 
     [Fact]
@@ -609,7 +616,7 @@ public sealed class DspPipelineAudioSanitizerTests
         }
 
         double heldGainDb = state.GainDb;
-        Assert.Equal(10.0, heldGainDb, precision: 6); // #733: capped at +10 dB boost.
+        Assert.Equal(3.0, heldGainDb, precision: 6); // #733: capped at +3 dB boost.
 
         for (int i = 0; i < 20; i++)
         {
@@ -620,8 +627,10 @@ public sealed class DspPipelineAudioSanitizerTests
             Assert.Equal(0.0, state.AppliedGainDb, precision: 6);
         }
 
+        // The +3 dB held boost fully decays away across the long muted gap (after
+        // the 18-block hold, one 4.5 dB/block decay step drops it from +3 to 0).
         double decayedGainDb = state.GainDb;
-        Assert.InRange(decayedGainDb, heldGainDb - 9.1, heldGainDb - 8.9);
+        Assert.Equal(0.0, decayedGainDb, precision: 6);
         Assert.Equal(0, state.PauseHoldBlocks);
 
         // #733: the gate moved to -50 dBFS, so the crest signal must sit above it
@@ -633,14 +642,15 @@ public sealed class DspPipelineAudioSanitizerTests
 
         DspPipelineService.ApplyRxAudioLeveler(block, ref state);
 
-        // Crest-catchup slew is now 3.0 dB/block (was 7.5), so the banked gain
-        // steps back up by 3 dB on the first crest block after the gap.
-        Assert.True(state.BoostSlewLimited);
+        // Crest-catchup slew (3.0 dB/block) now equals the +3 dB cap, so the gain
+        // steps straight back up to the cap on the first crest block after the gap
+        // (decayed 0 + 3 = +3) and is no longer slew-limited.
+        Assert.False(state.BoostSlewLimited);
         Assert.Equal(decayedGainDb + 3.0, state.AppliedGainDb, precision: 6);
         Assert.Equal(3.0, state.GainDeltaDb, precision: 6);
         Assert.InRange(state.InputRmsDbfs, -39.5, -38.5);
         Assert.InRange(state.InputPeakDbfs, -30.1, -29.7);
-        Assert.InRange(Rms(block), 0.0168f, 0.0172f);
+        Assert.InRange(Rms(block), 0.0150f, 0.0153f);
     }
 
     [Fact]
@@ -679,7 +689,7 @@ public sealed class DspPipelineAudioSanitizerTests
             DspPipelineService.ApplyRxAudioLeveler(block, ref state);
         }
 
-        Assert.Equal(10.0, state.GainDb, precision: 6); // #733: capped at +10 dB boost.
+        Assert.Equal(3.0, state.GainDb, precision: 6); // #733: capped at +3 dB boost.
 
         Array.Fill(block, 0.9f);
         DspPipelineService.ApplyRxAudioLeveler(block, ref state);
@@ -693,11 +703,11 @@ public sealed class DspPipelineAudioSanitizerTests
     [Fact]
     public void ApplyRxAudioLeveler_ModeratePeakSignalAfterWeakSignalDoesNotBlast()
     {
-        // The input peak (0.45) sits *below* the limiter target (0.74), so the
-        // raw input-peak fast-cut gate never fires. The danger is the gain banked
-        // across the weak run being dumped onto this louder block: gain × peak,
-        // not peak alone. Without the per-block peak guard the first block rides
-        // the soft-limit ceiling for several blocks — the "hard audio" blast.
+        // The input peak (0.45) sits *below* the limiter target (0.74). With the
+        // #733 +3 dB boost cap the gain banked across the weak run is now small
+        // enough that it cannot overdrive the limiter, so the first sample rides
+        // only the held +3 dB (~0.63) before the gain ramps down to target — it
+        // stays under the 0.74 ceiling, no clipping, no sustained blast.
         var state = new DspPipelineService.RxAudioLevelerState();
         float[] block = new float[1024];
 
@@ -707,15 +717,13 @@ public sealed class DspPipelineAudioSanitizerTests
             DspPipelineService.ApplyRxAudioLeveler(block, ref state);
         }
 
-        Assert.Equal(10.0, state.GainDb, precision: 6); // #733: capped at +10 dB boost.
+        Assert.Equal(3.0, state.GainDb, precision: 6); // #733: capped at +3 dB boost.
 
         Array.Fill(block, 0.45f);
         DspPipelineService.ApplyRxAudioLeveler(block, ref state);
 
-        // Output is leveled to target on the very first block, never blasted: the
-        // peak stays well under the 0.74 limiter ceiling instead of riding it.
-        Assert.True(PeakAbs(block) < 0.5f);
-        Assert.InRange(Rms(block), 0.10f, 0.15f);
+        Assert.True(PeakAbs(block) < 0.66f); // under the 0.74 limiter ceiling
+        Assert.InRange(Rms(block), 0.35f, 0.37f);
         Assert.True(state.GainDb < 0.0);
     }
 
@@ -743,17 +751,20 @@ public sealed class DspPipelineAudioSanitizerTests
     [Fact]
     public void ApplyRxAudioLeveler_PeakSafetyCutDoesNotSmoothIntoCrestCap()
     {
-        var state = new DspPipelineService.RxAudioLevelerState { GainDb = 8.0 };
+        // At the +3 dB cap, a loud 0.6 transient still has less headroom than the
+        // cap wants, so the per-sample peak guard limits gain (~+1.8 dB) to hold
+        // the output peak at the 0.74 ceiling — without smoothing the safety cut.
+        var state = new DspPipelineService.RxAudioLevelerState { GainDb = 3.0 };
         float[] block = new float[1024];
         Array.Fill(block, 0.01f);
-        block[128] = 0.47f;
+        block[128] = 0.6f;
 
         DspPipelineService.ApplyRxAudioLeveler(block, ref state);
 
         Assert.True(state.PeakLimited);
         Assert.False(state.OutputLimited);
         Assert.Equal(0, state.OutputLimitSampleCount);
-        Assert.InRange(state.AppliedGainDb, 3.8, 4.1);
+        Assert.InRange(state.AppliedGainDb, 1.7, 1.9);
         Assert.InRange(PeakAbs(block), 0.73f, 0.741f);
     }
 

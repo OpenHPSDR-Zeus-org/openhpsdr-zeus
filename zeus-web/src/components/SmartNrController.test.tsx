@@ -93,7 +93,6 @@ function mockState(nr: NrConfigDto): RadioStateDto {
     txFilterHighHz: conn.txFilterHighHz,
     sampleRate: conn.sampleRate,
     agcTopDb: conn.agcTopDb,
-    agcThresholdDbm: conn.agcThresholdDbm,
     agc: { ...AGC_CONFIG_DEFAULT },
     squelch: { ...SQUELCH_CONFIG_DEFAULT },
     txLeveling: { ...TX_LEVELING_CONFIG_DEFAULT },

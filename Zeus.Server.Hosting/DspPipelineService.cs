@@ -177,7 +177,19 @@ public class DspPipelineService : BackgroundService,
     // floor" zipper. The CUT/peak-guard safety below is unchanged, so loud
     // signals are still caught.
     private const double RxLevelerGateRmsDb = -50.0;
-    private const double RxLevelerMaxBoostDb = 10.0;
+    // Soft-gate window above the hard gate: the upward boost ramps 0 -> full
+    // across [GateRms, GateRms + GateSoftWindow] instead of snapping on at the
+    // gate. Without this, a hair-trigger AGC-T move that nudges a weak signal
+    // across the gate toggled the full boost on/off — an ~18 dB output step
+    // heard as crackle / "audio fell off the planet". WDSP's own AGC-T is 1:1
+    // and Thetis-faithful; this always-on leveler (which Thetis lacks) was the
+    // amplifier. The boost ramp is continuous with the belowGate=0 region.
+    private const double RxLevelerGateSoftWindowDb = 8.0;
+    // Cap the upward boost low (was 10 dB) so the leveler no longer fights the
+    // operator's AGC-T: AGC-T sets weak-signal loudness (Thetis-like) and the
+    // leveler only nudges. The downward CUT below is unchanged — it stays the
+    // blast-guard that catches a sudden strong signal.
+    private const double RxLevelerMaxBoostDb = 3.0;
     private const double RxLevelerMaxCutDb = -24.0;
     private const double RxLevelerBoostSlewDbPerBlock = 2.0;
     private const double RxLevelerFastBoostSlewDbPerBlock = 2.5;
@@ -298,6 +310,19 @@ public class DspPipelineService : BackgroundService,
             ? 0.0
             : RxLevelerTargetRmsDb - inputRmsDbfs;
         desiredDb = Math.Clamp(desiredDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
+
+        // Soft gate: taper the upward BOOST to zero as the input approaches the
+        // floor, so crossing the gate can never snap the full boost on/off (the
+        // AGC-T hair-trigger). Cuts (desiredDb < 0, the loud-signal blast-guard)
+        // are NEVER tapered. Continuous with belowGate: at the gate the factor is
+        // 0, reaching full boost RxLevelerGateSoftWindowDb above it.
+        if (!belowGate && desiredDb > 0.0)
+        {
+            double gateFactor = Math.Clamp(
+                (inputRmsDbfs - RxLevelerGateRmsDb) / RxLevelerGateSoftWindowDb,
+                0.0, 1.0);
+            desiredDb *= gateFactor;
+        }
 
         double peakHeadroomDb = double.NaN;
         bool peakLimited = false;
@@ -706,11 +731,6 @@ public class DspPipelineService : BackgroundService,
     }
     private double _appliedAgcTopDb;
     private double _appliedAgcOffsetDb;
-    // NaN until the knee is first pushed, so the first non-null threshold always applies.
-    private double _appliedAgcThresholdDbm = double.NaN;
-    // WDSP's per-mode default knee, captured (in WDSP dBm) the first time the
-    // operator engages, so disengaging can restore it. NaN until captured.
-    private double _capturedDefaultThreshWdsp = double.NaN;
     private double _appliedRxAfGainDb;
     // TX mic gain change-detect cache. NaN sentinel forces the first apply
     // even when the persisted value happens to equal 0 dB (the engine seam
@@ -3131,36 +3151,11 @@ public class DspPipelineService : BackgroundService,
             _appliedAgcTopDb = s.AgcTopDb;
             _appliedAgcOffsetDb = s.AgcOffsetDb;
         }
-        // AGC threshold ("knee", #741). Null = disengaged → restore WDSP's
-        // per-mode default knee (captured the first time the operator engaged).
-        // The operator value is in displayed dBm; convert to WDSP's scale with
-        // the same per-board RX meter offset the meters use, so the knee lines
-        // up with what the operator sees.
-        if (s.AgcThresholdDbm is double threshDisplayedDbm)
-        {
-            if (threshDisplayedDbm != _appliedAgcThresholdDbm)
-            {
-                // Capture WDSP's default knee once, BEFORE the first override,
-                // so disengage can restore it.
-                if (double.IsNaN(_capturedDefaultThreshWdsp))
-                    _capturedDefaultThreshWdsp = engine.GetAgcThresh(channel);
-
-                double calOffset = RadioCalibrations.RxMeterOffsetDb(
-                    _radio.EffectiveBoardKind, _radio.EffectiveOrionMkIIVariant);
-                double wdspThresh = threshDisplayedDbm - calOffset;
-                engine.SetAgcThresh(channel, wdspThresh);
-                if (rx2Channel >= 0) engine.SetAgcThresh(rx2Channel, wdspThresh);
-                _appliedAgcThresholdDbm = threshDisplayedDbm;
-            }
-        }
-        else if (!double.IsNaN(_appliedAgcThresholdDbm) && !double.IsNaN(_capturedDefaultThreshWdsp))
-        {
-            // Disengaged after having been engaged: restore the captured WDSP
-            // default knee (in WDSP scale — no cal-offset, it's already raw).
-            engine.SetAgcThresh(channel, _capturedDefaultThreshWdsp);
-            if (rx2Channel >= 0) engine.SetAgcThresh(rx2Channel, _capturedDefaultThreshWdsp);
-            _appliedAgcThresholdDbm = double.NaN;
-        }
+        // (Removed: the manual AGC "knee" push. WDSP's threshold and AGC-T are
+        // the SAME register (max_gain) — driving both independently clobbered
+        // each other and made AGC-T hair-trigger. AGC-T is now the single
+        // manual control via SetRXAAGCTop above; Auto-AGC tracks the noise floor
+        // on top of it. See the AGC knee removal commit.)
         if (s.RxAfGainDb != _appliedRxAfGainDb)
         {
             engine.SetRxAfGainDb(channel, s.RxAfGainDb);

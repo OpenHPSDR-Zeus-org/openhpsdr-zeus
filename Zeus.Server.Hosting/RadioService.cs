@@ -165,15 +165,22 @@ public sealed class RadioService : IDisposable
     private long _lastTickMs = long.MinValue;
     private int _lastAppliedEffectiveDb = -1;   // so the first send always fires
 
-    // Auto-AGC control-loop state. Adjusts AGC-T (the WDSP max-gain cap) so
-    // the band noise floor lands near a fixed reference, mirroring Thetis'
-    // noise-floor calibration. Closed-looping on the live S-meter (the prior
-    // implementation) ramped to max gain on quiet bands and clipped when
-    // signal returned.
-    private const int AgcNoiseFloorWindowSamples = 12; // 12 × 500 ms = 6 s
+    // Auto-AGC control-loop state. Tracks the band noise floor and places the
+    // effective AGC-T so the floor lands near a fixed reference (Thetis-style
+    // noise-floor calibration). The follower JUMPS to the target each tick
+    // rather than slewing — Thetis does the same, and the smoothing lives in the
+    // floor estimate (the percentile window), not the follower. The old slewed
+    // version (0.5 dB/tick into a 1.5 dB deadband after a full 6 s window) took
+    // ~30 s to settle a band change; jumping to a fast, short-window floor (with
+    // a fast-attack re-seed on a band-scale tune) settles in ~1-2 s like Thetis.
+    private const int AgcNoiseFloorWindowSamples = 6;  // 6 × 500 ms = 3 s window (was 12 / 6 s)
+    private const int AgcNoiseFloorMinSamples = 3;     // act after ~1.5 s; don't wait for a full window
     private const double AgcNoiseFloorPercentile = 0.20;
-    private const double AgcDeadbandDb = 1.5;
-    private const double AgcSlewPerTickDb = 0.5;
+    private const double AgcDeadbandDb = 0.5;          // narrow no-move zone (was 1.5) — closes the last bit of error
+    // A VFO move this large means a band change: drop the floor window so it
+    // re-seeds to the new band's noise within ~1.5 s instead of averaging the
+    // old band in (Thetis fast-attack on band/freq delta > 0.5 MHz).
+    private const double AgcFastAttackVfoDeltaHz = 500_000.0;
     private const double AgcMinEffectiveAgcT = 20.0;
     private const double AgcMaxEffectiveAgcT = 100.0;
     private const double AgcCutStressThresholdDb = -10.0;
@@ -181,6 +188,7 @@ public sealed class RadioService : IDisposable
     private const double AgcAdcPressureThresholdDbfs = -6.0;
     private double _agcOffsetDb;
     private long _lastAgcTickMs = long.MinValue;
+    private long _lastAutoAgcVfoHz = long.MinValue;
     private readonly double[] _noiseFloorWindow = new double[AgcNoiseFloorWindowSamples];
     private int _noiseFloorWindowIdx;
     private int _noiseFloorWindowFill;
@@ -417,10 +425,10 @@ public sealed class RadioService : IDisposable
             LevelerMaxGainDb: overlayLevelerMaxGain ?? Math.Clamp(rsSnap?.LevelerMaxGainDb ?? 8.0, 0.0, 20.0),
             AutoAgcEnabled: rsSnap?.AutoAgcEnabled ?? false,
             AgcOffsetDb: 0.0,       // always reset — control-loop accumulator
-            // Persisted AGC knee, or null when the operator has never set it
-            // (WDSP's per-mode default threshold stays in effect — no change
-            // vs. pre-#741). Pushed to WDSP from DspPipelineService when non-null.
-            AgcThresholdDbm: _dspSettingsStore.GetAgcThresholdDbm(),
+            // AGC knee removed: AGC-T is the single manual AGC control, so the
+            // threshold is never operator-driven (it and AGC-T are the same WDSP
+            // register — driving both clobbered each other). Always null.
+            AgcThresholdDbm: null,
             // PS persisted fields (or DTO defaults when not persisted yet).
             PsEnabled: false, // master arm is never persisted — operator must re-arm each session
             PsAuto: ps?.Auto ?? true,
@@ -1812,6 +1820,18 @@ public sealed class RadioService : IDisposable
                 _noiseFloorWindowIdx = 0;
             }
 
+            // Fast-attack: a band-scale VFO move makes the old band's samples
+            // meaningless, so drop the window and re-seed to the new band's floor
+            // (Thetis re-seeds in ~1 s on a > 0.5 MHz change). A small in-band
+            // tune does NOT reset — only a band-change-scale jump.
+            if (_lastAutoAgcVfoHz != long.MinValue &&
+                Math.Abs(_state.VfoHz - _lastAutoAgcVfoHz) > AgcFastAttackVfoDeltaHz)
+            {
+                _noiseFloorWindowFill = 0;
+                _noiseFloorWindowIdx = 0;
+            }
+            _lastAutoAgcVfoHz = _state.VfoHz;
+
             if (_lastAgcTickMs != long.MinValue && nowMs - _lastAgcTickMs < 500)
                 return;
             _lastAgcTickMs = nowMs;
@@ -1823,7 +1843,11 @@ public sealed class RadioService : IDisposable
                 if (_noiseFloorWindowFill < _noiseFloorWindow.Length) _noiseFloorWindowFill++;
             }
 
-            bool windowReady = _noiseFloorWindowFill >= _noiseFloorWindow.Length;
+            // Act as soon as we have a few samples (~1.5 s) — don't wait to fill
+            // the whole window. The percentile is computed over however many
+            // samples we have, which is enough to place the floor and start
+            // converging fast.
+            bool windowReady = _noiseFloorWindowFill >= AgcNoiseFloorMinSamples;
             double desiredOffset = _agcOffsetDb;
             if (windowReady)
             {
@@ -1869,11 +1893,13 @@ public sealed class RadioService : IDisposable
             }
 
             double delta = desiredOffset - _agcOffsetDb;
+            // Deadband: ignore sub-0.5 dB wobble so a jumpy floor estimate can't
+            // dither the gain every tick. Above it, JUMP straight to the target
+            // (no slew) — the floor window is the smoother, so the target moves
+            // gently in steady state and snaps only on a real band change.
             if (Math.Abs(delta) < AgcDeadbandDb) return;
 
-            _agcOffsetDb = delta > 0
-                ? Math.Min(desiredOffset, _agcOffsetDb + AgcSlewPerTickDb)
-                : Math.Max(desiredOffset, _agcOffsetDb - AgcSlewPerTickDb);
+            _agcOffsetDb = desiredOffset;
 
             _state = _state with { AgcOffsetDb = _agcOffsetDb };
             newOffset = _agcOffsetDb;
@@ -2251,32 +2277,11 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
-    // AGC threshold ("knee") in operator/displayed dBm. This is the smooth,
-    // signal-relative AGC control (Thetis panadapter knee → WDSP SetRXAAGCThresh)
-    // — distinct from the AgcTopDb max-gain cap. Clamp matches Thetis's
-    // SetRXAAGCThresh range ([-160, 2] dBm). The displayed-dBm → WDSP-scale
-    // conversion (per-board RX meter offset) happens at the engine push in
-    // DspPipelineService, where that offset is already computed for meters.
-    // Setting the knee does NOT disturb Auto-AGC (which acts on the top), so —
-    // unlike SetAgcTop — we leave AutoAgcEnabled/AgcOffsetDb alone.
-    public StateDto SetAgcThreshold(double dbm)
-    {
-        double clamped = Math.Clamp(dbm, -160.0, 2.0);
-        Mutate(s => s with { AgcThresholdDbm = clamped });
-        _dspSettingsStore.SetAgcThresholdDbm(clamped);
-        return Snapshot();
-    }
-
-    // Disengage the AGC knee: clear the operator override (→ null) and persist
-    // the cleared state. The DSP pipeline sees AgcThresholdDbm go null and
-    // restores WDSP's captured per-mode default threshold, so AGC returns to its
-    // default behaviour (#741).
-    public StateDto DisengageAgcThreshold()
-    {
-        Mutate(s => s with { AgcThresholdDbm = null });
-        _dspSettingsStore.ClearAgcThresholdDbm();
-        return Snapshot();
-    }
+    // (Removed: the manual AGC "knee" / threshold control. In WDSP the threshold
+    // and AGC-T are the SAME register (max_gain); exposing both as independent
+    // operator controls made them clobber each other and made AGC-T hair-trigger.
+    // AGC-T (SetAgcTop) is now the single manual AGC control; Auto-AGC tracks the
+    // noise floor on top of it.)
 
     // Master RX AF gain in dB. −50 dB is effectively silent (0.003 linear),
     // 0 dB matches the fresh-open default, +20 dB is a 10× linear boost for

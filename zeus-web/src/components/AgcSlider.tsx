@@ -45,9 +45,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  disengageAgcThreshold,
   setAgc,
-  setAgcThreshold,
   setAgcTop,
   setAutoAgc,
   type AgcConfigDto,
@@ -61,14 +59,6 @@ import { useLiveSlider } from '../hooks/useLiveSlider';
 // 0-120 mirrors the range Thetis exposes on its AGC-T slider.
 const MIN = 0;
 const MAX = 120;
-
-// AGC threshold ("knee") in dBm. The operator sets this just above the noise
-// floor; signals above it drive the AGC. Range mirrors a usable HF signal
-// window. KNEE_FALLBACK is the slider thumb position shown while the knee is
-// unset (null) — a sensible mid-low spot so the thumb isn't pinned to a rail.
-const KNEE_MIN = -140;
-const KNEE_MAX = 0;
-const KNEE_FALLBACK = -120;
 
 // AGC mode dropdown order matches Thetis (enums.cs:152-162).
 const AGC_MODES: readonly AgcMode[] = ['Fixed', 'Long', 'Slow', 'Med', 'Fast', 'Custom'];
@@ -138,7 +128,6 @@ export function AgcSlider() {
   const applyState = useConnectionStore((s) => s.applyState);
   const agc = useConnectionStore((s) => s.agc);
   const setLocalAgc = useConnectionStore((s) => s.setAgc);
-  const agcThresholdDbm = useConnectionStore((s) => s.agcThresholdDbm);
 
   // Local drag state overrides the store while the user is actively moving
   // the slider so echoed state updates don't yank the thumb back.
@@ -149,19 +138,8 @@ export function AgcSlider() {
   const effective = Math.round(Math.max(MIN, Math.min(MAX, sliderValue + offsetDb)));
   const sliderDisabled = !connected || autoEnabled;
 
-  // Knee (AGC threshold) local drag override, mirroring the AGC-T pattern so
-  // an echoed StateDto doesn't yank the thumb while the operator is dragging.
-  const [kneeDragValue, setKneeDragValue] = useState<number | null>(null);
-  // Thumb position: live drag value, else the operator's set knee, else the
-  // fallback. The numeric readout shows "—" until the knee has actually been set.
-  const kneeSliderValue = kneeDragValue ?? agcThresholdDbm ?? KNEE_FALLBACK;
-  const kneeSet = kneeDragValue != null || agcThresholdDbm != null;
-  // Unlike AGC-T, the knee is independent of auto-AGC — only gated on connect.
-  const kneeDisabled = !connected;
-
   const autoAbort = useRef<AbortController | null>(null);
   const agcAbort = useRef<AbortController | null>(null);
-  const kneeAbort = useRef<AbortController | null>(null);
 
   // Popover holding Custom (slope/decay/hang/thresh) or Fixed (fixed gain)
   // tunables, anchored under the mode dropdown so the toolbar stays compact.
@@ -187,41 +165,6 @@ export function AgcSlider() {
       [applyState],
     ),
   });
-
-  // Knee streams /api/agc/threshold the same way AGC-T streams /api/agcGain.
-  const kneeLiveSlider = useLiveSlider<number>({
-    send: useCallback(
-      (v: number, signal: AbortSignal) =>
-        setAgcThreshold(v, signal)
-          .then((next) => {
-            if (!signal.aborted) applyState(next);
-          })
-          .catch(() => {
-            /* next poll will reconcile; don't noisily log on abort */
-          }),
-      [applyState],
-    ),
-  });
-
-  // The "Knee" label is a toggle: when engaged (a threshold is set) it
-  // disengages → server restores WDSP's default knee; when disengaged it
-  // engages at the current thumb position. Dragging the slider always engages.
-  const toggleKnee = useCallback(() => {
-    if (!connected) return;
-    kneeAbort.current?.abort();
-    const ac = new AbortController();
-    kneeAbort.current = ac;
-    const req = kneeSet
-      ? disengageAgcThreshold(ac.signal)
-      : setAgcThreshold(kneeSliderValue, ac.signal);
-    req
-      .then((next) => {
-        if (!ac.signal.aborted) applyState(next);
-      })
-      .catch(() => {
-        /* next poll reconciles */
-      });
-  }, [connected, kneeSet, kneeSliderValue, applyState]);
 
   const toggleAuto = useCallback(() => {
     if (!connected) return;
@@ -258,7 +201,6 @@ export function AgcSlider() {
     () => () => {
       autoAbort.current?.abort();
       agcAbort.current?.abort();
-      kneeAbort.current?.abort();
     },
     [],
   );
@@ -369,73 +311,6 @@ export function AgcSlider() {
           }}
         >
           {effective} dB
-        </span>
-      </label>
-
-      <label className="knob-group" style={{ minWidth: 0 }}>
-        <button
-          type="button"
-          onClick={toggleKnee}
-          disabled={!connected}
-          aria-pressed={kneeSet}
-          aria-label={kneeSet ? 'AGC knee engaged (click to disengage)' : 'AGC knee off (click to engage)'}
-          title={
-            kneeSet
-              ? 'AGC knee ENGAGED — click to disengage (restore the default AGC threshold)'
-              : 'AGC knee off — click to engage, or drag the slider. Set it just above the noise floor for smooth, signal-relative AGC.'
-          }
-          className={`btn sm ${kneeSet ? 'active' : ''}`}
-          style={{ whiteSpace: 'nowrap' }}
-        >
-          Knee
-        </button>
-        <input
-          type="range"
-          min={KNEE_MIN}
-          max={KNEE_MAX}
-          step={1}
-          value={kneeSliderValue}
-          disabled={kneeDisabled}
-          aria-label="AGC threshold (knee)"
-          title="AGC threshold (knee) — set just above the noise floor for smooth, signal-relative AGC"
-          onChange={(e) => {
-            const v = Number(e.currentTarget.value);
-            setKneeDragValue(v);
-            kneeLiveSlider.push(v);
-          }}
-          onMouseUp={() => {
-            kneeLiveSlider.flush();
-            setKneeDragValue(null);
-          }}
-          onTouchEnd={() => {
-            kneeLiveSlider.flush();
-            setKneeDragValue(null);
-          }}
-          onKeyUp={() => {
-            kneeLiveSlider.flush();
-            setKneeDragValue(null);
-          }}
-          style={{
-            flex: 1,
-            cursor: kneeDisabled ? 'not-allowed' : 'pointer',
-            // Lit accent only while engaged; muted when disengaged so the
-            // off-state reads at a glance (mirrors the lit "Knee" button).
-            accentColor: kneeDisabled || !kneeSet ? 'var(--fg-3)' : 'var(--accent)',
-            opacity: kneeDisabled ? 0.55 : kneeSet ? 1 : 0.7,
-          }}
-        />
-        <span
-          className="mono"
-          style={{
-            flex: '0 0 auto',
-            width: 60,
-            textAlign: 'right',
-            color: kneeDisabled ? 'var(--fg-3)' : 'var(--fg-1)',
-            fontSize: 11,
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {kneeSet ? `${Math.round(kneeSliderValue)} dBm` : '—'}
         </span>
       </label>
 
