@@ -130,6 +130,7 @@ internal static class WdspFixtureEvidenceTool
                         ["windowedRmsSpreadDb"] = Math.Round(run.Metrics.WindowedRmsSpreadDb, 6),
                         ["clippingCount"] = run.ClippingCount,
                         ["txStageMeters"] = run.TxMeters,
+                        ["rxStageMeters"] = run.RxStageMeters,
                         ["candidateDiagnostics"] = run.CandidateDiagnostics,
                         ["expectedTonesHz"] = fixture.ExpectedTonesHz.Select(kv => new Dictionary<string, object?>
                         {
@@ -206,6 +207,7 @@ internal static class WdspFixtureEvidenceTool
                         ["nativeStageTiming"] = NewStageTimingRecord(run),
                         ["managedAllocation"] = NewManagedAllocationRecord(run),
                         ["txStageMeters"] = run.TxMeters,
+                        ["rxStageMeters"] = run.RxStageMeters,
                         ["clippingCount"] = run.ClippingCount,
                         ["candidateDiagnostics"] = run.CandidateDiagnostics,
                         ["evidence"] = new Dictionary<string, object?>
@@ -348,6 +350,7 @@ internal static class WdspFixtureEvidenceTool
             throw new ArgumentException("RX fixture is missing IQ samples.", nameof(fixture));
 
         var stages = new List<StageProbe>();
+        var rxMeters = new RxAgcMeterAccumulator();
         var sw = new Stopwatch();
         using var engine = new WdspDspEngine();
         int channel = MeasureStage(stages, "rx-open-channel", "RXA OpenChannel", () => engine.OpenChannel(fixture.SampleRateHz, PixelWidth));
@@ -364,9 +367,9 @@ internal static class WdspFixtureEvidenceTool
 
             sw.Start();
             for (int repeat = 0; repeat < FixtureRepeats; repeat++)
-                MeasureStage(stages, "rx-feed-iq", "RXA FeedIq fixture block", () => FeedFixtureIq(engine, channel, fixture.IqInterleaved));
+                MeasureStage(stages, "rx-feed-iq", "RXA FeedIq fixture block", () => FeedFixtureIq(engine, channel, fixture.IqInterleaved, rxMeters));
 
-            var audio = MeasureStage(stages, "rx-drain-audio", "RXA ReadAudio drain", () => DrainAudio(engine, channel));
+            var audio = MeasureStage(stages, "rx-drain-audio", "RXA ReadAudio drain", () => DrainAudio(engine, channel, rxMeters));
             if (audio.Length < 1024)
                 throw new InvalidOperationException($"{fixture.Name}/{profile.Id}: expected WDSP RX audio, got {audio.Length} samples.");
 
@@ -383,6 +386,7 @@ internal static class WdspFixtureEvidenceTool
                 IntermodulationProxy: 0.0,
                 SamplePreview: PreviewAudio(analysis),
                 TxMeters: null,
+                RxStageMeters: rxMeters.ToSummary(),
                 CandidateDiagnostics: null,
                 StageProbes: stages);
         }
@@ -458,6 +462,7 @@ internal static class WdspFixtureEvidenceTool
                 IntermodulationProxy: ComputeIntermodulationProxy(analysis, AudioSampleRateHz, fixture.ExpectedTonesHz),
                 SamplePreview: PreviewIq(analysis),
                 TxMeters: txMetersJson,
+                RxStageMeters: null,
                 CandidateDiagnostics: candidateDiagnostics,
                 StageProbes: stages);
         }
@@ -500,17 +505,18 @@ internal static class WdspFixtureEvidenceTool
         }
     }
 
-    private static void FeedFixtureIq(WdspDspEngine engine, int channel, double[] iq)
+    private static void FeedFixtureIq(WdspDspEngine engine, int channel, double[] iq, RxAgcMeterAccumulator rxMeters)
     {
         int complexSamples = iq.Length / 2;
         for (int offset = 0; offset < complexSamples; offset += RxChunkComplex)
         {
             int take = Math.Min(RxChunkComplex, complexSamples - offset);
             engine.FeedIq(channel, iq.AsSpan(2 * offset, 2 * take));
+            rxMeters.Add(engine.GetRxStageMeters(channel));
         }
     }
 
-    private static float[] DrainAudio(WdspDspEngine engine, int channel)
+    private static float[] DrainAudio(WdspDspEngine engine, int channel, RxAgcMeterAccumulator rxMeters)
     {
         var samples = new List<float>(AnalysisSamples * 2);
         var buffer = new float[2048];
@@ -518,7 +524,9 @@ internal static class WdspFixtureEvidenceTool
         for (int i = 0; i < 160; i++)
         {
             Thread.Sleep(10);
+            rxMeters.Add(engine.GetRxStageMeters(channel));
             int drained = engine.ReadAudio(channel, buffer);
+            rxMeters.Add(engine.GetRxStageMeters(channel));
             if (drained > 0)
                 samples.AddRange(buffer.Take(drained));
             if (samples.Count >= AnalysisSamples * 2)
@@ -575,12 +583,12 @@ internal static class WdspFixtureEvidenceTool
             "throughputratio" => ComputeThroughputRatio(run),
             "windowedrmsmovement" => run.Metrics.WindowedRmsSpreadDb,
             "coherenttonecontinuity" => 1.0 / (1.0 + Math.Max(0.0, run.Metrics.WindowedRmsSpreadDb) / 12.0),
-            "agcgainmovement" => run.Metrics.WindowedRmsSpreadDb,
+            "agcgainmovement" => GetRxAgcGainMovementDb(run),
             "impulsesuppression" => ComputeImpulseSuppressionDb(source, run.Metrics),
             "postblankerringing" => Math.Max(0.0, run.Metrics.WindowedRmsSpreadDb - source.WindowedRmsSpreadDb),
             "wantedadjacentratio" => ComputeWantedAdjacentRatioDb(run.Metrics),
             "filterleakage" => AdjacentTonePower(run.Metrics),
-            "agcmovement" => run.Metrics.WindowedRmsSpreadDb,
+            "agcmovement" => GetRxAgcGainMovementDb(run),
             "falseopenrate" => scenarioId is "noise-only-gating" or "noise-only"
                 ? Math.Clamp(run.Metrics.Rms / 0.025, 0.0, 1.0)
                 : 0.0,
@@ -604,6 +612,19 @@ internal static class WdspFixtureEvidenceTool
             "txoutputaverage" => GetTxMeterValue(run, "effectiveOutAvDbfs", GetTxMeterValue(run, "outAvDbfs", ToDb(run.Metrics.Rms))),
             _ => direction == "informational" ? run.Metrics.Rms : run.Metrics.WindowedRmsSpreadDb,
         };
+    }
+
+    private static double GetRxAgcGainMovementDb(FixtureRunResult run)
+    {
+        if (run.RxStageMeters is not null &&
+            run.RxStageMeters.TryGetValue("agcGainMovementDb", out object? value) &&
+            value is double movement &&
+            double.IsFinite(movement))
+        {
+            return movement;
+        }
+
+        return run.Metrics.WindowedRmsSpreadDb;
     }
 
     private static IReadOnlyList<object> NewGateRecords(PlanScenario scenario, FixtureRunResult run)
@@ -1296,8 +1317,43 @@ internal static class WdspFixtureEvidenceTool
         double IntermodulationProxy,
         object SamplePreview,
         IReadOnlyDictionary<string, object?>? TxMeters,
+        IReadOnlyDictionary<string, object?>? RxStageMeters,
         object? CandidateDiagnostics,
         IReadOnlyList<StageProbe> StageProbes);
+
+    private sealed class RxAgcMeterAccumulator
+    {
+        private int _count;
+        private double _min = double.PositiveInfinity;
+        private double _max = double.NegativeInfinity;
+        private double _last;
+
+        public void Add(RxStageMeters meters)
+        {
+            double value = meters.AgcGain;
+            if (!double.IsFinite(value) || value <= -300.0 || value >= 300.0)
+                return;
+
+            _count++;
+            _last = value;
+            _min = Math.Min(_min, value);
+            _max = Math.Max(_max, value);
+        }
+
+        public IReadOnlyDictionary<string, object?> ToSummary()
+        {
+            double movement = _count > 0 ? _max - _min : 0.0;
+            return new Dictionary<string, object?>
+            {
+                ["agcGainSampleCount"] = _count,
+                ["agcGainMinDb"] = _count > 0 ? Math.Round(_min, 6) : null,
+                ["agcGainMaxDb"] = _count > 0 ? Math.Round(_max, 6) : null,
+                ["agcGainLastDb"] = _count > 0 ? Math.Round(_last, 6) : null,
+                ["agcGainMovementDb"] = Math.Round(movement, 6),
+                ["source"] = "WDSP RXA_AGC_GAIN meter",
+            };
+        }
+    }
 
     private sealed record StageProbe(
         string StageId,

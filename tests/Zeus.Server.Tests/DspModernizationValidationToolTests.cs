@@ -2779,6 +2779,92 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task WdspFixtureEvidenceUsesRxAgcMeterForAgcMovementMetric()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell WDSP AGC fixture smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-wdsp-agc-meter-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(bundleDir, "benchmark-plan.json"),
+                """
+                {
+                  "schemaVersion": 1,
+                  "scenarios": [
+                    {
+                      "id": "agc-level-step",
+                      "name": "AGC level step and pumping",
+                      "fixtureStatus": "offline-fixture-ready",
+                      "signalPath": "RX IQ/RX audio",
+                      "requiredMetrics": [
+                        "AGC gain movement",
+                        "windowed RMS movement",
+                        "processing elapsed ms"
+                      ],
+                      "acceptanceGates": [
+                        "No audible pumping, clipping, or noise-floor chase."
+                      ]
+                    }
+                  ]
+                }
+                """);
+            await File.WriteAllTextAsync(
+                Path.Combine(bundleDir, "benchmark-metric-catalog.json"),
+                JsonSerializer.Serialize(DspBenchmarkPlanCatalog.BuildMetricCatalog(), CamelCaseJson));
+
+            var evidence = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "run-dsp-wdsp-fixture-evidence.ps1"),
+                TimeSpan.FromMinutes(2),
+                "-BundleDir", bundleDir,
+                "-ScenarioIds", "agc-level-step",
+                "-ComparisonIds", "current-zeus",
+                "-Force",
+                "-JsonOnly");
+
+            Assert.True(evidence.ExitCode == 0, evidence.CombinedOutput);
+
+            var metricsPath = Path.Combine(bundleDir, "artifacts", "offline-fixture-metrics.json");
+            Assert.True(File.Exists(metricsPath), evidence.CombinedOutput);
+
+            using var metricsDoc = JsonDocument.Parse(await File.ReadAllTextAsync(metricsPath));
+            var root = metricsDoc.RootElement;
+            Assert.Equal("wdsp", root.GetProperty("evidenceEngine").GetString());
+            var scenario = root.GetProperty("scenarios").EnumerateArray().Single();
+            Assert.Equal("agc-level-step", scenario.GetProperty("scenarioId").GetString());
+            var comparison = scenario.GetProperty("comparisons").EnumerateArray().Single();
+            var metrics = comparison.GetProperty("metrics");
+            Assert.True(metrics.TryGetProperty("AGC gain movement", out var agcGainMovement));
+            Assert.True(comparison.TryGetProperty("rxStageMeters", out var rxStageMeters));
+            Assert.Equal("WDSP RXA_AGC_GAIN meter", rxStageMeters.GetProperty("source").GetString());
+            Assert.True(rxStageMeters.GetProperty("agcGainSampleCount").GetInt32() > 0);
+            Assert.Equal(rxStageMeters.GetProperty("agcGainMovementDb").GetDouble(), agcGainMovement.GetDouble(), precision: 6);
+
+            var audioPath = comparison.GetProperty("evidence").GetProperty("audioPath").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(audioPath));
+            var audioFullPath = Path.Combine(bundleDir, audioPath.Replace('/', Path.DirectorySeparatorChar));
+            using var audioDoc = JsonDocument.Parse(await File.ReadAllTextAsync(audioFullPath));
+            var audioMeters = audioDoc.RootElement.GetProperty("rxStageMeters");
+            Assert.Equal(rxStageMeters.GetProperty("agcGainMovementDb").GetDouble(), audioMeters.GetProperty("agcGainMovementDb").GetDouble(), precision: 6);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task RxLevelerFixtureBenchmarkToolExportsCandidateEvidence()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell RX leveler benchmark smoke runs on Windows.");
