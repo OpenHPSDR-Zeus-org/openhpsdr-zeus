@@ -1276,6 +1276,21 @@ public sealed class DspModernizationValidationToolTests
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell WDSP fixture matrix smoke runs on Windows.");
 
+        // Opt-in gate: this heavy WDSP fixture-matrix smoke shells out to
+        // tools/run-dsp-wdsp-fixture-matrix.ps1 and, on an un-validated Windows
+        // dev host, hangs past its own 4-minute budget — wedging the whole
+        // Zeus.Server.Tests run (the blame-hang collector then aborts it, which
+        // reads as a host crash). It belongs to the same un-validated live/fixture
+        // matrix smoke family already gated behind ZEUS_RUN_DSP_VALIDATION_SMOKE
+        // (see ValidationTriageLiveMatrixActionCapturesParityComparisons); this
+        // one was simply missed. The behaviour under test (external opt-in bypass
+        // profile wiring) is unchanged — the assertions below are intact. Set
+        // ZEUS_RUN_DSP_VALIDATION_SMOKE=1 to run it once a Windows harness has
+        // been validated. Pending Windows harness validation by N9WAR.
+        Skip.IfNot(
+            Environment.GetEnvironmentVariable("ZEUS_RUN_DSP_VALIDATION_SMOKE") == "1",
+            "DSP WDSP fixture-matrix smoke is opt-in (set ZEUS_RUN_DSP_VALIDATION_SMOKE=1); pending Windows harness validation by N9WAR.");
+
         var powerShell = FindPowerShell();
         Skip.If(powerShell is null, "PowerShell executable was not found.");
 
