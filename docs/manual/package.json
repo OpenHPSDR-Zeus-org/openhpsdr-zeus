@@ -1,0 +1,7 @@
+{
+  "name": "zeus-operator-manual",
+  "private": true,
+  "description": "Source + build tooling for the Zeus Operator's Manual (living document).",
+  "license": "GPL-2.0-or-later",
+  "dependencies": { "marked": "^12.0.0" }
+}
