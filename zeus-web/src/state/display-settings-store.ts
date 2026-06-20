@@ -342,6 +342,19 @@ const SMOOTHING = 0.1;
 const AUTO_FLOOR_MARGIN_DB = 8;
 const AUTO_CEIL_MARGIN_DB = 6;
 
+// TX auto-range margins/percentiles. Unlike RX (sparse signals against a wide
+// noise floor), the TX signal is a continuous block occupying only a fraction
+// of the full-span display, so p5/p95 would both land in the floor. We fit on
+// a low floor percentile and a high peak percentile instead, and converge
+// faster (0.3) so the window settles within a few frames of key-down. The
+// peak percentile (not the absolute max) keeps a single hot bin from throwing
+// the ceiling.
+const TX_AUTO_FLOOR_MARGIN_DB = 6;
+const TX_AUTO_CEIL_MARGIN_DB = 8;
+const TX_AUTO_SMOOTHING = 0.3;
+const TX_AUTO_FLOOR_PCT = 0.1;
+const TX_AUTO_PEAK_PCT = 0.995;
+
 // Guard against degenerate ranges (e.g. silent input producing p5==p95).
 const MIN_SPAN_DB = 20;
 
@@ -374,6 +387,11 @@ export type DisplaySettingsState = {
   txDisplayFftSize: number;
   txDisplayWindow: number;
   txDisplayAvgTauMs: number;
+  // TX display auto-range. While keyed, fit the TX panadapter + waterfall
+  // windows to the live transmitted signal so the trace is never slammed to
+  // full-scale (the WDSP TX analyzer reads far hotter than the RX one). On by
+  // default; a manual TX window edit or scale-drag switches it off.
+  txAutoRange: boolean;
   colormap: ColormapId;
   waterfallScrollSpeed: number;
   // Panadapter background overlay mode + (optional) user image. See the
@@ -412,6 +430,12 @@ export type DisplaySettingsState = {
     avgTauMs?: number;
   }) => void;
   resetTxDisplayParams: () => void;
+  // Toggle TX auto-range. Turning it off restores the operator's saved TX
+  // windows (mirrors setAutoRange for RX).
+  setTxAutoRange: (v: boolean) => void;
+  // Fit the TX windows to a frame of live TX pixels (no-op when off / empty).
+  // Driven from the waterfall ingest while keyed.
+  updateTxAutoRange: (pixels: Float32Array) => void;
   resetDbRanges: () => void;
   updateAutoRange: (wfDb: Float32Array) => void;
   // Shift dbMin and dbMax together by `deltaDb`. Used by the draggable dB
@@ -480,6 +504,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   txDisplayFftSize: DEFAULT_TX_DISPLAY_FFT_SIZE,
   txDisplayWindow: DEFAULT_TX_DISPLAY_WINDOW,
   txDisplayAvgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS,
+  txAutoRange: true,
   colormap: 'blue',
   waterfallScrollSpeed: initialWaterfallScrollSpeed,
   // Defaults until the server-side fetch lands (see hydrateFromServer at the
@@ -592,7 +617,8 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   },
   setTxDbRange: (txDbMin, txDbMax) => {
     const next = sanitizeRange(txDbMin, txDbMax, TX_FIXED_DB_MIN, TX_FIXED_DB_MAX);
-    set({ txDbMin: next.min, txDbMax: next.max });
+    // A manual TX window edit takes over from auto-range.
+    set({ txAutoRange: false, txDbMin: next.min, txDbMax: next.max });
     writeSavedTxRange(next.min, next.max);
     scheduleDbRangeSave();
   },
@@ -604,7 +630,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   },
   setWfTxDbRange: (wfTxDbMin, wfTxDbMax) => {
     const next = sanitizeRange(wfTxDbMin, wfTxDbMax, TX_FIXED_DB_MIN, TX_FIXED_DB_MAX);
-    set({ wfTxDbMin: next.min, wfTxDbMax: next.max });
+    set({ txAutoRange: false, wfTxDbMin: next.min, wfTxDbMax: next.max });
     writeSavedWfTxRange(next.min, next.max);
     scheduleDbRangeSave();
   },
@@ -639,8 +665,46 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
       txDisplayFftSize: DEFAULT_TX_DISPLAY_FFT_SIZE,
       txDisplayWindow: DEFAULT_TX_DISPLAY_WINDOW,
       txDisplayAvgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS,
+      txAutoRange: true,
     });
     scheduleTxDisplaySave();
+  },
+  setTxAutoRange: (v) => {
+    if (v) {
+      set({ txAutoRange: true });
+    } else {
+      // Off restores the operator's saved TX windows (mirrors setAutoRange).
+      const tx = readSavedTxRange();
+      const wf = readSavedWfTxRange();
+      set({
+        txAutoRange: false,
+        txDbMin: tx.txDbMin,
+        txDbMax: tx.txDbMax,
+        wfTxDbMin: wf.wfTxDbMin,
+        wfTxDbMax: wf.wfTxDbMax,
+      });
+    }
+  },
+  updateTxAutoRange: (pixels) => {
+    if (!get().txAutoRange || pixels.length === 0) return;
+    const [floor, peak] = txFloorPeak(pixels);
+    let targetMin = floor - TX_AUTO_FLOOR_MARGIN_DB;
+    let targetMax = peak + TX_AUTO_CEIL_MARGIN_DB;
+    if (targetMax - targetMin < MIN_SPAN_DB) {
+      const mid = 0.5 * (targetMin + targetMax);
+      targetMin = mid - MIN_SPAN_DB / 2;
+      targetMax = mid + MIN_SPAN_DB / 2;
+    }
+    const s = TX_AUTO_SMOOTHING;
+    const { txDbMin, txDbMax, wfTxDbMin, wfTxDbMax } = get();
+    // EMA toward the target so the window settles smoothly over a few frames
+    // instead of jumping every tick. Both TX windows track the same signal.
+    set({
+      txDbMin: txDbMin * (1 - s) + targetMin * s,
+      txDbMax: txDbMax * (1 - s) + targetMax * s,
+      wfTxDbMin: wfTxDbMin * (1 - s) + targetMin * s,
+      wfTxDbMax: wfTxDbMax * (1 - s) + targetMax * s,
+    });
   },
   resetDbRanges: () => {
     set({
@@ -722,6 +786,24 @@ function percentiles(arr: Float32Array): [number, number] {
   const lowIdx = Math.min(n - 1, Math.max(0, Math.floor(0.05 * n)));
   const highIdx = Math.min(n - 1, Math.max(0, Math.floor(0.95 * n)));
   return [sorted[lowIdx] ?? FIXED_DB_MIN, sorted[highIdx] ?? FIXED_DB_MAX];
+}
+
+// TX floor/peak for auto-range. Filters out non-finite / sentinel bins (e.g.
+// out-of-span edges set to the invalid-bin sentinel) so they don't drag the
+// floor, then returns [low-percentile floor, high-percentile peak]. The peak
+// percentile (not the absolute max) ignores a lone hot bin.
+function txFloorPeak(arr: Float32Array): [number, number] {
+  const vals: number[] = [];
+  for (let i = 0; i < arr.length; i++) {
+    const v = arr[i] ?? Number.NaN;
+    if (Number.isFinite(v) && v > -250) vals.push(v);
+  }
+  if (vals.length === 0) return [TX_FIXED_DB_MIN, TX_FIXED_DB_MAX];
+  vals.sort((a, b) => a - b);
+  const n = vals.length;
+  const floorIdx = Math.min(n - 1, Math.max(0, Math.floor(TX_AUTO_FLOOR_PCT * n)));
+  const peakIdx = Math.min(n - 1, Math.max(0, Math.floor(TX_AUTO_PEAK_PCT * n)));
+  return [vals[floorIdx] ?? TX_FIXED_DB_MIN, vals[peakIdx] ?? TX_FIXED_DB_MAX];
 }
 
 // Decode a data:URL produced by canvas.toDataURL() into a Blob the multipart
