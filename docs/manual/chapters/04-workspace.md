@@ -85,10 +85,6 @@ Zeus runs the same backend everywhere; the *interface* adapts to where you're vi
 - **Web (LAN browser)** — point a browser on another computer at the Zeus server's address and you get the same desktop-style workspace. One thing to know: microphone access in a browser requires a **secure (HTTPS)** connection. The Zeus server prints an `https://` LAN address at startup — use that one if you intend to transmit from a browser. The first visit warns that the certificate is self-signed; accept it to proceed.
 - **Mobile** — open Zeus on a phone (or any screen about 900 px wide or narrower) and you get a **single-column touch layout** built from the same panels and the same live data. It has two tabs at the top: **Radio** (frequency/VFO, S-meter, panadapter+waterfall with a drag divider, PTT and tune, mode and band) and **Tools** (tiles for TX Controls, Rotator, QRZ Lookup, and DSP, each opening the full desktop panel scaled to the column). The mobile shell **inherits** layout and display choices you made on the desktop; you build and arrange panels on the desktop, and they appear on the phone. On mobile, pinch to zoom the spectrum and use the on-screen trackpad and **lock** button to tune.
 
-### A small note on the brand mark
-
-The lightning bolt in the top-left logo is more than decoration. Tapping the bolt four times in a session unlocks a hidden **HARDWARE** diagnostics folder in Settings — board and DSP diagnostics meant for troubleshooting. It re-locks every time you relaunch Zeus, so a fresh session never shows it and an accidental tap never leaves it exposed. If you never go looking, you'll never trip over it.
-
 ### URL Embed panel
 
 A Tools-category panel that pins any web page inside your workspace as a tile,
