@@ -154,6 +154,7 @@ public class DspPipelineRx2RoutingTests
         public int ReadAudio(int channelId, Span<float> output) => 0;
         public bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut) => false;
         public bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
+        public void ConfigureTxDisplayAnalyzer(int fftSize, int windowType, double avgTauSec) { }
         public bool TryGetPsFeedbackDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
         public int OpenTxChannel(int outputRateHz = 48_000) => 0;
         public void SetMox(bool moxOn) { }

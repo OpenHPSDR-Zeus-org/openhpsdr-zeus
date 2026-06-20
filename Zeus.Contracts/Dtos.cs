@@ -1680,7 +1680,20 @@ public sealed record DisplaySettingsDto(
     double? WfDbMin,
     double? WfDbMax,
     double? WfTxDbMin,
-    double? WfTxDbMax);
+    double? WfTxDbMax,
+    // TX display analyzer parameters (issue: live TX waterfall). All
+    // display-only — they shape the transmitted-signal panadapter/waterfall
+    // visualization and never touch the transmitted audio, drive, or PA.
+    // Null on legacy rows / requests → server falls back to its defaults.
+    //   TxDisplayCalOffsetDb — dB added to the TX trace/waterfall pixels so the
+    //     operator can calibrate the absolute level (Thetis TXDisplayCalOffset).
+    //   TxDisplayFftSize     — WDSP TX analyzer FFT size (power of two).
+    //   TxDisplayWindow      — WDSP analyzer window type (win_type).
+    //   TxDisplayAvgTauMs    — TX trace visual smoothing time-constant (ms).
+    double? TxDisplayCalOffsetDb = null,
+    int? TxDisplayFftSize = null,
+    int? TxDisplayWindow = null,
+    double? TxDisplayAvgTauMs = null);
 
 public sealed record DisplaySettingsSetRequest(
     string Mode,
@@ -1693,7 +1706,11 @@ public sealed record DisplaySettingsSetRequest(
     double? WfDbMin = null,
     double? WfDbMax = null,
     double? WfTxDbMin = null,
-    double? WfTxDbMax = null);
+    double? WfTxDbMax = null,
+    double? TxDisplayCalOffsetDb = null,
+    int? TxDisplayFftSize = null,
+    int? TxDisplayWindow = null,
+    double? TxDisplayAvgTauMs = null);
 
 // Server-side mirror of the frontend Signal Intelligence weak-signal display
 // controls. The DSP math remains in zeus-web's signal-estimator; this DTO lets

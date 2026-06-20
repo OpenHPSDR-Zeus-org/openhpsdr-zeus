@@ -251,6 +251,9 @@ public sealed class SyntheticDspEngine : IDspEngine
     // while MOX is on, matching the existing "no new data" semantics.
     public bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
 
+    // Synthetic has no TX analyzer to reconfigure — no-op.
+    public void ConfigureTxDisplayAnalyzer(int fftSize, int windowType, double avgTauSec) { }
+
     // Synthetic has no PS feedback path either — the PS-Monitor toggle is a
     // no-op here, same shape as TryGetTxDisplayPixels.
     public bool TryGetPsFeedbackDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;

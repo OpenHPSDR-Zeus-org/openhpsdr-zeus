@@ -322,6 +322,17 @@ public sealed class WdspDspEngine : IDspEngine
     private int _txDispRxSampleRateHz;
     private bool _txDispAlive;
 
+    // Configurable TX display analyzer params (live TX waterfall feature).
+    // Display-only — they shape the transmitted-signal panadapter/waterfall
+    // FFT, never the air. Defaults mirror the historical constants so an
+    // unconfigured engine renders byte-identically to before. _txFftSize /
+    // _txWinType are read on the TX + PS-FB analyzer config path; _txAvgTauSec
+    // is the visual log-recursive smoothing tau (guarded by _txDispLock for the
+    // TXA reconfig). See ConfigureTxDisplayAnalyzer.
+    private volatile int _txFftSize = AnalyzerFftSize;
+    private volatile int _txWinType = AnalyzerWindow;
+    private double _txAvgTauSec = TxAvgTauSec;
+
     // PureSignal feedback display analyzer (issue #121). Optional second WDSP
     // disp slot fed from FeedPsFeedbackBlock's rxI/rxQ — i.e. the post-PA
     // signal observed via the radio's loopback ADC. When the operator turns on
@@ -536,7 +547,7 @@ public sealed class WdspDspEngine : IDspEngine
         NativeMethods.XCreateAnalyzer(id, out int rc, MaxFftSize, 1, 1, null);
         if (rc != 0) throw new InvalidOperationException($"XCreateAnalyzer failed rc={rc}");
 
-        ConfigureAnalyzer(id, sampleRateHz, InSize, pixelWidth, zoomLevel: 1);
+        ConfigureAnalyzer(id, sampleRateHz, InSize, pixelWidth, zoomLevel: 1, AnalyzerFftSize, AnalyzerWindow, AnalyzerKaiserPi);
         ConfigureDisplayAveraging(id);
 
         var state = new ChannelState
@@ -778,7 +789,7 @@ public sealed class WdspDspEngine : IDspEngine
         {
             if (state.ZoomLevel == level) return;
             state.ZoomLevel = level;
-            ConfigureAnalyzer(channelId, state.SampleRateHz, InSize, state.PixelWidth, level);
+            ConfigureAnalyzer(channelId, state.SampleRateHz, InSize, state.PixelWidth, level, AnalyzerFftSize, AnalyzerWindow, AnalyzerKaiserPi);
         }
 
         // Mirror zoom onto the TX analyzer so the TX panadapter span stays
@@ -791,7 +802,7 @@ public sealed class WdspDspEngine : IDspEngine
             {
                 _txDispZoomLevel = level;
                 txaIdToReconfig = txa;
-                TryConfigureTxAnalyzer(txa, _txaDspRateHz, _txaDspSize, _txDispRxSampleRateHz, _txDispPixelWidth, level);
+                TryConfigureTxAnalyzer(txa, _txaDspRateHz, _txaDspSize, _txDispRxSampleRateHz, _txDispPixelWidth, level, _txFftSize, _txWinType, AnalyzerKaiserPi);
             }
         }
 
@@ -803,7 +814,7 @@ public sealed class WdspDspEngine : IDspEngine
             if (_psFbDispAlive && _psFbDispId is int psFb)
             {
                 _psFbDispZoomLevel = level;
-                TryConfigureTxAnalyzer(psFb, PsFeedbackSampleRateHz, PsFeedbackBlockSize, _psFbDispRxSampleRateHz, _psFbDispPixelWidth, level);
+                TryConfigureTxAnalyzer(psFb, PsFeedbackSampleRateHz, PsFeedbackBlockSize, _psFbDispRxSampleRateHz, _psFbDispPixelWidth, level, _txFftSize, _txWinType, AnalyzerKaiserPi);
             }
         }
 
@@ -1380,6 +1391,56 @@ public sealed class WdspDspEngine : IDspEngine
         }
     }
 
+    // Power-of-two FFT sizes the TX display analyzer accepts. Mirrors
+    // DisplaySettingsStore.TxFftSizes; an out-of-range request snaps to the
+    // 16384 default so a malformed value can never reach SetAnalyzer.
+    private static int NormalizeTxFftSize(int fftSize) => fftSize switch
+    {
+        2048 or 4096 or 8192 or 16384 or 32768 or 65536 => fftSize,
+        _ => AnalyzerFftSize,
+    };
+
+    public void ConfigureTxDisplayAnalyzer(int fftSize, int windowType, double avgTauSec)
+    {
+        if (_disposed != 0) return;
+
+        // Defense in depth — the store validates too, but the engine is also
+        // reachable from tests and future callers. Snap anything invalid to the
+        // historical defaults rather than feeding garbage to SetAnalyzer.
+        int fft = NormalizeTxFftSize(fftSize);
+        int win = (windowType >= 0 && windowType <= 11) ? windowType : AnalyzerWindow;
+        double tau = (avgTauSec > 0.0 && avgTauSec <= 2.0) ? avgTauSec : TxAvgTauSec;
+
+        _txFftSize = fft;
+        _txWinType = win;
+
+        // Reconfigure the live TX analyzer in place (when open). SetAnalyzer is
+        // serialized against the Spectrum0 feed and GetPixels by _txDispLock,
+        // matching SetZoom's reconfig path.
+        lock (_txDispLock)
+        {
+            _txAvgTauSec = tau;
+            if (_txDispAlive && _txaChannelId is int txa)
+            {
+                TryConfigureTxAnalyzer(txa, _txaDspRateHz, _txaDspSize, _txDispRxSampleRateHz, _txDispPixelWidth, _txDispZoomLevel, fft, win, AnalyzerKaiserPi);
+                ConfigureDisplayAveragingTau(txa, tau);
+            }
+        }
+
+        // The PS-feedback analyzer shares the TX display span — keep it in sync
+        // so toggling PS-Monitor doesn't change FFT resolution / smoothing.
+        lock (_psFbDispLock)
+        {
+            if (_psFbDispAlive && _psFbDispId is int psFb)
+            {
+                TryConfigureTxAnalyzer(psFb, PsFeedbackSampleRateHz, PsFeedbackBlockSize, _psFbDispRxSampleRateHz, _psFbDispPixelWidth, _psFbDispZoomLevel, fft, win, AnalyzerKaiserPi);
+                ConfigureDisplayAveragingTau(psFb, tau);
+            }
+        }
+
+        _log.LogInformation("wdsp.configureTxDisplay fft={Fft} win={Win} tauMs={Tau:F0}", fft, win, tau * 1000.0);
+    }
+
     public int OpenTxChannel(int outputRateHz = 48_000)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
@@ -1647,10 +1708,10 @@ public sealed class WdspDspEngine : IDspEngine
                         // TXA.c:586). Pre-fix the analyzer was configured at
                         // the OUTPUT (post-cfir/rsmpout) rate and got fed the
                         // predistorted IQ — cosmetically dirty by design.
-                        configured = TryConfigureTxAnalyzer(id, _txaDspRateHz, _txaDspSize, rxSampleRateHz, rxPixelWidth, rxZoom);
+                        configured = TryConfigureTxAnalyzer(id, _txaDspRateHz, _txaDspSize, rxSampleRateHz, rxPixelWidth, rxZoom, _txFftSize, _txWinType, AnalyzerKaiserPi);
                         if (configured)
                         {
-                            ConfigureDisplayAveragingTau(id, TxAvgTauSec);
+                            ConfigureDisplayAveragingTau(id, _txAvgTauSec);
                             _txDispAlive = true;
                         }
                     }
@@ -2423,7 +2484,7 @@ public sealed class WdspDspEngine : IDspEngine
                 _log.LogWarning("wdsp.psFb.open XCreateAnalyzer rc={Rc} — PS-Monitor will fall back to TX trace", rc);
                 return;
             }
-            bool configured = TryConfigureTxAnalyzer(psFbId, PsFeedbackSampleRateHz, PsFeedbackBlockSize, rxRate, pixelWidth, zoom);
+            bool configured = TryConfigureTxAnalyzer(psFbId, PsFeedbackSampleRateHz, PsFeedbackBlockSize, rxRate, pixelWidth, zoom, _txFftSize, _txWinType, AnalyzerKaiserPi);
             if (!configured)
             {
                 NativeMethods.DestroyAnalyzer(psFbId);
@@ -2433,7 +2494,7 @@ public sealed class WdspDspEngine : IDspEngine
                     rxRate, PsFeedbackSampleRateHz);
                 return;
             }
-            ConfigureDisplayAveragingTau(psFbId, TxAvgTauSec);
+            ConfigureDisplayAveragingTau(psFbId, _txAvgTauSec);
             _psFbDispId = psFbId;
             _psFbDispPixelWidth = pixelWidth;
             _psFbDispRxSampleRateHz = rxRate;
@@ -3090,7 +3151,8 @@ public sealed class WdspDspEngine : IDspEngine
     // match (txRate is a positive integer multiple of rxRate). Callers that get
     // false skip TX analyzer creation and fall back to the RX analyzer during
     // MOX — matches the pre-issue-#81 behaviour for that codepath.
-    private static bool TryConfigureTxAnalyzer(int disp, int txSampleRateHz, int txBlockSize, int rxSampleRateHz, int pixelWidth, int rxZoomLevel)
+    private static bool TryConfigureTxAnalyzer(int disp, int txSampleRateHz, int txBlockSize, int rxSampleRateHz, int pixelWidth, int rxZoomLevel,
+        int fftSize, int winType, double piAlpha)
     {
         if (rxSampleRateHz <= 0 || txSampleRateHz < rxSampleRateHz || txSampleRateHz % rxSampleRateHz != 0)
             return false;
@@ -3099,16 +3161,21 @@ public sealed class WdspDspEngine : IDspEngine
         // (_txaOutSize: 1024 on P1, 2048 on P2). Hardcoding InSize left WDSP
         // reading only the first 1024 of each 2048-sample P2 block, aliasing at
         // (192000/1024) ≈ 188 Hz and producing a spur comb on the TUN carrier.
-        ConfigureAnalyzer(disp, txSampleRateHz, txBlockSize, pixelWidth, effectiveZoom);
+        ConfigureAnalyzer(disp, txSampleRateHz, txBlockSize, pixelWidth, effectiveZoom, fftSize, winType, piAlpha);
         return true;
     }
 
-    private static void ConfigureAnalyzer(int disp, int sampleRateHz, int bfSize, int pixelWidth, int zoomLevel)
+    // fftSize / winType / piAlpha let the TX display analyzer be reconfigured at
+    // runtime (live TX waterfall feature); RX callers pass the historical
+    // AnalyzerFftSize / AnalyzerWindow / AnalyzerKaiserPi constants so RX
+    // behaviour is byte-identical.
+    private static void ConfigureAnalyzer(int disp, int sampleRateHz, int bfSize, int pixelWidth, int zoomLevel,
+        int fftSize, int winType, double piAlpha)
     {
-        int overlap = (int)Math.Max(0, Math.Ceiling(AnalyzerFftSize - (double)sampleRateHz / AnalyzerFps));
-        int maxW = AnalyzerFftSize + (int)Math.Min(
+        int overlap = (int)Math.Max(0, Math.Ceiling(fftSize - (double)sampleRateHz / AnalyzerFps));
+        int maxW = fftSize + (int)Math.Min(
             AnalyzerKeepTime * sampleRateHz,
-            AnalyzerKeepTime * AnalyzerFftSize * AnalyzerFps);
+            AnalyzerKeepTime * fftSize * AnalyzerFps);
         int flp = 0;
 
         // fscLin/fscHin are integer bin counts to clip from the LOW and HIGH
@@ -3119,7 +3186,7 @@ public sealed class WdspDspEngine : IDspEngine
         double fscLin = 0.0, fscHin = 0.0;
         if (zoomLevel > 1)
         {
-            int clippedPerSide = AnalyzerFftSize * (zoomLevel - 1) / (2 * zoomLevel);
+            int clippedPerSide = fftSize * (zoomLevel - 1) / (2 * zoomLevel);
             fscLin = clippedPerSide;
             fscHin = clippedPerSide;
         }
@@ -3130,10 +3197,10 @@ public sealed class WdspDspEngine : IDspEngine
             n_fft: 1,
             typ: 1,
             flp: ref flp,
-            sz: AnalyzerFftSize,
+            sz: fftSize,
             bf_sz: bfSize,
-            win_type: AnalyzerWindow,
-            pi_alpha: AnalyzerKaiserPi,
+            win_type: winType,
+            pi_alpha: piAlpha,
             ovrlp: overlap,
             clp: 0,
             fscLin: fscLin,

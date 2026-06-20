@@ -47,7 +47,6 @@ import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent }
 import { GripVertical, X } from 'lucide-react';
 import { Panadapter } from '../../components/Panadapter';
 import { WaterfallSurface } from '../../components/WaterfallSurface';
-import { TxEqAnalyzer } from '../../components/TxEqAnalyzer';
 import { ZoomControl } from '../../components/ZoomControl';
 import { WaterfallSpeedControl } from '../../components/WaterfallSpeedControl';
 import { SpectrumControls } from '../../components/SpectrumControls';
@@ -129,7 +128,8 @@ export function HeroPanel({
   const rx2AudioMode = useConnectionStore((s) => s.rx2AudioMode);
   const rxFocus = useConnectionStore((s) => s.rxFocus);
   const setRxFocus = useConnectionStore((s) => s.setRxFocus);
-  // During TX the waterfall region becomes the live TX EQ analyzer.
+  // During TX the waterfall region shows the live transmitted spectrum
+  // (WDSP TX analyzer pixels, streamed by the server while keyed).
   const keyed = useTxStore((s) => s.moxOn || s.tunOn);
   const updateTileInstanceConfig = useLayoutStore(
     (s) => s.updateTileInstanceConfigInLayout,
@@ -484,9 +484,15 @@ export function HeroPanel({
           />
           {connected && (
             keyed ? (
-              // On TX both receivers transmit the same audio, so a single
-              // full-width analyzer replaces the waterfall (or RX2 quad).
-              <TxEqAnalyzer transparent={bgActive} />
+              // On TX both receivers transmit the same audio, and the server
+              // feeds the WDSP TX analyzer's pixels into the main display
+              // stream while keyed (DspPipelineService, issue #81). So a single
+              // full-width waterfall shows the live transmitted spectrum
+              // scrolling — paired with the panadapter above (also TX while
+              // keyed) it forms a real TX panafall. The TX dB window
+              // (wfTxDbMin/Max) and the left-edge WfDbScale drag let the
+              // operator set the in-passband brightness independently of RX.
+              <WaterfallSurface transparent={bgActive} />
             ) : rx2Enabled ? (
               <div style={stitchedGridStyle}>
                 <div style={{ minWidth: 0, minHeight: 0 }}>

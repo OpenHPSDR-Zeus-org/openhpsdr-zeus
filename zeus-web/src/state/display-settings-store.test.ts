@@ -42,11 +42,17 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  DEFAULT_TX_DISPLAY_AVG_TAU_MS,
+  DEFAULT_TX_DISPLAY_CAL_OFFSET_DB,
+  DEFAULT_TX_DISPLAY_FFT_SIZE,
+  DEFAULT_TX_DISPLAY_WINDOW,
   DEFAULT_WF_SCROLL_SPEED,
   FIXED_DB_MAX,
   FIXED_DB_MIN,
+  TX_DISPLAY_CAL_OFFSET_ABS_DB,
+  TX_DISPLAY_AVG_TAU_MAX_MS,
   WATERFALL_SCROLL_SPEED_MAX,
   WATERFALL_SCROLL_SPEED_MIN,
   TX_FIXED_DB_MAX,
@@ -199,6 +205,66 @@ describe('display-settings-store', () => {
       wfDbMax: FIXED_DB_MAX,
       wfTxDbMin: TX_FIXED_DB_MIN,
       wfTxDbMax: TX_FIXED_DB_MAX,
+    });
+  });
+});
+
+describe('TX display analyzer params', () => {
+  beforeEach(() => {
+    // Stub fetch so the debounced server save is a no-op (and never leaks a
+    // rejected promise / pending timer into later tests).
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })));
+    useDisplaySettingsStore.setState({
+      txDisplayCalOffsetDb: DEFAULT_TX_DISPLAY_CAL_OFFSET_DB,
+      txDisplayFftSize: DEFAULT_TX_DISPLAY_FFT_SIZE,
+      txDisplayWindow: DEFAULT_TX_DISPLAY_WINDOW,
+      txDisplayAvgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS,
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('updates a single param and leaves the rest untouched', () => {
+    useDisplaySettingsStore.getState().setTxDisplayParams({ fftSize: 32768 });
+    const s = useDisplaySettingsStore.getState();
+    expect(s.txDisplayFftSize).toBe(32768);
+    expect(s.txDisplayCalOffsetDb).toBe(DEFAULT_TX_DISPLAY_CAL_OFFSET_DB);
+    expect(s.txDisplayWindow).toBe(DEFAULT_TX_DISPLAY_WINDOW);
+    expect(s.txDisplayAvgTauMs).toBe(DEFAULT_TX_DISPLAY_AVG_TAU_MS);
+  });
+
+  it('clamps the cal offset to ±limit', () => {
+    useDisplaySettingsStore.getState().setTxDisplayParams({ calOffsetDb: 9999 });
+    expect(useDisplaySettingsStore.getState().txDisplayCalOffsetDb).toBe(TX_DISPLAY_CAL_OFFSET_ABS_DB);
+    useDisplaySettingsStore.getState().setTxDisplayParams({ calOffsetDb: -9999 });
+    expect(useDisplaySettingsStore.getState().txDisplayCalOffsetDb).toBe(-TX_DISPLAY_CAL_OFFSET_ABS_DB);
+  });
+
+  it('clamps smoothing tau to the allowed range', () => {
+    useDisplaySettingsStore.getState().setTxDisplayParams({ avgTauMs: 99999 });
+    expect(useDisplaySettingsStore.getState().txDisplayAvgTauMs).toBe(TX_DISPLAY_AVG_TAU_MAX_MS);
+  });
+
+  it('ignores a non-power-of-two FFT size', () => {
+    useDisplaySettingsStore.getState().setTxDisplayParams({ fftSize: 12345 });
+    expect(useDisplaySettingsStore.getState().txDisplayFftSize).toBe(DEFAULT_TX_DISPLAY_FFT_SIZE);
+  });
+
+  it('ignores an unknown window type', () => {
+    useDisplaySettingsStore.getState().setTxDisplayParams({ window: 99 });
+    expect(useDisplaySettingsStore.getState().txDisplayWindow).toBe(DEFAULT_TX_DISPLAY_WINDOW);
+  });
+
+  it('resets all params to defaults', () => {
+    const s = useDisplaySettingsStore.getState();
+    s.setTxDisplayParams({ calOffsetDb: -15, fftSize: 8192, window: 5, avgTauMs: 400 });
+    s.resetTxDisplayParams();
+    expect(useDisplaySettingsStore.getState()).toMatchObject({
+      txDisplayCalOffsetDb: DEFAULT_TX_DISPLAY_CAL_OFFSET_DB,
+      txDisplayFftSize: DEFAULT_TX_DISPLAY_FFT_SIZE,
+      txDisplayWindow: DEFAULT_TX_DISPLAY_WINDOW,
+      txDisplayAvgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS,
     });
   });
 });

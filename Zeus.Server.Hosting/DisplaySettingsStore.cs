@@ -43,6 +43,31 @@ public sealed class DisplaySettingsStore : IDisposable
         return true;
     }
 
+    // Bounds for the TX display analyzer parameters. These are display-only
+    // (they shape the transmitted-signal visualization, never the air), but we
+    // still guard the persisted values so a malformed PUT can't poison the DB
+    // or push an out-of-range value into the WDSP analyzer reconfig.
+    private const double TxCalOffsetAbsDb = 60.0;
+    private const double TxAvgTauMaxMs = 2000.0;
+    // Power-of-two FFT sizes the WDSP TX analyzer accepts. 16384 is the engine
+    // default (matches the RX analyzer); smaller = faster/less resolution,
+    // larger = finer bins / heavier compute.
+    private static readonly int[] TxFftSizes = { 2048, 4096, 8192, 16384, 32768, 65536 };
+
+    private static bool IsValidCalOffset(double? v) =>
+        v.HasValue && !double.IsNaN(v.Value) && !double.IsInfinity(v.Value)
+        && Math.Abs(v.Value) <= TxCalOffsetAbsDb;
+
+    private static bool IsValidFftSize(int? v) => v.HasValue && Array.IndexOf(TxFftSizes, v.Value) >= 0;
+
+    // WDSP win_type values 0..11 (analyzer.c). Keep the accept range generous;
+    // the frontend only surfaces a friendly subset.
+    private static bool IsValidWindow(int? v) => v.HasValue && v.Value >= 0 && v.Value <= 11;
+
+    private static bool IsValidAvgTauMs(double? v) =>
+        v.HasValue && !double.IsNaN(v.Value) && !double.IsInfinity(v.Value)
+        && v.Value >= 0.0 && v.Value <= TxAvgTauMaxMs;
+
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<DisplaySettingsEntry> _docs;
     private readonly ILogger<DisplaySettingsStore> _log;
@@ -84,7 +109,11 @@ public sealed class DisplaySettingsStore : IDisposable
                     WfDbMin: null,
                     WfDbMax: null,
                     WfTxDbMin: null,
-                    WfTxDbMax: null);
+                    WfTxDbMax: null,
+                    TxDisplayCalOffsetDb: null,
+                    TxDisplayFftSize: null,
+                    TxDisplayWindow: null,
+                    TxDisplayAvgTauMs: null);
             }
             return new DisplaySettingsDto(
                 Mode: NormalizeMode(e.Mode),
@@ -99,7 +128,11 @@ public sealed class DisplaySettingsStore : IDisposable
                 WfDbMin: e.WfDbMin,
                 WfDbMax: e.WfDbMax,
                 WfTxDbMin: e.WfTxDbMin,
-                WfTxDbMax: e.WfTxDbMax);
+                WfTxDbMax: e.WfTxDbMax,
+                TxDisplayCalOffsetDb: e.TxDisplayCalOffsetDb,
+                TxDisplayFftSize: e.TxDisplayFftSize,
+                TxDisplayWindow: e.TxDisplayWindow,
+                TxDisplayAvgTauMs: e.TxDisplayAvgTauMs);
         }
     }
 
@@ -110,7 +143,9 @@ public sealed class DisplaySettingsStore : IDisposable
         double? dbMin = null, double? dbMax = null,
         double? txDbMin = null, double? txDbMax = null,
         double? wfDbMin = null, double? wfDbMax = null,
-        double? wfTxDbMin = null, double? wfTxDbMax = null)
+        double? wfTxDbMin = null, double? wfTxDbMax = null,
+        double? txDisplayCalOffsetDb = null, int? txDisplayFftSize = null,
+        int? txDisplayWindow = null, double? txDisplayAvgTauMs = null)
     {
         lock (_sync)
         {
@@ -127,6 +162,12 @@ public sealed class DisplaySettingsStore : IDisposable
             if (IsValidRange(txDbMin, txDbMax)) { e.TxDbMin = txDbMin; e.TxDbMax = txDbMax; }
             if (IsValidRange(wfDbMin, wfDbMax)) { e.WfDbMin = wfDbMin; e.WfDbMax = wfDbMax; }
             if (IsValidRange(wfTxDbMin, wfTxDbMax)) { e.WfTxDbMin = wfTxDbMin; e.WfTxDbMax = wfTxDbMax; }
+            // TX display analyzer params — each validated independently so a
+            // caller can update one knob without clobbering the others.
+            if (IsValidCalOffset(txDisplayCalOffsetDb)) e.TxDisplayCalOffsetDb = txDisplayCalOffsetDb;
+            if (IsValidFftSize(txDisplayFftSize)) e.TxDisplayFftSize = txDisplayFftSize;
+            if (IsValidWindow(txDisplayWindow)) e.TxDisplayWindow = txDisplayWindow;
+            if (IsValidAvgTauMs(txDisplayAvgTauMs)) e.TxDisplayAvgTauMs = txDisplayAvgTauMs;
             e.UpdatedUtc = DateTime.UtcNow;
             if (e.Id == 0) _docs.Insert(e);
             else _docs.Update(e);
@@ -232,5 +273,13 @@ public sealed class DisplaySettingsEntry
     public double? WfDbMax { get; set; }
     public double? WfTxDbMin { get; set; }
     public double? WfTxDbMax { get; set; }
+    // TX display analyzer params (display-only). Null on rows written before
+    // these fields existed — Get() returns null and the engine applies its
+    // built-in defaults (16384-bin FFT, Hann window (win_type 2), 175 ms
+    // smoothing, 0 dB cal offset).
+    public double? TxDisplayCalOffsetDb { get; set; }
+    public int? TxDisplayFftSize { get; set; }
+    public int? TxDisplayWindow { get; set; }
+    public double? TxDisplayAvgTauMs { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }
