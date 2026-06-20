@@ -7,19 +7,26 @@
 //
 // The workspace never scrolls: a single uniform `rowHeight` shrinks every tile
 // so the whole layout fits the viewport. That shrink also rescales LOCKED
-// tiles, which operators expect to stay put at their exact authored size.
+// tiles, which operators expect to stay put at the exact size they had when
+// they pinned them.
 //
-// A single uniform rowHeight cannot hold one tile fixed while shrinking others,
-// so when a tile is locked AND the layout would overflow, we instead pin
-// rowHeight at the authored value (locked tiles render at exactly h × authored
-// px, invariant to the workspace getting longer/shorter) and shrink only the
-// UNLOCKED tiles' grid heights, recompacting around the static locked tiles.
+// Locking must be INERT — clicking the lock must not change the panel's size —
+// AND the size must then stay fixed as the workspace grows/shrinks. A single
+// uniform rowHeight can't do both, so each locked tile carries the on-screen
+// pixel height it had at lock time (`lockedHeightPx`, captured by the
+// component). We then pick the largest rowHeight (<= authored) at which the
+// whole layout still fits, holding each locked tile at its frozen pixel height
+// via a compensated (fractional) grid span and letting the UNLOCKED tiles take
+// the remaining space. Because reserving a locked tile's *current* height
+// changes nothing, the solver lands on the pre-lock rowHeight at the moment of
+// locking (inert); as the workspace later grows, only the rowHeight — and thus
+// the unlocked tiles — shrink, while locked tiles keep their frozen height.
 //
 // The result is a RENDER layout. The stored layout is never mutated here; the
 // component reconciles RGL's echo of this derived layout back to stored
-// coordinates so the shrunken render geometry is never persisted
-// (reconcileReportedToStored). When nothing is compensated the derived layout
-// equals the stored layout and the whole path is a no-op.
+// coordinates so the compensated render geometry is never persisted
+// (reconcileReportedToStored). With nothing locked the derived layout equals
+// the stored layout and the whole path is a no-op.
 
 import { compactMagnetUp } from './workspaceGrid';
 import type { Layout } from 'react-grid-layout';
@@ -35,6 +42,11 @@ export interface DeriveTile {
   h: number;
   locked: boolean;
   minH: number;
+  /** On-screen pixel height captured when the tile was locked. Locked tiles are
+   *  held at exactly this height. Absent for tiles locked before the field
+   *  existed — those fall back to their height at the no-lock density so
+   *  locking stays inert. */
+  lockedHeightPx?: number;
 }
 
 export interface RenderPlacement {
@@ -136,24 +148,57 @@ function uniformResult(
   };
 }
 
-/** Render the layout with unlocked tile heights scaled by `scale`, recompacted
- *  so unlocked tiles magnet up around the static (locked) tiles. */
-function renderAtScale(
+/** On-screen pixel height of a tile spanning `h` grid rows. Mirrors RGL's
+ *  calcGridItemWHPx (minus the final px rounding, which we don't need here). */
+function tileHeightPx(h: number, rowHeight: number, margin: number): number {
+  return rowHeight * h + Math.max(0, h - 1) * margin;
+}
+
+/** Pixel bottom edge of a tile, matching RGL's absoluteStrategy positioning. */
+function tileBottomPx(
+  y: number,
+  h: number,
+  rowHeight: number,
+  margin: number,
+): number {
+  return (rowHeight + margin) * y + tileHeightPx(h, rowHeight, margin);
+}
+
+/** Grid rows a tile must span to render exactly `px` tall at `rowHeight`:
+ *  solve px = rowHeight·h + (h-1)·margin  ⇒  h = (px + margin)/(rowHeight + margin). */
+function lockedSpanRows(px: number, rowHeight: number, margin: number): number {
+  return (px + margin) / (rowHeight + margin);
+}
+
+/** Render the layout at a candidate rowHeight: each locked tile gets a
+ *  (fractional) span that reproduces its frozen pixel height; unlocked tiles
+ *  keep their stored span. Recompact so unlocked tiles magnet up around the
+ *  static locked tiles, then report the layout and its total pixel extent. */
+function renderAtRowHeight(
   tiles: DeriveTile[],
-  scale: number,
-): { placements: RenderPlacement[]; maxBottom: number } {
+  rowHeight: number,
+  margin: number,
+  lockedPxByUid: Map<string, number>,
+): { placements: RenderPlacement[]; maxBottomPx: number } {
   const items: Layout = tiles.map((t) => ({
     i: t.uid,
     x: t.x,
     y: t.y,
     w: t.w,
     h: t.locked
-      ? t.h
-      : Math.max(t.minH, Math.min(t.h, Math.round(t.h * scale))),
+      ? lockedSpanRows(lockedPxByUid.get(t.uid) ?? 0, rowHeight, margin)
+      : t.h,
     static: t.locked,
     moved: false,
   }));
   const compacted = compactMagnetUp(items);
+  let maxBottomPx = 0;
+  for (const it of compacted) {
+    maxBottomPx = Math.max(
+      maxBottomPx,
+      tileBottomPx(it.y, it.h, rowHeight, margin),
+    );
+  }
   return {
     placements: compacted.map((it) => ({
       uid: it.i,
@@ -162,53 +207,15 @@ function renderAtScale(
       w: it.w,
       h: it.h,
     })),
-    maxBottom: maxBottomOf(compacted),
+    maxBottomPx,
   };
 }
 
-/** Find the largest unlocked-height scale that keeps the compacted layout
- *  within `fitRows`. Returns null when even the minimum heights overflow
- *  (locked tiles alone exceed the viewport). */
-function fitUnlockedToRows(
-  tiles: DeriveTile[],
-  fitRows: number,
-): { placements: RenderPlacement[]; scale: number } | null {
-  const full = renderAtScale(tiles, 1);
-  if (full.maxBottom <= fitRows) {
-    return { placements: full.placements, scale: 1 };
-  }
-
-  // Binary-search the largest scale in (0, 1) that fits. 24 iterations resolves
-  // far finer than the 1-row grid quantisation.
-  let lo = 0;
-  let hi = 1;
-  let best: { placements: RenderPlacement[]; scale: number } | null = null;
-  for (let i = 0; i < 24; i += 1) {
-    const mid = (lo + hi) / 2;
-    const r = renderAtScale(tiles, mid);
-    if (r.maxBottom <= fitRows) {
-      best = { placements: r.placements, scale: mid };
-      lo = mid;
-    } else {
-      hi = mid;
-    }
-  }
-  if (best) return best;
-
-  // Floor: every unlocked tile at its minH. If that still overflows, the locked
-  // tiles themselves don't fit — caller falls back to a uniform shrink.
-  const floor = renderAtScale(tiles, 0);
-  if (floor.maxBottom <= fitRows) {
-    return { placements: floor.placements, scale: 0 };
-  }
-  return null;
-}
-
 /**
- * Compute the workspace render layout. When a tile is locked and the layout
- * would overflow, locked tiles are held at authored size (rowHeight pinned) and
- * unlocked tiles shrink to fit. Otherwise this reproduces the legacy uniform
- * shrink-to-fit exactly.
+ * Compute the workspace render layout. With nothing locked this reproduces the
+ * legacy uniform shrink-to-fit exactly. When tiles are locked, each is held at
+ * its frozen pixel height (captured at lock time) while the rowHeight — and so
+ * the unlocked tiles — shrink to keep the whole layout inside the viewport.
  */
 export function deriveWorkspaceLayout(
   tiles: DeriveTile[],
@@ -216,48 +223,77 @@ export function deriveWorkspaceLayout(
 ): DerivedWorkspaceLayout {
   const layoutRows = maxBottomOf(tiles);
   const anyLocked = tiles.some((t) => t.locked);
-  const anyUnlocked = tiles.some((t) => !t.locked);
 
-  // Nothing locked, no measurable container, or every tile locked (no unlocked
-  // tile can absorb the slack) → legacy uniform behaviour.
-  if (!anyLocked || !anyUnlocked || opts.containerHeight <= 0) {
+  if (!anyLocked || opts.containerHeight <= 0) {
     return uniformResult(tiles, layoutRows, opts);
   }
 
-  const { authoredRowHeightPx: R, gridMarginPx: m } = opts;
-  const fitRows = Math.floor((opts.containerHeight + m) / (R + m));
-  if (fitRows <= 0) {
+  const {
+    authoredRowHeightPx: R,
+    gridMarginPx: m,
+    minRowHeightPx: minR,
+    containerHeight: C,
+  } = opts;
+
+  // Use the same row margin the no-lock path would, so locking doesn't shift
+  // the gap (and thus the sizes). It depends only on the stored layout extent,
+  // not on the rowHeight we are about to solve for, so it is stable across the
+  // search.
+  const baseTargetRows = Math.max(layoutRows, opts.targetRows);
+  const rowMargin = uniformRowMargin(C, baseTargetRows, m, opts.rowGapShare);
+
+  // Frozen pixel height per locked tile. A tile locked before the captured
+  // field existed has no stored height, so use its height at the no-lock
+  // density — that keeps locking inert for legacy layouts too.
+  const baselineRowHeight = uniformRowHeight(C, baseTargetRows, rowMargin, R, minR);
+  const lockedPxByUid = new Map<string, number>();
+  for (const t of tiles) {
+    if (!t.locked) continue;
+    const px =
+      t.lockedHeightPx !== undefined && t.lockedHeightPx > 0
+        ? t.lockedHeightPx
+        : tileHeightPx(t.h, baselineRowHeight, rowMargin);
+    lockedPxByUid.set(t.uid, px);
+  }
+
+  // Pick the largest rowHeight (≤ authored) at which the whole layout still
+  // fits, with locked tiles held at their frozen pixel height. A larger
+  // rowHeight makes the unlocked tiles taller (more total height), so "fits"
+  // is monotonic and a binary search lands on the tightest non-overflowing
+  // value. Reserving a locked tile's *current* height changes nothing, so at
+  // the instant of locking this resolves to the pre-lock rowHeight (inert).
+  const atMax = renderAtRowHeight(tiles, R, rowMargin, lockedPxByUid);
+  let best: { rr: number; placements: RenderPlacement[] } | null =
+    atMax.maxBottomPx <= C ? { rr: R, placements: atMax.placements } : null;
+  if (!best) {
+    let lo = minR;
+    let hi = R;
+    for (let i = 0; i < 24; i += 1) {
+      const mid = (lo + hi) / 2;
+      const r = renderAtRowHeight(tiles, mid, rowMargin, lockedPxByUid);
+      if (r.maxBottomPx <= C) {
+        best = { rr: mid, placements: r.placements };
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+  }
+
+  // Even the minimum rowHeight overflows — the locked tiles alone exceed the
+  // viewport. Never scroll: fall back to the uniform shrink, which lets locked
+  // tiles give up their frozen size as a last resort.
+  if (!best) {
     return uniformResult(tiles, layoutRows, opts);
   }
 
-  // Already fits at authored density → render as stored at the authored
-  // rowHeight. Locked tiles are exactly h × R px; spare height stays at the
-  // bottom (matching the sparse-layout behaviour the workspace already has).
-  if (layoutRows <= fitRows) {
-    return {
-      rowHeight: R,
-      rowMargin: m,
-      placements: tiles.map(passthrough),
-      compensated: false,
-      unlockedScale: 1,
-    };
-  }
-
-  // Overflow: shrink unlocked tiles to fit while locked tiles stay authored.
-  const fitted = fitUnlockedToRows(tiles, fitRows);
-  if (fitted) {
-    return {
-      rowHeight: R,
-      rowMargin: m,
-      placements: fitted.placements,
-      compensated: fitted.scale < 1,
-      unlockedScale: fitted.scale,
-    };
-  }
-
-  // Locked tiles alone overflow the viewport — unavoidable corner. Fall back to
-  // the uniform shrink (locked tiles shrink too) rather than show a scrollbar.
-  return uniformResult(tiles, layoutRows, opts);
+  return {
+    rowHeight: best.rr,
+    rowMargin,
+    placements: best.placements,
+    compensated: true,
+    unlockedScale: 1,
+  };
 }
 
 /**

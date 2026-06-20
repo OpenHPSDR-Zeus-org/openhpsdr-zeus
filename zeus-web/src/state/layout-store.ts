@@ -154,8 +154,15 @@ interface LayoutState {
   ) => void;
   /** Toggle whether every tile in a layout is pinned in place. */
   setWorkspaceLockedInLayout: (layoutId: string, locked: boolean) => void;
-  /** Toggle whether one tile is pinned to its current grid space. */
-  setTileLockedInLayout: (layoutId: string, uid: string, locked: boolean) => void;
+  /** Toggle whether one tile is pinned to its current grid space. When locking,
+   *  `lockedHeightPx` is the tile's current on-screen pixel height, captured so
+   *  the tile can be held at exactly that size while the workspace reflows. */
+  setTileLockedInLayout: (
+    layoutId: string,
+    uid: string,
+    locked: boolean,
+    lockedHeightPx?: number,
+  ) => void;
   /** Replace a tile's instanceConfig blob. */
   updateTileInstanceConfig: (uid: string, instanceConfig: unknown) => void;
   /** Replace a tile's instanceConfig blob in a specific layout. */
@@ -528,7 +535,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     applyWorkspaceMutationForLayout(set, get, layoutId, withWorkspaceLocked(workspace, locked));
   },
 
-  setTileLockedInLayout: (layoutId, uid, locked) => {
+  setTileLockedInLayout: (layoutId, uid, locked, lockedHeightPx) => {
     const target = findActive(get().layouts, layoutId);
     if (!target && layoutId !== get().activeLayoutId) return;
     const workspace = layoutId === get().activeLayoutId
@@ -539,7 +546,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       if (t.uid !== uid) return t;
       if ((t.locked === true) === locked) return t;
       changed = true;
-      return withTileLocked(t, locked);
+      return withTileLocked(t, locked, lockedHeightPx);
     });
     if (!changed) return;
     applyWorkspaceMutationForLayout(set, get, layoutId, { ...workspace, tiles });
@@ -600,10 +607,23 @@ function withWorkspaceLocked(
   return next;
 }
 
-function withTileLocked(tile: WorkspaceTile, locked: boolean): WorkspaceTile {
-  if (locked) return { ...tile, locked: true };
+function withTileLocked(
+  tile: WorkspaceTile,
+  locked: boolean,
+  lockedHeightPx?: number,
+): WorkspaceTile {
+  if (locked) {
+    const next: WorkspaceTile = { ...tile, locked: true };
+    if (typeof lockedHeightPx === 'number' && lockedHeightPx > 0) {
+      next.lockedHeightPx = lockedHeightPx;
+    } else {
+      delete next.lockedHeightPx;
+    }
+    return next;
+  }
   const next = { ...tile };
   delete next.locked;
+  delete next.lockedHeightPx;
   return next;
 }
 
