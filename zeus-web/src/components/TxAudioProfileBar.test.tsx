@@ -87,15 +87,33 @@ describe('TxAudioProfileBar', () => {
     unmount();
   });
 
-  it('opens the name dialog and saves by name', async () => {
+  it('saves the selected profile in place when Save is pressed', async () => {
     const save = vi.fn(async () => ({ ok: true }));
     useTxAudioProfileStore.setState({ save });
     const { container, unmount } = render(createElement(TxAudioProfileBar));
     await act(flush);
 
+    // A profile is selected (lastLoadedId = studio-ssb), so Save overwrites it
+    // directly by name — no name dialog.
     const saveBtn = container.querySelector('[aria-label="Save TX audio profile"]') as HTMLButtonElement;
     await act(async () => {
       saveBtn.click();
+      await flush();
+    });
+    expect(save).toHaveBeenCalledWith('Studio SSB');
+    expect(document.querySelector('.text-input-dialog-field input')).toBeNull();
+    unmount();
+  });
+
+  it('opens the name dialog and saves by name via the New button', async () => {
+    const save = vi.fn(async () => ({ ok: true }));
+    useTxAudioProfileStore.setState({ save });
+    const { container, unmount } = render(createElement(TxAudioProfileBar));
+    await act(flush);
+
+    const newBtn = container.querySelector('[aria-label="New TX audio profile"]') as HTMLButtonElement;
+    await act(async () => {
+      newBtn.click();
       await flush();
     });
 
