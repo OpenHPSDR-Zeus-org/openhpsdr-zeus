@@ -173,91 +173,19 @@ export function resolveResizeOverlaps(
       item.y = slot.y;
     }
   }
-  return next;
-}
 
-/**
- * Operator-invoked "Tidy": pack movable tiles upward to close vertical gaps,
- * keeping each tile's column (x) and never moving a locked (static) tile. This
- * is the only function that compacts — it runs on an explicit button press, not
- * as a side effect of a drag.
- */
-export function tidyWorkspacePlacements(layout: Layout): Layout {
-  const next = cloneLayout(layout);
-  const order = new Map(next.map((item, index) => [item.i, index]));
-  const statics = next.filter((item) => item.static);
-  const movers = next
-    .filter((item) => !item.static)
-    .sort(
-      (a, b) =>
-        a.y - b.y ||
-        a.x - b.x ||
-        (order.get(a.i) ?? 0) - (order.get(b.i) ?? 0),
-    );
-
-  // Seed the obstacle set with the static tiles so movers magnet up *around*
-  // them rather than through them.
-  const placed: LayoutItem[] = [...statics];
-  for (const item of movers) {
-    item.y = Math.max(0, item.y);
-    // Pull up while the cell above is clear.
-    while (item.y > 0) {
-      const trial = { ...item, y: item.y - 1 };
-      if (placed.some((p) => collides(trial, p))) break;
-      item.y -= 1;
+  // A locked neighbour can't be relocated — clamp the resized tile so a resize
+  // never leaves a panel sitting on top of a locked one. Trim height first (the
+  // common "grew downward into a locked tile"), then width.
+  for (const blocker of next) {
+    if (blocker.i === resizedId || !blocker.static) continue;
+    if (!collides(resized, blocker)) continue;
+    if (resized.y < blocker.y) {
+      resized.h = Math.max(1, blocker.y - resized.y);
+    } else if (resized.x < blocker.x) {
+      resized.w = Math.max(1, blocker.x - resized.x);
     }
-    // If it still overlaps something (e.g. landed on a static tile), push it
-    // just below the obstacle.
-    let guard = 0;
-    let hit = placed.find((p) => collides(item, p));
-    while (hit && guard < placed.length + 1) {
-      item.y = hit.y + hit.h;
-      hit = placed.find((p) => collides(item, p));
-      guard += 1;
-    }
-    placed.push(item);
   }
-  return clearMovedFlags(next);
-}
-
-/**
- * Magnet movable tiles upward to close vertical gaps around static tiles, used
- * by the locked-tile pixel-height solver (lockedWorkspaceLayout). Kept separate
- * from tidyWorkspacePlacements because the solver feeds it synthetic fractional
- * spans and an optional priority tile.
- */
-export function compactMagnetUp(
-  layout: Layout,
-  priorityId?: string,
-  preservePriority = false,
-): Layout {
-  const next = cloneLayout(layout);
-  const originalOrder = new Map(next.map((item, index) => [item.i, index]));
-  const priority = preservePriority && priorityId
-    ? next.find((item) => item.i === priorityId)
-    : undefined;
-  const placed: LayoutItem[] = priority ? [priority] : [];
-  const ordered = next
-    .filter((item) => item.i !== priority?.i)
-    .sort((a, b) => compareItems(a, b, originalOrder));
-
-  for (const item of ordered) {
-    if (!item.static) {
-      item.y = Math.max(0, item.y);
-      moveBelowCollisions(item, placed);
-      while (item.y > 0) {
-        item.y -= 1;
-        const collision = firstCollision(placed, item);
-        if (collision) {
-          item.y = collision.y + collision.h;
-          break;
-        }
-      }
-      moveBelowCollisions(item, placed);
-    }
-    placed.push(item);
-  }
-
   return next;
 }
 
@@ -311,21 +239,6 @@ function overlapIsSquare(a: LayoutItem, b: LayoutItem): boolean {
   return minArea > 0 && overlapArea >= minArea * SWAP_OVERLAP_FRACTION;
 }
 
-function moveBelowCollisions(item: LayoutItem, placed: LayoutItem[]) {
-  let collision = firstCollision(placed, item);
-  while (collision) {
-    item.y = collision.y + collision.h;
-    collision = firstCollision(placed, item);
-  }
-}
-
-function firstCollision(
-  layout: LayoutItem[],
-  item: LayoutItem,
-): LayoutItem | undefined {
-  return layout.find((other) => collides(other, item));
-}
-
 function normalizeDragStart(
   previous: LayoutItem | WorkspaceDragStartSnapshot | null | undefined,
 ): WorkspaceDragStartSnapshot | null {
@@ -342,18 +255,6 @@ function normalizeDragStart(
 function findDroppedItem(layout: Layout): LayoutItem | undefined {
   const moved = layout.filter((item) => item.moved);
   return moved[moved.length - 1];
-}
-
-function compareItems(
-  a: LayoutItem,
-  b: LayoutItem,
-  originalOrder: Map<string, number>,
-) {
-  return (
-    a.y - b.y ||
-    a.x - b.x ||
-    (originalOrder.get(a.i) ?? 0) - (originalOrder.get(b.i) ?? 0)
-  );
 }
 
 function cloneLayout(layout: Layout): LayoutItem[] {

@@ -33,7 +33,7 @@ import {
   type LayoutItem,
 } from 'react-grid-layout';
 import { absoluteStrategy } from 'react-grid-layout/core';
-import { LayoutGrid, Plus, Puzzle, Settings } from 'lucide-react';
+import { Plus, Puzzle, Settings } from 'lucide-react';
 import { useWorkspace } from './WorkspaceContext';
 import { parseLayoutOrDefault, useLayoutStore } from '../state/layout-store';
 import { getPanelDef } from './panels';
@@ -42,7 +42,6 @@ import {
   autoFitDroppedPanel,
   createWorkspaceDragCompactor,
   resolveResizeOverlaps,
-  tidyWorkspacePlacements,
   type WorkspaceDragStartSnapshot,
 } from './workspaceGrid';
 import {
@@ -165,33 +164,6 @@ export function FlexWorkspace({
     [addTileToLayout, targetLayoutId],
   );
 
-  // Tidy is the ONLY path that packs the grid. The free-grid drag/resize model
-  // leaves gaps exactly where the operator left them; this button magnets the
-  // movable tiles up to close those gaps on demand, keeping each tile's column
-  // and never moving a locked tile.
-  const onTidy = useCallback(() => {
-    if (workspaceLocked) return;
-    const packed = tidyWorkspacePlacements(
-      workspace.tiles.map((t) => ({
-        i: t.uid,
-        x: t.x,
-        y: t.y,
-        w: t.w,
-        h: t.h,
-        static: t.locked === true,
-      })),
-    );
-    updateTilePlacementsInLayout(
-      targetLayoutId,
-      packed.map((p) => ({ uid: p.i, x: p.x, y: p.y, w: p.w, h: p.h })),
-    );
-  }, [
-    workspace.tiles,
-    workspaceLocked,
-    targetLayoutId,
-    updateTilePlacementsInLayout,
-  ]);
-
   // Brief loading state while the server fetch resolves. We render the
   // empty container so it has measurable width when the tiles arrive.
   return (
@@ -218,18 +190,6 @@ export function FlexWorkspace({
           aria-label="Add panel"
         >
           <Plus size={18} strokeWidth={2.2} aria-hidden />
-        </button>
-      )}
-      {showAddPanelModal && !addPanelOpen && !workspaceLocked && (
-        <button
-          type="button"
-          className="workspace-tidy-btn"
-          onClick={onTidy}
-          disabled={!isLoaded}
-          title="Tidy — close vertical gaps between panels"
-          aria-label="Tidy panels"
-        >
-          <LayoutGrid size={16} strokeWidth={2.2} aria-hidden />
         </button>
       )}
       {showAddPanelModal && addPanelOpen && (

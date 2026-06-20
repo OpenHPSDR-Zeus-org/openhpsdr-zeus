@@ -9,7 +9,6 @@ import {
   autoFitDroppedPanel,
   createWorkspaceDragCompactor,
   resolveResizeOverlaps,
-  tidyWorkspacePlacements,
 } from './workspaceGrid';
 
 function cloneLayout(layout: Layout): Layout {
@@ -209,28 +208,3 @@ describe('resolveResizeOverlaps — local, no cascade', () => {
   });
 });
 
-describe('tidyWorkspacePlacements — explicit pack', () => {
-  it('closes vertical gaps while keeping each column', () => {
-    const layout: Layout = [
-      { i: 'top', x: 0, y: 0, w: 6, h: 2 },
-      { i: 'lower', x: 0, y: 6, w: 6, h: 2 },
-      { i: 'side', x: 6, y: 4, w: 6, h: 2 },
-    ];
-    const next = tidyWorkspacePlacements(layout);
-    expect(next.find((i) => i.i === 'lower')).toMatchObject({ x: 0, y: 2 });
-    expect(next.find((i) => i.i === 'side')).toMatchObject({ x: 6, y: 0 });
-    expectNoCollisions(next);
-  });
-
-  it('packs movable tiles around a locked tile without moving it', () => {
-    const layout: Layout = [
-      { i: 'locked', x: 0, y: 4, w: 6, h: 2, static: true },
-      { i: 'below', x: 0, y: 8, w: 6, h: 2 },
-    ];
-    const next = tidyWorkspacePlacements(layout);
-    expect(next.find((i) => i.i === 'locked')).toMatchObject({ y: 4 });
-    // `below` magnets up to just under the locked tile, not through it.
-    expect(next.find((i) => i.i === 'below')).toMatchObject({ x: 0, y: 6 });
-    expectNoCollisions(next);
-  });
-});

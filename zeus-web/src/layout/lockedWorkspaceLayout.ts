@@ -28,8 +28,7 @@
 // (reconcileReportedToStored). With nothing locked the derived layout equals
 // the stored layout and the whole path is a no-op.
 
-import { compactMagnetUp } from './workspaceGrid';
-import type { Layout } from 'react-grid-layout';
+import type { Layout, LayoutItem } from 'react-grid-layout';
 
 /** Minimal tile shape the solver needs. `h` should already be clamped to the
  *  panel's maxH (the caller clamps w/h for RGL); `minH` is the panel's
@@ -172,8 +171,11 @@ function lockedSpanRows(px: number, rowHeight: number, margin: number): number {
 
 /** Render the layout at a candidate rowHeight: each locked tile gets a
  *  (fractional) span that reproduces its frozen pixel height; unlocked tiles
- *  keep their stored span. Recompact so unlocked tiles magnet up around the
- *  static locked tiles, then report the layout and its total pixel extent. */
+ *  keep their stored span. Positions are PRESERVED (gaps and all) — only a tile
+ *  a frozen-size locked span would overlap is pushed straight down to clear it.
+ *  This is what makes locking inert: with nothing overflowing, every tile stays
+ *  exactly where the operator left it (the old magnet-up closed gaps, which
+ *  made the whole workspace jump the instant a panel was locked). */
 function renderAtRowHeight(
   tiles: DeriveTile[],
   rowHeight: number,
@@ -191,7 +193,7 @@ function renderAtRowHeight(
     static: t.locked,
     moved: false,
   }));
-  const compacted = compactMagnetUp(items);
+  const compacted = resolveOverlapsDownOnly(items);
   let maxBottomPx = 0;
   for (const it of compacted) {
     maxBottomPx = Math.max(
@@ -346,4 +348,49 @@ export function reconcileReportedToStored(
         : item.h;
     return { ...item, h };
   });
+}
+
+/**
+ * Resolve overlaps by pushing the LOWER tile of each colliding pair straight
+ * down — never pulling anything up. Static (locked) tiles are immovable
+ * obstacles. Unlike a magnet-up compaction this leaves every pre-existing gap
+ * intact, so a layout that already fits is returned untouched (the inertness
+ * the lock relies on); only a frozen-size locked span that genuinely overlaps
+ * the tile below it forces that tile down to clear the collision.
+ */
+function resolveOverlapsDownOnly(layout: Layout): Layout {
+  const next = layout.map((item) => ({ ...item }));
+  const maxPasses = Math.max(1, next.length * next.length);
+
+  for (let pass = 0; pass < maxPasses; pass += 1) {
+    const ordered = [...next].sort((a, b) => a.y - b.y || a.x - b.x);
+    let moved = false;
+    for (let i = 0; i < ordered.length; i += 1) {
+      const upper = ordered[i]!;
+      for (let j = i + 1; j < ordered.length; j += 1) {
+        const lower = ordered[j]!;
+        if (!overlaps(upper, lower)) continue;
+        // `lower` is the later one in (y, x) order — push it below `upper`.
+        // A locked tile is never moved; the overlap (rare: a locked tile sitting
+        // under a movable one) is left for Tidy / the operator to resolve.
+        if (lower.static) continue;
+        const y = upper.y + upper.h;
+        if (lower.y < y) {
+          lower.y = y;
+          moved = true;
+        }
+      }
+    }
+    if (!moved) break;
+  }
+  return next;
+}
+
+function overlaps(a: LayoutItem, b: LayoutItem): boolean {
+  if (a.i === b.i) return false;
+  if (a.x + a.w <= b.x) return false;
+  if (a.x >= b.x + b.w) return false;
+  if (a.y + a.h <= b.y) return false;
+  if (a.y >= b.y + b.h) return false;
+  return true;
 }
