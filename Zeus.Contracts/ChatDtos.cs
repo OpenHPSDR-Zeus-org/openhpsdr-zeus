@@ -86,10 +86,54 @@ public sealed record ChatStatusDto(
     bool Connected,
     string? Callsign,
     string RelayUrl,
-    string? Error);
+    string? Error,
+    bool IsAdmin = false,
+    bool FreqPublic = true);
+
+/// <summary>
+/// A chat channel visible to the operator: the public lobby, an admin-created
+/// group, or a DM. <paramref name="Kind"/> is "public"|"group"|"dm";
+/// <paramref name="Members"/> is empty for the public room.
+/// </summary>
+public sealed record ChatRoomDto(
+    string Id,
+    string Name,
+    string Kind,
+    IReadOnlyList<string> Members);
+
+/// <summary>
+/// The local operator's friend graph, mirrored from the relay. <paramref name="Accepted"/>
+/// are mutual friends (whose frequency is visible); <paramref name="Incoming"/> are
+/// requests awaiting this operator's accept/deny; <paramref name="Outgoing"/> are
+/// requests this operator has sent that are still pending. Callsigns are uppercased.
+/// </summary>
+public sealed record ChatFriendsDto(
+    IReadOnlyList<string> Accepted,
+    IReadOnlyList<string> Incoming,
+    IReadOnlyList<string> Outgoing);
 
 // ── REST request/response shapes ──────────────────────────────────────────
 
 public sealed record ChatEnableRequest(bool Enabled);
 
-public sealed record ChatSendRequest(string Text);
+/// <summary>Outgoing message; <paramref name="Room"/> defaults to the public lobby.</summary>
+public sealed record ChatSendRequest(string Text, string? Room = null);
+
+/// <summary>A single-callsign request body for the friend endpoints
+/// (request / accept / deny / remove) and admin ban/unban.</summary>
+public sealed record ChatFriendRequest(string Callsign);
+
+/// <summary>Send a direct message to <paramref name="To"/>.</summary>
+public sealed record ChatDmRequest(string To, string Text);
+
+/// <summary>Admin: create a private group named <paramref name="Name"/>.</summary>
+public sealed record ChatRoomCreateRequest(string Name);
+
+/// <summary>Admin: add/remove <paramref name="Callsign"/> to/from <paramref name="Room"/>.</summary>
+public sealed record ChatRoomMemberRequest(string Room, string Callsign);
+
+/// <summary>Admin: delete a private group, or request history for a room.</summary>
+public sealed record ChatRoomRequest(string Room);
+
+/// <summary>Toggle whether this operator's frequency may be shared (eye toggle).</summary>
+public sealed record ChatFreqVisibilityRequest(bool Public);

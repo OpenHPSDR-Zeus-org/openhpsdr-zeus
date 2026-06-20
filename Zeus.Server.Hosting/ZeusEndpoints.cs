@@ -2456,7 +2456,7 @@ public static class ZeusEndpoints
                 return Results.BadRequest(new { error = "message text required" });
             try
             {
-                await chat.SendMessageAsync(req.Text, ctx.RequestAborted);
+                await chat.SendMessageAsync(req.Text, req.Room, ctx.RequestAborted);
                 return Results.Ok(new { ok = true });
             }
             catch (ArgumentException ex)
@@ -2474,6 +2474,76 @@ public static class ZeusEndpoints
 
         app.MapGet("/api/chat/roster", (ChatService chat) =>
             Results.Ok(new { operators = chat.GetRoster() }));
+
+        // Friend graph (consent gate for seeing another operator's frequency).
+        app.MapGet("/api/chat/friends", (ChatService chat) => Results.Ok(chat.GetFriends()));
+
+        // request / accept / deny / remove all take { callsign } and share the
+        // same 400 (empty) / 409 (not connected) error mapping as /send.
+        static async Task<IResult> FriendAction(
+            Func<string, CancellationToken, Task> action, ChatFriendRequest req, HttpContext ctx)
+        {
+            if (string.IsNullOrWhiteSpace(req.Callsign))
+                return Results.BadRequest(new { error = "callsign required" });
+            try
+            {
+                await action(req.Callsign, ctx.RequestAborted);
+                return Results.Ok(new { ok = true });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status409Conflict);
+            }
+        }
+
+        app.MapPost("/api/chat/friends/request", (ChatFriendRequest req, ChatService chat, HttpContext ctx) =>
+            FriendAction(chat.SendFriendRequestAsync, req, ctx));
+        app.MapPost("/api/chat/friends/accept", (ChatFriendRequest req, ChatService chat, HttpContext ctx) =>
+            FriendAction(chat.AcceptFriendAsync, req, ctx));
+        app.MapPost("/api/chat/friends/deny", (ChatFriendRequest req, ChatService chat, HttpContext ctx) =>
+            FriendAction(chat.DenyFriendAsync, req, ctx));
+        app.MapPost("/api/chat/friends/remove", (ChatFriendRequest req, ChatService chat, HttpContext ctx) =>
+            FriendAction(chat.RemoveFriendAsync, req, ctx));
+
+        // Rooms, DMs, history, moderation, eye toggle — all share the 400/409 map.
+        static async Task<IResult> Run(Func<Task> action)
+        {
+            try { await action(); return Results.Ok(new { ok = true }); }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status409Conflict);
+            }
+        }
+
+        app.MapGet("/api/chat/rooms", (ChatService chat) => Results.Ok(new { rooms = chat.GetRooms() }));
+
+        app.MapPost("/api/chat/dm", (ChatDmRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.SendDmAsync(req.To, req.Text, ctx.RequestAborted)));
+
+        app.MapPost("/api/chat/history", (ChatRoomRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.RequestHistoryAsync(req.Room, ctx.RequestAborted)));
+
+        app.MapPost("/api/chat/freq-visibility", (ChatFreqVisibilityRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.SetFreqVisibilityAsync(req.Public, ctx.RequestAborted)));
+
+        // Admin/moderation (relay enforces that the caller is actually an admin).
+        app.MapPost("/api/chat/admin/room/create", (ChatRoomCreateRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.CreateRoomAsync(req.Name, ctx.RequestAborted)));
+        app.MapPost("/api/chat/admin/room/delete", (ChatRoomRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.DeleteRoomAsync(req.Room, ctx.RequestAborted)));
+        app.MapPost("/api/chat/admin/room/add", (ChatRoomMemberRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.AddMemberAsync(req.Room, req.Callsign, ctx.RequestAborted)));
+        app.MapPost("/api/chat/admin/room/remove", (ChatRoomMemberRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.RemoveMemberAsync(req.Room, req.Callsign, ctx.RequestAborted)));
+        app.MapPost("/api/chat/admin/ban", (ChatFriendRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.BanAsync(req.Callsign, ctx.RequestAborted)));
+        app.MapPost("/api/chat/admin/unban", (ChatFriendRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.UnbanAsync(req.Callsign, ctx.RequestAborted)));
 
         // Point-to-point propagation (DE → DX). Proxies the HamClock sidecar's
         // ITU-R P.533-14 engine; always returns 200 with an {available:false}

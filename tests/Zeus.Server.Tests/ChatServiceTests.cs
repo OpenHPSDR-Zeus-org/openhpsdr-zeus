@@ -159,6 +159,18 @@ public class ChatServiceTests : IDisposable
         Assert.Null(ChatService.ParseRoster(doc.RootElement, "roster"));
     }
 
+    [Fact]
+    public void ParseFriends_ReadsArrays_AndDefaultsMissingToEmpty()
+    {
+        using var doc = JsonDocument.Parse(
+            """{"t":"friends","accepted":["N9WAR","EI6LF"],"incoming":["KB2UKA"]}""");
+        var f = ChatService.ParseFriends(doc.RootElement);
+
+        Assert.Equal(new[] { "N9WAR", "EI6LF" }, f.Accepted);
+        Assert.Equal(new[] { "KB2UKA" }, f.Incoming);
+        Assert.Empty(f.Outgoing); // missing array → empty, not null
+    }
+
     // ── ChatEvent (0x35) envelope serialization (outbound, frontend wire) ───
 
     [Fact]
@@ -215,13 +227,29 @@ public class ChatServiceTests : IDisposable
         }
 
         var msg = new ChatMessage("id1", "EI6LF", "hi", 1700000000000, "lobby");
-        var historyFrame = ChatEventFrame.History(new[] { msg });
+        var historyFrame = ChatEventFrame.History("lobby", new[] { msg });
         using (var doc = JsonDocument.Parse(ChatEventFrame.Payload(historyFrame).ToArray()))
         {
             var root = doc.RootElement;
             Assert.Equal("history", root.GetProperty("kind").GetString());
             Assert.Equal("id1", root.GetProperty("messages")[0].GetProperty("id").GetString());
         }
+    }
+
+    [Fact]
+    public void ChatEvent_FriendsEnvelope_UsesCamelCaseArrays()
+    {
+        var friends = new ChatFriendsDto(
+            Accepted: new[] { "N9WAR" }, Incoming: new[] { "EI6LF" }, Outgoing: Array.Empty<string>());
+        var frame = ChatEventFrame.Friends(friends);
+
+        using var doc = JsonDocument.Parse(ChatEventFrame.Payload(frame).ToArray());
+        var root = doc.RootElement;
+        Assert.Equal("friends", root.GetProperty("kind").GetString());
+        var f = root.GetProperty("friends");
+        Assert.Equal("N9WAR", f.GetProperty("accepted")[0].GetString());
+        Assert.Equal("EI6LF", f.GetProperty("incoming")[0].GetString());
+        Assert.Empty(f.GetProperty("outgoing").EnumerateArray());
     }
 
     [Fact]
@@ -244,7 +272,7 @@ public class ChatServiceTests : IDisposable
 
         // Send must fail with 409-mapped exception when not connected.
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => chat.SendMessageAsync("hello", CancellationToken.None));
+            () => chat.SendMessageAsync("hello", null, CancellationToken.None));
     }
 
     [Fact]
@@ -261,7 +289,7 @@ public class ChatServiceTests : IDisposable
         Assert.True(store.GetEnabled());
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => chat.SendMessageAsync("hi", CancellationToken.None));
+            () => chat.SendMessageAsync("hi", null, CancellationToken.None));
 
         chat.SetEnabled(false);
         Assert.False(store.GetEnabled());
@@ -272,7 +300,29 @@ public class ChatServiceTests : IDisposable
     {
         using var chat = BuildChat();
         await Assert.ThrowsAsync<ArgumentException>(
-            () => chat.SendMessageAsync("   ", CancellationToken.None));
+            () => chat.SendMessageAsync("   ", null, CancellationToken.None));
+    }
+
+    [Fact]
+    public void Friends_DefaultEmpty_WhenNeverConnected()
+    {
+        using var chat = BuildChat();
+        var f = chat.GetFriends();
+        Assert.Empty(f.Accepted);
+        Assert.Empty(f.Incoming);
+        Assert.Empty(f.Outgoing);
+    }
+
+    [Fact]
+    public async Task FriendRequest_WhenNotConnected_Throws()
+    {
+        using var chat = BuildChat();
+        // Not connected → 409-mapped exception, like SendMessageAsync.
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => chat.SendFriendRequestAsync("EI6LF", CancellationToken.None));
+        // Empty callsign → 400-mapped exception.
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => chat.AcceptFriendAsync("  ", CancellationToken.None));
     }
 
     // ── helpers ────────────────────────────────────────────────────────────

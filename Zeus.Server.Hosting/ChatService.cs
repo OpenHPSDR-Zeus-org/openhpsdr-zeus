@@ -53,9 +53,23 @@ public sealed class ChatService : BackgroundService
     private readonly string _relayUrl;
     private readonly string? _relaySecret;
 
+    private static readonly ChatFriendsDto EmptyFriends =
+        new(Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>());
+
     private readonly ChatMessageRing _messages = new(MessageHistoryCap);
     private readonly object _rosterSync = new();
     private IReadOnlyList<ChatOperator> _roster = Array.Empty<ChatOperator>();
+
+    // The operator's friend graph, mirrored from the relay (accepted / incoming
+    // / outgoing). Replaced wholesale on each relay "friends" frame.
+    private volatile ChatFriendsDto _friends = EmptyFriends;
+
+    // Rooms the operator can see (public + groups + DMs), mirrored from the relay.
+    private readonly object _roomsSync = new();
+    private IReadOnlyList<ChatRoomDto> _rooms = Array.Empty<ChatRoomDto>();
+
+    // Whether the operator is a relay moderator (from the welcome frame).
+    private volatile bool _isAdmin;
 
     // Live connection state, set on the worker loop and read by the API.
     private volatile bool _connected;
@@ -109,7 +123,9 @@ public sealed class ChatService : BackgroundService
         Connected: _connected,
         Callsign: _selfCallsign,
         RelayUrl: _relayUrl,
-        Error: _lastError);
+        Error: _lastError,
+        IsAdmin: _isAdmin,
+        FreqPublic: _store.GetFreqPublic());
 
     /// <summary>Persists the opt-in and wakes the worker to connect/disconnect.</summary>
     public ChatStatusDto SetEnabled(bool enabled)
@@ -136,16 +152,136 @@ public sealed class ChatService : BackgroundService
     /// <see cref="ArgumentException"/> when the text is empty — the endpoint
     /// maps these to 409 / 400.
     /// </summary>
-    public async Task SendMessageAsync(string text, CancellationToken ct)
+    public async Task SendMessageAsync(string text, string? room, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(text))
             throw new ArgumentException("message text is empty", nameof(text));
 
+        var socket = RequireSocket();
+        var roomId = string.IsNullOrWhiteSpace(room) ? "lobby" : room.Trim();
+        await SendFrameAsync(socket, new { t = "msg", text, room = roomId }, ct);
+    }
+
+    /// <summary>Sends a direct message to <paramref name="to"/> (creates the DM on demand).</summary>
+    public async Task SendDmAsync(string to, string text, CancellationToken ct)
+    {
+        var call = (to ?? string.Empty).Trim().ToUpperInvariant();
+        if (call.Length == 0) throw new ArgumentException("recipient is empty", nameof(to));
+        if (string.IsNullOrWhiteSpace(text)) throw new ArgumentException("message text is empty", nameof(text));
+        var socket = RequireSocket();
+        await SendFrameAsync(socket, new { t = "dm", to = call, text }, ct);
+    }
+
+    /// <summary>Asks the relay for recent history of a room (pushed back as a 0x35 frame).</summary>
+    public async Task RequestHistoryAsync(string room, CancellationToken ct)
+    {
+        var roomId = string.IsNullOrWhiteSpace(room) ? "lobby" : room.Trim();
+        var socket = RequireSocket();
+        await SendFrameAsync(socket, new { t = "history", room = roomId }, ct);
+    }
+
+    /// <summary>Rooms the operator can currently see.</summary>
+    public IReadOnlyList<ChatRoomDto> GetRooms()
+    {
+        lock (_roomsSync) return _rooms;
+    }
+
+    // ── Admin / moderation ─────────────────────────────────────────────────
+
+    public Task CreateRoomAsync(string name, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("room name is empty", nameof(name));
+        return SendFrameAsync(RequireSocket(), new { t = "admin_create_room", name = name.Trim() }, ct);
+    }
+
+    public Task DeleteRoomAsync(string room, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(room)) throw new ArgumentException("room is empty", nameof(room));
+        return SendFrameAsync(RequireSocket(), new { t = "admin_delete_room", room = room.Trim() }, ct);
+    }
+
+    public Task AddMemberAsync(string room, string callsign, CancellationToken ct) =>
+        SendRoomMemberAsync("admin_add_member", room, callsign, ct);
+
+    public Task RemoveMemberAsync(string room, string callsign, CancellationToken ct) =>
+        SendRoomMemberAsync("admin_remove_member", room, callsign, ct);
+
+    public Task BanAsync(string callsign, CancellationToken ct) =>
+        SendFriendActionAsync("admin_ban", "callsign", callsign, ct);
+
+    public Task UnbanAsync(string callsign, CancellationToken ct) =>
+        SendFriendActionAsync("admin_unban", "callsign", callsign, ct);
+
+    private Task SendRoomMemberAsync(string verb, string room, string callsign, CancellationToken ct)
+    {
+        var call = (callsign ?? string.Empty).Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(room)) throw new ArgumentException("room is empty", nameof(room));
+        if (call.Length == 0) throw new ArgumentException("callsign is empty", nameof(callsign));
+        return SendFrameAsync(RequireSocket(),
+            new Dictionary<string, string> { ["t"] = verb, ["room"] = room.Trim(), ["callsign"] = call }, ct);
+    }
+
+    // ── Frequency visibility (eye toggle) ──────────────────────────────────
+
+    /// <summary>Persists the eye toggle and, if connected, tells the relay at once.</summary>
+    public async Task SetFreqVisibilityAsync(bool isPublic, CancellationToken ct)
+    {
+        _store.SetFreqPublic(isPublic);
+        PushStatus();
+        var socket = _socket;
+        if (socket is not null && socket.State == WebSocketState.Open && _connected)
+        {
+            var snap = _radio.Snapshot();
+            await SendFrameAsync(socket, new
+            {
+                t = "presence",
+                freq = snap.VfoHz,
+                mode = snap.Mode.ToString(),
+                status = CurrentStatus(),
+                freqPublic = isPublic,
+            }, ct);
+        }
+    }
+
+    private ClientWebSocket RequireSocket()
+    {
         var socket = _socket;
         if (socket is null || socket.State != WebSocketState.Open || !_connected)
             throw new InvalidOperationException("chat relay is not connected");
+        return socket;
+    }
 
-        await SendFrameAsync(socket, new { t = "msg", text }, ct);
+    /// <summary>The operator's current friend graph (accepted / incoming / outgoing).</summary>
+    public ChatFriendsDto GetFriends() => _friends;
+
+    /// <summary>Sends a friend request to <paramref name="callsign"/>.</summary>
+    public Task SendFriendRequestAsync(string callsign, CancellationToken ct) =>
+        SendFriendActionAsync("friend_req", "to", callsign, ct);
+
+    /// <summary>Accepts the incoming friend request from <paramref name="callsign"/>.</summary>
+    public Task AcceptFriendAsync(string callsign, CancellationToken ct) =>
+        SendFriendActionAsync("friend_accept", "from", callsign, ct);
+
+    /// <summary>Declines the incoming friend request from <paramref name="callsign"/>.</summary>
+    public Task DenyFriendAsync(string callsign, CancellationToken ct) =>
+        SendFriendActionAsync("friend_deny", "from", callsign, ct);
+
+    /// <summary>Removes a friendship and/or cancels a pending request with
+    /// <paramref name="callsign"/>.</summary>
+    public Task RemoveFriendAsync(string callsign, CancellationToken ct) =>
+        SendFriendActionAsync("friend_remove", "callsign", callsign, ct);
+
+    // Common path for the four friend verbs. Validates like SendMessageAsync so
+    // the endpoints map empty callsign → 400 and not-connected → 409. Builds the
+    // frame as a dictionary so the field name (to/from/callsign) is emitted
+    // verbatim (lowercase) rather than camelCased.
+    private async Task SendFriendActionAsync(string verb, string field, string callsign, CancellationToken ct)
+    {
+        var call = (callsign ?? string.Empty).Trim().ToUpperInvariant();
+        if (call.Length == 0)
+            throw new ArgumentException("callsign is empty", nameof(callsign));
+
+        await SendFrameAsync(RequireSocket(), new Dictionary<string, string> { ["t"] = verb, [field] = call }, ct);
     }
 
     // ── Background worker ──────────────────────────────────────────────────
@@ -164,8 +300,15 @@ public sealed class ChatService : BackgroundService
             var identity = await TryGetIdentityAsync(stoppingToken);
             if (identity is null)
             {
-                // Logged out (or no session) while enabled — wait and retry.
-                _lastError = "QRZ not logged in";
+                // Logged out (or no session) while enabled — surface the reason
+                // so the panel can say "Login to QRZ" instead of spinning on
+                // "Connecting…", then wait and retry. Push only on transition to
+                // avoid spamming a status frame every backoff tick.
+                if (_lastError != "QRZ not logged in")
+                {
+                    _lastError = "QRZ not logged in";
+                    PushStatus();
+                }
                 await WaitForWakeAsync(backoff, stoppingToken);
                 continue;
             }
@@ -236,6 +379,7 @@ public sealed class ChatService : BackgroundService
             freq = snap.VfoHz,
             mode = snap.Mode.ToString(),
             status = CurrentStatus(),
+            freqPublic = _store.GetFreqPublic(),
             client = "zeus",
         }, ct);
 
@@ -314,6 +458,8 @@ public sealed class ChatService : BackgroundService
                 case "welcome":
                     if (root.TryGetProperty("self", out var selfEl))
                         _selfCallsign = ReadString(selfEl, "callsign") ?? _selfCallsign;
+                    _isAdmin = root.TryGetProperty("isAdmin", out var adminEl)
+                        && adminEl.ValueKind == JsonValueKind.True;
                     UpdateRoster(root, "roster");
                     PushStatus();
                     break;
@@ -322,8 +468,29 @@ public sealed class ChatService : BackgroundService
                     break;
                 case "msg":
                     var msg = ParseMessage(root);
-                    _messages.Add(msg);
+                    // The in-memory ring is the public-room snapshot cache only;
+                    // group/DM history comes from the relay on demand.
+                    if (string.IsNullOrEmpty(msg.Room) || msg.Room == "lobby")
+                        _messages.Add(msg);
                     _hub.BroadcastChatEvent(ChatEventFrame.Message(msg));
+                    break;
+                case "friends":
+                    _friends = ParseFriends(root);
+                    _hub.BroadcastChatEvent(ChatEventFrame.Friends(_friends));
+                    break;
+                case "rooms":
+                    var rooms = ParseRooms(root);
+                    lock (_roomsSync) _rooms = rooms;
+                    _hub.BroadcastChatEvent(ChatEventFrame.Rooms(rooms));
+                    break;
+                case "history":
+                    var histRoom = ReadString(root, "room") ?? "lobby";
+                    _hub.BroadcastChatEvent(ChatEventFrame.History(histRoom, ParseHistory(root)));
+                    break;
+                case "banned":
+                    _lastError = ReadString(root, "message") ?? "You have been banned from ZeusChat.";
+                    _hub.BroadcastChatEvent(ChatEventFrame.Banned(_lastError));
+                    PushStatus();
                     break;
                 case "error":
                     var code = ReadString(root, "code");
@@ -386,6 +553,55 @@ public sealed class ChatService : BackgroundService
         return list;
     }
 
+    /// <summary>
+    /// Parses a relay <c>{t:"friends",...}</c> frame into a <see cref="ChatFriendsDto"/>.
+    /// Missing arrays default to empty. Internal for unit tests.
+    /// </summary>
+    internal static ChatFriendsDto ParseFriends(JsonElement root) => new(
+        Accepted: ReadStringArray(root, "accepted"),
+        Incoming: ReadStringArray(root, "incoming"),
+        Outgoing: ReadStringArray(root, "outgoing"));
+
+    private static IReadOnlyList<string> ReadStringArray(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return Array.Empty<string>();
+        var list = new List<string>(arr.GetArrayLength());
+        foreach (var el in arr.EnumerateArray())
+        {
+            var s = el.GetString();
+            if (!string.IsNullOrWhiteSpace(s)) list.Add(s);
+        }
+        return list;
+    }
+
+    /// <summary>Parses a relay <c>{t:"rooms",rooms:[...]}</c> frame. Internal for tests.</summary>
+    internal static IReadOnlyList<ChatRoomDto> ParseRooms(JsonElement root)
+    {
+        if (!root.TryGetProperty("rooms", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return Array.Empty<ChatRoomDto>();
+        var list = new List<ChatRoomDto>(arr.GetArrayLength());
+        foreach (var r in arr.EnumerateArray())
+        {
+            list.Add(new ChatRoomDto(
+                Id: ReadString(r, "id") ?? string.Empty,
+                Name: ReadString(r, "name") ?? string.Empty,
+                Kind: ReadString(r, "kind") ?? "group",
+                Members: ReadStringArray(r, "members")));
+        }
+        return list;
+    }
+
+    /// <summary>Parses a relay <c>{t:"history",messages:[...]}</c> frame. Internal for tests.</summary>
+    internal static IReadOnlyList<ChatMessage> ParseHistory(JsonElement root)
+    {
+        if (!root.TryGetProperty("messages", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return Array.Empty<ChatMessage>();
+        var list = new List<ChatMessage>(arr.GetArrayLength());
+        foreach (var m in arr.EnumerateArray()) list.Add(ParseMessage(m));
+        return list;
+    }
+
     // ── Presence / status helpers ──────────────────────────────────────────
 
     private void OnRadioStateChanged(StateDto state)
@@ -414,11 +630,15 @@ public sealed class ChatService : BackgroundService
     {
         IReadOnlyList<ChatOperator> roster;
         lock (_rosterSync) roster = _roster;
+        IReadOnlyList<ChatRoomDto> rooms;
+        lock (_roomsSync) rooms = _rooms;
         return new[]
         {
             ChatEventFrame.Status(GetStatus()),
             ChatEventFrame.Roster(roster),
-            ChatEventFrame.History(_messages.Snapshot(MessageHistoryCap)),
+            ChatEventFrame.Friends(_friends),
+            ChatEventFrame.Rooms(rooms),
+            ChatEventFrame.History("lobby", _messages.Snapshot(MessageHistoryCap)),
         };
     }
 
@@ -427,14 +647,22 @@ public sealed class ChatService : BackgroundService
     private void SetDisconnected()
     {
         _socket = null;
-        if (_connected)
-        {
-            _connected = false;
+        var wasConnected = _connected;
+        _connected = false;
+        // Push when we drop a live link, or when there's an error to report:
+        // a first-attempt connect failure never set _connected, but the operator
+        // still needs to see why (e.g. relay unreachable) rather than "Connecting…".
+        _isAdmin = false;
+        if (wasConnected || _lastError is not null)
             PushStatus();
-        }
-        else
+        // Relay-sourced state (friend graph + rooms) is dropped so nothing stale
+        // lingers while offline. Fresh snapshots arrive on reconnect.
+        if (wasConnected)
         {
-            _connected = false;
+            _friends = EmptyFriends;
+            _hub.BroadcastChatEvent(ChatEventFrame.Friends(_friends));
+            lock (_roomsSync) _rooms = Array.Empty<ChatRoomDto>();
+            _hub.BroadcastChatEvent(ChatEventFrame.Rooms(Array.Empty<ChatRoomDto>()));
         }
     }
 

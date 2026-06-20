@@ -43,6 +43,28 @@ export type ChatStatus = {
   callsign: string | null;
   relayUrl: string | null;
   error: string | null;
+  /** Whether this operator is a relay moderator (can create rooms / ban). */
+  isAdmin: boolean;
+  /** Whether this operator's frequency is shared at all (eye toggle). */
+  freqPublic: boolean;
+};
+
+export type ChatRoomKind = 'public' | 'group' | 'dm';
+
+export type ChatRoom = {
+  id: string;
+  name: string;
+  kind: ChatRoomKind;
+  members: string[];
+};
+
+export type ChatFriends = {
+  /** Mutual friends — their frequency is visible to you. */
+  accepted: string[];
+  /** Requests awaiting your accept/deny. */
+  incoming: string[];
+  /** Requests you've sent that are still pending. */
+  outgoing: string[];
 };
 
 function toStr(v: unknown): string | null {
@@ -65,6 +87,19 @@ export function normalizeStatus(raw: unknown): ChatStatus {
     callsign: toStr(r.callsign),
     relayUrl: toStr(r.relayUrl),
     error: toStr(r.error),
+    isAdmin: Boolean(r.isAdmin),
+    freqPublic: r.freqPublic !== false, // default visible
+  };
+}
+
+export function normalizeRoom(raw: unknown): ChatRoom {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const kind = r.kind === 'public' || r.kind === 'dm' ? r.kind : 'group';
+  return {
+    id: typeof r.id === 'string' ? r.id : '',
+    name: typeof r.name === 'string' ? r.name : '',
+    kind,
+    members: toCallList(r.members),
   };
 }
 
@@ -77,6 +112,21 @@ export function normalizeOperator(raw: unknown): ChatOperator {
     mode: toStr(r.mode),
     status: toStatus(r.status),
     since: toNum(r.since) ?? 0,
+  };
+}
+
+function toCallList(v: unknown): string[] {
+  return Array.isArray(v)
+    ? v.filter((c): c is string => typeof c === 'string' && c.length > 0).map((c) => c.toUpperCase())
+    : [];
+}
+
+export function normalizeFriends(raw: unknown): ChatFriends {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    accepted: toCallList(r.accepted),
+    incoming: toCallList(r.incoming),
+    outgoing: toCallList(r.outgoing),
   };
 }
 
@@ -134,13 +184,13 @@ export function chatSetEnabled(enabled: boolean, signal?: AbortSignal): Promise<
   );
 }
 
-export function chatSend(text: string, signal?: AbortSignal): Promise<{ ok: boolean }> {
+export function chatSend(text: string, room?: string, signal?: AbortSignal): Promise<{ ok: boolean }> {
   return jsonFetch(
     '/api/chat/send',
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify(room ? { text, room } : { text }),
       signal,
     },
     (raw) => ({ ok: Boolean((raw as { ok?: unknown } | null)?.ok) }),
@@ -164,3 +214,73 @@ export function chatRoster(signal?: AbortSignal): Promise<ChatOperator[]> {
     return Array.isArray(arr) ? arr.map(normalizeOperator) : [];
   });
 }
+
+export function chatFriends(signal?: AbortSignal): Promise<ChatFriends> {
+  return jsonFetch('/api/chat/friends', { signal }, normalizeFriends);
+}
+
+/** request / accept / deny / remove — all POST { callsign } and return { ok }. */
+function friendAction(
+  path: 'request' | 'accept' | 'deny' | 'remove',
+  callsign: string,
+  signal?: AbortSignal,
+): Promise<{ ok: boolean }> {
+  return jsonFetch(
+    `/api/chat/friends/${path}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ callsign }),
+      signal,
+    },
+    (raw) => ({ ok: Boolean((raw as { ok?: unknown } | null)?.ok) }),
+  );
+}
+
+export const chatFriendRequest = (callsign: string, signal?: AbortSignal) =>
+  friendAction('request', callsign, signal);
+export const chatFriendAccept = (callsign: string, signal?: AbortSignal) =>
+  friendAction('accept', callsign, signal);
+export const chatFriendDeny = (callsign: string, signal?: AbortSignal) =>
+  friendAction('deny', callsign, signal);
+export const chatFriendRemove = (callsign: string, signal?: AbortSignal) =>
+  friendAction('remove', callsign, signal);
+
+// ── Rooms / DMs / history / moderation / eye toggle ───────────────────────
+
+function postOk(path: string, body: unknown, signal?: AbortSignal): Promise<{ ok: boolean }> {
+  return jsonFetch(
+    path,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal },
+    (raw) => ({ ok: Boolean((raw as { ok?: unknown } | null)?.ok) }),
+  );
+}
+
+export function chatRooms(signal?: AbortSignal): Promise<ChatRoom[]> {
+  return jsonFetch('/api/chat/rooms', { signal }, (raw) => {
+    const arr = (raw as { rooms?: unknown } | null)?.rooms;
+    return Array.isArray(arr) ? arr.map(normalizeRoom) : [];
+  });
+}
+
+export const chatDm = (to: string, text: string, signal?: AbortSignal) =>
+  postOk('/api/chat/dm', { to, text }, signal);
+
+export const chatRequestHistory = (room: string, signal?: AbortSignal) =>
+  postOk('/api/chat/history', { room }, signal);
+
+export const chatSetFreqVisibility = (isPublic: boolean, signal?: AbortSignal) =>
+  postOk('/api/chat/freq-visibility', { public: isPublic }, signal);
+
+export const chatCreateRoom = (name: string, signal?: AbortSignal) =>
+  postOk('/api/chat/admin/room/create', { name }, signal);
+export const chatDeleteRoom = (room: string, signal?: AbortSignal) =>
+  postOk('/api/chat/admin/room/delete', { room }, signal);
+export const chatAddMember = (room: string, callsign: string, signal?: AbortSignal) =>
+  postOk('/api/chat/admin/room/add', { room, callsign }, signal);
+export const chatRemoveMember = (room: string, callsign: string, signal?: AbortSignal) =>
+  postOk('/api/chat/admin/room/remove', { room, callsign }, signal);
+export const chatBan = (callsign: string, signal?: AbortSignal) =>
+  postOk('/api/chat/admin/ban', { callsign }, signal);
+export const chatUnban = (callsign: string, signal?: AbortSignal) =>
+  postOk('/api/chat/admin/unban', { callsign }, signal);
