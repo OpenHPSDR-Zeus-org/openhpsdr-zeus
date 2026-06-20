@@ -256,18 +256,27 @@ export function deriveWorkspaceLayout(
     lockedPxByUid.set(t.uid, px);
   }
 
-  // Pick the largest rowHeight (≤ authored) at which the whole layout still
-  // fits, with locked tiles held at their frozen pixel height. A larger
-  // rowHeight makes the unlocked tiles taller (more total height), so "fits"
-  // is monotonic and a binary search lands on the tightest non-overflowing
-  // value. Reserving a locked tile's *current* height changes nothing, so at
-  // the instant of locking this resolves to the pre-lock rowHeight (inert).
-  const atMax = renderAtRowHeight(tiles, R, rowMargin, lockedPxByUid);
+  // Pick the largest rowHeight at which the whole layout still fits, with
+  // locked tiles held at their frozen pixel height. A larger rowHeight makes
+  // the unlocked tiles taller (more total height), so "fits" is monotonic and
+  // a binary search lands on the tightest non-overflowing value.
+  //
+  // The ceiling is `baselineRowHeight` — the rowHeight the NO-LOCK uniform path
+  // would use right now — NOT the authored `R`. Locking must never make an
+  // unlocked tile bigger than it would be with nothing locked; the feature only
+  // ever shrinks unlocked tiles to make room for frozen locked ones. Capping at
+  // `R` was a bug: when the layout is shorter than WORKSPACE_TARGET_ROWS the
+  // no-lock path already runs below `R` (the target-row divisor shrinks it), yet
+  // such a layout still "fits" at `R`, so the solver jumped rowHeight UP on lock
+  // — growing every unlocked tile and opening a gap around the pinned panel.
+  // Reserving a locked tile's *current* height changes nothing, so at the
+  // instant of locking this resolves to the pre-lock baseline rowHeight (inert).
+  const atMax = renderAtRowHeight(tiles, baselineRowHeight, rowMargin, lockedPxByUid);
   let best: { rr: number; placements: RenderPlacement[] } | null =
-    atMax.maxBottomPx <= C ? { rr: R, placements: atMax.placements } : null;
+    atMax.maxBottomPx <= C ? { rr: baselineRowHeight, placements: atMax.placements } : null;
   if (!best) {
     let lo = minR;
-    let hi = R;
+    let hi = baselineRowHeight;
     for (let i = 0; i < 24; i += 1) {
       const mid = (lo + hi) / 2;
       const r = renderAtRowHeight(tiles, mid, rowMargin, lockedPxByUid);

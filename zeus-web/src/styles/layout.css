@@ -2555,8 +2555,8 @@
 .qrz-grid-rows { display: flex; flex-direction: column; gap: 0; }
 .qrz-grid-rows .qrz-row { border-bottom: 1px dotted rgba(255,255,255,0.06); }
 .qrz-footer {
-  display: flex; align-items: center; padding-top: 6px; margin-top: 2px;
-  border-top: 1px solid rgba(74,158,255,0.2);
+  display: flex; align-items: center; padding-bottom: 6px; margin-bottom: 2px;
+  border-bottom: 1px solid rgba(74,158,255,0.2);
 }
 /* SP / LP rotator buttons inline in the QRZ footer — only rendered when a
  * rotator is connected and both home + contact have coordinates. Sized to

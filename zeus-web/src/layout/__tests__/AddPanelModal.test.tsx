@@ -46,7 +46,7 @@ describe('AddPanelModal', () => {
     unmount();
   });
 
-  it('renders the category rail with All + every PanelCategory', () => {
+  it('renders the category rail with All + every non-empty PanelCategory', () => {
     const { container, unmount } = setup();
     const rail = container.querySelector(
       '[data-testid="add-panel-rail"]',
@@ -62,12 +62,52 @@ describe('AddPanelModal', () => {
       'dsp',
       'log',
       'tools',
-      'amplifiers',
       'controls',
     ]) {
       expect(
         rail.querySelector(`[data-testid="add-panel-category-${cat}"]`),
       ).not.toBeNull();
+    }
+    unmount();
+  });
+
+  it('omits category chips that hold no panels (no dead filters)', () => {
+    const { container, unmount } = setup();
+    const rail = container.querySelector(
+      '[data-testid="add-panel-rail"]',
+    ) as HTMLElement;
+    // amplifiers / tuners / switches are defined for future panels but have
+    // no members today, so their chips must not render.
+    for (const cat of ['amplifiers', 'tuners', 'switches']) {
+      expect(
+        rail.querySelector(`[data-testid="add-panel-category-${cat}"]`),
+      ).toBeNull();
+    }
+    unmount();
+  });
+
+  it('every rendered category chip yields at least one panel card', () => {
+    const { container, unmount } = setup();
+    const chips = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '[data-testid="add-panel-rail"] .add-panel-category-btn',
+      ),
+    ).filter(
+      (btn) =>
+        btn.getAttribute('data-testid') !== 'add-panel-category-all',
+    );
+    expect(chips.length).toBeGreaterThan(0);
+    for (const chip of chips) {
+      act(() => {
+        chip.click();
+      });
+      const cards = container.querySelectorAll(
+        '[data-testid="add-panel-cards"] .add-panel-card',
+      );
+      expect(
+        cards.length,
+        `category ${chip.getAttribute('data-testid')} should not be empty`,
+      ).toBeGreaterThan(0);
     }
     unmount();
   });
