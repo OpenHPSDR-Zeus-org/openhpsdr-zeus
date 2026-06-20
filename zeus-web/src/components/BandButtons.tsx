@@ -154,21 +154,26 @@ export function BandButtons() {
       const targetHz = stored?.hz ?? band.centerHz;
       const targetMode: RxMode | null = stored?.mode ?? null;
 
-      useConnectionStore.setState({ vfoHz: targetHz });
-      setVfo(targetHz)
-        .then(applyState)
-        .catch(() => {
-          /* next state poll will reconcile */
-        });
+      useConnectionStore.setState(
+        targetMode && targetMode !== mode
+          ? { vfoHz: targetHz, mode: targetMode }
+          : { vfoHz: targetHz },
+      );
 
-      if (targetMode && targetMode !== mode) {
-        useConnectionStore.setState({ mode: targetMode });
-        setMode(targetMode)
-          .then(applyState)
-          .catch(() => {
+      void (async () => {
+        if (targetMode && targetMode !== mode) {
+          try {
+            applyState(await setMode(targetMode));
+          } catch {
             /* next state poll will reconcile */
-          });
-      }
+          }
+        }
+        try {
+          applyState(await setVfo(targetHz));
+        } catch {
+          /* next state poll will reconcile */
+        }
+      })();
     },
     [applyState, currentBand, flushPendingSave, mode],
   );

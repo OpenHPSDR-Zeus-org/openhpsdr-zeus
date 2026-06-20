@@ -98,6 +98,11 @@ describe('BandButtons', () => {
     expect(fortyMeters).toBeTruthy();
     expect(setVfo).toHaveBeenCalledWith(7_150_000);
     expect(setMode).toHaveBeenCalledWith('AM');
+    const setModeCallOrder = vi.mocked(setMode).mock.invocationCallOrder[0];
+    const setVfoCallOrder = vi.mocked(setVfo).mock.invocationCallOrder[0];
+    expect(setModeCallOrder).toBeDefined();
+    expect(setVfoCallOrder).toBeDefined();
+    expect(setModeCallOrder!).toBeLessThan(setVfoCallOrder!);
     expect(useConnectionStore.getState().mode).toBe('AM');
 
     unmount();
