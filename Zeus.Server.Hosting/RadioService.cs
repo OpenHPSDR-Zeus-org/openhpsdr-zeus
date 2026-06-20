@@ -1482,7 +1482,16 @@ public sealed class RadioService : IDisposable
         };
     }
 
-    private static (int low, int high) SignedFilterForMode(RxMode mode, int loAbs, int hiAbs)
+    // Re-sign a positive (abs) TX/RX bandpass magnitude pair per the mode's
+    // sideband convention. WDSP selects the SSB sideband from the SIGN of the
+    // bandpass edges (negative = LSB-family, positive = USB-family), so this is
+    // the single source of truth for that mapping. Exposed to DspPipelineService
+    // so the engine-apply seam can re-derive the sign from the live mode rather
+    // than trusting whatever sign happens to be stored in StateDto — see the
+    // call site in DspPipelineService for why (legacy DB / split-on-B paths can
+    // leave a positive value behind on an LSB mode and transmit the wrong
+    // sideband). Idempotent for well-formed state.
+    internal static (int low, int high) SignedFilterForMode(RxMode mode, int loAbs, int hiAbs)
     {
         return mode switch
         {

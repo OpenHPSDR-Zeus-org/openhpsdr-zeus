@@ -140,3 +140,22 @@ export async function stopMicUplinkRunning(): Promise<void> {
 export function isMicUplinkRunning(): boolean {
   return handle !== null;
 }
+
+/** Geometry of the live mic spectrum tap, or null when no tap is available. */
+export function getMicSpectrumInfo(): { binCount: number; fftSize: number; sampleRate: number } | null {
+  if (!handle?.getSpectrum || !handle.spectrumBinCount) return null;
+  return {
+    binCount: handle.spectrumBinCount,
+    fftSize: handle.spectrumFftSize ?? handle.spectrumBinCount * 2,
+    sampleRate: handle.spectrumSampleRate ?? 48000,
+  };
+}
+
+/**
+ * Fill `out` (length must equal the current bin count) with the latest mic FFT
+ * magnitudes in dBFS. Returns false when no live analyser is running — e.g.
+ * desktop/native audio mode, or before the operator has granted the mic.
+ */
+export function getMicSpectrum(out: Float32Array): boolean {
+  return handle?.getSpectrum?.(out) ?? false;
+}

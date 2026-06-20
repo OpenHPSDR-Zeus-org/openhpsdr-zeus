@@ -47,6 +47,7 @@ import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent }
 import { GripVertical, X } from 'lucide-react';
 import { Panadapter } from '../../components/Panadapter';
 import { WaterfallSurface } from '../../components/WaterfallSurface';
+import { TxEqAnalyzer } from '../../components/TxEqAnalyzer';
 import { ZoomControl } from '../../components/ZoomControl';
 import { WaterfallSpeedControl } from '../../components/WaterfallSpeedControl';
 import { SpectrumControls } from '../../components/SpectrumControls';
@@ -54,6 +55,7 @@ import { LeafletWorldMap } from '../../components/design/LeafletWorldMap';
 import { LeafletMapErrorBoundary } from '../../components/design/LeafletMapErrorBoundary';
 import { setRx2, type Rx2AudioMode } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
+import { useTxStore } from '../../state/tx-store';
 import { useRotatorStore } from '../../state/rotator-store';
 import { useLayoutStore } from '../../state/layout-store';
 import { TileLockButton } from '../TileChrome';
@@ -127,6 +129,8 @@ export function HeroPanel({
   const rx2AudioMode = useConnectionStore((s) => s.rx2AudioMode);
   const rxFocus = useConnectionStore((s) => s.rxFocus);
   const setRxFocus = useConnectionStore((s) => s.setRxFocus);
+  // During TX the waterfall region becomes the live TX EQ analyzer.
+  const keyed = useTxStore((s) => s.moxOn || s.tunOn);
   const updateTileInstanceConfig = useLayoutStore(
     (s) => s.updateTileInstanceConfigInLayout,
   );
@@ -479,7 +483,11 @@ export function HeroPanel({
             onPointerDown={onSplitterPointerDown}
           />
           {connected && (
-            rx2Enabled ? (
+            keyed ? (
+              // On TX both receivers transmit the same audio, so a single
+              // full-width analyzer replaces the waterfall (or RX2 quad).
+              <TxEqAnalyzer transparent={bgActive} />
+            ) : rx2Enabled ? (
               <div style={stitchedGridStyle}>
                 <div style={{ minWidth: 0, minHeight: 0 }}>
                   <WaterfallSurface

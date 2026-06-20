@@ -674,6 +674,35 @@ public sealed class DspPipelineAudioSanitizerTests
     }
 
     [Fact]
+    public void ApplyRxAudioLeveler_ModeratePeakSignalAfterWeakSignalDoesNotBlast()
+    {
+        // The input peak (0.45) sits *below* the limiter target (0.74), so the
+        // raw input-peak fast-cut gate never fires. The danger is the gain banked
+        // across the weak run being dumped onto this louder block: gain × peak,
+        // not peak alone. Without the per-block peak guard the first block rides
+        // the soft-limit ceiling for several blocks — the "hard audio" blast.
+        var state = new DspPipelineService.RxAudioLevelerState();
+        float[] block = new float[1024];
+
+        for (int i = 0; i < 18; i++)
+        {
+            Array.Fill(block, 0.01f);
+            DspPipelineService.ApplyRxAudioLeveler(block, ref state);
+        }
+
+        Assert.True(state.GainDb > 20.0);
+
+        Array.Fill(block, 0.45f);
+        DspPipelineService.ApplyRxAudioLeveler(block, ref state);
+
+        // Output is leveled to target on the very first block, never blasted: the
+        // peak stays well under the 0.74 limiter ceiling instead of riding it.
+        Assert.True(PeakAbs(block) < 0.5f);
+        Assert.InRange(Rms(block), 0.10f, 0.15f);
+        Assert.True(state.GainDb < 0.0);
+    }
+
+    [Fact]
     public void ApplyRxAudioLeveler_ReportsPeakHeadroomConstraint()
     {
         var state = new DspPipelineService.RxAudioLevelerState();

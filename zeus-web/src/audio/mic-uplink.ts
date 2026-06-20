@@ -63,7 +63,22 @@ export type MicUplinkBlockHandler = (samples: Float32Array, peak: number) => voi
 export type MicUplinkHandle = {
   resume?: () => Promise<void>;
   stop: () => Promise<void>;
+  // Real-time spectrum tap for the TX EQ analyzer. Fills `out` (length must
+  // equal spectrumBinCount) with FFT magnitudes in dBFS and returns true, or
+  // returns false when no live analyser is available (e.g. native audio mode).
+  getSpectrum?: (out: Float32Array) => boolean;
+  spectrumBinCount?: number;
+  spectrumFftSize?: number;
+  spectrumSampleRate?: number;
 };
+
+// Voice-band resolution: 4096-pt FFT at 48 kHz → ~11.7 Hz/bin, smoothed so the
+// trace reads cleanly without lagging speech transients. dB window matches the
+// analyzer's −100..0 dBFS scale.
+const ANALYSER_FFT_SIZE = 4096;
+const ANALYSER_SMOOTHING = 0.6;
+const ANALYSER_MIN_DB = -100;
+const ANALYSER_MAX_DB = 0;
 
 const MIC_BASE_CONSTRAINTS: MediaTrackConstraints = {
   echoCancellation: false,
@@ -137,11 +152,36 @@ export async function startMicUplink(
     node.connect(silentSink);
     silentSink.connect(context.destination);
 
+    // Spectrum tap: a parallel AnalyserNode off the raw mic source feeds the TX
+    // EQ analyzer. It's a pure sink (not connected onward) so it never affects
+    // the uplink audio. The analyser's effective sample rate is the context's
+    // actual rate, which may differ from the requested 48 kHz on some devices.
+    const analyser = context.createAnalyser();
+    analyser.fftSize = ANALYSER_FFT_SIZE;
+    analyser.smoothingTimeConstant = ANALYSER_SMOOTHING;
+    analyser.minDecibels = ANALYSER_MIN_DB;
+    analyser.maxDecibels = ANALYSER_MAX_DB;
+    source.connect(analyser);
+
+    const getSpectrum = (out: Float32Array): boolean => {
+      if (context.state !== 'running') return false;
+      if (out.length !== analyser.frequencyBinCount) return false;
+      // The DOM lib narrows the buffer generic to ArrayBuffer; our reusable
+      // scratch buffers are always plain (non-shared) ArrayBuffers.
+      analyser.getFloatFrequencyData(out as Float32Array<ArrayBuffer>);
+      return true;
+    };
+
     return {
       resume,
+      getSpectrum,
+      spectrumBinCount: analyser.frequencyBinCount,
+      spectrumFftSize: analyser.fftSize,
+      spectrumSampleRate: context.sampleRate,
       stop: async () => {
         try { node.port.onmessage = null; } catch { /* ignore */ }
         try { source.disconnect(); } catch { /* ignore */ }
+        try { analyser.disconnect(); } catch { /* ignore */ }
         try { node.disconnect(); } catch { /* ignore */ }
         try { silentSink.disconnect(); } catch { /* ignore */ }
         cleanupStream();

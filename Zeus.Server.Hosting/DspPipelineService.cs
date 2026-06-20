@@ -308,6 +308,16 @@ public class DspPipelineService : BackgroundService,
         double currentDb = double.IsFinite(state.GainDb) ? state.GainDb : 0.0;
         currentDb = Math.Clamp(currentDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
 
+        // True when the gain we are currently holding would, on its own, drive
+        // this block's peak past the limiter target — i.e. a gain "held" high
+        // across a quiet gap (pause memory / catch-up) is about to be dumped onto
+        // a louder block. The raw input-peak gate below (peak > target) misses
+        // this case because the danger is gain × peak, not peak alone: a signal
+        // whose input peak is modest still blasts the speaker if the held gain is
+        // large. When this is set we cut as urgently as a clipping peak would.
+        bool currentGainOverdrivesPeak =
+            double.IsFinite(peakHeadroomDb) && currentDb > peakHeadroomDb;
+
         double nextDb = currentDb;
         if (belowGate)
         {
@@ -370,18 +380,29 @@ public class DspPipelineService : BackgroundService,
         }
         else if (!belowGate)
         {
-            double cutSlewDb = (peak > RxLevelerPeakTarget || peakLimited)
+            double cutSlewDb = (peak > RxLevelerPeakTarget || peakLimited || currentGainOverdrivesPeak)
                 ? Math.Max(RxLevelerSmoothCutDb, currentDb - desiredDb)
                 : RxLevelerSmoothCutDb;
             nextDb = Math.Max(desiredDb, currentDb - cutSlewDb);
         }
         nextDb = Math.Clamp(nextDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
 
+        // Hard per-block peak guard. The smooth boost/cut slews above track
+        // loudness gently; this is the safety floor that stops a held-high gain
+        // from ever being *applied* to a block whose peak would then exceed the
+        // limiter target. Without it, gain banked across a quiet gap gets dumped
+        // onto the first loud-ish block of a new signal and rides the soft-limit
+        // ceiling for several blocks before the slew catches up — the "sudden
+        // strong signal blasts the speaker" failure this leveler exists to stop.
+        // Cutting straight to the peak-safe gain is inaudible next to that blast.
+        if (!belowGate && double.IsFinite(peakHeadroomDb) && nextDb > peakHeadroomDb)
+            nextDb = Math.Clamp(peakHeadroomDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
+
         int rampSamples = Math.Clamp(Math.Min(samples.Length, RxLevelerGainRampMaxSamples), 1, Math.Max(1, samples.Length));
         double preLimitPeak = 0.0;
         int outputLimitSampleCount = 0;
         double appliedEndDb = belowGate ? 0.0 : nextDb;
-        bool emergencyCut = !belowGate && desiredDb < currentDb && (peak > RxLevelerPeakTarget || peakLimited);
+        bool emergencyCut = !belowGate && nextDb < currentDb && (peak > RxLevelerPeakTarget || peakLimited || currentGainOverdrivesPeak);
         for (int i = 0; i < samples.Length; i++)
         {
             float clean = SanitizeAudioSample(samples[i]);
@@ -662,6 +683,21 @@ public class DspPipelineService : BackgroundService,
     private int _appliedCtunOffsetHz;
     private int _appliedTxLowHz;
     private int _appliedTxHighHz;
+
+    // Derive the TX bandpass edges WDSP should use from the live mode, ignoring
+    // the sign already stored in StateDto. WDSP selects the SSB sideband from
+    // the sign of the bandpass (negative = LSB-family, positive = USB-family),
+    // so the sign MUST track the current mode — not whatever a stale prefs DB or
+    // a mode writer that forgot to re-sign happened to leave behind. Re-deriving
+    // from the magnitudes via the single source of truth (SignedFilterForMode)
+    // is idempotent for well-formed state, so this never overrides an operator's
+    // deliberate width edit.
+    private static (int low, int high) SignedTxFilterFor(StateDto s)
+    {
+        int loAbs = Math.Min(Math.Abs(s.TxFilterLowHz), Math.Abs(s.TxFilterHighHz));
+        int hiAbs = Math.Max(Math.Abs(s.TxFilterLowHz), Math.Abs(s.TxFilterHighHz));
+        return RadioService.SignedFilterForMode(s.Mode, loAbs, hiAbs);
+    }
     private double _appliedAgcTopDb;
     private double _appliedAgcOffsetDb;
     private double _appliedRxAfGainDb;
@@ -2992,11 +3028,18 @@ public class DspPipelineService : BackgroundService,
         // notches hold their absolute RF frequency across a retune. The engine
         // no-ops when the value is unchanged, so this is cheap to call here.
         engine.SetNotchTuneFrequencyHz(s.RadioLoHz);
-        if (s.TxFilterLowHz != _appliedTxLowHz || s.TxFilterHighHz != _appliedTxHighHz)
+        // Re-sign the TX bandpass from the LIVE mode instead of trusting the
+        // sign stored in StateDto. WDSP picks the SSB sideband from the sign of
+        // the bandpass edges; a state that comes up with Mode=LSB but a positive
+        // TX filter (legacy prefs DB, or a writer that set the mode without
+        // re-signing the TX width) would otherwise transmit USB. This is
+        // idempotent for well-formed state, so it never fights an operator edit.
+        var (txLow, txHigh) = SignedTxFilterFor(s);
+        if (txLow != _appliedTxLowHz || txHigh != _appliedTxHighHz)
         {
-            engine.SetTxFilter(s.TxFilterLowHz, s.TxFilterHighHz);
-            _appliedTxLowHz = s.TxFilterLowHz;
-            _appliedTxHighHz = s.TxFilterHighHz;
+            engine.SetTxFilter(txLow, txHigh);
+            _appliedTxLowHz = txLow;
+            _appliedTxHighHz = txHigh;
         }
         if (s.AgcTopDb != _appliedAgcTopDb || s.AgcOffsetDb != _appliedAgcOffsetDb)
         {
@@ -3337,7 +3380,10 @@ public class DspPipelineService : BackgroundService,
         // OpenTxChannel).
         engine.SetTxMode(s.Mode);
         engine.SetFilter(channelId, s.FilterLowHz, s.FilterHighHz);
-        engine.SetTxFilter(s.TxFilterLowHz, s.TxFilterHighHz);
+        // Sign the TX bandpass from the live mode (see SignedTxFilterFor) so a
+        // fresh engine doesn't key up with a USB-positive default while in LSB.
+        var (txOpenLow, txOpenHigh) = SignedTxFilterFor(s);
+        engine.SetTxFilter(txOpenLow, txOpenHigh);
         engine.SetVfoHz(channelId, s.VfoHz);
         // Replay the WDSP shift on fresh-channel open so a connect landing
         // with VfoHz != RadioLoHz (persisted across restart) is demodulating
@@ -3384,8 +3430,8 @@ public class DspPipelineService : BackgroundService,
         _appliedLowHz = s.FilterLowHz;
         _appliedHighHz = s.FilterHighHz;
         _appliedCtunOffsetHz = ctunShiftHz;
-        _appliedTxLowHz = s.TxFilterLowHz;
-        _appliedTxHighHz = s.TxFilterHighHz;
+        _appliedTxLowHz = txOpenLow;
+        _appliedTxHighHz = txOpenHigh;
         _appliedAgcTopDb = s.AgcTopDb;
         _appliedAgcOffsetDb = s.AgcOffsetDb;
         _appliedRxAfGainDb = s.RxAfGainDb;
