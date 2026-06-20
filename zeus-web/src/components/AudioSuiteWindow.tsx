@@ -1342,9 +1342,28 @@ export function AudioSuiteWindow({
       });
     }
   };
-  const onSaveProfile = () => {
+  // "+" — capture the current chain under a NEW name (name dialog).
+  const onNewProfile = () => {
     setProfileDialogError(null);
     setProfileSaveOpen(true);
+  };
+  // "Save" — overwrite the currently-selected profile in place, no name
+  // prompt. With nothing selected there's no target, so fall back to the
+  // new-profile dialog.
+  const onSaveProfile = async () => {
+    if (!selectedProfile) {
+      onNewProfile();
+      return;
+    }
+    const result = await saveProfile(selectedProfile, route);
+    if (!result.ok) {
+      setVstNotice({
+        tone: 'error',
+        text: `Profile save failed:\n${result.error || `Could not save "${selectedProfile}"`}`,
+      });
+      return;
+    }
+    setVstNotice({ tone: 'ok', text: `Saved "${selectedProfile}".` });
   };
   const onDeleteProfile = () => {
     if (!selectedProfile) return;
@@ -1797,8 +1816,21 @@ export function AudioSuiteWindow({
           </select>
           <button
             type="button"
-            onClick={onSaveProfile}
-            title="Save the current chain as a profile"
+            onClick={onNewProfile}
+            title="Save the current chain as a new profile"
+            aria-label="New RX profile"
+            style={profileBtnStyle(false)}
+          >
+            +
+          </button>
+          <button
+            type="button"
+            onClick={() => void onSaveProfile()}
+            title={
+              selectedProfile
+                ? `Overwrite "${selectedProfile}" with the current chain`
+                : 'Save the current chain as a new profile'
+            }
             style={profileBtnStyle(false)}
           >
             Save
@@ -2024,9 +2056,8 @@ export function AudioSuiteWindow({
       )}
       {profileSaveOpen && (
         <TextInputDialog
-          title="Save profile"
+          title="New profile"
           label="Profile name"
-          initialValue={selectedProfile}
           placeholder="Ragchew"
           confirmLabel="Save Profile"
           onCancel={() => {

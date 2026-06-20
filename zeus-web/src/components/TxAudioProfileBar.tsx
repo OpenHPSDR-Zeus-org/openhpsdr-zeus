@@ -17,7 +17,7 @@
 // server-side from live state; this component never assembles a profile body.
 
 import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Plus } from 'lucide-react';
 
 import { ConfirmDialog } from '../layout/ConfirmDialog';
 import { TextInputDialog } from '../layout/TextInputDialog';
@@ -111,6 +111,7 @@ export function TxAudioProfileBar({ compact = false }: TxAudioProfileBarProps) {
     }
   };
 
+  // The "+" / name-dialog path: capture the live state under a NEW name.
   const onSaveSubmit = async (name: string) => {
     setSaveOpen(false);
     setNotice(null);
@@ -120,6 +121,23 @@ export function TxAudioProfileBar({ compact = false }: TxAudioProfileBarProps) {
       return;
     }
     setNotice({ tone: 'ok', text: `Saved "${name}".` });
+  };
+
+  // The "Save" button: overwrite the currently-selected profile in place, no
+  // name prompt. With nothing selected there's no target, so fall back to the
+  // new-profile dialog (the "+" path).
+  const onSaveSelected = async () => {
+    setNotice(null);
+    if (!selectedProfile) {
+      setSaveOpen(true);
+      return;
+    }
+    const result = await save(selectedProfile.name);
+    if (!result.ok) {
+      setNotice({ tone: 'error', text: result.error ?? 'Profile save failed.' });
+      return;
+    }
+    setNotice({ tone: 'ok', text: `Saved "${selectedProfile.name}".` });
   };
 
   const onDeleteConfirm = async () => {
@@ -242,13 +260,27 @@ export function TxAudioProfileBar({ compact = false }: TxAudioProfileBarProps) {
         </div>
         <button
           type="button"
-          aria-label="Save TX audio profile"
-          title="Save the current live TX audio settings as a named profile"
+          aria-label="New TX audio profile"
+          title="Save the current live TX audio settings as a new profile"
           disabled={busy}
           onClick={() => {
             setNotice(null);
             setSaveOpen(true);
           }}
+          style={{ ...buttonStyle(busy), display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '0 7px' }}
+        >
+          <Plus size={14} aria-hidden />
+        </button>
+        <button
+          type="button"
+          aria-label="Save TX audio profile"
+          title={
+            selectedProfile
+              ? `Overwrite "${selectedProfile.name}" with the current live TX audio settings`
+              : 'Save the current live TX audio settings as a new profile'
+          }
+          disabled={busy}
+          onClick={() => void onSaveSelected()}
           style={buttonStyle(busy, true)}
         >
           Save
