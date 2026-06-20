@@ -22,7 +22,12 @@ jobs:
       ref: main
     secrets: inherit
     permissions:
-      contents: read
+      # release.yml's create-release / create-nightly-release jobs declare
+      # `contents: write`. GitHub validates a called workflow's permission
+      # requirements at startup (before `if:` gating), so the calling job must
+      # grant write even though those jobs are skipped in download-main mode —
+      # otherwise the whole run fails with startup_failure. Matches nightly.yml.
+      contents: write
 
   publish:
     name: Publish to downloads.openhpsdrzeus.com
