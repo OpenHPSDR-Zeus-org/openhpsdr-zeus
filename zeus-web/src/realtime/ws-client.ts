@@ -63,6 +63,7 @@ import { useAudioSuiteStore } from '../state/audio-suite-store';
 import { CW_STATE_FROM_BYTE, useCwStore } from '../state/cw-store';
 import { useSpotStore } from '../state/spot-store';
 import { useChatStore, type ChatEnvelope } from '../state/chat-store';
+import { usePttStore } from '../state/ptt-store';
 import { warnOnce } from '../util/logger';
 import { clampFinite } from '../util/number';
 import { wsUrl as buildWsUrl } from '../serverUrl';
@@ -197,6 +198,14 @@ const RX_AUDIO_MASTER_BYPASS_BYTES = 2;
 // so the ChatPanel stays live without polling. Contract:
 // Zeus.Contracts/ChatEventFrame.cs.
 export const MSG_TYPE_CHAT_EVENT = 0x35;
+
+// Hardware PTT-IN status edge — broadcast on every footswitch / mic-PTT /
+// rear-KEY edge so the Radio Settings PTT-IN lamp tracks the physical input
+// (P1 HardwarePttChanged, P2 UDP-1025 PttIn). Read-only indicator; does NOT
+// drive MOX (that flows through the gated server-side ExternalPttService).
+// Wire shape: [0x37][keyed:u8] = 2 bytes. Contract: Zeus.Contracts/PttStatusFrame.cs.
+export const MSG_TYPE_PTT_STATUS = 0x37;
+const PTT_STATUS_BYTES = 2;
 
 // CW engine status — broadcast on every state edge of the host-side CW
 // keyer so the macro pad can render in-flight text + queue depth without
@@ -579,6 +588,18 @@ export function startRealtime(path = '/ws'): () => void {
           }
           const bypassed = new DataView(ev.data).getUint8(1) !== 0;
           useAudioSuiteStore.getState().setRxMasterBypassedFromServer(bypassed);
+          return;
+        }
+        if (peekType === MSG_TYPE_PTT_STATUS) {
+          if (ev.data.byteLength < PTT_STATUS_BYTES) {
+            warnOnce(
+              'ws-ptt-status-short',
+              `PTT status frame too short: ${ev.data.byteLength}`,
+            );
+            return;
+          }
+          const keyed = new DataView(ev.data).getUint8(1) !== 0;
+          usePttStore.getState().setKeyed(keyed);
           return;
         }
         if (peekType === MSG_TYPE_PA_TEMP) {

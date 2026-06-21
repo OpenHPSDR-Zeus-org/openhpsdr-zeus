@@ -231,4 +231,19 @@ public enum MsgType : byte
     // it cleanly. Encoded by DiagnosticsFramePublisher (source-gen serialised
     // for the hot push path).
     DiagnosticsHealth = 0x36,
+
+    // Server → client (hardware PTT-IN status edge). Broadcast on every
+    // footswitch / mic-PTT / rear-KEY edge so the Radio Settings "PTT-IN:
+    // idle / keyed" lamp tracks the physical input. P1 boards are driven by
+    // the Protocol1Client HardwarePttChanged event, P2 boards by the UDP-1025
+    // hi-priority status PttIn bit. Read-only indicator — does NOT drive MOX
+    // (ExternalPttService promotes the same edges into MOX separately through
+    // TxService.TrySetMox arbitration). Payload: [type:1][keyed:u8] = 2
+    // bytes total. See PttStatusFrame.cs.
+    //
+    // NOTE: 0x33 was used for this type in the unmerged external-ports squash
+    // (78c3c28e); 0x33–0x35 are RxAudioChainOrder / RxAudioMasterBypass /
+    // ChatEvent and 0x36 is DiagnosticsHealth on this base, so PttStatus uses
+    // the next free byte 0x37.
+    PttStatus = 0x37,
 }

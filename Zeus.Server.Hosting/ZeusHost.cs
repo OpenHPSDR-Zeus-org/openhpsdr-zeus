@@ -358,6 +358,10 @@ public static class ZeusHost
         // PTT line) into a host MOX request — without it the gateware-driven
         // CW carrier transmits while Zeus stays unkeyed (UI off, meters at
         // idle cadence, FR-6 timeout disarmed).
+        // Per-install hardware-PTT-IN → MOX enable gate (default OFF). Gates
+        // whether ExternalPttService promotes a footswitch edge to MOX; the
+        // PTT-IN status lamp tracks the footswitch regardless.
+        builder.Services.AddSingleton<PttSettingsStore>();
         builder.Services.AddSingleton<ExternalPttService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<ExternalPttService>());
 
