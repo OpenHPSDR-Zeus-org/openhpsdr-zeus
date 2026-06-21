@@ -105,6 +105,8 @@ export function PassbandOverlay({
   const selectedVfoHz = useConnectionStore((s) =>
     receiver === 'B' ? s.vfoBHz : s.vfoHz,
   );
+  const mode = useConnectionStore((s) => (receiver === 'B' ? s.modeB : s.mode));
+  const cwPitchHz = useConnectionStore((s) => s.cwPitchHz);
 
   const rectRef = useRef<HTMLDivElement | null>(null);
   const drag = useRef<EdgeDrag | null>(null);
@@ -230,8 +232,13 @@ export function PassbandOverlay({
       const vfoHz = receiver === 'B' ? conn.vfoBHz : conn.vfoHz;
       const filterLowHz = receiver === 'B' ? conn.filterLowHzB : conn.filterLowHz;
       const filterHighHz = receiver === 'B' ? conn.filterHighHzB : conn.filterHighHz;
+      const rxMode = receiver === 'B' ? conn.modeB : conn.mode;
+      // filterLow/HighHz are audio offsets from the hardware LO, not the VFO
+      // dial. In CW modes the LO is shifted by ±cwPitchHz from VFO, so
+      // passCenter must land on the LO (not VFO) to place the rect correctly.
+      const cwOffset = rxMode === 'CWU' ? -conn.cwPitchHz : rxMode === 'CWL' ? conn.cwPitchHz : 0;
       const dialOffsetHz = vc.isInitialized() ? vfoHz - vc.getTargetCenterHz() : 0;
-      const passCenter = view + dialOffsetHz;
+      const passCenter = view + dialOffsetHz + cwOffset;
       const startHz = view - spanHz / 2;
       const leftPct = ((passCenter + filterLowHz - startHz) / spanHz) * 100;
       const rightPct = ((passCenter + filterHighHz - startHz) / spanHz) * 100;
@@ -252,7 +259,10 @@ export function PassbandOverlay({
         s.filterLowHzB !== prev.filterLowHzB ||
         s.filterHighHzB !== prev.filterHighHzB ||
         s.vfoHz !== prev.vfoHz ||
-        s.vfoBHz !== prev.vfoBHz
+        s.vfoBHz !== prev.vfoBHz ||
+        s.mode !== prev.mode ||
+        s.modeB !== prev.modeB ||
+        s.cwPitchHz !== prev.cwPitchHz
       ) {
         schedule();
       }
@@ -276,8 +286,9 @@ export function PassbandOverlay({
   const startHz = center - spanHz / 2;
 
   // Initial (pre-draw-bus) geometry; the callback refines it next frame.
-  const passLowHz = selectedVfoHz + filterLowHz;
-  const passHighHz = selectedVfoHz + filterHighHz;
+  const cwOffset = mode === 'CWU' ? -cwPitchHz : mode === 'CWL' ? cwPitchHz : 0;
+  const passLowHz = selectedVfoHz + cwOffset + filterLowHz;
+  const passHighHz = selectedVfoHz + cwOffset + filterHighHz;
   const leftPct = ((passLowHz - startHz) / spanHz) * 100;
   const rightPct = ((passHighHz - startHz) / spanHz) * 100;
   const widthPct = rightPct - leftPct;

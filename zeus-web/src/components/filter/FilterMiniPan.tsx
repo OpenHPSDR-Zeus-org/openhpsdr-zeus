@@ -668,6 +668,10 @@ function FilterMiniPanSurface({
       ctx.restore();
 
       const vfo = active.vfoHz;
+      // filterLowHz/filterHighHz are audio offsets from the hardware LO, not VFO.
+      // In CW modes LO ≠ VFO, so shift the spectrum window by cwOffset so the
+      // passband lines land on the correct spectral slice.
+      const cwOffset = active.mode === 'CWU' ? -c.cwPitchHz : active.mode === 'CWL' ? c.cwPitchHz : 0;
       if (display.panDb && display.hzPerPixel > 0) {
         heldPanDb = display.panDb;
         heldCenterHz = Number(display.centerHz);
@@ -704,7 +708,7 @@ function FilterMiniPanSurface({
       }
 
       // Window geometry shared by the trace, floor contour and markers.
-      const loHz = vfo + winLoOffHz;
+      const loHz = vfo + cwOffset + winLoOffHz;
       let binStart = 0;
       let binEnd = 0;
       let fullStartHz = 0;
@@ -1500,7 +1504,7 @@ function FilterMiniPanSurface({
         tickOffsets.push(Object.is(offHz, -0) ? 0 : offHz);
       }
       tickOffsets.forEach((offHz) => {
-        const absHz = vfo + offHz;
+        const absHz = vfo + cwOffset + offHz;
         const xPx = offsetToX(offHz);
         if (xPx < 0 || xPx > w) return;
         const text = formatTickMhz(absHz);
@@ -1536,6 +1540,7 @@ function FilterMiniPanSurface({
         s.modeB !== p.modeB ||
         s.vfoHz !== p.vfoHz ||
         s.vfoBHz !== p.vfoBHz ||
+        s.cwPitchHz !== p.cwPitchHz ||
         s.rx2Enabled !== p.rx2Enabled ||
         s.rxFocus !== p.rxFocus
       ) {
@@ -1661,7 +1666,9 @@ function FilterMiniPanSurface({
     const d = selectDisplaySlice(useDisplayStore.getState(), active.receiver);
     if (!d.panDb || d.hzPerPixel <= 0 || floor === null) return false;
     const vfo = active.vfoHz;
-    const winLoHz = vfo + filterWindowLoOffsetHz(active.filterLowHz, active.filterHighHz, spanHz);
+    const fitCwOff = active.mode === 'CWU' ? -c.cwPitchHz : active.mode === 'CWL' ? c.cwPitchHz : 0;
+    const lo = vfo + fitCwOff;
+    const winLoHz = lo + filterWindowLoOffsetHz(active.filterLowHz, active.filterHighHz, spanHz);
     const dCenter = Number(d.centerHz);
     const peaks = detectPeaks(d.panDb, dCenter, d.hzPerPixel).filter((p) => p.snrDb >= BRACKET_MIN_SNR_DB);
     let best: DetectedPeak | null = null;
@@ -1677,7 +1684,7 @@ function FilterMiniPanSurface({
     // Keep the fit on the active mode's sideband — a signal on the wrong side of
     // the carrier is unreachable here without retuning, so bail rather than flip
     // the passband to the opposite sideband.
-    const fitted = fitPassbandForMode(active.mode, ext.loHz - vfo, ext.hiHz - vfo, FIT_MARGIN_HZ);
+    const fitted = fitPassbandForMode(active.mode, ext.loHz - lo, ext.hiHz - lo, FIT_MARGIN_HZ);
     if (!fitted) return false;
     const { low, high } = fitted;
     const slot = presetIsFixed(active.filterPresetName) || !active.filterPresetName ? 'VAR1' : active.filterPresetName;
@@ -1759,7 +1766,11 @@ function FilterMiniPanSurface({
     if (!d || e.pointerId !== d.pointerId) return;
     e.stopPropagation();
 
-    const vfo = miniPanVfoHzForReceiver(useConnectionStore.getState(), d.receiver);
+    const snapC = useConnectionStore.getState();
+    const vfo = miniPanVfoHzForReceiver(snapC, d.receiver);
+    const snapMode = d.receiver === 'B' ? snapC.modeB : snapC.mode;
+    const snapCwOff = snapMode === 'CWU' ? -snapC.cwPitchHz : snapMode === 'CWL' ? snapC.cwPitchHz : 0;
+    const lo = vfo + snapCwOff;
     const hzPerPx = d.spanHz / d.rect.width;
     // Magnetic snap is active for edge drags unless Alt is held (free placement)
     // and unless there are no detected carriers.
@@ -1769,12 +1780,12 @@ function FilterMiniPanSurface({
     if (d.mode === 'lo') {
       const relX = e.clientX - d.rect.left;
       loHz = Math.round(relX * hzPerPx + d.windowLoOffsetHz);
-      if (snap) loHz = Math.round(magnetEdge(vfo + loHz, d.peaks) - vfo);
+      if (snap) loHz = Math.round(magnetEdge(lo + loHz, d.peaks) - lo);
       if (loHz > d.startHiHz - 50) loHz = d.startHiHz - 50;
     } else if (d.mode === 'hi') {
       const relX = e.clientX - d.rect.left;
       hiHz = Math.round(relX * hzPerPx + d.windowLoOffsetHz);
-      if (snap) hiHz = Math.round(magnetEdge(vfo + hiHz, d.peaks) - vfo);
+      if (snap) hiHz = Math.round(magnetEdge(lo + hiHz, d.peaks) - lo);
       if (hiHz < d.startLoHz + 50) hiHz = d.startLoHz + 50;
     } else {
       const dxHz = Math.round((e.clientX - d.startX) * hzPerPx);
