@@ -61,7 +61,6 @@ export type SettingsTabId =
   | 'spots'
   | 'server'
   | 'radio'
-  | 'radio-settings'
   | 'calibration'
   | 'updates'
   | 'about';
@@ -82,7 +81,6 @@ const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
   { id: 'spots', label: 'SPOTS' },
   { id: 'server', label: 'SERVER' },
   { id: 'radio', label: 'RADIO' },
-  { id: 'radio-settings', label: 'RADIO SETTINGS' },
   { id: 'calibration', label: 'CALIBRATION' },
   { id: 'updates', label: 'UPDATES' },
   { id: 'about', label: 'ABOUT' },
@@ -102,9 +100,12 @@ export function SettingsView({ initialTab, onClose }: Props) {
   const savePa = usePaStore((s) => s.save);
   const loadPa = usePaStore((s) => s.load);
   const paInflight = usePaStore((s) => s.inflight);
-  // RADIO tab is board-option-only. Hidden unless the active capability
-  // fingerprint advertises an option surface that writes a real firmware
-  // field (HL2 Band Volts or ANAN-G2 ADC dither/random).
+  // RADIO tab hosts the always-relevant radio settings (PTT-IN, TX audio
+  // source, antenna relays — RadioSettingsPanel) and, when the connected board
+  // advertises a firmware-option surface (HL2 Band Volts or ANAN-G2 ADC
+  // dither/random), the per-board RadioOptionsPanel below them. The tab itself
+  // is always visible because RadioSettingsPanel applies to every board;
+  // `hasRadioOptions` only gates the optional board-options section within it.
   const hasHl2OptionalToggles = useRadioStore(
     (s) => s.capabilities.hasHl2OptionalToggles,
   );
@@ -117,29 +118,15 @@ export function SettingsView({ initialTab, onClose }: Props) {
   // so a fresh session never lists it.
   const hardwareUnlocked = useEasterEggStore((s) => s.hardwareUnlocked);
   const visibleTabs = useMemo(
-    () =>
-      TABS.filter(
-        (t) =>
-          (t.id !== 'radio' || hasRadioOptions) &&
-          (t.id !== 'hardware' || hardwareUnlocked),
-      ),
-    [hasRadioOptions, hardwareUnlocked],
+    () => TABS.filter((t) => t.id !== 'hardware' || hardwareUnlocked),
+    [hardwareUnlocked],
   );
 
-  // If the operator was sitting on the RADIO tab and the board changed
-  // (re-discovery now reports no radio options), bounce them back to PA so they
-  // don't get stuck on an empty tabpanel.
-  useEffect(() => {
-    if (active === 'radio' && !hasRadioOptions) {
-      setActive('pa');
-    }
-  }, [active, hasRadioOptions]);
-
   // Effective tab for rendering. If the stored `active` tab isn't currently
-  // visible — a hidden HARDWARE folder, or RADIO opened via initialTab without
-  // board options — fall back to PA so the operator never lands on a hidden
-  // tabpanel. Deriving this (rather than bouncing in an effect) avoids racing
-  // the initialTab effect, which could otherwise re-select a hidden tab.
+  // visible — e.g. a hidden HARDWARE folder — fall back to PA so the operator
+  // never lands on a hidden tabpanel. Deriving this (rather than bouncing in an
+  // effect) avoids racing the initialTab effect, which could otherwise
+  // re-select a hidden tab.
   const activeTab = visibleTabs.some((t) => t.id === active) ? active : 'pa';
 
   useEffect(() => {
@@ -221,8 +208,12 @@ export function SettingsView({ initialTab, onClose }: Props) {
           {activeTab === 'hamclock' && <HamClockSettingsPanel />}
           {activeTab === 'spots' && <SpotsSettingsPanel />}
           {activeTab === 'server' && <ServerUrlPanel />}
-          {activeTab === 'radio' && hasRadioOptions && <RadioOptionsPanel />}
-          {activeTab === 'radio-settings' && <RadioSettingsPanel />}
+          {activeTab === 'radio' && (
+            <>
+              <RadioSettingsPanel />
+              {hasRadioOptions && <RadioOptionsPanel />}
+            </>
+          )}
           {activeTab === 'calibration' && <CalibrationPanel />}
           {activeTab === 'updates' && <UpdatesPanel />}
           {activeTab === 'about' && <AboutPanel />}
