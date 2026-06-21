@@ -47,6 +47,7 @@ import { ChevronLeft, ChevronRight, Download, Upload } from 'lucide-react';
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
 import { WorkspaceErrorBoundary } from './layout/WorkspaceErrorBoundary';
+import { AppErrorBoundary } from './layout/AppErrorBoundary';
 import { currentDetachedWorkspaceLayoutId } from './layout/workspace-windows';
 import { ConfirmDialog } from './layout/ConfirmDialog';
 import { AfGainSlider } from './components/AfGainSlider';
@@ -1025,12 +1026,18 @@ export default function App() {
       <div className="workspace-area">
         <AlertBanner />
         {settingsViewOpen ? (
-          <Suspense fallback={null}>
-            <SettingsView
-              initialTab={settingsInitialTab as SettingsTabId | undefined}
-              onClose={() => setSettingsView(false)}
-            />
-          </Suspense>
+          <AppErrorBoundary
+            scope="Settings"
+            resetKey={settingsInitialTab}
+            recover={{ label: 'Close settings', run: () => setSettingsView(false) }}
+          >
+            <Suspense fallback={null}>
+              <SettingsView
+                initialTab={settingsInitialTab as SettingsTabId | undefined}
+                onClose={() => setSettingsView(false)}
+              />
+            </Suspense>
+          </AppErrorBoundary>
         ) : (
           <WorkspaceErrorBoundary
             key={activeLayoutId}
