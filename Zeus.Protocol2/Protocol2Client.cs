@@ -112,8 +112,10 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // are reserved for the PureSignal feedback pair when PS is armed, leaving 6
     // user receivers; with PS off, all 8. The N-receiver pipeline keys off this
     // constant so the ceiling is a single-line change if firmware ever extends
-    // the enable field.
-    public const int MaxRxDdc = 8;
+    // the enable field. Sourced from Zeus.Contracts.WireContract.MaxReceivers
+    // so the wire foundation and the StateDto Receivers[] contract can never
+    // drift apart.
+    public const int MaxRxDdc = Zeus.Contracts.WireContract.MaxReceivers;
 
     // RX IQ data arrives on UDP source ports RxDataPortBase + ddcIndex, i.e.
     // 1035 (DDC0) .. 1035 + MaxRxDdc - 1 (DDC7).

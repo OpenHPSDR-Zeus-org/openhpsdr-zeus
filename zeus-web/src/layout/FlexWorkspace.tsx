@@ -44,17 +44,11 @@ import {
   resolveResizeOverlaps,
   type WorkspaceDragStartSnapshot,
 } from './workspaceGrid';
-import {
-  deriveWorkspaceLayout,
-  reconcileReportedToStored,
-  type DeriveTile,
-} from './lockedWorkspaceLayout';
 import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
 import {
   EMPTY_WORKSPACE_LAYOUT,
   WORKSPACE_GRID_COLS,
   WORKSPACE_ROW_HEIGHT_PX,
-  WORKSPACE_TARGET_ROWS,
   WORKSPACE_TILE_MIN_H,
   WORKSPACE_TILE_MIN_W,
   type WorkspaceTile,
@@ -76,7 +70,6 @@ import {
 } from './panels/urlEmbedConfig';
 
 const WORKSPACE_GRID_MARGIN_PX = 3;
-const WORKSPACE_ROW_GAP_SHARE = 6;
 
 type GridInteraction = 'drag' | 'resize' | null;
 
@@ -258,14 +251,15 @@ function WorkspaceCanvas({
   // otherwise return undefined and never re-resolve).
   const pluginPanels = usePluginPanels();
   const pluginPanelKey = pluginPanels.map((panel) => panel.panelId).join('\0');
-  // Track container height so the grid can be sized on first paint. Once the
-  // grid metrics are frozen (below) this only feeds the initial capture.
-  const [containerHeight, setContainerHeight] = useState(0);
   const [gridInteraction, setGridInteraction] =
     useState<GridInteraction>(null);
   const draggingRef = useRef(false);
   const skipPostDropLayoutChangeRef = useRef(false);
   const dragStartRef = useRef<WorkspaceDragStartSnapshot | null>(null);
+  // Live viewport height of the (scrolling) workspace, in pixels. Only used to
+  // report how many rows are currently visible to the add-panel pagination flow
+  // (setViewportPage below); the fixed-cell geometry itself never depends on it.
+  const [containerHeight, setContainerHeight] = useState(0);
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -277,37 +271,35 @@ function WorkspaceCanvas({
     return () => ro.disconnect();
   }, [containerRef]);
 
-  // Fixed-cell workspace. Capture the grid's pixel metrics ONCE — at the first
-  // valid measurement — so a column and a row keep a CONSTANT pixel size and
-  // panels never rescale when the window is resized. The column COUNT, however,
-  // tracks the live window width: growing the window adds columns (more room to
-  // arrange panels into) and shrinking removes them — down to the base 24, or to
-  // whatever the current layout already occupies, so existing tiles are never
-  // shoved. Vertically the page grows downward and the canvas scrolls
-  // (all-panels.css). Net effect: panels stay a fixed size, but the usable area
-  // always fills the window instead of being capped at the first size.
-  const [frozen, setFrozen] = useState<{ width: number; height: number } | null>(
-    null,
-  );
+  // Fixed-cell workspace. A column and a row are a CONSTANT pixel size, so a
+  // panel never rescales when the window is resized — the core of the "hardware
+  // front panel" model. Resizing the window only changes how many cells are
+  // visible: the column COUNT tracks the live width (growing the window adds
+  // columns, shrinking removes them, never below the base 24 nor below what the
+  // current layout already occupies), and vertically the page grows downward
+  // and SCROLLS (all-panels.css). Nothing is ever shrunk to "fit" the viewport,
+  // so an operator can expand a panel as far as they like and a smaller window
+  // simply scrolls to the content instead of squashing or clipping it.
+  //
+  // The column pixel pitch is captured ONCE — from the first valid width at the
+  // base 24-column count — and then held constant. RGL derives a column width of
+  // (containerWidth - margin*(cols-1)) / cols, so we invert that to recover the
+  // per-column pitch and feed RGL an exact width for `cols` columns, pinning the
+  // rendered column width to baseColWidth with no sub-pixel rescale on resize.
+  const [frozenWidth, setFrozenWidth] = useState(0);
   useEffect(() => {
-    if (frozen) return;
-    if (mounted && width > 0 && containerHeight > 0) {
-      setFrozen({ width, height: containerHeight });
-    }
-  }, [frozen, mounted, width, containerHeight]);
-  // Frozen height drives the (fixed) row height via deriveWorkspaceLayout.
-  const gridHeight = frozen?.height ?? containerHeight;
-  // Fixed column width, captured from the first layout at the base 24-column
-  // count. RGL's column width = (containerWidth - margin*(cols-1)) / cols, so we
-  // invert that to recover the per-column pixel pitch and then hold it constant.
+    if (frozenWidth > 0) return;
+    if (mounted && width > 0) setFrozenWidth(width);
+  }, [frozenWidth, mounted, width]);
   const baseColWidth =
-    frozen && frozen.width > 0
-      ? (frozen.width - WORKSPACE_GRID_MARGIN_PX * (WORKSPACE_GRID_COLS - 1)) /
+    frozenWidth > 0
+      ? (frozenWidth - WORKSPACE_GRID_MARGIN_PX * (WORKSPACE_GRID_COLS - 1)) /
         WORKSPACE_GRID_COLS
       : 0;
   // Never drop below the base count or below the rightmost tile already placed,
   // so a window-shrink never clamps an existing tile inward (RGL would otherwise
-  // shove any tile whose x+w exceeds cols).
+  // shove any tile whose x+w exceeds cols). When the window is narrower than the
+  // occupied extent the workspace scrolls horizontally rather than reflowing.
   const occupiedCols = useMemo(
     () => tiles.reduce((m, t) => Math.max(m, t.x + t.w), WORKSPACE_GRID_COLS),
     [tiles],
@@ -327,118 +319,62 @@ function WorkspaceCanvas({
   const gridWidth =
     baseColWidth > 0
       ? cols * baseColWidth + (cols - 1) * WORKSPACE_GRID_MARGIN_PX
-      : frozen?.width ?? width;
+      : frozenWidth || width;
   // Stable ref so the drag/resize-stop callbacks read the live column count
   // without being recreated (and re-binding RGL) on every resize tick.
   const colsRef = useRef(cols);
   colsRef.current = cols;
-  // deriveWorkspaceLayout sizes the (fixed) row height from the frozen container
-  // height; with nothing locked it is a pure passthrough of the stored geometry.
-  //
-  // Locking is deliberately NOT fed into the solver. In the fixed-cell page model
-  // a panel never rescales — a locked tile is simply made `static` (non-draggable
-  // / non-resizable) in rglLayouts below. The old behaviour re-solved rowHeight
-  // and shrank the unlocked tiles whenever a tile was locked (to hold the locked
-  // one at a frozen pixel height while fitting the viewport); with a constant
-  // cell size that only made the panel visibly change size on lock/unlock. So we
-  // pass `locked: false` here to keep the solver on its inert passthrough path
-  // regardless of lock state.
-  const deriveTiles = useMemo<DeriveTile[]>(
-    () =>
-      tiles.map((t) => {
-        const def = getPanelDef(t.panelId, pluginPanelKey);
-        const w = def?.maxW !== undefined ? Math.min(t.w, def.maxW) : t.w;
-        const h = def?.maxH !== undefined ? Math.min(t.h, def.maxH) : t.h;
-        return {
-          uid: t.uid,
-          x: t.x,
-          y: t.y,
-          w,
-          h,
-          // Lock is a pure static flag now — never a size-compensation trigger.
-          locked: false,
-          minH: def?.minH ?? WORKSPACE_TILE_MIN_H,
-        };
-      }),
-    [tiles, pluginPanelKey],
-  );
+  // Cells are a constant pixel size — rowHeight and the grid margins never change
+  // with the window. A locked tile therefore holds its pixel height for free
+  // (h rows × a constant rowHeight), so the old shrink-to-fit solver and its
+  // per-tile pixel compensation are gone: the render layout is simply the stored
+  // geometry, clamped to each panel's maxW/maxH.
+  const rowHeight = WORKSPACE_ROW_HEIGHT_PX;
+  const rowMargin = WORKSPACE_GRID_MARGIN_PX;
 
-  const derived = useMemo(
-    () =>
-      deriveWorkspaceLayout(deriveTiles, {
-        containerHeight: gridHeight,
-        authoredRowHeightPx: WORKSPACE_ROW_HEIGHT_PX,
-        gridMarginPx: WORKSPACE_GRID_MARGIN_PX,
-        rowGapShare: WORKSPACE_ROW_GAP_SHARE,
-        targetRows: WORKSPACE_TARGET_ROWS,
-        minRowHeightPx: 0.1,
-      }),
-    [deriveTiles, gridHeight],
-  );
-  const { rowHeight, rowMargin } = derived;
+  // Per-tile render placement = stored geometry clamped to the panel's caps. A
+  // tile saved wider/taller than its cap snaps back here, and RGL's echo of that
+  // clamped layout persists the correction on the next onLayoutChange.
+  const placementByUid = useMemo(() => {
+    const m = new Map<
+      string,
+      { x: number; y: number; w: number; h: number }
+    >();
+    for (const t of tiles) {
+      const def = getPanelDef(t.panelId, pluginPanelKey);
+      const w = def?.maxW !== undefined ? Math.min(t.w, def.maxW) : t.w;
+      const h = def?.maxH !== undefined ? Math.min(t.h, def.maxH) : t.h;
+      m.set(t.uid, { x: t.x, y: t.y, w, h });
+    }
+    return m;
+  }, [tiles, pluginPanelKey]);
+
+  // With constant cells the render geometry equals the stored geometry, so
+  // persistence is a straight passthrough to the store (no reconcile pass).
+  const persist = onLayoutChange;
 
   // Report this workspace's live page size (in grid cells) to the store so the
   // add-panel flow knows when a panel no longer fits the visible page and must
   // spill onto a new workspace tab. Only the primary (docked) workspace reports;
-  // detached windows do not drive pagination.
+  // detached windows do not drive pagination. The page height is the LIVE
+  // viewport height (the workspace scrolls): a new panel is auto-placed within
+  // the rows currently visible, while manually expanding a panel past the fold
+  // just scrolls instead of squashing or paginating.
   const setViewportPage = useLayoutStore((s) => s.setViewportPage);
   useEffect(() => {
-    if (!isPrimary || !(rowHeight > 0)) return;
+    if (!isPrimary || !(rowHeight > 0) || !(containerHeight > 0)) return;
     const visibleRows = Math.max(
       1,
-      Math.floor((gridHeight + rowMargin) / (rowHeight + rowMargin)),
+      Math.floor((containerHeight + rowMargin) / (rowHeight + rowMargin)),
     );
     setViewportPage(cols, visibleRows);
-  }, [isPrimary, cols, gridHeight, rowHeight, rowMargin, setViewportPage]);
+  }, [isPrimary, cols, containerHeight, rowHeight, rowMargin, setViewportPage]);
 
-  // Stored geometry, keyed by uid, for reconciling RGL's echo of the derived
-  // (possibly shrunk) render layout back to what we persist. Refs keep the
-  // persist callback stable without going stale.
-  const storedByUid = useMemo(
-    () => new Map(tiles.map((t) => [t.uid, { x: t.x, y: t.y, w: t.w, h: t.h }])),
-    [tiles],
-  );
-  const derivedRef = useRef(derived);
-  derivedRef.current = derived;
-  const storedByUidRef = useRef(storedByUid);
-  storedByUidRef.current = storedByUid;
-  // All persistence flows through here so the shrunk render geometry never
-  // reaches the store. When nothing is compensated this is the identity, so the
-  // common path is byte-identical to the legacy behaviour.
-  const persist = useCallback(
-    (next: Layout) => {
-      onLayoutChange(
-        reconcileReportedToStored(
-          next,
-          derivedRef.current,
-          storedByUidRef.current,
-        ),
-      );
-    },
-    [onLayoutChange],
-  );
-
-  const placementByUid = useMemo(
-    () => new Map(derived.placements.map((p) => [p.uid, p])),
-    [derived],
-  );
-
-  // When locking a tile, capture its current on-screen pixel height so the
-  // store can hold it there afterwards. The capture is the live rendered size,
-  // so clicking lock never resizes the panel (see deriveWorkspaceLayout).
+  // Locking just pins the tile (static). With a constant cell size there is no
+  // pixel height to capture — the tile keeps its size automatically.
   const handleToggleTileLock = useCallback(
-    (uid: string, locked: boolean) => {
-      if (!locked) {
-        onToggleTileLock(uid, false);
-        return;
-      }
-      const p = placementByUid.get(uid);
-      const lockedHeightPx = p
-        ? derived.rowHeight * p.h + Math.max(0, p.h - 1) * derived.rowMargin
-        : undefined;
-      onToggleTileLock(uid, true, lockedHeightPx);
-    },
-    [onToggleTileLock, placementByUid, derived.rowHeight, derived.rowMargin],
+    (uid: string, locked: boolean) => onToggleTileLock(uid, locked),
+    [onToggleTileLock],
   );
 
   const workspaceDragCompactor = useMemo(
@@ -567,12 +503,10 @@ function WorkspaceCanvas({
       lg: tiles.map((t) => {
         const def = getPanelDef(t.panelId, pluginPanelKey);
         const tileLocked = workspaceLocked || t.locked === true;
-        // Geometry comes from the derived render layout: locked tiles stay at
-        // their authored size while unlocked tiles shrink to fit (see
-        // deriveWorkspaceLayout). The placement is already clamped to the
-        // panel's maxW/maxH (deriveTiles does the clamp before solving), so a
-        // tile saved wider than its cap snaps back here and the next persist
-        // writes the fix.
+        // Geometry is the stored placement, already clamped to the panel's
+        // maxW/maxH (placementByUid does the clamp), so a tile saved wider than
+        // its cap snaps back here and the next persist writes the fix. Cells are
+        // a constant size, so a locked tile holds its pixel height automatically.
         const placement = placementByUid.get(t.uid);
         const w = placement?.w ?? t.w;
         const h = placement?.h ?? t.h;
@@ -585,9 +519,8 @@ function WorkspaceCanvas({
           w,
           h,
           // Per-panel legibility floor when the panel declares one, else the
-          // workspace-global minimum. RGL clamps drag-resize to these and
-          // refuses to compact a tile below them, so the viewport auto-fit
-          // can shrink the grid only until a dense panel hits its floor.
+          // workspace-global minimum. RGL clamps drag-resize to these so a tile
+          // can never be sized below its readable footprint.
           minW: def?.minW ?? WORKSPACE_TILE_MIN_W,
           minH: def?.minH ?? WORKSPACE_TILE_MIN_H,
           ...(def?.maxW !== undefined ? { maxW: def.maxW } : {}),
