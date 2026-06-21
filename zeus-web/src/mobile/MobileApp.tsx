@@ -32,6 +32,7 @@ import { Panadapter } from '../components/Panadapter';
 import { WaterfallSurface } from '../components/WaterfallSurface';
 import { MobilePttButton } from '../components/MobilePttButton';
 import { MobileFrequencyTrackpad } from './MobileFrequencyTrackpad';
+import { MobileInstallPrompt } from './MobileInstallPrompt';
 import { TunButton } from '../components/TunButton';
 import { PsToggleButton } from '../components/PsToggleButton';
 import { AudioToggle } from '../components/AudioToggle';
@@ -270,6 +271,7 @@ export function MobileApp() {
       )}
 
       <main className="m-stack">
+        <MobileInstallPrompt />
         {activeTab === 'radio' ? (
           <>
             <Section label="Frequency" meta="VFO A">
