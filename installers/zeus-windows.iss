@@ -8,7 +8,7 @@
 
 #define MyAppName "OpenHPSDR-Zeus"
 #define MyAppShortName "OpenHPSDR-Zeus"
-#define MyAppPublisher "Brian Keating (EI6LF) and contributors"
+#define MyAppPublisher "Brian Keating (EI6LF), Douglas J. Cerrato (KB2UKA), Christian Suarez (N9WAR), and contributors"
 #define MyAppURL "https://github.com/Kb2uka/openhpsdr-zeus"
 #define MyAppExeName "OpenhpsdrZeus.exe"
 

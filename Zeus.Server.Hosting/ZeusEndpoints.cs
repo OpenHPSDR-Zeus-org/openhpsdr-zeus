@@ -1187,6 +1187,9 @@ public static class ZeusEndpoints
             return r.SetAgcTop(req.TopDb);
         });
 
+        // (Removed /api/agc/threshold + /disengage with the AGC knee — AGC-T is
+        // the single manual AGC control now.)
+
         app.MapPost("/api/rx/agc", (AgcSetRequest req, RadioService r) =>
         {
             log.LogInformation(
@@ -1769,14 +1772,20 @@ public static class ZeusEndpoints
         // browsers / devices instead of living in per-origin localStorage.
         app.MapGet("/api/display-settings", (DisplaySettingsStore store) => Results.Ok(store.Get()));
 
-        app.MapPut("/api/display-settings", (DisplaySettingsSetRequest req, DisplaySettingsStore store) =>
+        app.MapPut("/api/display-settings", (DisplaySettingsSetRequest req, DisplaySettingsStore store, DspPipelineService dsp) =>
         {
             if (string.IsNullOrWhiteSpace(req.Mode) || string.IsNullOrWhiteSpace(req.Fit))
                 return Results.BadRequest(new { error = "mode and fit required" });
             store.SaveMode(req.Mode, req.Fit, req.RxTraceColor,
                 req.DbMin, req.DbMax, req.TxDbMin, req.TxDbMax,
-                req.WfDbMin, req.WfDbMax, req.WfTxDbMin, req.WfTxDbMax);
-            return Results.Ok(store.Get());
+                req.WfDbMin, req.WfDbMax, req.WfTxDbMin, req.WfTxDbMax,
+                req.TxDisplayCalOffsetDb, req.TxDisplayFftSize,
+                req.TxDisplayWindow, req.TxDisplayAvgTauMs);
+            var saved = store.Get();
+            // Push the (validated, merged) TX display config to the running
+            // engine so the change is live without a reconnect. Display-only.
+            dsp.ApplyTxDisplaySettings(saved);
+            return Results.Ok(saved);
         });
 
         // Signal Intelligence weak-signal display policy. The frontend owns the

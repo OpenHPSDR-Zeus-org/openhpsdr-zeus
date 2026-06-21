@@ -9,8 +9,10 @@ import {
   setMode,
   setVfo,
   type RadioStateDto,
+  type RxMode,
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { BAND_MEMORY_UPDATED_EVENT, type BandMemoryUpdatedDetail } from '../util/band-memory';
 import { act, render } from './meters/__tests__/harness';
 import { BandButtons } from './BandButtons';
 
@@ -39,6 +41,17 @@ function resetStore() {
   });
 }
 
+function dispatchBandMemoryUpdated(
+  band: string,
+  hz: number,
+  mode: RxMode,
+) {
+  window.dispatchEvent(new CustomEvent<BandMemoryUpdatedDetail>(
+    BAND_MEMORY_UPDATED_EVENT,
+    { detail: { band, hz, mode } },
+  ));
+}
+
 describe('BandButtons', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -52,6 +65,9 @@ describe('BandButtons', () => {
 
   it('flushes mode memory for the departing band before selecting another band', async () => {
     vi.useFakeTimers();
+    vi.mocked(fetchBandMemory).mockResolvedValue([
+      { band: '20m', hz: 14_200_000, mode: 'USB' },
+    ]);
     const { container, unmount } = render(createElement(BandButtons));
     await act(async () => {
       await Promise.resolve();
@@ -60,6 +76,7 @@ describe('BandButtons', () => {
 
     act(() => {
       useConnectionStore.setState({ mode: 'LSB' });
+      dispatchBandMemoryUpdated('20m', 14_200_000, 'LSB');
     });
     const fortyMeters = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
       .find((button) => button.textContent === '40m');
@@ -104,6 +121,35 @@ describe('BandButtons', () => {
     expect(setVfoCallOrder).toBeDefined();
     expect(setModeCallOrder!).toBeLessThan(setVfoCallOrder!);
     expect(useConnectionStore.getState().mode).toBe('AM');
+
+    unmount();
+  });
+
+  it('does not overwrite a remembered band mode from a transient mode snapshot', async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchBandMemory).mockResolvedValue([
+      { band: '20m', hz: 14_200_000, mode: 'USB' },
+    ]);
+    const { container, unmount } = render(createElement(BandButtons));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    vi.clearAllMocks();
+
+    act(() => {
+      useConnectionStore.setState({ mode: 'LSB' });
+    });
+    const fortyMeters = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === '40m');
+
+    await act(async () => {
+      fortyMeters?.click();
+      await Promise.resolve();
+    });
+
+    expect(fortyMeters).toBeTruthy();
+    expect(saveBandMemory).toHaveBeenCalledWith('20m', 14_200_000, 'USB');
+    expect(saveBandMemory).not.toHaveBeenCalledWith('20m', 14_200_000, 'LSB');
 
     unmount();
   });

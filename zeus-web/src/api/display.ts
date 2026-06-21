@@ -25,6 +25,13 @@ export type DisplaySettings = {
   wfDbMax: number | null;
   wfTxDbMin: number | null;
   wfTxDbMax: number | null;
+  // TX display analyzer params (live TX waterfall). Display-only — they shape
+  // the transmitted-signal panadapter/waterfall, never the air. null = server
+  // never stored a value → frontend uses its DEFAULT_TX_DISPLAY_* constants.
+  txDisplayCalOffsetDb: number | null;
+  txDisplayFftSize: number | null;
+  txDisplayWindow: number | null;
+  txDisplayAvgTauMs: number | null;
 };
 
 // Matches backend DisplaySettingsStore.DefaultRxTraceColor.
@@ -44,6 +51,10 @@ type DisplaySettingsDtoRaw = {
   wfDbMax?: number | null;
   wfTxDbMin?: number | null;
   wfTxDbMax?: number | null;
+  txDisplayCalOffsetDb?: number | null;
+  txDisplayFftSize?: number | null;
+  txDisplayWindow?: number | null;
+  txDisplayAvgTauMs?: number | null;
 };
 
 function normalizeRxTraceColor(raw: string | null | undefined): string {
@@ -78,6 +89,10 @@ function normalize(raw: DisplaySettingsDtoRaw): DisplaySettings {
     wfDbMax: normalizeDbValue(raw.wfDbMax),
     wfTxDbMin: normalizeDbValue(raw.wfTxDbMin),
     wfTxDbMax: normalizeDbValue(raw.wfTxDbMax),
+    txDisplayCalOffsetDb: normalizeDbValue(raw.txDisplayCalOffsetDb),
+    txDisplayFftSize: normalizeDbValue(raw.txDisplayFftSize),
+    txDisplayWindow: normalizeDbValue(raw.txDisplayWindow),
+    txDisplayAvgTauMs: normalizeDbValue(raw.txDisplayAvgTauMs),
   };
 }
 
@@ -99,6 +114,12 @@ export async function updateDisplaySettings(
   wfDbMax?: number | null,
   wfTxDbMin?: number | null,
   wfTxDbMax?: number | null,
+  txDisplay?: {
+    calOffsetDb?: number | null;
+    fftSize?: number | null;
+    window?: number | null;
+    avgTauMs?: number | null;
+  },
   signal?: AbortSignal,
 ): Promise<DisplaySettings> {
   const res = await fetch('/api/display-settings', {
@@ -116,6 +137,10 @@ export async function updateDisplaySettings(
       wfDbMax,
       wfTxDbMin,
       wfTxDbMax,
+      txDisplayCalOffsetDb: txDisplay?.calOffsetDb,
+      txDisplayFftSize: txDisplay?.fftSize,
+      txDisplayWindow: txDisplay?.window,
+      txDisplayAvgTauMs: txDisplay?.avgTauMs,
     }),
     signal,
   });

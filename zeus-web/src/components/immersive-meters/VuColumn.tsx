@@ -263,8 +263,8 @@ export function VuColumn({ valueDb, name, sub, defsId, zoneTicks }: VuColumnProp
             })}
           </g>
         )}
-        {/* Liquid-metal glass over the VU column — wet specular + sheen. */}
-        <GlassDome defsId="vuColGlass" x={0} y={0} width={60} height={160} sheenWidthFrac={0.24} caustic={false} />
+        {/* Liquid-metal glass over the VU column — static specular. */}
+        <GlassDome defsId="vuColGlass" x={0} y={0} width={60} height={160} />
       </svg>
       <div style={numStyle}>
         {silent ? '−∞' : fmtDb(valueDb)}

@@ -337,6 +337,16 @@ export function Panadapter({
         }
       }
 
+      // While keyed, fit the TX display windows to the live transmitted signal
+      // (no-op when TX auto-range is off). The panadapter is the always-present
+      // TX surface, so it drives the fit regardless of which waterfall renderer
+      // is active. Receiver A only — that's the slice the server feeds TX
+      // pixels into; RX2 (receiver B) keeps its own RX window during TX.
+      if (receiver === 'A' && slice.panValid && slice.panDb) {
+        const { moxOn, tunOn } = useTxStore.getState();
+        if (moxOn || tunOn) useDisplaySettingsStore.getState().updateTxAutoRange(slice.panDb);
+      }
+
       requestRedraw();
     });
 

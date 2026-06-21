@@ -899,6 +899,14 @@ public sealed record StateDto(
     // adjusts AgcOffsetDb, which is added to the user baseline AgcTopDb.
     bool AutoAgcEnabled = false,
     double AgcOffsetDb = 0.0,
+    // AGC threshold ("knee") in operator/displayed dBm — the signal-relative
+    // level below which the AGC applies increasing gain (up to the AgcTopDb
+    // cap). This is the smooth, signal-relative control Thetis exposes via the
+    // panadapter knee line (WDSP SetRXAAGCThresh). NULL = operator has not set
+    // the knee, so WDSP's per-mode default threshold is left in effect (no
+    // behavioural change vs. pre-#741). When set, the server converts displayed
+    // dBm → WDSP scale with the per-board RX meter offset before pushing it.
+    double? AgcThresholdDbm = null,
 
     // ---- PureSignal predistortion (TXA-side; WDSP calcc/iqc stages) ----
     // PsEnabled is the master arm bit. Persisted server-side as a standing
@@ -1291,6 +1299,8 @@ public sealed record PreampSetRequest(bool On);
 
 public sealed record AgcGainSetRequest(double TopDb);
 
+public sealed record AgcThresholdSetRequest(double ThresholdDbm);
+
 public sealed record RxAfGainSetRequest(double Db);
 
 public sealed record AttenuatorSetRequest(int Db);
@@ -1670,7 +1680,20 @@ public sealed record DisplaySettingsDto(
     double? WfDbMin,
     double? WfDbMax,
     double? WfTxDbMin,
-    double? WfTxDbMax);
+    double? WfTxDbMax,
+    // TX display analyzer parameters (issue: live TX waterfall). All
+    // display-only — they shape the transmitted-signal panadapter/waterfall
+    // visualization and never touch the transmitted audio, drive, or PA.
+    // Null on legacy rows / requests → server falls back to its defaults.
+    //   TxDisplayCalOffsetDb — dB added to the TX trace/waterfall pixels so the
+    //     operator can calibrate the absolute level (Thetis TXDisplayCalOffset).
+    //   TxDisplayFftSize     — WDSP TX analyzer FFT size (power of two).
+    //   TxDisplayWindow      — WDSP analyzer window type (win_type).
+    //   TxDisplayAvgTauMs    — TX trace visual smoothing time-constant (ms).
+    double? TxDisplayCalOffsetDb = null,
+    int? TxDisplayFftSize = null,
+    int? TxDisplayWindow = null,
+    double? TxDisplayAvgTauMs = null);
 
 public sealed record DisplaySettingsSetRequest(
     string Mode,
@@ -1683,7 +1706,11 @@ public sealed record DisplaySettingsSetRequest(
     double? WfDbMin = null,
     double? WfDbMax = null,
     double? WfTxDbMin = null,
-    double? WfTxDbMax = null);
+    double? WfTxDbMax = null,
+    double? TxDisplayCalOffsetDb = null,
+    int? TxDisplayFftSize = null,
+    int? TxDisplayWindow = null,
+    double? TxDisplayAvgTauMs = null);
 
 // Server-side mirror of the frontend Signal Intelligence weak-signal display
 // controls. The DSP math remains in zeus-web's signal-estimator; this DTO lets
