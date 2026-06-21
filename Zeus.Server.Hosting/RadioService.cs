@@ -667,7 +667,7 @@ public sealed class RadioService : IDisposable
         get { lock (_sync) return _activeClient is not null || _p2Active; }
     }
 
-    public StateDto Snapshot() { lock (_sync) return _state; }
+    public StateDto Snapshot() { lock (_sync) return _state with { Receivers = ProjectReceivers(_state) }; }
 
     /// <summary>Current operator preamp toggle. PreampOn isn't on the
     /// StateDto wire format, so DspPipelineService reads it directly when
@@ -931,6 +931,19 @@ public sealed class RadioService : IDisposable
         }
         return Snapshot();
     }
+
+    /// <summary>Receiver-indexed VFO setter for the multi-DDC model.
+    /// <paramref name="rxIndex"/> 0 → RX1 (<see cref="SetVfo(long)"/>), 1 → RX2
+    /// (<see cref="SetVfoB(long)"/>). Generalizes the RX1/RX2 A/B split so
+    /// callers (the /api/vfo endpoint, CAT/TCI, future per-DDC controls) can
+    /// address a receiver by index. Indices ≥ 2 are reserved until DDC 2..N
+    /// control lands and currently return the snapshot unchanged.</summary>
+    public StateDto SetReceiverVfo(int rxIndex, long hz) => rxIndex switch
+    {
+        0 => SetVfo(hz),
+        1 => SetVfoB(hz),
+        _ => Snapshot(),
+    };
 
     public StateDto SetRx2(Rx2SetRequest req)
     {
@@ -3045,11 +3058,40 @@ public sealed class RadioService : IDisposable
         lock (_sync)
         {
             next = fn(_state);
+            // Project the canonical per-receiver array from the flat RX1/RX2
+            // fields on every mutation so StateChanged subscribers and the
+            // SignalR broadcast always carry an up-to-date Receivers[] (wire
+            // v2). Pure function of the flat fields — cheap (1–2 elements).
+            next = next with { Receivers = ProjectReceivers(next) };
             _state = next;
         }
         _stateDirty = true;
         StateChanged?.Invoke(next);
     }
+
+    // Build the canonical per-receiver array (wire v2) from the flat RX1/RX2
+    // fields. Index 0 = RX1 (always present); index 1 = RX2 with Enabled
+    // tracking Rx2Enabled so the frontend has the VFO-B config even when RX2 is
+    // off. AdcSource defaults to ADC0 until the multi-DDC UI assigns per-DDC
+    // ADCs; SampleRateHz is the shared capture rate. Additional DDCs (index ≥ 2)
+    // are appended here once DDC 2..N control exists. Pure + allocation-light
+    // (called on every Mutate / Snapshot).
+    private static IReadOnlyList<ReceiverDto> ProjectReceivers(StateDto s) =>
+        new[]
+        {
+            new ReceiverDto(
+                Index: 0, Enabled: true, AdcSource: 0,
+                VfoHz: s.VfoHz, Mode: s.Mode,
+                FilterLowHz: s.FilterLowHz, FilterHighHz: s.FilterHighHz,
+                FilterPresetName: s.FilterPresetName,
+                AfGainDb: s.RxAfGainDb, SampleRateHz: s.SampleRate),
+            new ReceiverDto(
+                Index: 1, Enabled: s.Rx2Enabled, AdcSource: 0,
+                VfoHz: s.VfoBHz, Mode: s.ModeB,
+                FilterLowHz: s.FilterLowHzB, FilterHighHz: s.FilterHighHzB,
+                FilterPresetName: s.FilterPresetNameB,
+                AfGainDb: s.Rx2AfGainDb, SampleRateHz: s.SampleRate),
+        };
 
     // Debounce flush: called by _stateFlushTimer every 1 s.
     // Captures the latest StateDto + family-filter memory under _sync and

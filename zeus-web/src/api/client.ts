@@ -381,6 +381,33 @@ export type RadioStateDto = {
   // the display on the tuned frequency. Toggled via setCtun → POST
   // /api/radio/ctun. See docs/prd/panfall_behavior.md.
   ctunEnabled: boolean;
+  // ---- Multi-DDC receivers array (wire v2) ----
+  // Canonical per-receiver list: index 0 = RX1, 1 = RX2, >= 2 = extra DDCs.
+  // Optional until the frontend migrates off the flat RX1/RX2 fields; the
+  // server projects these from the flat fields so [0]/[1] always mirror them.
+  receivers?: ReceiverDto[];
+  // Wire contract version (WireContract.Version). v2 = receivers[] present.
+  wireVersion?: number;
+  // DDC / receiver ceiling for this build (WireContract.MaxReceivers).
+  maxReceivers?: number;
+};
+
+// Mirrors Zeus.Contracts.ReceiverDto — per-receiver (per-DDC) state. Index 0 is
+// RX1, index 1 is RX2, indices >= 2 are additional DDCs. The multi-DDC UI reads
+// this array; the flat RX1/RX2 fields above remain the source for indices 0/1
+// until that migration completes.
+export type ReceiverDto = {
+  index: number;
+  enabled: boolean;
+  // Which phase-synchronous 16-bit ADC feeds this DDC (0 or 1).
+  adcSource: number;
+  vfoHz: number;
+  mode: RxMode;
+  filterLowHz: number;
+  filterHighHz: number;
+  filterPresetName: string | null;
+  afGainDb: number;
+  sampleRateHz: number;
 };
 
 // CFC mirrors Zeus.Contracts.CfcConfig. Bands array is fixed at 10 entries
