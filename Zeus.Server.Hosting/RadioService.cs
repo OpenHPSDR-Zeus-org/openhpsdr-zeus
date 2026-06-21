@@ -775,6 +775,7 @@ public sealed class RadioService : IDisposable
                 _loggerFactory.CreateLogger<Protocol1Client>(),
                 _txIqSource);
             client.AdcOverloadObserved += OnAdcOverload;
+            client.Disconnected += OnClientDisconnected;
             _activeClient = client;
             _state = _state with
             {
@@ -893,6 +894,7 @@ public sealed class RadioService : IDisposable
 
         if (client is not null)
         {
+            client.Disconnected -= OnClientDisconnected;
             client.AdcOverloadObserved -= OnAdcOverload;
             Disconnected?.Invoke();
             await TearDownClientAsync(client, ct).ConfigureAwait(false);
@@ -3286,6 +3288,12 @@ public sealed class RadioService : IDisposable
     // Zeus' pre-#218 behaviour for operators who never touch this setting.
     public OrionMkIIVariant EffectiveOrionMkIIVariant =>
         _preferredRadioStore?.GetOrionMkIIVariant() ?? OrionMkIIVariant.G2;
+
+    // Fires from the Protocol1 RX thread when consecutive receive timeouts exhaust
+    // the threshold — the radio stopped sending. Runs DisconnectAsync on the thread
+    // pool so StopAsync's _rxThread.Join() doesn't deadlock the calling thread.
+    private void OnClientDisconnected() =>
+        _ = Task.Run(() => DisconnectAsync(CancellationToken.None));
 
     // Protocol1 → RadioService bridge. Runs on the RX thread at ~1.2 kHz;
     // hands off to HandleAdcOverload for the logic the tests can drive.
