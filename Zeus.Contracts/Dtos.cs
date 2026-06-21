@@ -826,6 +826,50 @@ public sealed record NotchDto(double CenterHz, double WidthHz, bool Active = tru
 // connect), so the server/engine never has to reconcile deltas.
 public sealed record NotchListRequest(IReadOnlyList<NotchDto> Notches);
 
+/// <summary>Single source of truth for the SignalR / JSON wire contract
+/// version and the receiver-DDC ceiling shared between server and frontend.
+/// </summary>
+public static class WireContract
+{
+    /// <summary>Broadcast contract version. v1 was the implicit pre-multi-DDC
+    /// baseline (no <see cref="StateDto.Receivers"/>); v2 introduces the
+    /// per-receiver <see cref="StateDto.Receivers"/> array so the frontend can
+    /// feature-detect multi-DDC support. Surfaced on the wire via
+    /// <see cref="StateDto.WireVersion"/>.</summary>
+    public const int Version = 2;
+
+    /// <summary>Maximum concurrent DDC receivers. Protocol 2's DDC-enable
+    /// command is a single byte (8 bits ⇒ DDC0..DDC7), so the ceiling is 8.
+    /// <see cref="Zeus.Contracts"/> owns the canonical value;
+    /// <c>Zeus.Protocol2.Protocol2Client.MaxRxDdc</c> references it so the wire
+    /// foundation and the contract can never drift apart.</summary>
+    public const int MaxReceivers = 8;
+}
+
+/// <summary>Per-receiver (per-DDC) state for the multi-DDC model. Index 0 is
+/// RX1, index 1 is RX2, and indices ≥ 2 are additional DDCs (up to
+/// <see cref="WireContract.MaxReceivers"/> − 1).
+/// <para>The first usable dual-receive path mirrors the <see cref="StateDto"/>
+/// flat RX1 fields (<see cref="StateDto.VfoHz"/> etc.) into index 0 and the
+/// RX2 / VFO-B fields (<see cref="StateDto.VfoBHz"/> etc.) into index 1;
+/// <see cref="Zeus.Server"/>'s RadioService projects them on every state
+/// change. Additional DDCs live only in this array. The frontend migrates from
+/// the flat fields to this array (multi-DDC UI), after which the flat dupes are
+/// retired.</para></summary>
+public sealed record ReceiverDto(
+    int Index,
+    bool Enabled,
+    // Which phase-synchronous 16-bit ADC feeds this DDC (0 or 1). Defaults to
+    // ADC0; per-DDC ADC assignment is exposed in Settings by the multi-DDC UI.
+    byte AdcSource,
+    long VfoHz,
+    RxMode Mode,
+    int FilterLowHz,
+    int FilterHighHz,
+    string? FilterPresetName,
+    double AfGainDb,
+    int SampleRateHz);
+
 public sealed record StateDto(
     ConnectionStatus Status,
     string? Endpoint,
@@ -1085,7 +1129,27 @@ public sealed record StateDto(
     // pushing. The frontend hydrates the audio picker from this and never
     // clobbers the server on connect (PR #359/#360 anti-clobber pattern).
     // Default Host is byte-identical to today on every board.
-    TxAudioSource TxAudioSource = TxAudioSource.Host);
+    TxAudioSource TxAudioSource = TxAudioSource.Host,
+
+    // ---- Multi-DDC receivers array (wire v2) ----
+    // Canonical per-receiver list: index 0 = RX1, index 1 = RX2, index ≥ 2 =
+    // additional DDCs. The flat RX1 fields (VfoHz/Mode/Filter*/RxAfGainDb) and
+    // the RX2 / VFO-B fields (VfoBHz/ModeB/Filter*B/Rx2AfGainDb) remain the
+    // authoritative source for indices 0/1; RadioService projects them into
+    // this array on every state change (Mutate + Snapshot), so the array is
+    // never stale. Null only on a pre-projection seed — every wire-bound path
+    // populates it. The frontend migrates to this array (multi-DDC UI); the
+    // flat dupes are retired once that lands.
+    IReadOnlyList<ReceiverDto>? Receivers = null,
+
+    // Wire contract version (WireContract.Version) so the frontend can
+    // feature-detect the Receivers[] array and per-DDC controls. v1 = implicit
+    // pre-multi-DDC baseline; v2 = Receivers[] present.
+    int WireVersion = WireContract.Version,
+
+    // DDC / receiver ceiling for this build (WireContract.MaxReceivers). The
+    // multi-DDC UI gates the "exposed receivers" control against this.
+    int MaxReceivers = WireContract.MaxReceivers);
 
 /// <summary>Canonical CW constants shared between backend and wire DTOs.
 /// Single source of truth — CwOffset (server-side) and StateDto both
