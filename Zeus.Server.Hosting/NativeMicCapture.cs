@@ -285,17 +285,25 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
                 // are discarded — TxAudioIngest still gets the unmodified
                 // mic block via FlushBlock, so the on-air audio path is
                 // bit-identical to the no-preview case.
-                try
+                // Only run the host-mic plugin preview when Host is the active
+                // source. When a radio jack is selected the host mic is off the
+                // air, so its per-plugin IN / OUT / GR preview meters must not
+                // animate from it either (same source-awareness as the level
+                // meter above).
+                if (_ingest.ActiveSource == MicBlockSource.Host)
                 {
-                    _bridge.ProcessLivePreview(
-                        new ReadOnlySpan<float>(_accum, 0, MicBlockSamples),
-                        sampleRate: 48_000);
-                }
-                catch (Exception ex)
-                {
-                    if (++_previewErrLogged <= 4)
-                        _log.LogWarning(ex,
-                            "audio.native.tx plugin preview threw (suppressed after 4)");
+                    try
+                    {
+                        _bridge.ProcessLivePreview(
+                            new ReadOnlySpan<float>(_accum, 0, MicBlockSamples),
+                            sampleRate: 48_000);
+                    }
+                    catch (Exception ex)
+                    {
+                        if (++_previewErrLogged <= 4)
+                            _log.LogWarning(ex,
+                                "audio.native.tx plugin preview threw (suppressed after 4)");
+                    }
                 }
 
                 FlushBlock();
@@ -307,13 +315,24 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
 
     private void FlushPeakWindow()
     {
+        // The mic meter must reflect the ACTIVE TX audio source, not always the
+        // host mic. When the operator selects a radio jack (Radio Mic / Line In /
+        // Balanced) the host mic is gated off the air in TxAudioIngest — and it
+        // must drop off the METER too, otherwise the operator sees host-mic level
+        // on a radio source with nothing connected (the meter would "lie"). So:
+        //   Host source  → this device's host-mic window peak.
+        //   Radio source → the radio-jack peak TxAudioIngest tracked, which is
+        //                   silence (0) when no UDP-1026 audio is arriving.
+        // Either way this is a steady ~10 Hz heartbeat, so a radio source with no
+        // input falls to silence rather than freezing on the last host value.
+        //
         // Convert linear peak (0..1) to dBFS via the shared converter on the
         // contract type. Flooring + clipping happens inside LinearToDbfs.
-        // Timestamp the frame here so a client can detect mic-stream stalls
-        // (e.g. if the OS unplugs the input device, the frame stops
-        // arriving and the operator sees the meter freeze rather than fall
-        // to silence — that's the right behaviour).
-        float peakDbfs = MicPeakFrame.LinearToDbfs(_peakWindow);
+        // Timestamp the frame here so a client can detect mic-stream stalls.
+        float peakLinear = _ingest.ActiveSource == MicBlockSource.Host
+            ? _peakWindow
+            : _ingest.ConsumeRadioPeakLinear();
+        float peakDbfs = MicPeakFrame.LinearToDbfs(peakLinear);
         long tsUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         try
         {

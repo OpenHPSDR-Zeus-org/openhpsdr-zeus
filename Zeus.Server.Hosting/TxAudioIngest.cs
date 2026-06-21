@@ -165,6 +165,16 @@ public sealed class TxAudioIngest : IDisposable
     // arbitration is re-done inside the accumulation lock against this owner.
     private MicBlockSource _accumulatorSource = MicBlockSource.Host;
 
+    // Peak radio-jack input level (linear 0..1) seen on ACCEPTED RadioMic blocks
+    // since the last meter read. Read/written ONLY under _sync. The desktop mic-
+    // meter heartbeat (NativeMicCapture) consumes this at ~10 Hz so the operator-
+    // facing meter shows the ACTUAL radio input when a radio source is armed —
+    // and reads silence (0) when no radio audio is arriving (no mic connected /
+    // no UDP-1026 stream). Without this, the meter would keep showing the host
+    // mic on a radio source (the reported "still listening to host" bug). Reset
+    // to 0 on any source switch so a stale value can't bleed across sources.
+    private float _radioPeakLinear;
+
     /// <summary>
     /// Arm the TX-audio source for the HOST↔RADIO single-select gate
     /// (external-audio-jacks re-port). Called by the pipeline when the resolved
@@ -189,11 +199,32 @@ public sealed class TxAudioIngest : IDisposable
             // Quiesce: drop any partially-accumulated old-source audio so it
             // can't stitch onto the post-switch source mid-WDSP-block.
             _accumulatorFill = 0;
+            // Drop any stale radio-meter peak so the meter doesn't carry a value
+            // across a source switch (e.g. host→radio shows fresh radio level,
+            // radio→host stops surfacing a frozen radio peak).
+            _radioPeakLinear = 0f;
         }
     }
 
     /// <summary>Current armed source for the host/radio gate (test/diagnostic).</summary>
     internal MicBlockSource ActiveSource { get { lock (_sync) return _activeSource; } }
+
+    /// <summary>
+    /// Read and reset the peak radio-jack input level (linear 0..1) seen on
+    /// accepted radio blocks since the last call. The desktop mic-meter heartbeat
+    /// consumes this so the meter reflects the ACTUAL radio input when a radio
+    /// source is armed, and reads silence (0) when no radio audio is arriving.
+    /// Thread-safe.
+    /// </summary>
+    internal float ConsumeRadioPeakLinear()
+    {
+        lock (_sync)
+        {
+            var peak = _radioPeakLinear;
+            _radioPeakLinear = 0f;
+            return peak;
+        }
+    }
 
     /// <summary>
     /// True when a TCI client is the authoritative source of TX audio right now
@@ -510,6 +541,25 @@ public sealed class TxAudioIngest : IDisposable
             if (_accumulatorFill > 0 && _accumulatorSource != source)
                 _accumulatorFill = 0;
             _accumulatorSource = source;
+
+            // Track the radio-jack input peak for the source-aware mic meter.
+            // Only on accepted RadioMic blocks (the gate above guarantees the
+            // radio jack is the armed source) — the host path is untouched. The
+            // desktop meter heartbeat consumes this via ConsumeRadioPeakLinear,
+            // so the meter shows the real radio level and falls to silence when
+            // no radio audio is arriving.
+            if (source == MicBlockSource.RadioMic)
+            {
+                var rspan = f32lePayload.Span;
+                float radioPeak = 0f;
+                for (int i = 0; i < MicBlockSamples; i++)
+                {
+                    float a = BinaryPrimitives.ReadSingleLittleEndian(rspan.Slice(i * 4, 4));
+                    if (a < 0) a = -a;
+                    if (a > radioPeak) radioPeak = a;
+                }
+                if (radioPeak > _radioPeakLinear) _radioPeakLinear = radioPeak;
+            }
 
             // Decode f32le into accumulator. WDSP wants -1..+1 range; browser
             // ships the same convention.
