@@ -115,7 +115,13 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: false, // single-RX: RX2 doesn't exist
         SupportsPathIllustrator: true,
-        MaxPowerWatts: 10);
+        MaxPowerWatts: 10,
+        // Hermes-class boards carry the Alex/filter RX-antenna relays (C3[7:5])
+        // and the full EXT1/EXT2/XVTR/BYPASS aux set — antenna slice (#804). No
+        // TX-antenna relay (P1, ANT1-hardwired on transmit); single RX → no RX2
+        // antenna path.
+        HasRxAntennaRelays: true,
+        RxAuxInputs: RxAuxInputs.All);
 
     // ANAN-10E (HermesII firmware) — same Hermes-class fingerprint but the
     // 10E hardware is rated to ~30 W, so its meter axis gets the bigger top.
@@ -129,7 +135,9 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: false,
         SupportsPathIllustrator: true,
-        MaxPowerWatts: 30);
+        MaxPowerWatts: 30,
+        HasRxAntennaRelays: true,
+        RxAuxInputs: RxAuxInputs.All);
 
     // ANAN-100D — 100 W class. Meter axis 120 W gives some headroom past
     // the rated rail without truncating PEP overshoots.
@@ -143,7 +151,12 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: true,
         SupportsPathIllustrator: true,
-        MaxPowerWatts: 120);
+        MaxPowerWatts: 120,
+        // Dual-ADC DDC board: RX-antenna relays + full aux set + a dedicated RX2
+        // antenna path — antenna slice (#804). P1, so no TX-antenna relay.
+        HasRxAntennaRelays: true,
+        RxAuxInputs: RxAuxInputs.All,
+        HasRx2AntennaPath: true);
 
     // ANAN-200D — 200 W class but axis matches the 100/200/G2 family at
     // 120 W: half-axis at 100 W is the natural reading point.
@@ -157,7 +170,10 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: true,
         SupportsPathIllustrator: true,
-        MaxPowerWatts: 120);
+        MaxPowerWatts: 120,
+        HasRxAntennaRelays: true,
+        RxAuxInputs: RxAuxInputs.All,
+        HasRx2AntennaPath: true);
 
     // 0x0A family conservative baseline (7000DLE / 8000DLE / OrionMkII /
     // ANVELINA-PRO3 / Red Pitaya). Saturn-class facts. 100–200 W typical →
@@ -173,7 +189,15 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: true,
         HasSteppedAttenuationRx2: true,
         SupportsPathIllustrator: false,
-        MaxPowerWatts: 120);
+        MaxPowerWatts: 120,
+        // 0x0A / Saturn family: switchable TX antenna relays (alex0[26:24], P2),
+        // RX-antenna relays, full EXT1/EXT2/XVTR/BYPASS aux set, and an RX2
+        // antenna path — antenna slice (#804). All Saturn variants ('with'
+        // derivations below) inherit these.
+        HasTxAntennaRelays: true,
+        HasRxAntennaRelays: true,
+        RxAuxInputs: RxAuxInputs.All,
+        HasRx2AntennaPath: true);
 
     // ANAN-G2 — local Thetis parity notes pin RX1/RX2 at
     // 48/96/192/384/768/1536 kHz over Protocol 2.
@@ -215,7 +239,12 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: true,
         HasSteppedAttenuationRx2: false, // single-RX: RX2 doesn't exist
         SupportsPathIllustrator: false,
-        MaxPowerWatts: 120);
+        MaxPowerWatts: 120,
+        // ANAN-G2E (HermesC10) runs Protocol 1 with the MkII BPF board: RX-antenna
+        // relays + full aux set, but ANT1-hardwired on transmit (no P2 Alex word)
+        // and single-RX (no RX2 antenna path) — antenna slice (#804).
+        HasRxAntennaRelays: true,
+        RxAuxInputs: RxAuxInputs.All);
 
     // Apache OrionMkII original (Orion-MkII firmware, 100 W) — Saturn-class
     // hardware fingerprint but without on-board telemetry / audio amp per
@@ -231,7 +260,15 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: true,
         SupportsPathIllustrator: false,
-        MaxPowerWatts: 120);
+        MaxPowerWatts: 120,
+        // Apache OrionMkII original is a 0x0A / P2 board: TX + RX antenna relays,
+        // full aux set, RX2 antenna path — antenna slice (#804). Same antenna
+        // semantics as the Saturn baseline; only the telemetry/audio-amp facts
+        // differ.
+        HasTxAntennaRelays: true,
+        HasRxAntennaRelays: true,
+        RxAuxInputs: RxAuxInputs.All,
+        HasRx2AntennaPath: true);
 
     // HermesLite2 — rated 5 W stock but operators routinely run to 10 W with
     // adequate cooling, so the meter axis is 10 W to cover the realistic
@@ -253,5 +290,15 @@ internal static class BoardCapabilitiesTable
         HasSteppedAttenuationRx2: false,
         SupportsPathIllustrator: false,
         MaxPowerWatts: 10,
-        HasHl2OptionalToggles: true);
+        HasHl2OptionalToggles: true,
+        // HL2 has a SINGLE antenna jack forwarding to the N2ADR pad: NO RX
+        // antenna relays, NO TX antenna relays, NO aux inputs — antenna slice
+        // (#804). Explicit (not just defaulted) because the wire-layer clamp in
+        // ControlFrame.EncodeRxAntennaC3Bits depends on this being false: a stale
+        // per-band ANT2/3 (shared band rows are board-agnostic) must collapse to
+        // ANT1 so the N2ADR pad never flips.
+        HasTxAntennaRelays: false,
+        HasRxAntennaRelays: false,
+        RxAuxInputs: RxAuxInputs.None,
+        HasRx2AntennaPath: false);
 }

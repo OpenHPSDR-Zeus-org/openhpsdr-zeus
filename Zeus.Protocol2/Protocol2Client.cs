@@ -224,6 +224,36 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // out as the reserved-bit safe default for non-Anvelina firmware.
     private byte _ocDxTxMask;
     private byte _ocDxRxMask;
+    // TX/RX antenna relay selection (external-ports plan — antenna slice, #804).
+    // 1-based wire selector (1=ANT1, 2=ANT2, 3=ANT3) — same convention as
+    // EncodeTxAntennaBits, so this assembly needs no reference to the
+    // HpsdrAntenna enum (which lives in Zeus.Protocol1; P2 references only
+    // Zeus.Contracts). _txAntenna feeds alex0[26:24]; _rxAntenna is the
+    // state-multiplexed RX-side antenna (carried on alex0 during RX). These are
+    // the *applied* values — the wire reads them. While keyed, an operator
+    // setter stashes into _pending* and is flushed on the next unkey edge so the
+    // Alex relay matrix is never hot-switched under power. The [26:24] emission
+    // is additionally gated on _hasTxAntennaRelays so non-relay boards never
+    // advertise ANT2/3. -1 = nothing pending.
+    private int _txAntenna = 1;
+    private int _rxAntenna = 1;
+    private int _pendingTxAntenna = -1;
+    private int _pendingRxAntenna = -1;
+    private bool _hasTxAntennaRelays;
+    // RX auxiliary input select (external-ports plan — antenna slice, #804).
+    // 0 = base ANT relay (no aux), 1=EXT1, 2=EXT2, 3=XVTR, 4=BYPASS(K36). When
+    // non-zero the alex0 aux bits replace the base RX path. Defaults 0 →
+    // byte-identical to today. The K36/BYPASS pick can NEVER override PS feedback
+    // routing — PS arbitration runs AFTER the operator aux in
+    // SendCmdHighPriority (the PS-K36 firewall). Deferred while keyed alongside
+    // the antennas. -1 = nothing pending.
+    private int _rxAuxInput;
+    private int _pendingRxAuxInput = -1;
+    // Whether the connected board's Alex/BPF board uses the ANAN-7000/Saturn
+    // master RX-select gating (bit 14 must accompany any aux selection). Set
+    // alongside the relay-population gate. MkII-BPF boards (0x0A / G2E) use it;
+    // classic-Alex boards do not.
+    private bool _mkiiBpfRxSelect;
     private bool _moxOn;
     private bool _tuneActive;
     private long _totalFrames;
@@ -786,6 +816,81 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
+    /// <summary>
+    /// Set the per-band TX/RX antenna relays (external-ports plan — antenna
+    /// slice, #804). <paramref name="txAntWire"/> / <paramref name="rxAntWire"/>
+    /// are 1-based wire selectors (1=ANT1, 2=ANT2, 3=ANT3); out-of-range coerces
+    /// to ANT1. <paramref name="hasTxAntennaRelays"/> is the board/variant relay
+    /// gate (from <c>BoardCapabilities.HasTxAntennaRelays</c>) — when false the
+    /// alex0[26:24] TX-antenna bits stay on ANT1 regardless of selection, so a
+    /// non-relay variant never advertises ANT2/3.
+    ///
+    /// SAFETY: the Alex relay matrix must never be hot-switched while keyed.
+    /// When MOX or TUNE is active this defers the new selection into
+    /// <see cref="_pendingTxAntenna"/>/<see cref="_pendingRxAntenna"/> and does
+    /// NOT re-push HighPriority; the deferred value is flushed and emitted on the
+    /// next unkey edge (<see cref="SetMox"/>/<see cref="SetTune"/> off). PS / MOX
+    /// / OC / duplex bytes are untouched here.
+    /// </summary>
+    public void SetAntennas(int txAntWire, int rxAntWire, bool hasTxAntennaRelays)
+        => SetAntennas(txAntWire, rxAntWire, hasTxAntennaRelays, rxAuxInput: 0, mkiiBpfRxSelect: false);
+
+    /// <summary>
+    /// Overload that also sets the RX auxiliary input
+    /// (<paramref name="rxAuxInput"/>: 0=base ANT, 1=EXT1, 2=EXT2, 3=XVTR,
+    /// 4=BYPASS) and the MkII-BPF master RX-select gate. The K36/BYPASS pick is
+    /// emitted on alex0 bit 11, but PureSignal external feedback OWNS that bit
+    /// while PS is armed — the arbitration runs in SendCmdHighPriority AFTER the
+    /// operator aux, so an aux=BYPASS choice can never steal the PS coupler (the
+    /// PS-K36 firewall). Same mid-key deferral as the base antennas.
+    /// </summary>
+    public void SetAntennas(int txAntWire, int rxAntWire, bool hasTxAntennaRelays, int rxAuxInput, bool mkiiBpfRxSelect)
+    {
+        int tx = (txAntWire is 1 or 2 or 3) ? txAntWire : 1;
+        int rx = (rxAntWire is 1 or 2 or 3) ? rxAntWire : 1;
+        int aux = (rxAuxInput is >= 0 and <= 4) ? rxAuxInput : 0;
+        _hasTxAntennaRelays = hasTxAntennaRelays;
+        _mkiiBpfRxSelect = mkiiBpfRxSelect;
+
+        if (_moxOn || _tuneActive)
+        {
+            // Keyed: stash the desired state, leave the live relay bits alone.
+            _pendingTxAntenna = tx;
+            _pendingRxAntenna = rx;
+            _pendingRxAuxInput = aux;
+            return;
+        }
+
+        bool changed = _txAntenna != tx || _rxAntenna != rx || _rxAuxInput != aux;
+        _txAntenna = tx;
+        _rxAntenna = rx;
+        _rxAuxInput = aux;
+        _pendingTxAntenna = -1;
+        _pendingRxAntenna = -1;
+        _pendingRxAuxInput = -1;
+        if (changed && _rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
+    // Apply any antenna selection deferred while keyed. Called on the unkey edge
+    // from SetMox/SetTune AFTER the MOX/TUNE flag clears, so the relay re-push
+    // happens at idle, never under power. Returns true if a re-push is warranted
+    // (the caller's SendCmdHighPriority covers it).
+    private bool FlushPendingAntennas()
+    {
+        if (_pendingTxAntenna < 0 && _pendingRxAntenna < 0 && _pendingRxAuxInput < 0) return false;
+        int tx = _pendingTxAntenna >= 0 ? _pendingTxAntenna : _txAntenna;
+        int rx = _pendingRxAntenna >= 0 ? _pendingRxAntenna : _rxAntenna;
+        int aux = _pendingRxAuxInput >= 0 ? _pendingRxAuxInput : _rxAuxInput;
+        bool changed = _txAntenna != tx || _rxAntenna != rx || _rxAuxInput != aux;
+        _txAntenna = tx;
+        _rxAntenna = rx;
+        _rxAuxInput = aux;
+        _pendingTxAntenna = -1;
+        _pendingRxAntenna = -1;
+        _pendingRxAuxInput = -1;
+        return changed;
+    }
+
     public void SetPaEnabled(bool enabled)
     {
         _paEnabled = enabled;
@@ -796,6 +901,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     {
         _moxOn = on;
         if (!on) ResetTxIq();
+        // Unkey edge: apply any antenna selection deferred while keyed before the
+        // HighPriority re-push, so the relay matrix switches at idle and the very
+        // next HP frame carries the operator's new antenna. Only flush when fully
+        // unkeyed (a TUNE could still be active).
+        if (!on && !_tuneActive) FlushPendingAntennas();
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
@@ -803,6 +913,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     {
         _tuneActive = on;
         if (!on) ResetTxIq();
+        if (!on && !_moxOn) FlushPendingAntennas();
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
@@ -1598,15 +1709,45 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // while keyed, protecting the ADC.
         bool xmit = _moxOn || _tuneActive;
         bool rx2Enabled = Volatile.Read(ref _rx2Enabled) != 0;
-        uint alex0Common = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: 1, board: _boardKind);
-        uint alex0 = alex0Common | (xmit ? ALEX_TX_RELAY : 0u);
+        // TX-antenna relay select (external-ports plan — antenna slice, #804).
+        // Gate the alex0[26:24] emission on the board/variant relay population: a
+        // non-relay variant stays on ANT1 and never advertises ANT2/3. _txAntenna
+        // is the 1-based wire selector and is only ever updated at idle (mid-key
+        // changes defer), so the relay matrix is never hot-switched.
+        int txAntWire = _hasTxAntennaRelays ? _txAntenna : 1;
+        // alex0 ANT1/2/3 bits [26:24] are STATE-MULTIPLEXED (pihpsdr
+        // new_protocol.c:1331-1357): during RX they reflect the RX antenna;
+        // during TX — or when RX is on an aux input (EXT/XVTR/BYPASS), where the
+        // ANT relay isn't used for RX — they reflect the TX antenna. alex1 ALWAYS
+        // reflects TX. Without this, changing the TX antenna also moved the RX
+        // path because alex0 always carried the TX antenna.
+        int alex0AntWire = (xmit || _rxAuxInput != 0)
+            ? txAntWire
+            : ((_rxAntenna is 1 or 2 or 3) ? _rxAntenna : 1);
+        uint alex0Common = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: txAntWire, board: _boardKind);
+        // alex1 keeps the TX antenna from txAntWire; alex0 swaps in the
+        // state-correct antenna (clear [26:24], re-OR via the shared encoder).
+        uint alex0 = (alex0Common & ~ALEX_TX_ANTENNA_MASK) | EncodeTxAntennaBits(alex0AntWire)
+                     | (xmit ? ALEX_TX_RELAY : 0u);
         uint alex1 = ComposeAlex1Word(
             _rxFreqHz,
             _rx2FreqHz,
             rx2Enabled,
             xmit,
             _psFeedbackEnabled,
-            _boardKind);
+            _boardKind,
+            txAntWire);
+        // RX auxiliary input select (external-ports plan — antenna slice, #804).
+        // Emitted on alex0 — XVTR/EXT1/EXT2/BYPASS bits 8..11 (+ Saturn RX_SELECT
+        // bit 14). ORDER IS LOAD-BEARING (the PS-K36 firewall): the operator aux
+        // bits are composed FIRST, then the PureSignal feedback routing below is
+        // applied AFTER and OWNS the K36/BYPASS (bit 11) relay while PS is armed.
+        // An operator aux=BYPASS choice can never steal the PS coupler. Computed
+        // via the shared pure helper so the golden test and the wire agree.
+        alex0 |= ComposeRxAuxBits(_rxAuxInput, _mkiiBpfRxSelect);
+        // ----- PureSignal feedback routing — applied AFTER operator aux. DO NOT
+        //       MOVE OR MODIFY: this block must stay physically last so the PS
+        //       coupler bit always wins over the operator aux (PS-K36 firewall).
         // ALEX_PS_BIT (0x00040000): pihpsdr new_protocol.c:994-998 ORs this
         // into alex0 (during xmit) and alex1 (always-on while PS armed).
         // ComposeAlex1Word owns the alex1 side because it also owns ADC1/RX2
@@ -1659,6 +1800,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private const uint ALEX_TX_ANTENNA_1   = 0x01000000;
     private const uint ALEX_TX_ANTENNA_2   = 0x02000000;
     private const uint ALEX_TX_ANTENNA_3   = 0x04000000;
+    // TX-antenna field [26:24] — cleared before re-OR'ing the state-multiplexed
+    // antenna in SendCmdHighPriority (external-ports plan — antenna slice, #804).
+    private const uint ALEX_TX_ANTENNA_MASK = ALEX_TX_ANTENNA_1 | ALEX_TX_ANTENNA_2 | ALEX_TX_ANTENNA_3;
 
     // Flips the T/R relay on the LPF board so the TX path reaches the antenna
     // through the selected TX LPF instead of through the RX BPF path. OR'd
@@ -1672,6 +1816,15 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // operator picks the external feedback path. Internal coupler leaves
     // this bit clear.
     internal const uint AlexRxAntennaBypass = 0x00000800;
+    // Operator RX-auxiliary input select (external-ports plan — antenna slice,
+    // #804). alex0 bits 8..10 — pihpsdr alex.h: XVTR=bit8, EXT1=bit9, EXT2=bit10
+    // (BYPASS/K36 is bit 11 = AlexRxAntennaBypass above, shared with PS external
+    // feedback). Alex0Anan7000RxSelect (bit 14) is the Saturn/MkII-BPF master
+    // RX-select gate, OR'd alongside any non-base aux on those boards (alex.h).
+    internal const uint AlexRxAntennaXvtr   = 0x00000100;
+    internal const uint AlexRxAntennaExt1   = 0x00000200;
+    internal const uint AlexRxAntennaExt2   = 0x00000400;
+    internal const uint Alex0Anan7000RxSelect = 0x00004000;
     // Alex1-only: grounds the RX input while keyed so the hot TX field doesn't
     // back-feed into the Mercury ADC (pihpsdr alex.h ANAN7000_RX_GNDonTX).
     private const uint ALEX1_ANAN7000_RX_GNDonTX = 0x00000100;
@@ -1700,10 +1853,30 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         bool moxOn,
         bool psEnabled,
         bool psExternal,
-        HpsdrBoardKind board = HpsdrBoardKind.OrionMkII)
+        HpsdrBoardKind board = HpsdrBoardKind.OrionMkII,
+        int txAntWire = 1,
+        bool hasTxAntennaRelays = false,
+        int rxAuxInput = 0,
+        bool mkiiBpfRxSelect = false,
+        int rxAntWire = 1)
     {
-        uint alexCommon = ComputeAlexWord(rxFreqHz, rxFreqHz, txAnt: 1, board: board);
-        uint alex0 = alexCommon | (moxOn ? ALEX_TX_RELAY : 0u);
+        // Mirrors the SendCmdHighPriority alex0 path EXACTLY, in the same order,
+        // so the golden test asserts real behaviour:
+        //   1. base BPF/LPF bits + STATE-MULTIPLEXED ANT1/2/3 (RX ant on RX,
+        //      TX ant on xmit / RX-on-aux) — pihpsdr new_protocol.c:1331-1357
+        //   2. TX_RELAY during xmit
+        //   3. operator RX-aux bits — composed FIRST
+        //   4. PureSignal feedback routing — applied AFTER, owns K36 (firewall)
+        // Default args (rx ant = tx ant = ANT1, no relays/aux) reproduce the
+        // prior word, so the older golden tests stay byte-identical.
+        int wire = hasTxAntennaRelays ? txAntWire : 1;
+        int alex0AntWire = (moxOn || rxAuxInput != 0)
+            ? wire
+            : ((rxAntWire is 1 or 2 or 3) ? rxAntWire : 1);
+        uint alexCommon = ComputeAlexWord(rxFreqHz, rxFreqHz, txAnt: wire, board: board);
+        uint alex0 = (alexCommon & ~ALEX_TX_ANTENNA_MASK) | EncodeTxAntennaBits(alex0AntWire)
+                     | (moxOn ? ALEX_TX_RELAY : 0u);
+        alex0 |= ComposeRxAuxBits(rxAuxInput, mkiiBpfRxSelect);
         if (psEnabled && moxOn) alex0 |= AlexPsBit;
         if (psEnabled && psExternal && moxOn) alex0 |= AlexRxAntennaBypass;
         return alex0;
@@ -1715,11 +1888,33 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         bool rx2Enabled,
         bool moxOn,
         bool psEnabled,
-        HpsdrBoardKind board = HpsdrBoardKind.OrionMkII)
+        HpsdrBoardKind board = HpsdrBoardKind.OrionMkII,
+        int txAntWire = 1)
     {
         uint rx2FilterFreqHz = rx2Enabled ? rx2FreqHz : rxFreqHz;
-        uint alex1 = ComputeAlexWord(rx2FilterFreqHz, rx2FilterFreqHz, txAnt: 1, board: board);
+        // alex1 ALWAYS reflects the TX antenna (external-ports plan — antenna
+        // slice, #804) — it never carries the RX antenna, so the TX-antenna
+        // selector is threaded straight through here.
+        uint alex1 = ComputeAlexWord(rx2FilterFreqHz, rx2FilterFreqHz, txAnt: txAntWire, board: board);
         if (moxOn) alex1 |= ALEX_TX_RELAY | ALEX1_ANAN7000_RX_GNDonTX;
+        if (psEnabled) alex1 |= AlexPsBit;
+        return alex1;
+    }
+
+    /// <summary>
+    /// Compose the alex1 word the way <see cref="SendCmdHighPriority"/> does,
+    /// exposed internal so wire-format tests can assert the alex1 (offset 1428)
+    /// PureSignal / TX-relay / RX-ground bits without standing up a socket.
+    /// Single-RX, ANT1 default — the antenna-slice golden net pins these bits.
+    /// </summary>
+    internal static uint ComposeAlex1ForTest(
+        uint rxFreqHz,
+        bool moxOn,
+        bool psEnabled,
+        HpsdrBoardKind board = HpsdrBoardKind.OrionMkII)
+    {
+        uint alexCommon = ComputeAlexWord(rxFreqHz, rxFreqHz, txAnt: 1, board: board);
+        uint alex1 = alexCommon | (moxOn ? ALEX_TX_RELAY | ALEX1_ANAN7000_RX_GNDonTX : 0u);
         if (psEnabled) alex1 |= AlexPsBit;
         return alex1;
     }
@@ -1735,14 +1930,56 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // ANAN-7000/Saturn BPF board) — confirmed against pihpsdr alex.h
         // and new_protocol.c. Same call for every board.
         word |= LpfBits(txFreqHz);
-        word |= txAnt switch
-        {
-            1 => ALEX_TX_ANTENNA_1,
-            2 => ALEX_TX_ANTENNA_2,
-            3 => ALEX_TX_ANTENNA_3,
-            _ => ALEX_TX_ANTENNA_1,
-        };
+        word |= EncodeTxAntennaBits(txAnt);
         return word;
+    }
+
+    /// <summary>
+    /// Pure encoder for the Protocol-2 alex0/alex1 TX-antenna bits [26:24]
+    /// (external-ports plan — antenna slice, #804). Single source of the
+    /// ANT1/2/3 → bit math, shared by <see cref="ComputeAlexWord"/>,
+    /// <see cref="SendCmdHighPriority"/>'s state-mux re-OR, and the
+    /// external-port encoder seam. Out-of-range → ANT1.
+    /// </summary>
+    internal static uint EncodeTxAntennaBits(int txAnt) => txAnt switch
+    {
+        1 => ALEX_TX_ANTENNA_1,
+        2 => ALEX_TX_ANTENNA_2,
+        3 => ALEX_TX_ANTENNA_3,
+        _ => ALEX_TX_ANTENNA_1,
+    };
+
+    /// <summary>
+    /// Pure encoder for the Protocol-2 alex0 RX-auxiliary-input bits
+    /// (external-ports plan — antenna slice, #804). Single source of the
+    /// aux-relay math, shared by <see cref="SendCmdHighPriority"/> and the
+    /// PS-K36 arbitration golden test.
+    ///
+    /// <paramref name="rxAux"/> selects the aux feed: 0=base ANT (no aux bits),
+    /// 1=EXT1, 2=EXT2, 3=XVTR, 4=BYPASS(K36). On MkII-BPF (Saturn) boards the
+    /// master RX-select bit (bit 14) is OR'd in alongside any non-base aux so the
+    /// jacks are actually gated onto the RX (alex.h); classic-Alex boards leave
+    /// bit 14 clear. Returns 0 for the base ANT path — byte-identical to today's
+    /// alex0 when no aux is selected.
+    ///
+    /// NOTE on the K36 (BYPASS) bit: this helper returns
+    /// <see cref="AlexRxAntennaBypass"/> for an operator BYPASS pick, but the
+    /// caller applies PureSignal feedback routing AFTER this, so PS owns the relay
+    /// while armed (the PS-K36 firewall). This helper never inspects PS state —
+    /// the arbitration is purely "PS OR runs last".
+    /// </summary>
+    internal static uint ComposeRxAuxBits(int rxAux, bool mkiiBpfRxSelect)
+    {
+        uint bits = rxAux switch
+        {
+            1 => AlexRxAntennaExt1,
+            2 => AlexRxAntennaExt2,
+            3 => AlexRxAntennaXvtr,
+            4 => AlexRxAntennaBypass,
+            _ => 0u,
+        };
+        if (bits != 0 && mkiiBpfRxSelect) bits |= Alex0Anan7000RxSelect;
+        return bits;
     }
 
     // RX BPF band splits lifted from pihpsdr new_protocol.c

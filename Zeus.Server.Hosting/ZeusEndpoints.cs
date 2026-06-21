@@ -2212,6 +2212,66 @@ public static class ZeusEndpoints
             return Results.Ok(new Hl2OptionsDto(BandVolts: effective));
         });
 
+        // External antenna ports (external-ports plan — antenna slice, #804).
+        // GET returns the per-band TX/RX antenna + RX-aux selection plus the
+        // board-capability gates the frontend renders the right selectors from.
+        // Antenna state is server-authoritative and NEVER enters StateDto.
+        app.MapGet("/api/radio/antenna", (RadioService radio, AntennaSettingsStore store) =>
+        {
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            var bands = store.GetAll()
+                .Select(b => new AntennaBandDto(b.Band, b.TxAnt.ToString(), b.RxAnt.ToString(), b.RxAux.ToString()))
+                .ToArray();
+            return Results.Ok(new AntennaSettingsDto(
+                HasTxAntennaRelays: caps.HasTxAntennaRelays,
+                HasRxAntennaRelays: caps.HasRxAntennaRelays,
+                Bands: bands,
+                AvailableRxAux: AvailableRxAux(caps.RxAuxInputs)));
+        });
+
+        // PUT one band's antenna selection. Capability-gated: 400 on a malformed
+        // body / unknown band / unparseable antenna; 409 when the request asks
+        // for a relay the connected board does not have (a non-ANT1 TX on a board
+        // without TX relays, a non-ANT1 RX on a board without RX relays, or an
+        // aux the board does not expose). ANT1 / None are always accepted (the
+        // hardwired default on every board). The save fires Changed →
+        // RadioService.RecomputePaAndPush, which pushes server-authoritatively to
+        // the live client (P1 SetAntennaRx / P2 SetAntennas) — never via the
+        // frontend, so no clobber-on-connect. The wire layer defers a mid-key
+        // relay change to the unkey edge; PS owns the K36/BYPASS relay while armed
+        // regardless of an aux=BYPASS pick (PS-K36 firewall).
+        app.MapPut("/api/radio/antenna", (AntennaSetRequest req, RadioService radio, AntennaSettingsStore store) =>
+        {
+            if (req is null || string.IsNullOrWhiteSpace(req.Band))
+                return Results.BadRequest(new { error = "band required" });
+            if (!BandUtils.HfBands.Contains(req.Band))
+                return Results.BadRequest(new { error = $"unknown band '{req.Band}'" });
+            if (!Enum.TryParse<HpsdrAntenna>(req.TxAnt, ignoreCase: true, out var txAnt))
+                return Results.BadRequest(new { error = $"unknown txAnt '{req.TxAnt}'" });
+            if (!Enum.TryParse<HpsdrAntenna>(req.RxAnt, ignoreCase: true, out var rxAnt))
+                return Results.BadRequest(new { error = $"unknown rxAnt '{req.RxAnt}'" });
+            var rxAuxStr = string.IsNullOrWhiteSpace(req.RxAux) ? "None" : req.RxAux;
+            if (!Enum.TryParse<RxAuxInputSel>(rxAuxStr, ignoreCase: true, out var rxAux))
+                return Results.BadRequest(new { error = $"unknown rxAux '{req.RxAux}'" });
+
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            if (txAnt != HpsdrAntenna.Ant1 && !caps.HasTxAntennaRelays)
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no TX antenna relays; only Ant1 is valid" });
+            if (rxAnt != HpsdrAntenna.Ant1 && !caps.HasRxAntennaRelays)
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no RX antenna relays; only Ant1 is valid" });
+            if (rxAux != RxAuxInputSel.None && !RxAuxSupported(rxAux, caps.RxAuxInputs))
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} does not expose RX-aux input {rxAux}" });
+
+            store.SetBand(req.Band, txAnt, rxAnt, rxAux);
+
+            var bands = store.GetAll()
+                .Select(b => new AntennaBandDto(b.Band, b.TxAnt.ToString(), b.RxAnt.ToString(), b.RxAux.ToString()))
+                .ToArray();
+            return Results.Ok(new AntennaSettingsDto(
+                caps.HasTxAntennaRelays, caps.HasRxAntennaRelays, bands,
+                AvailableRxAux(caps.RxAuxInputs)));
+        });
+
         // ANAN-G2 / Saturn-class ADC options. Dither/random write Protocol-2
         // CmdRx bytes 5/6 when the connected/effective board advertises
         // SupportsG2AdcOptions; non-G2 boards still persist the preference but
@@ -2914,6 +2974,29 @@ public static class ZeusEndpoints
         var trimmed = deviceId?.Trim();
         return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
     }
+
+    // The aux-input strings the connected board's Alex / filter board exposes
+    // (external-ports plan — antenna slice, #804). Empty on boards with no aux
+    // inputs (HL2). Names match the RxAuxInputSel single-choice enum the PUT
+    // request parses.
+    static string[] AvailableRxAux(RxAuxInputs caps)
+    {
+        var list = new List<string>(4);
+        if (caps.HasFlag(RxAuxInputs.Ext1))   list.Add(nameof(RxAuxInputSel.Ext1));
+        if (caps.HasFlag(RxAuxInputs.Ext2))   list.Add(nameof(RxAuxInputSel.Ext2));
+        if (caps.HasFlag(RxAuxInputs.Xvtr))   list.Add(nameof(RxAuxInputSel.Xvtr));
+        if (caps.HasFlag(RxAuxInputs.Bypass)) list.Add(nameof(RxAuxInputSel.Bypass));
+        return list.ToArray();
+    }
+
+    static bool RxAuxSupported(RxAuxInputSel sel, RxAuxInputs caps) => sel switch
+    {
+        RxAuxInputSel.Ext1   => caps.HasFlag(RxAuxInputs.Ext1),
+        RxAuxInputSel.Ext2   => caps.HasFlag(RxAuxInputs.Ext2),
+        RxAuxInputSel.Xvtr   => caps.HasFlag(RxAuxInputs.Xvtr),
+        RxAuxInputSel.Bypass => caps.HasFlag(RxAuxInputs.Bypass),
+        _                    => true, // None always allowed
+    };
 
     static bool TryParseIpEndpoint(string raw, out IPEndPoint ep)
     {
