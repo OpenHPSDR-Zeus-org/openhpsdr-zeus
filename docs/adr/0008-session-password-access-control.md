@@ -38,17 +38,22 @@ The broker ([0006](./0006-broker-signaling-turn-callsign.md)) is a third party i
 path, so it must never learn the password. The `Zeus.Server` is the resource being protected and is
 the sole verifier:
 
-- Stored **Argon2id-hashed** in the `Zeus.Server` prefs (LiteDB, cross-platform; never plaintext,
-  never synced to the broker or the domain).
-- The remote client proves knowledge of the password to `Zeus.Server` *after* the WebRTC channel is
-  up, over the **DTLS-encrypted DataChannel** — which the broker and any TURN relay cannot read.
+- **Mechanism: SPAKE2+ (RFC 9383)**, ciphersuite `P256-SHA256-HKDF-SHA256-HMAC-SHA256`. SPAKE2+ is
+  the *augmented* PAKE: at registration the password runs through a memory-hard PBKDF (Argon2id) to
+  `w0, w1`; the `Zeus.Server` prefs store only the **verifier** `w0` and `L = w1·P` — never the
+  password, never `w1`. A stolen prefs DB therefore does not yield the password (the attacker still
+  faces the PBKDF), strictly better than plain SPAKE2 where both sides share the same secret.
+- The client (prover) proves knowledge over the **DTLS-encrypted DataChannel** *after* the WebRTC
+  channel is up — which the broker and any TURN relay cannot read.
 - **Channel-binding against a malicious broker:** a broker that tampers with SDP DTLS fingerprints
-  could in principle MITM the channel. To defend against a compromised broker, use a
-  **PAKE (SPAKE2-style)** so the password authenticates both ends and binds to the channel — the
-  broker cannot impersonate without the password and cannot mount an offline dictionary attack.
-  (Magic Wormhole uses SPAKE2 for exactly this "secret over a brokered channel" problem.) A simpler
-  HMAC-challenge-response over DTLS is acceptable as an interim *only* while we fully trust the
-  broker; PAKE is the target because the broker is third-party infrastructure.
+  could in principle MITM the channel. SPAKE2+ defeats this — the password authenticates both ends
+  and binds the session key, so the broker cannot impersonate without the password and cannot mount
+  an offline dictionary attack. (Same class of protection Magic Wormhole gets from SPAKE2.)
+- **Implementation discipline:** P-256 only (cofactor 1), hardcoded RFC M/N constants, byte-exact
+  transcript (8-byte little-endian length prefixes, uncompressed points), HKDF-SHA256 key schedule,
+  `CryptographicOperations.FixedTimeEquals` for every confirmation-MAC check, and mandatory point
+  validation (reject off-curve / identity) on every received share. Both the C# (BouncyCastle EC)
+  and browser (`@noble/curves`) sides are unit-tested against the **RFC 9383 Appendix C** vectors.
 
 ## Consequences
 
