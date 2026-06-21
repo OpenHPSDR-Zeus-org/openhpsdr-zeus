@@ -261,6 +261,17 @@ public static class ZeusEndpoints
                 message = s.Message,
                 version = s.Version,
                 engineAvailable = installer.EngineInstalled,
+                // Platform affordance flags for the Audio Tools GUI. The
+                // out-of-process JUCE/VSTHost engine is Windows-only by design
+                // (VstEngineInstaller throws "Windows-only" elsewhere), so the
+                // "Download VST Engine" path is only meaningful on Windows. The
+                // native in-process bridges (zeus-vst-bridge for VST3, plus the
+                // macOS-only zeus-au-bridge for Audio Units) are how macOS/Linux
+                // host plugins — no engine download required. These additive
+                // flags let the frontend pick the right affordance per OS.
+                engineSupported = OperatingSystem.IsWindows(),
+                inProcessHostSupported = true,
+                auSupported = OperatingSystem.IsMacOS(),
             };
         }
         app.MapGet("/api/audio-suite/vst-engine/install", (VstEngineInstaller installer) =>
@@ -653,6 +664,65 @@ public static class ZeusEndpoints
                 return Results.BadRequest(new { error = ex.Message });
             }
         });
+
+        // Scan installed Audio Units (macOS) and register each as an installed
+        // Zeus plugin so it flows into the Audio Suite chain in-process — the
+        // AU sibling of scan-vst-directory. Unlike VST3, AUs are resolved from
+        // the OS AudioComponent registry, so there is no directory argument.
+        // The whole flow is a no-op off macOS: AuComponentScanService.ScanAsync
+        // returns an empty result, so these endpoints stay 200/empty on
+        // Windows/Linux (nothing AU-shaped ever runs there). As with VST3
+        // scans, registered AUs are parked into Available — a scan must never
+        // change what is processing audio.
+        static async Task<IResult> ScanAuAsync(
+            string defaultRoute,
+            ScanAuRequest? body,
+            AuComponentScanService scanner,
+            ChainOrderService chainOrder,
+            RxChainOrderService rxChainOrder,
+            CancellationToken ct)
+        {
+            var requested = body?.Route;
+            var route = string.IsNullOrWhiteSpace(requested)
+                || string.Equals(requested, "auto", StringComparison.OrdinalIgnoreCase)
+                ? defaultRoute
+                : requested;
+            try
+            {
+                var result = await scanner.ScanAsync(route, ct);
+                chainOrder.ParkAll(result.Registered
+                    .Where(r => AuComponentScanService.IsTxPluginId(r.Id))
+                    .Select(r => r.Id)
+                    .ToList());
+                rxChainOrder.ParkAll(result.Registered
+                    .Where(r => AuComponentScanService.IsRxPluginId(r.Id))
+                    .Select(r => r.Id)
+                    .ToList());
+                return Results.Ok(new
+                {
+                    supported = OperatingSystem.IsMacOS(),
+                    registered = result.Registered.Select(r => new { id = r.Id, name = r.Name }),
+                    skipped = result.Skipped.Select(r => new { id = r.Id, name = r.Name }),
+                    errors = result.Errors.Select(e => new { source = e.ComponentId, message = e.Message }),
+                });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        }
+        app.MapPost("/api/audio-suite/scan-au",
+            (ScanAuRequest? body, AuComponentScanService scanner,
+             ChainOrderService chainOrder, RxChainOrderService rxChainOrder, CancellationToken ct) =>
+                ScanAuAsync("tx", body, scanner, chainOrder, rxChainOrder, ct));
+        app.MapPost("/api/tx-audio-suite/scan-au",
+            (ScanAuRequest? body, AuComponentScanService scanner,
+             ChainOrderService chainOrder, RxChainOrderService rxChainOrder, CancellationToken ct) =>
+                ScanAuAsync("tx", body, scanner, chainOrder, rxChainOrder, ct));
+        app.MapPost("/api/rx-audio-suite/scan-au",
+            (ScanAuRequest? body, AuComponentScanService scanner,
+             ChainOrderService chainOrder, RxChainOrderService rxChainOrder, CancellationToken ct) =>
+                ScanAuAsync("rx", body, scanner, chainOrder, rxChainOrder, ct));
 
         // Audio Suite chain-level IN/OUT signal meters. Linear peak of
         // the block entering / leaving the TX insert chain, plus dBFS.
@@ -4610,6 +4680,11 @@ internal sealed record PreviewSetRequest(bool Enabled, bool? MeterOnly = null);
 internal sealed record ChainOrderSetRequest(List<string> PluginIds);
 internal sealed record ChainMembershipSetRequest(bool Active);
 internal sealed record ScanVstDirectoryRequest(string Directory, string? Route = null);
+
+// Body for the AU scan endpoints. AUs come from the OS AudioComponent
+// registry, so there is no directory — only an optional route selector
+// ("auto" | "tx" | "rx" | "both"), mirroring the VST3 scan's Route field.
+internal sealed record ScanAuRequest(string? Route = null);
 internal sealed record MasterBypassSetRequest(bool Bypassed);
 internal sealed record ProcessingModeSetRequest(string Mode);
 internal sealed record TxStageDensityDiagnostics(

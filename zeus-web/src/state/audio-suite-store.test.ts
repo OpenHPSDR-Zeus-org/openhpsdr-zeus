@@ -731,3 +731,141 @@ describe('audio-suite-store VST engine install', () => {
     expect(useAudioSuiteStore.getState().vstEngineAvailable).toBe(false);
   });
 });
+
+describe('audio-suite-store platform affordance', () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    resetStoreState();
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+    vi.useRealTimers();
+    resetStoreState();
+    localStorage.clear();
+  });
+
+  it('mirrors the platform flags from the engine-install DTO (macOS shape)', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/tx-audio-suite/vst-engine/install') {
+        return response({
+          phase: 'idle',
+          percent: 0,
+          engineAvailable: false,
+          engineSupported: false,
+          inProcessHostSupported: true,
+          auSupported: true,
+        });
+      }
+      return response({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await useAudioSuiteStore.getState().loadEngineSupportFromServer();
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/tx-audio-suite/vst-engine/install');
+    expect(useAudioSuiteStore.getState().engineSupported).toBe(false);
+    expect(useAudioSuiteStore.getState().inProcessHostSupported).toBe(true);
+    expect(useAudioSuiteStore.getState().auSupported).toBe(true);
+    expect(useAudioSuiteStore.getState().engineSupportLoaded).toBe(true);
+  });
+
+  it('mirrors the platform flags from the engine-install DTO (Windows shape)', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/tx-audio-suite/vst-engine/install') {
+        return response({
+          phase: 'idle',
+          percent: 0,
+          engineSupported: true,
+          inProcessHostSupported: true,
+          auSupported: false,
+        });
+      }
+      return response({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await useAudioSuiteStore.getState().loadEngineSupportFromServer();
+
+    expect(useAudioSuiteStore.getState().engineSupported).toBe(true);
+    expect(useAudioSuiteStore.getState().auSupported).toBe(false);
+  });
+
+  it('defaults to the engine-supported shape before the DTO loads', () => {
+    const state = useAudioSuiteStore.getState();
+    expect(state.engineSupported).toBe(true);
+    expect(state.engineSupportLoaded).toBe(false);
+  });
+
+  it('scans AU components on the TX route and reports support', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/tx-audio-suite/scan-au') {
+        return response({
+          supported: true,
+          registered: [{ id: 'com.openhpsdr.zeus.au.eq', name: 'EQ' }],
+          skipped: [],
+          errors: [],
+        });
+      }
+      if (url === '/api/plugins') return response({ plugins: [] });
+      if (url === '/api/tx-audio-suite/chain/order') return response({ pluginIds: [] });
+      if (url === '/api/rx-audio-suite/chain/order') return response({ pluginIds: [] });
+      if (url === '/api/rx-audio-suite/processing-mode') {
+        return response({ engineAvailable: false, engineActive: false });
+      }
+      return response({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await useAudioSuiteStore.getState().scanAuComponents('tx');
+
+    expect(result.ok).toBe(true);
+    expect(result.supported).toBe(true);
+    expect(result.registered).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith('/api/tx-audio-suite/scan-au', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ route: 'tx' }),
+    });
+  });
+
+  it('routes AU scans to the RX endpoint for the RX path', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/rx-audio-suite/scan-au') {
+        return response({ supported: true, registered: [], skipped: [], errors: [] });
+      }
+      if (url === '/api/plugins') return response({ plugins: [] });
+      if (url === '/api/tx-audio-suite/chain/order') return response({ pluginIds: [] });
+      if (url === '/api/rx-audio-suite/chain/order') return response({ pluginIds: [] });
+      if (url === '/api/rx-audio-suite/processing-mode') {
+        return response({ engineAvailable: false, engineActive: false });
+      }
+      return response({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await useAudioSuiteStore.getState().scanAuComponents('rx');
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/rx-audio-suite/scan-au', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ route: 'rx' }),
+    });
+  });
+
+  it('reports an error result when the AU scan endpoint rejects', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      response({ error: 'boom' }, false),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await useAudioSuiteStore.getState().scanAuComponents('tx');
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('boom');
+  });
+});

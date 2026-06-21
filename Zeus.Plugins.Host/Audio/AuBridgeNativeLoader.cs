@@ -15,18 +15,13 @@ namespace Zeus.Plugins.Host.Audio;
 /// </summary>
 internal static class AuBridgeNativeLoader
 {
-    private static readonly object Gate = new();
-    private static bool _registered;
-
     internal static void EnsureResolverRegistered()
     {
-        if (_registered) return;
-        lock (Gate)
-        {
-            if (_registered) return;
-            NativeLibrary.SetDllImportResolver(typeof(AuBridgeNative).Assembly, Resolve);
-            _registered = true;
-        }
+        // Route through the shared registrar so the AU resolver coexists with
+        // the VST3 resolver — both bridges live in this one assembly, which the
+        // runtime permits only a single SetDllImportResolver for. See
+        // NativeBridgeResolver.
+        NativeBridgeResolver.Register(Resolve);
     }
 
     private static IntPtr Resolve(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)

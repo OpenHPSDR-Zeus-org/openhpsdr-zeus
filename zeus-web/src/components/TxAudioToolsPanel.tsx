@@ -556,6 +556,8 @@ function TxChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) 
   const processingMode = useAudioSuiteStore((s) => s.processingMode);
   const engineAvailable = useAudioSuiteStore((s) => s.vstEngineAvailable);
   const engineActive = useAudioSuiteStore((s) => s.vstEngineActive);
+  const engineSupported = useAudioSuiteStore((s) => s.engineSupported);
+  const engineSupportLoaded = useAudioSuiteStore((s) => s.engineSupportLoaded);
   const chainOrder = useAudioSuiteStore((s) => s.chainOrder);
   const loadMasterBypassFromServer = useAudioSuiteStore(
     (s) => s.loadMasterBypassFromServer,
@@ -615,7 +617,14 @@ function TxChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) 
         <>
           <SuiteButton route="tx" />
           {!vstMode && <DownloadAudioSuiteButton />}
-          {vstMode && <DownloadVstEngineButton />}
+          {/* VST mode: Windows downloads the out-of-process engine; macOS/Linux
+              host plugins in-process (AU/VST3), so the engine-download button —
+              which errors off Windows — is replaced by a Scan/Add affordance.
+              Wait for the platform DTO before committing, so macOS never flashes
+              the (erroring) engine button on the default Windows-shaped state. */}
+          {vstMode &&
+            engineSupportLoaded &&
+            (engineSupported ? <DownloadVstEngineButton /> : <InProcessPluginScanButton route="tx" />)}
         </>
       }
     >
@@ -670,6 +679,9 @@ function RxChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) 
     (s) => s.loadRxProcessingModeFromServer,
   );
 
+  const engineSupported = useAudioSuiteStore((s) => s.engineSupported);
+  const engineSupportLoaded = useAudioSuiteStore((s) => s.engineSupportLoaded);
+
   const slots = useMemo(() => {
     const orderIndex = new Map(rxChainOrder.map((id, i) => [id, i] as const));
     return chainPanels
@@ -711,7 +723,16 @@ function RxChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) 
           muted={!rxVstEngineActive}
         />
       }
-      actions={<SuiteButton route="rx" />}
+      actions={
+        <>
+          {/* RX inserts host in-process. On macOS/Linux there is no engine to
+              download, so surface the same Scan/Add affordance as TX — this is
+              how AU plugins reach the RX path. Windows adds RX VST3s via the
+              suite's "Add VST folder"; AU is macOS-only. */}
+          {engineSupportLoaded && !engineSupported && <InProcessPluginScanButton route="rx" />}
+          <SuiteButton route="rx" />
+        </>
+      }
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         <RxMasterBypassButton />
@@ -853,6 +874,112 @@ function ProcessingModeButton() {
   );
 }
 
+/**
+ * In-process plugin affordance for platforms where the out-of-process VST
+ * engine is unavailable (macOS / Linux). On macOS this scans the OS
+ * AudioComponent registry for AUv2 effects and registers them into the given
+ * route's insert chain in-process; on every platform it surfaces a path to
+ * the suite where VST3 folders can be added (also in-process via the native
+ * VST3 bridge). No engine download — that path errors off Windows.
+ */
+function InProcessPluginScanButton({ route }: { route: AudioRoute }) {
+  const auSupported = useAudioSuiteStore((s) => s.auSupported);
+  const scanAuComponents = useAudioSuiteStore((s) => s.scanAuComponents);
+  const openTx = useAudioSuiteStore((s) => s.openTx);
+  const openRx = useAudioSuiteStore((s) => s.openRx);
+  const [scanning, setScanning] = useState(false);
+  const [notice, setNotice] = useState<{ tone: 'ok' | 'warn' | 'err'; text: string } | null>(
+    null,
+  );
+
+  const openSuite = route === 'tx' ? openTx : openRx;
+
+  const runScan = useCallback(async () => {
+    setScanning(true);
+    setNotice(null);
+    try {
+      const result = await scanAuComponents(route);
+      if (!result.ok) {
+        setNotice({ tone: 'err', text: result.error ?? 'AU scan failed' });
+        return;
+      }
+      if (!result.supported) {
+        setNotice({ tone: 'warn', text: 'Audio Units are macOS-only.' });
+        return;
+      }
+      const added = result.registered.length;
+      const present = result.skipped.length;
+      const failed = result.errors.length;
+      setNotice({
+        tone: failed > 0 ? 'warn' : 'ok',
+        text: `Added ${added}, already present ${present}${failed > 0 ? `, failed ${failed}` : ''}.`,
+      });
+    } finally {
+      setScanning(false);
+    }
+  }, [route, scanAuComponents]);
+
+  const scanLabel = scanning ? 'Scanning…' : auSupported ? 'Scan AU' : 'Scan plugins';
+  const scanTitle = auSupported
+    ? `Scan installed Audio Units and add them to the ${route.toUpperCase()} insert chain (in-process, no engine download)`
+    : `Open the ${route.toUpperCase()} Audio Suite to add VST3 plugin folders (hosted in-process)`;
+
+  const noticeColor =
+    notice?.tone === 'err' ? 'var(--tx)' : notice?.tone === 'warn' ? 'var(--power)' : 'var(--fg-2)';
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <button
+          type="button"
+          onClick={() => (auSupported ? void runScan() : openSuite())}
+          disabled={scanning}
+          style={inProcessScanButtonStyle(scanning)}
+          title={scanTitle}
+        >
+          {scanLabel}
+        </button>
+        {auSupported && (
+          <button
+            type="button"
+            onClick={openSuite}
+            style={inProcessScanButtonStyle(false)}
+            title={`Open the ${route.toUpperCase()} Audio Suite to add VST3 plugin folders (hosted in-process)`}
+          >
+            + VST3
+          </button>
+        )}
+      </div>
+      {notice && (
+        <span
+          role="status"
+          style={{ color: noticeColor, fontSize: 10, fontWeight: 600, letterSpacing: 0 }}
+        >
+          {notice.text}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function inProcessScanButtonStyle(busy: boolean): CSSProperties {
+  return {
+    padding: '4px 12px',
+    borderRadius: 4,
+    border: '1px solid var(--accent)',
+    background: 'var(--bg-2)',
+    color: 'var(--fg-0)',
+    cursor: busy ? 'progress' : 'pointer',
+    opacity: busy ? 0.6 : 1,
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+    fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)',
+    whiteSpace: 'nowrap',
+  };
+}
+
 function SuiteButton({ route }: { route: AudioRoute }) {
   const openTx = useAudioSuiteStore((s) => s.openTx);
   const openRx = useAudioSuiteStore((s) => s.openRx);
@@ -888,6 +1015,9 @@ function SuiteButton({ route }: { route: AudioRoute }) {
 
 export function TxAudioToolsPanel() {
   const allPanels = usePluginPanels();
+  const loadEngineSupportFromServer = useAudioSuiteStore(
+    (s) => s.loadEngineSupportFromServer,
+  );
   const chainPanels = useMemo(
     () => allPanels.filter((p) => p.slot === CHAIN_SLOT),
     [allPanels],
@@ -896,6 +1026,12 @@ export function TxAudioToolsPanel() {
     () => allPanels.filter((p) => p.slot === RX_CHAIN_SLOT),
     [allPanels],
   );
+
+  // Pull the platform affordance flags once on mount so TX/RX render the
+  // right path (Windows engine download vs macOS/Linux in-process scan).
+  useEffect(() => {
+    loadEngineSupportFromServer();
+  }, [loadEngineSupportFromServer]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

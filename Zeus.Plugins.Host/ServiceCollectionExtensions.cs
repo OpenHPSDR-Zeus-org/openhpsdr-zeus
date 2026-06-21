@@ -67,6 +67,17 @@ public static class ServiceCollectionExtensions
             // Waves WaveShell expand into their hosted sub-plugins.
             engine: sp.GetService<Audio.VstEngineController>()));
 
+        // AU component scanner — the macOS-only sibling of the VST3 scanner.
+        // Enumerates installed AUv2 'aufx' effects from the OS AudioComponent
+        // registry (via the native zeus-au-bridge) and registers each as a
+        // generated plugin package, so Audio Units flow into the TX/RX Audio
+        // Suite chains in-process. The service is a no-op off macOS (ScanAsync
+        // returns an empty result), so registering it on every platform is safe.
+        services.AddSingleton(sp => new AuComponentScanService(
+            manager: sp.GetRequiredService<PluginManager>(),
+            pluginRoot: options?.PluginRoot ?? PluginRoot.Get(),
+            log: sp.GetRequiredService<ILogger<AuComponentScanService>>()));
+
         return services;
     }
 }

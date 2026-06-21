@@ -5,18 +5,16 @@ namespace Zeus.Plugins.Host.Audio;
 
 internal static class VstBridgeNativeLoader
 {
-    private static readonly object Gate = new();
-    private static bool _registered;
-
     internal static void EnsureResolverRegistered()
     {
-        if (_registered) return;
-        lock (Gate)
-        {
-            if (_registered) return;
-            NativeLibrary.SetDllImportResolver(typeof(VstBridgeNative).Assembly, Resolve);
-            _registered = true;
-        }
+        // Route through the shared registrar: the runtime allows only ONE
+        // DllImport resolver per assembly, and the macOS AU bridge ships a
+        // second native library in this same assembly. The registrar installs
+        // a single dispatching resolver so VST3 and AU never collide. VST3
+        // resolution is unchanged — Resolve below is the same delegate as
+        // before, just installed via the shared dispatcher instead of a
+        // direct SetDllImportResolver call.
+        NativeBridgeResolver.Register(Resolve);
     }
 
     private static IntPtr Resolve(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
