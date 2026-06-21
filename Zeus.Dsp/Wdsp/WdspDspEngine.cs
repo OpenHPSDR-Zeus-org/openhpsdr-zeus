@@ -293,6 +293,18 @@ public sealed class WdspDspEngine : IDspEngine
         return Math.Clamp(target, InQueueFloorFrames, InQueueCeilFrames);
     }
 
+    /// <summary>
+    /// Feed policy for <see cref="FeedIq"/> when a channel's hand-off queue is
+    /// full. Default (<c>false</c>) is non-blocking <b>drop-oldest</b>: the
+    /// realtime RX sink thread must never block, because a stall cascades into
+    /// kernel UDP drops. Set <c>true</c> only for <b>offline / faster-than-realtime
+    /// bulk feeders</b> (unit tests, file/fixture replay) that push IQ with no
+    /// network pacing and need <b>lossless</b> delivery — it restores the
+    /// self-pacing blocking back-pressure the realtime path deliberately avoids.
+    /// MUST stay <c>false</c> for any live radio.
+    /// </summary>
+    public bool BlockingIqFeed { get; init; }
+
     private readonly ConcurrentDictionary<int, ChannelState> _channels = new();
     private readonly object _nativeSlotLock = new();
     private readonly HashSet<int> _reservedNativeSlots = new();
@@ -676,19 +688,28 @@ public sealed class WdspDspEngine : IDspEngine
                     if (!state.InQueue.IsAddingCompleted)
                     {
                         state.DiagFramesIn++;
-                        // Non-blocking hand-off with drop-OLDEST. FeedIq runs on
-                        // the realtime P1/P2 RX sink thread; a blocking Add would
-                        // stall UDP intake whenever the worker falls behind, and a
-                        // stalled intake lets the kernel socket buffer overflow →
-                        // dropped packets → sequence gaps (the cascading failure
-                        // this guard prevents). Instead, when the queue is full we
-                        // evict the OLDEST queued frame and keep the newest, so
-                        // display/audio latency stays bounded and the glitch is a
-                        // single counted dropped frame rather than a stall. Pairs
-                        // with the rate-scaled capacity (ComputeInQueueCapacity).
                         try
                         {
-                            if (!state.InQueue.TryAdd(frame))
+                            if (BlockingIqFeed)
+                            {
+                                // Lossless back-pressure for offline / faster-than-
+                                // realtime bulk feeders (tests, fixture/file replay):
+                                // block until the worker makes room so no frame is
+                                // dropped. NEVER used on the realtime RX path — see
+                                // BlockingIqFeed.
+                                state.InQueue.Add(frame);
+                            }
+                            // Non-blocking hand-off with drop-OLDEST (default). FeedIq
+                            // runs on the realtime P1/P2 RX sink thread; a blocking Add
+                            // would stall UDP intake whenever the worker falls behind,
+                            // and a stalled intake lets the kernel socket buffer
+                            // overflow → dropped packets → sequence gaps (the cascading
+                            // failure this guard prevents). Instead, when the queue is
+                            // full we evict the OLDEST queued frame and keep the newest,
+                            // so display/audio latency stays bounded and the glitch is a
+                            // single counted dropped frame rather than a stall. Pairs
+                            // with the rate-scaled capacity (ComputeInQueueCapacity).
+                            else if (!state.InQueue.TryAdd(frame))
                             {
                                 state.DiagEnqueueFull++;
                                 if (state.InQueue.TryTake(out var stale))
