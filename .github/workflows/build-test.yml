@@ -59,18 +59,19 @@ jobs:
             arch: arm64
             experimental: true
 
-          # ---- macOS x64 (Intel) coverage (NEW) --------------------------
-          # macos-13 is the last x64 (Intel) hosted image. Apple Silicon is the
-          # default now, so without this leg Intel Macs are silently untested.
-          # Tradeoff: Intel macOS hosted capacity is limited and the image is on
-          # a deprecation track, so this is experimental (informational) rather
-          # than a hard gate — we still want the signal when it is available.
-          # TODO(maintainer): keep an eye on macos-13 availability; if/when it
-          # is retired, drop this leg and note Intel macOS is best-effort.
-          - name: macos-x64
-            os: macos-13
-            arch: x64
-            experimental: true
+          # ---- macOS x64 (Intel) coverage — RETIRED ----------------------
+          # The macos-x64 leg ran on `macos-13`, GitHub's last Intel hosted
+          # image. That pool is on GitHub's deprecation track and its hosted
+          # capacity collapsed: jobs sat `queued` for 1h+ and never picked up a
+          # runner, leaving a perpetual "pending" check on every PR (the leg was
+          # already continue-on-error, so it never gated — only added noise and
+          # burned a queue slot). Per the leg's own retirement note, it is now
+          # dropped. Intel macOS is BEST-EFFORT / untested in CI; macos-arm64
+          # remains the required macOS gate. Note: arch-specific native bits
+          # (Intel dylib + FFTW bundling) are no longer exercised here — see
+          # docs/lessons on macOS FFTW bundling before shipping Intel changes.
+          # build-voyeur-engines.yml shows the migration path (cross-build
+          # x86_64 on macos-14) if a hard Intel gate is wanted again later.
 
     steps:
       - uses: actions/checkout@v4
