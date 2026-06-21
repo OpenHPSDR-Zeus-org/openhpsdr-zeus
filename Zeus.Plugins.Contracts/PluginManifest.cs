@@ -142,6 +142,28 @@ public sealed record PanelContribution
 public sealed record AudioBlock
 {
     /// <summary>
+    /// Native host backend for this audio block. <c>"vst3"</c> (the default)
+    /// loads via the in-process VST3 bridge from <see cref="Vst3Path"/>;
+    /// <c>"au"</c> loads a macOS Audio Unit via the in-process AU bridge
+    /// using <see cref="AuComponentId"/>. Additive and back-compatible:
+    /// existing manifests omit this field and resolve to <c>"vst3"</c>, so
+    /// no on-disk manifest changes shape.
+    /// </summary>
+    [JsonPropertyName("format")]
+    public string Format { get; init; } = "vst3";
+
+    /// <summary>
+    /// Audio Unit identity for <c>format == "au"</c>: a
+    /// <c>type:subtype:manufacturer</c> string of four-char codes
+    /// (e.g. <c>"aufx:lpas:appl"</c> for Apple's AULowpass). This is the AU
+    /// analogue of <see cref="Vst3Path"/>/<see cref="Vst3Uid"/> — an Audio
+    /// Unit is resolved from the OS AudioComponent registry by this triple,
+    /// not from a filesystem path. Null for VST3 plugins.
+    /// </summary>
+    [JsonPropertyName("auComponentId")]
+    public string? AuComponentId { get; init; }
+
+    /// <summary>
     /// Path to a VST3 file — relative to the plugin dir for a copied plugin,
     /// or absolute when the plugin is referenced in place (operator scan).
     /// </summary>

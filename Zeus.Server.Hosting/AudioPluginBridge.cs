@@ -47,6 +47,12 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     private readonly PluginManager _manager;
     private readonly DspPipelineService _pipeline;
     private readonly IVstBridgeNative _vstBridge;
+    // Second native backend for macOS Audio Units (audio.format == "au").
+    // Selected per-manifest in ResolveAudioPlugin; the VST3 backend
+    // (_vstBridge) is untouched. Lazily created so a tests/Win/Linux process
+    // that never loads an AU pays nothing (and on non-macOS the AU dylib is
+    // simply absent → AuBridgeNative degrades to passthrough).
+    private IVstBridgeNative? _auBridge;
     private readonly Func<bool> _isMoxOn;
     private readonly Func<bool> _isMonitorOn;
     private readonly Func<bool> _isTciTxAudioActive;
@@ -178,11 +184,13 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         ILogger<AudioPluginBridge> log,
         Func<bool>? isTciTxAudioActive = null,
         RxVstEngineService? rxVstEngine = null,
-        VstEngineController? vstEngine = null)
+        VstEngineController? vstEngine = null,
+        IVstBridgeNative? auBridge = null)
     {
         _manager = manager;
         _pipeline = pipeline;
         _vstBridge = vstBridge;
+        _auBridge = auBridge;
         _isMoxOn = isMoxOn;
         _isMonitorOn = isMonitorOn;
         _isTciTxAudioActive = isTciTxAudioActive ?? (() => false);
@@ -1193,16 +1201,25 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         if (p.Loaded.Plugin is IAudioPlugin direct) return direct;
 
         var audio = p.Loaded.Manifest.Audio;
-        if (audio is { Vst3Path: { Length: > 0 } })
-        {
-            return new VstHostAudioPlugin(
-                bridge: _vstBridge,
-                manifestAudio: audio,
-                pluginRootPath: p.Loaded.PluginDir,
-                displayName: p.Loaded.Manifest.Name,
-                log: _log);
-        }
-        return null;
+        if (audio is null) return null;
+
+        // Format selects the native backend. "au" → macOS Audio Unit bridge
+        // keyed by auComponentId; anything else (default "vst3") → the VST3
+        // bridge keyed by vst3Path. The VST3 path is unchanged; AU is purely
+        // additive (3-way dispatch).
+        bool isAu = string.Equals(audio.Format, "au", StringComparison.OrdinalIgnoreCase);
+        bool hasIdentity = isAu
+            ? audio.AuComponentId is { Length: > 0 }
+            : audio.Vst3Path is { Length: > 0 };
+        if (!hasIdentity) return null;
+
+        var bridge = isAu ? (_auBridge ??= new AuBridgeNative()) : _vstBridge;
+        return new VstHostAudioPlugin(
+            bridge: bridge,
+            manifestAudio: audio,
+            pluginRootPath: p.Loaded.PluginDir,
+            displayName: p.Loaded.Manifest.Name,
+            log: _log);
     }
 
     private int FindFreeSlot()
