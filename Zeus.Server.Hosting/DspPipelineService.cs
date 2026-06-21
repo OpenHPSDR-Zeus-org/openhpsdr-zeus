@@ -4745,7 +4745,21 @@ public class DspPipelineService : BackgroundService,
         int audioSampleCount = engine.ReadAudio(channel, audioBuf);
         int rx2AudioSampleCount = 0;
         if (state.Rx2Enabled && rx2Channel >= 0)
-            rx2AudioSampleCount = engine.ReadAudio(rx2Channel, _rx2AudioBuf);
+        {
+            // RX1 is the audio clock-master when both receivers are mixed: read
+            // at most rx1Count samples from RX2 so the mixed stream is fed at
+            // exactly the RX sample rate. Draining RX2's ring fully and mixing
+            // max(rx1,rx2) over-feeds the sink — the two channels' per-tick
+            // counts jitter independently, so E[max] exceeds the true rate
+            // (~5% measured on a G2), saturating the output ring → overrun →
+            // dual-RX clicking (#787). The unread RX2 remainder stays buffered
+            // for the next tick, so no RX2 audio is dropped. RX2-only mode still
+            // drains RX2 fully (RX2 is the master there).
+            Span<float> rx2Span = state.Rx2AudioMode == Rx2AudioMode.Both
+                ? _rx2AudioBuf.AsSpan(0, Math.Min(audioSampleCount, _rx2AudioBuf.Length))
+                : _rx2AudioBuf.AsSpan();
+            rx2AudioSampleCount = engine.ReadAudio(rx2Channel, rx2Span);
+        }
         audioSampleCount = SelectRxAudio(
             state.Rx2AudioMode,
             audioBuf,
