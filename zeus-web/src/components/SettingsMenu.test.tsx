@@ -195,16 +195,56 @@ describe('SettingsView — RADIO tab gating', () => {
     seedRadioCaps({ hasHl2OptionalToggles: false });
   });
 
-  it('hides the RADIO tab when no board radio options are supported', async () => {
+  it('shows the RADIO tab with radio settings even when no board firmware options are supported', async () => {
+    // The RADIO tab is now always present — it hosts the universal radio
+    // settings (PTT-IN / TX audio / antenna). With no board firmware-option
+    // surface it shows those settings only; the per-board options section is
+    // omitted.
+    stubSettingsFetch({
+      '/api/radio/ptt-status': { keyed: false, enabled: false, hangMs: 250 },
+      '/api/radio/audio': {
+        hasOnboardCodec: false,
+        hermesLite2MicFrontEnd: false,
+        hasRadioLineIn: false,
+        hasBalancedXlr: false,
+        hasMicBias: false,
+        source: 'Host',
+        micBoost: false,
+        micBias: false,
+        lineInGain: 0,
+      },
+      '/api/radio/antenna': {
+        hasTxAntennaRelays: false,
+        hasRxAntennaRelays: false,
+        availableRxAux: [],
+        bands: [],
+      },
+    });
     seedRadioCaps({ hasHl2OptionalToggles: false, supportsG2AdcOptions: false });
     await act(async () => {
       root.render(<SettingsView onClose={() => {}} />);
       await flushEffects();
     });
-    const tabs = Array.from(
-      container.querySelectorAll('[role="tablist"] button'),
-    ).map((b) => b.textContent?.trim() ?? '');
-    expect(tabs).not.toContain('RADIO');
+    const tabButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="tablist"] button'),
+    );
+    expect(tabButtons.map((b) => b.textContent?.trim() ?? '')).toContain('RADIO');
+    // The old standalone RADIO SETTINGS tab is gone — folded into RADIO.
+    expect(tabButtons.map((b) => b.textContent?.trim() ?? '')).not.toContain(
+      'RADIO SETTINGS',
+    );
+
+    const radioTab = tabButtons.find((b) => b.textContent?.trim() === 'RADIO');
+    expect(radioTab).toBeDefined();
+    await act(async () => {
+      radioTab!.click();
+      await flushEffects();
+    });
+    // Universal radio settings render (PTT-IN card from RadioSettingsPanel)…
+    expect(container.textContent).toContain('PTT-IN');
+    // …but no per-board firmware-option section.
+    expect(container.textContent).not.toContain('Band Volts');
+    expect(container.textContent).not.toContain('ANAN-G2 Options');
   });
 
   it('shows the RADIO tab and renders the panel on click when hasHl2OptionalToggles is true', async () => {
