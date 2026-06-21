@@ -87,6 +87,7 @@ import './styles/pa-settings.css';
 import './styles/analog-meter.css';
 import './styles/rotator-dial.css';
 import App from './App.tsx';
+import { AppErrorBoundary } from './layout/AppErrorBoundary';
 import { installFetchInterceptor } from './serverUrl';
 import { loadInstalledPluginUis } from './plugins/runtime/pluginRuntime';
 
@@ -147,6 +148,8 @@ if (!rootEl) throw new Error('root element missing');
 
 createRoot(rootEl).render(
   <StrictMode>
-    <App />
+    <AppErrorBoundary>
+      <App />
+    </AppErrorBoundary>
   </StrictMode>,
 );
