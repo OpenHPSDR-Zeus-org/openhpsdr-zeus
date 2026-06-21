@@ -1,0 +1,45 @@
+name = "zeus-remote-broker"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# Branded custom domain (Cloudflare auto-creates the DNS record on deploy).
+# Requires the openhpsdrzeus.com zone on this Cloudflare account.
+# remote.openhpsdrzeus.com is the canonical broker endpoint.
+routes = [
+  { pattern = "remote.openhpsdrzeus.com", custom_domain = true },
+]
+
+workers_dev = true
+
+[vars]
+# Host (radio) registration is QRZ-gated by default; client signaling is open
+# (the radio's session password is the real gate). For local `wrangler dev`:
+#   wrangler dev --var QRZ_VERIFY:off
+QRZ_VERIFY = "on"
+# Where /go/<callsign> sends the browser (the web client on Cloudflare Pages).
+WEB_APP_ORIGIN = "https://openhpsdrzeus.com"
+
+# Per-callsign WebRTC signaling room (WebSocket Hibernation).
+[[durable_objects.bindings]]
+name = "SIGNAL_ROOM"
+class_name = "SignalRoom"
+
+# Per-IP connection rate limiter.
+[[durable_objects.bindings]]
+name = "RATE_DO"
+class_name = "RateLimiter"
+
+# SQLite-backed DO namespaces (free-plan compatible).
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SignalRoom"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["RateLimiter"]
+
+# TURN credentials are minted from Cloudflare Realtime. Provide the key out of
+# band so it stays out of source control:
+#   wrangler secret put TURN_KEY_ID
+#   wrangler secret put TURN_API_TOKEN
+# If unset, /turn returns 503 and clients fall back to STUN-only (direct P2P).

@@ -1,0 +1,100 @@
+<!doctype html>
+<!--
+  Phase-0 WebRTC spike harness (docs/designs/remote-access-webrtc.md).
+  Dev-only: proves the real browser <-> Zeus.Server WebRTC DataChannel path and
+  measures round-trip latency. Requires the backend started with ZEUS_RTC_SPIKE=1
+  (the /api/rtc/spike/offer endpoint is inert otherwise). Open at /rtc-spike.html.
+  This file is NOT the production remote client; it is throwaway de-risking.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Zeus WebRTC spike</title>
+  <style>
+    body { font: 14px ui-monospace, monospace; background: #657486; color: #eef; padding: 24px; }
+    button { font: inherit; padding: 6px 14px; cursor: pointer; }
+    #log { white-space: pre-wrap; margin-top: 16px; background: #0003; padding: 12px; border-radius: 6px; }
+    .ok { color: #7CFC9B; } .err { color: #ff8a7a; } .rtt { color: #ffc93a; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h2>Zeus WebRTC DataChannel spike</h2>
+  <button id="go">Connect &amp; echo-test</button>
+  <div id="log"></div>
+  <script type="module">
+    const logEl = document.getElementById('log');
+    const log = (msg, cls = '') => {
+      const line = document.createElement('div');
+      if (cls) line.className = cls;
+      line.textContent = msg;
+      logEl.appendChild(line);
+    };
+
+    async function run() {
+      logEl.textContent = '';
+      const pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }],
+      });
+      pc.onconnectionstatechange = () => log(`conn: ${pc.connectionState}`);
+
+      // Unreliable + unordered = the production IQ/display channel profile.
+      const dc = pc.createDataChannel('spike', { ordered: false, maxRetransmits: 0 });
+
+      const opened = new Promise((res) => (dc.onopen = res));
+      let pending = null;
+      dc.onmessage = (e) => pending && pending(e.data);
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await iceComplete(pc);
+      log('offer gathered, posting to broker-less spike endpoint…');
+
+      let answerSdp;
+      try {
+        const resp = await fetch('/api/rtc/spike/offer', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sdp: pc.localDescription.sdp }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status} — is ZEUS_RTC_SPIKE=1 set?`);
+        answerSdp = (await resp.json()).sdp;
+      } catch (err) {
+        log(`offer POST failed: ${err.message}`, 'err');
+        pc.close();
+        return;
+      }
+
+      await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+      await opened;
+      log('datachannel open ✓', 'ok');
+
+      // 50-sample echo RTT distribution (binary payloads).
+      const payload = new TextEncoder().encode('zeus-webrtc-spike');
+      const samples = [];
+      for (let i = 0; i < 50; i++) {
+        const t0 = performance.now();
+        const got = await new Promise((res) => { pending = res; dc.send(payload); });
+        samples.push(performance.now() - t0);
+        if (got.byteLength !== payload.byteLength) { log('echo mismatch!', 'err'); break; }
+      }
+      samples.sort((a, b) => a - b);
+      const p = (q) => samples[Math.floor(q * samples.length)].toFixed(2);
+      log(`echo RTT  min ${samples[0].toFixed(2)}ms  median ${p(0.5)}ms  p95 ${p(0.95)}ms`, 'rtt');
+      log('spike OK — DataChannel path verified end to end.', 'ok');
+      pc.close();
+    }
+
+    function iceComplete(pc) {
+      return new Promise((res) => {
+        if (pc.iceGatheringState === 'complete') return res();
+        const t = setTimeout(res, 750); // vanilla-ICE cap; host candidates suffice on LAN
+        pc.onicegatheringstatechange = () => {
+          if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); }
+        };
+      });
+    }
+
+    document.getElementById('go').onclick = () => run().catch((e) => log(String(e), 'err'));
+  </script>
+</body>
+</html>
