@@ -78,7 +78,9 @@ public sealed class StreamingHub
     private const int MaxInboundMessageBytes = 16 * 1024;
 
     private readonly ILogger<StreamingHub> _log;
-    private readonly ConcurrentDictionary<Guid, ClientSession> _clients = new();
+    // Keyed by Guid; values are IClientSink so a remote-access WebRTC sink can
+    // ride the same fan-out as WebSocket ClientSessions (see AttachSink).
+    private readonly ConcurrentDictionary<Guid, IClientSink> _clients = new();
     // Latest WDSP wisdom phase + status string. Set by Program.cs wiring on
     // phase- and status-changed events; read on every AttachClientAsync so
     // late joiners see the current state without waiting for the next
@@ -356,6 +358,34 @@ public sealed class StreamingHub
             _log.LogInformation("ws.client.disconnected id={Id} total={Count}", id, _clients.Count);
         }
     }
+
+    /// <summary>
+    /// Register a non-WebSocket frame sink (a remote-access WebRTC session) so it
+    /// receives the same broadcast fan-out as <c>/ws</c> clients. The caller
+    /// (RemoteWebRtcSession) only attaches AFTER the SPAKE2+ password unlocks
+    /// (ADR-0008), and the sink's send is gated again, so nothing leaks early.
+    /// </summary>
+    internal void AttachSink(Guid id, IClientSink sink) => _clients[id] = sink;
+
+    /// <summary>
+    /// Bump the global display-stream gate by <paramref name="delta"/> (+1/−1).
+    /// A non-WebSocket sink (the remote WebRTC session) holds no ClientSession,
+    /// so it adjusts the aggregate directly here — mirroring how
+    /// <c>ClientSession.SetWantsDisplay</c> moves the same counter — to open the
+    /// panadapter frame fan-out (Broadcast(in DisplayFrame) gates on this).
+    /// </summary>
+    internal void AdjustDisplayRequests(int delta) => Interlocked.Add(ref _displayStreamRequests, delta);
+
+    /// <summary>
+    /// Bump the global audio-stream gate by <paramref name="delta"/> (+1/−1) for
+    /// a non-WebSocket sink (remote WebRTC session), mirroring
+    /// <c>ClientSession.SetWantsAudio</c>. Drives the desktop-mode on-demand
+    /// 0x02 RX-audio stream the same way a /ws client's 0x21 does.
+    /// </summary>
+    internal void AdjustAudioRequests(int delta) => Interlocked.Add(ref _audioStreamRequests, delta);
+
+    /// <summary>Remove a previously-attached remote sink.</summary>
+    internal void DetachSink(Guid id) => _clients.TryRemove(id, out _);
 
     internal void DispatchInbound(ReadOnlyMemory<byte> frame)
     {
@@ -681,6 +711,19 @@ public sealed class StreamingHub
         }
     }
 
+    public void Broadcast(in PttStatusFrame frame)
+    {
+        if (_clients.IsEmpty) return;
+
+        var payload = new byte[PttStatusFrame.ByteLength];
+        var writer = new FixedBufferWriter(payload, PttStatusFrame.ByteLength);
+        frame.Serialize(writer);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
+    }
+
     public void Broadcast(in AudioChainOrderFrame frame)
     {
         if (_clients.IsEmpty) return;
@@ -813,7 +856,7 @@ public sealed class StreamingHub
         }
     }
 
-    private sealed class ClientSession
+    private sealed class ClientSession : IClientSink
     {
         public Guid Id { get; }
         private readonly WebSocket _ws;

@@ -45,6 +45,11 @@ public sealed class ChatService : BackgroundService
     private static readonly TimeSpan ReconnectMinDelay = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan ReconnectMaxDelay = TimeSpan.FromSeconds(30);
 
+    // How long a panel-visible heartbeat keeps the operator "showing the panel"
+    // before it lapses. The web client re-pings every ~15s; this leaves room for
+    // a couple of misses before we drop presence (e.g. the browser was closed).
+    private static readonly TimeSpan PanelActiveTimeout = TimeSpan.FromSeconds(45);
+
     private readonly QrzService _qrz;
     private readonly RadioService _radio;
     private readonly StreamingHub _hub;
@@ -86,6 +91,11 @@ public sealed class ChatService : BackgroundService
     // throttle. Written by event handlers, drained by the worker.
     private readonly PresenceThrottle _presence = new(PresenceThrottleWindow);
     private volatile bool _moxOn;
+
+    // UTC ticks of the last "Chat panel is displayed" heartbeat from the web
+    // client; 0 means the panel is not shown. Presence is gated on this so an
+    // enabled operator who has the panel closed never appears on the roster.
+    private long _panelHeartbeatTicks;
 
     // The live socket, set while connected so SendMessageAsync (API path) can
     // post a {t:"msg"} frame. Null when disconnected.
@@ -138,6 +148,34 @@ public sealed class ChatService : BackgroundService
         }
         Wake();
         return GetStatus();
+    }
+
+    /// <summary>
+    /// Records a heartbeat from the web client reporting whether the operator
+    /// currently has the Chat panel displayed, and wakes the worker so it can
+    /// connect (panel shown) or drop presence (panel hidden). Presence is gated
+    /// on this in addition to the enabled opt-in — see <see cref="PanelActive"/>.
+    /// </summary>
+    public ChatStatusDto ReportPanelVisible(bool visible)
+    {
+        Interlocked.Exchange(ref _panelHeartbeatTicks, visible ? DateTimeOffset.UtcNow.UtcTicks : 0L);
+        Wake();
+        return GetStatus();
+    }
+
+    /// <summary>
+    /// True while a recent panel-visible heartbeat is in force. Lapses
+    /// <see cref="PanelActiveTimeout"/> after the last heartbeat so a closed
+    /// browser (which can't send the explicit <c>false</c>) still drops off.
+    /// </summary>
+    private bool PanelActive
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref _panelHeartbeatTicks);
+            if (ticks == 0L) return false;
+            return DateTimeOffset.UtcNow - new DateTimeOffset(ticks, TimeSpan.Zero) < PanelActiveTimeout;
+        }
     }
 
     public IReadOnlyList<ChatMessage> GetMessages(int limit) => _messages.Snapshot(limit);
@@ -292,7 +330,10 @@ public sealed class ChatService : BackgroundService
         var backoff = ReconnectMinDelay;
         while (!stoppingToken.IsCancellationRequested)
         {
-            if (!_store.GetEnabled())
+            // Connect only while the operator both opted in AND is showing the
+            // Chat panel. Idling here (no socket) keeps them off everyone's
+            // roster. A heartbeat or enable toggle wakes the loop to re-evaluate.
+            if (!_store.GetEnabled() || !PanelActive)
             {
                 await WaitForWakeAsync(Timeout.InfiniteTimeSpan, stoppingToken);
                 continue;
@@ -432,6 +473,12 @@ public sealed class ChatService : BackgroundService
             // Short wait so pending presence changes flush near the throttle
             // boundary without a busy loop.
             await WaitForWakeAsync(TimeSpan.FromSeconds(1), ct);
+
+            // If the operator disabled chat or stopped showing the panel (the
+            // visible heartbeat lapsed, or the browser closed), tear the link
+            // down so the relay drops them from everyone's roster.
+            if (!_store.GetEnabled() || !PanelActive)
+                return;
 
             var now = DateTimeOffset.UtcNow;
             if (_presence.TryTake(now, out var p))

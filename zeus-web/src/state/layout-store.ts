@@ -23,6 +23,9 @@ import {
   newTileUid,
   parseWorkspaceLayout,
   placeTileInGrid,
+  placeTileInPage,
+  WORKSPACE_GRID_COLS,
+  WORKSPACE_TARGET_ROWS,
   type WorkspaceLayout,
   type WorkspaceTile,
 } from '../layout/workspace';
@@ -75,6 +78,15 @@ interface LayoutState {
   workspace: WorkspaceLayout;
   /** True after loadFromServer() has run (success or 404 / network error). */
   isLoaded: boolean;
+  // Live page size (in grid cells) of the visible PRIMARY workspace, reported
+  // by FlexWorkspace as the window resizes. Used by addTile to decide when a new
+  // panel no longer fits the current page and must spill onto a fresh workspace
+  // (pagination). Defaults to the authored design fold until the first report.
+  viewportCols: number;
+  viewportRows: number;
+  /** Report the visible primary-workspace page size (grid cells). No-op when
+   *  unchanged so it can be called freely from a resize effect. */
+  setViewportPage: (cols: number, rows: number) => void;
   // Add-Panel modal visibility — lifted into the store so the trigger
   // button can live wherever (LeftLayoutBar, FlexWorkspace) while the modal
   // itself still renders inside the workspace.
@@ -226,12 +238,34 @@ function findActive(layouts: NamedLayout[], id: string): NamedLayout | undefined
   return layouts.find((l) => l.id === id);
 }
 
+/** Name for a spillover page derived from the page it overflowed from. Strips a
+ *  trailing number off the base name ("Default 2" → "Default") and picks the
+ *  lowest free "Base N" (N ≥ 2), so pages read Default → Default 2 → Default 3. */
+function nextPageName(
+  layouts: NamedLayout[],
+  from: NamedLayout | undefined,
+): string {
+  const base = (from?.name ?? 'Workspace').replace(/\s+\d+$/, '').trim() || 'Workspace';
+  const taken = new Set(layouts.map((l) => l.name));
+  let n = 2;
+  while (taken.has(`${base} ${n}`)) n += 1;
+  return `${base} ${n}`;
+}
+
 export const useLayoutStore = create<LayoutState>((set, get) => ({
   radioKey: '',
   layouts: [],
   activeLayoutId: DEFAULT_LAYOUT_ID,
   workspace: DEFAULT_WORKSPACE_LAYOUT,
   isLoaded: false,
+  viewportCols: WORKSPACE_GRID_COLS,
+  viewportRows: WORKSPACE_TARGET_ROWS,
+  setViewportPage: (cols, rows) => {
+    const c = Math.max(1, Math.floor(cols));
+    const r = Math.max(1, Math.floor(rows));
+    if (get().viewportCols === c && get().viewportRows === r) return;
+    set({ viewportCols: c, viewportRows: r });
+  },
   addPanelOpen: false,
   setAddPanelOpen: (open) => set({ addPanelOpen: open }),
 
@@ -421,12 +455,38 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   },
 
   addTileToLayout: (layoutId, panelId, opts) => {
-    const target = findActive(get().layouts, layoutId);
-    if (!target && layoutId !== get().activeLayoutId) return null;
-    const workspace = layoutId === get().activeLayoutId
-      ? get().workspace
+    const state = get();
+    const target = findActive(state.layouts, layoutId);
+    const isActive = layoutId === state.activeLayoutId;
+    if (!target && !isActive) return null;
+    const workspace = isActive
+      ? state.workspace
       : parseLayoutOrDefault(target!.layoutJson);
-    const placement = placeTileInGrid(panelId, workspace.tiles);
+
+    // Pagination — only for the visible (active) workspace. The workspace never
+    // scrolls, so a panel that would land below/right of the page must spill
+    // onto a fresh workspace tab rather than off-screen. placeTileInPage returns
+    // null when nothing fits the current page; in that case mint the next page,
+    // switch to it, and add there (the new page is empty, so it fits).
+    let placement: { x: number; y: number; w: number; h: number };
+    if (isActive) {
+      const fit = placeTileInPage(
+        panelId,
+        workspace.tiles,
+        state.viewportCols,
+        state.viewportRows,
+      );
+      if (fit === null) {
+        const newId = state.addLayout(
+          nextPageName(state.layouts, target),
+          target?.icon ? { icon: target.icon } : undefined,
+        );
+        return get().addTileToLayout(newId, panelId, opts);
+      }
+      placement = fit;
+    } else {
+      placement = placeTileInGrid(panelId, workspace.tiles);
+    }
     const uid = newTileUid();
     const tile: WorkspaceTile = {
       uid,

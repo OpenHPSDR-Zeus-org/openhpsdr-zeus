@@ -166,6 +166,7 @@ export function FlexWorkspace({
         workspaceLocked={workspaceLocked}
         isLoaded={isLoaded}
         layoutId={targetLayoutId}
+        isPrimary={!layoutId}
         onLayoutChange={onLayoutChange}
         onRequestRemoveTile={(uid, title) => setPendingRemoveTile({ uid, title })}
         onToggleTileLock={(uid, locked, lockedHeightPx) =>
@@ -219,6 +220,9 @@ interface WorkspaceCanvasProps {
   workspaceLocked: boolean;
   isLoaded: boolean;
   layoutId: string;
+  /** True for the main dock workspace (not a detached window). Only the primary
+   *  reports its page size to the store, which drives add-panel pagination. */
+  isPrimary: boolean;
   onLayoutChange: (next: Layout) => void;
   onRequestRemoveTile: (uid: string, title: string) => void;
   onToggleTileLock: (
@@ -233,6 +237,7 @@ function WorkspaceCanvas({
   workspaceLocked,
   isLoaded,
   layoutId,
+  isPrimary,
   onLayoutChange,
   onRequestRemoveTile,
   onToggleTileLock,
@@ -251,6 +256,20 @@ function WorkspaceCanvas({
   const draggingRef = useRef(false);
   const skipPostDropLayoutChangeRef = useRef(false);
   const dragStartRef = useRef<WorkspaceDragStartSnapshot | null>(null);
+  // Live viewport height of the (scrolling) workspace, in pixels. Only used to
+  // report how many rows are currently visible to the add-panel pagination flow
+  // (setViewportPage below); the fixed-cell geometry itself never depends on it.
+  const [containerHeight, setContainerHeight] = useState(0);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    setContainerHeight(el.getBoundingClientRect().height);
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) setContainerHeight(e.contentRect.height);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [containerRef]);
 
   // Fixed-cell workspace. A column and a row are a CONSTANT pixel size, so a
   // panel never rescales when the window is resized — the core of the "hardware
@@ -333,6 +352,23 @@ function WorkspaceCanvas({
   // With constant cells the render geometry equals the stored geometry, so
   // persistence is a straight passthrough to the store (no reconcile pass).
   const persist = onLayoutChange;
+
+  // Report this workspace's live page size (in grid cells) to the store so the
+  // add-panel flow knows when a panel no longer fits the visible page and must
+  // spill onto a new workspace tab. Only the primary (docked) workspace reports;
+  // detached windows do not drive pagination. The page height is the LIVE
+  // viewport height (the workspace scrolls): a new panel is auto-placed within
+  // the rows currently visible, while manually expanding a panel past the fold
+  // just scrolls instead of squashing or paginating.
+  const setViewportPage = useLayoutStore((s) => s.setViewportPage);
+  useEffect(() => {
+    if (!isPrimary || !(rowHeight > 0) || !(containerHeight > 0)) return;
+    const visibleRows = Math.max(
+      1,
+      Math.floor((containerHeight + rowMargin) / (rowHeight + rowMargin)),
+    );
+    setViewportPage(cols, visibleRows);
+  }, [isPrimary, cols, containerHeight, rowHeight, rowMargin, setViewportPage]);
 
   // Locking just pins the tile (static). With a constant cell size there is no
   // pixel height to capture — the tile keeps its size automatically.

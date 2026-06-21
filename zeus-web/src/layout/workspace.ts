@@ -169,6 +169,41 @@ export function placeTileInGrid(
   return { x: 0, y: bottom, w, h };
 }
 
+/** Find a home for a new tile WITHIN a fixed page (pageCols × pageRows), the
+ *  visible workspace area. Same first-fit scan as placeTileInGrid but bounded:
+ *  returns null when the tile's footprint does not fit in any free slot inside
+ *  the page. The caller (layout-store) uses null as the signal to paginate —
+ *  spill the panel onto a fresh workspace — instead of appending it below the
+ *  fold where it would be clipped (the workspace never scrolls). A tile taller
+ *  or wider than a whole page can never fit one, so it is placed at the origin
+ *  rather than triggering an endless paginate. */
+export function placeTileInPage(
+  panelId: string,
+  others: WorkspaceTile[],
+  pageCols: number,
+  pageRows: number,
+): { x: number; y: number; w: number; h: number } | null {
+  const span = defaultSpanFor(panelId);
+  const cols = Math.max(1, Math.floor(pageCols));
+  const rows = Math.max(1, Math.floor(pageRows));
+  const w = Math.min(span.w, cols);
+  const h = span.h;
+  // Larger than a whole page in either axis — no page can hold it, so don't
+  // paginate forever; place it at the origin of the current page.
+  if (h > rows || span.w > cols) return { x: 0, y: 0, w, h };
+  const maxX = cols - w;
+  const maxY = rows - h;
+  for (let y = 0; y <= maxY; y += 1) {
+    for (let x = 0; x <= maxX; x += 1) {
+      const candidate = { x, y, w, h };
+      if (!others.some((t) => tilesOverlap(candidate, t))) {
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
+
 function tilesOverlap(
   a: { x: number; y: number; w: number; h: number },
   b: { x: number; y: number; w: number; h: number },

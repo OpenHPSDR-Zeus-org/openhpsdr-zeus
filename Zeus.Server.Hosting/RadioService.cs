@@ -57,16 +57,32 @@ public sealed class RadioService : IDisposable
 {
     private const int DefaultHpsdrPort = 1024;
     internal const double DefaultAgcTopDb = 80.0;
+    // Operator AGC-T baseline range. Below ~30 dB the RX audio is effectively
+    // muted and above ~80 dB it is the loudest the AGC will drive; the old
+    // -20..120 span (mirroring the raw Thetis slider) exposed a large dead
+    // region the operator never used. The slider is linear across this window.
+    // NOTE: this bounds only the manual baseline (AgcTopDb). Auto-AGC's offset
+    // (AgcOffsetDb) and the effective value it pushes to WDSP are NOT bounded
+    // by this — see AgcMinEffectiveAgcT / AgcMaxEffectiveAgcT.
+    internal const double MinAgcTopDb = 30.0;
+    internal const double MaxAgcTopDb = 80.0;
 
     private readonly object _sync = new();
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<RadioService> _log;
     private readonly DspSettingsStore _dspSettingsStore;
     private readonly PaSettingsStore _paStore;
+    // Per-band external-antenna selection (external-ports plan — antenna slice,
+    // #804). Optional so existing constructions (tests) stay valid; null → the
+    // antenna path resolves to ANT1/ANT1/None (byte-identical to today).
+    private readonly AntennaSettingsStore? _antennaStore;
     private readonly PreferredRadioStore? _preferredRadioStore;
     private readonly PsSettingsStore? _psStore;
     private readonly FilterPresetStore? _filterPresetStore;
     private readonly RadioStateStore? _radioStateStore;
+    // Global (per-radio, NOT per-band) TX-audio source selection. Pushed via
+    // PushAudioFrontEnd on store edit + connect (external-audio-jacks re-port).
+    private readonly AudioSettingsStore? _audioStore;
     // Cached PS board key for the currently-connected radio. Set by
     // ApplyPsHwPeakForConnection (P1 or P2 connect path) and read by
     // PersistPsState to route HW Peak writes to the correct per-board slot.
@@ -193,6 +209,16 @@ public sealed class RadioService : IDisposable
     private readonly double[] _noiseFloorWindow = new double[AgcNoiseFloorWindowSamples];
     private int _noiseFloorWindowIdx;
     private int _noiseFloorWindowFill;
+    // Which source is currently filling the floor window (0 none / 1 spectrum /
+    // 2 S-meter fallback) and the last time a real spectrum floor arrived
+    // (Environment.TickCount64 ms). Together these (a) keep the two differently-
+    // calibrated sources from being mixed in one percentile window, and (b) make
+    // the loop fall back to the S-meter ONLY after the spectrum has been absent
+    // long enough to be a true outage, not a single dropped frame — without this,
+    // a sustained stale-spectrum period under steady RX would freeze tracking.
+    private int _autoAgcWindowSource;
+    private long _lastSpectrumFloorMs = long.MinValue;
+    private const long AgcSpectrumStaleMs = 1500;  // 3 ticks; > normal frame gaps
 
     // 100 ms between 1-dB steps. Events arrive at ~1.2 kHz (192 kSps), so
     // without throttling the offset would saturate at 31 dB in ~30 ms. At 10 Hz
@@ -246,23 +272,43 @@ public sealed class RadioService : IDisposable
     /// fresh-engine connect to re-apply notches the new WDSP channel lost.</summary>
     public IReadOnlyList<NotchDto> Notches { get { lock (_sync) return _notches.ToArray(); } }
 
+    /// <summary>Fires whenever the global audio front-end state changes (store
+    /// edit or connect). The wire bytes are RESOLVED (board-clamped + source-
+    /// encoded) by PushAudioFrontEnd; this event lets DspPipelineService forward
+    /// the same state into a live Protocol2Client (TxSpecific bytes 50/51) and
+    /// route the radio-mic STREAM gate. Audio is decoupled from PureSignal /
+    /// antenna / K36 — it never touches the alex word or PS bit.</summary>
+    public event Action<AudioFrontEndPush>? AudioFrontEndChanged;
+
     // Shared TX IQ source threaded through Protocol1Client. TxAudioIngest
     // writes into the same instance; this is the seam between "mic arrived
     // over WS" and "EP2 packet got real IQ". When null the client falls back
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
         _dspSettingsStore = dspSettingsStore;
         _paStore = paStore;
+        _antennaStore = antennaStore;
         _preferredRadioStore = preferredRadioStore;
         _psStore = psStore;
         _filterPresetStore = filterPresetStore;
         _radioStateStore = radioStateStore;
+        _audioStore = audioStore;
         _paStore.Changed += RecomputePaAndPush;
+        // An antenna edit re-pushes the active band's selection server-
+        // authoritatively through the same RecomputePaAndPush fan-out (P1
+        // SetAntennaRx directly / P2 via PaSnapshotChanged → SetAntennas).
+        if (_antennaStore is not null)
+            _antennaStore.Changed += RecomputePaAndPush;
+        // Audio front-end is global per-radio (not per-band), so it has its own
+        // store + push rather than riding the PA snapshot. A store edit re-pushes
+        // the resolved wire bytes + StateDto (PR #359/#360 anti-clobber pattern).
+        if (_audioStore is not null)
+            _audioStore.Changed += PushAudioFrontEnd;
         if (_preferredRadioStore is not null)
             _preferredRadioStore.Changed += RecomputePaAndPush;
         _txIqSource = txIqSource;
@@ -401,8 +447,10 @@ public sealed class RadioService : IDisposable
             // headroom to normalize weak post-demod audio immediately after a
             // fresh start. Operator overrides persist via
             // DspSettingsStore.SetAgcTopDb so deliberate lower AGC-T settings
-            // still stick across restarts.
-            AgcTopDb: _dspSettingsStore.GetAgcTopDb() ?? DefaultAgcTopDb,
+            // still stick across restarts. Clamp the rehydrated value into the
+            // operator range so a legacy out-of-range persisted baseline (from
+            // the old -20..120 slider) can't park the thumb off the rail.
+            AgcTopDb: Math.Clamp(_dspSettingsStore.GetAgcTopDb() ?? DefaultAgcTopDb, MinAgcTopDb, MaxAgcTopDb),
             Agc: persistedAgc,
             Squelch: persistedSquelch,
             TxLeveling: persistedTxLeveling,
@@ -817,6 +865,12 @@ public sealed class RadioService : IDisposable
             // at the protocol defaults (drive=0, OC=0) until something else
             // moves.
             RecomputePaAndPush();
+            // Replay the global audio front-end (external-audio-jacks re-port)
+            // so the operator's source/boost/bias/gain selection is on the first
+            // outgoing frame, not deferred until they touch the panel. Per-board
+            // clamp + the OFF defaults make this a no-op (byte-identical) on
+            // boards without an audio front-end.
+            PushAudioFrontEnd();
             return Snapshot();
         }
         catch
@@ -1574,6 +1628,10 @@ public sealed class RadioService : IDisposable
         Mutate(s =>
         {
             _preampOn = on;
+            // Fast-attack (#806): a preamp/LNA change steps the noise floor, so
+            // drop the auto-AGC floor window to re-seed on the new level (Thetis
+            // display.cs:893-906). No-op when Auto-AGC is off. Mutate holds _sync.
+            ResetAutoAgcNoiseFloorWindow();
             return s with { PreampOn = on };
         });
         // P1 path: Protocol1Client owns the bit; SetPreamp pushes the
@@ -1598,6 +1656,12 @@ public sealed class RadioService : IDisposable
         {
             effective = Math.Clamp(_atten.ClampedDb + _attOffsetDb, HpsdrAtten.MinDb, HpsdrAtten.MaxDb);
             _lastAppliedEffectiveDb = effective;
+            // Fast-attack (#806): an operator attenuator step shifts the noise
+            // floor by that many dB, so re-seed the auto-AGC floor window. (The
+            // gradual auto-ATT ramp pushes effective attenuation through
+            // ActiveClient directly, NOT this setter, so it does not re-seed and
+            // the floor follows it smoothly.)
+            ResetAutoAgcNoiseFloorWindow();
         }
         ActiveClient?.SetAttenuator(new HpsdrAtten(effective));
         return Snapshot();
@@ -1763,16 +1827,14 @@ public sealed class RadioService : IDisposable
                 // to the user's baseline immediately.
                 _agcOffsetDb = 0.0;
                 _lastAgcTickMs = long.MinValue;
-                _noiseFloorWindowFill = 0;
-                _noiseFloorWindowIdx = 0;
+                ResetAutoAgcNoiseFloorWindow();
                 _state = _state with { AgcOffsetDb = 0.0 };
             }
             else
             {
                 // Turning auto on: reset timer + window so we recalibrate.
                 _lastAgcTickMs = long.MinValue;
-                _noiseFloorWindowFill = 0;
-                _noiseFloorWindowIdx = 0;
+                ResetAutoAgcNoiseFloorWindow();
             }
         }
         var snap = Snapshot();
@@ -1785,6 +1847,20 @@ public sealed class RadioService : IDisposable
         return snap;
     }
 
+    // Drops the auto-AGC noise-floor window so the next samples re-seed the floor
+    // estimate from scratch. This is Thetis's "fast-attack": a band change,
+    // attenuator step, preamp/LNA toggle, power-on, or a TX pause all invalidate
+    // the old floor (Thetis display.cs:893-919). Also clears the window-source tag
+    // so the next seed re-establishes which source is live. (_lastSpectrumFloorMs
+    // is intentionally NOT cleared — it is a rolling availability timestamp.)
+    // Caller MUST hold _sync.
+    private void ResetAutoAgcNoiseFloorWindow()
+    {
+        _noiseFloorWindowFill = 0;
+        _noiseFloorWindowIdx = 0;
+        _autoAgcWindowSource = 0;
+    }
+
     /// <summary>
     /// Auto-AGC control loop. Estimates the band noise floor from a sliding
     /// window of S-meter samples and chooses an absolute effective AGC-T that
@@ -1794,9 +1870,21 @@ public sealed class RadioService : IDisposable
     /// slider baseline. Slew-limited so adjustments are inaudibly gradual.
     /// </summary>
     internal void HandleRxMeterForAutoAgc(double signalDbm, long nowMs) =>
-        HandleRxMetersForAutoAgc(signalDbm, double.NaN, double.NaN, nowMs);
+        HandleRxMetersForAutoAgc(signalDbm, double.NaN, double.NaN, double.NaN, nowMs);
 
-    internal void HandleRxMetersForAutoAgc(double signalDbm, double adcPkDbfs, double agcGainDb, long nowMs)
+    // Back-compat overload (no spectrum floor): callers/tests that only have the
+    // S-meter delegate here. spectrumFloorDbm = NaN makes the loop fall back to
+    // signalDbm exactly as before.
+    internal void HandleRxMetersForAutoAgc(double signalDbm, double adcPkDbfs, double agcGainDb, long nowMs) =>
+        HandleRxMetersForAutoAgc(signalDbm, double.NaN, adcPkDbfs, agcGainDb, nowMs);
+
+    // Primary overload (issue #806). spectrumFloorDbm is a real per-band noise
+    // floor measured from the panadapter FFT — the same physical quantity Thetis
+    // tracks. When finite it REPLACES signalDbm as the floor source. signalDbm,
+    // which in this integration is the post-AGC audio-RMS fallback (it moves with
+    // the signal, not the floor), is kept only as the degraded fallback for when
+    // no fresh spectrum is available (stale analyzer frame / near-dead span).
+    internal void HandleRxMetersForAutoAgc(double signalDbm, double spectrumFloorDbm, double adcPkDbfs, double agcGainDb, long nowMs)
     {
         bool changedOffset = false;
         double newOffset = 0.0;
@@ -1806,19 +1894,19 @@ public sealed class RadioService : IDisposable
         {
             if (!_state.AutoAgcEnabled) return;
             if (_mox) return;   // Pause during TX
+            bool hasSpectrumFloor = double.IsFinite(spectrumFloorDbm) && spectrumFloorDbm > -250.0;
             bool hasSignalMeter = double.IsFinite(signalDbm) && signalDbm > -250.0;
             bool hasAgcGain = double.IsFinite(agcGainDb) && agcGainDb > -199.5;
             bool hasAdcPeak = double.IsFinite(adcPkDbfs) && adcPkDbfs > -199.5;
             bool adcUnderPressure = hasAdcPeak && adcPkDbfs > AgcAdcPressureThresholdDbfs;
-            if (!hasSignalMeter && !hasAgcGain) return;
+            if (!hasSpectrumFloor && !hasSignalMeter && !hasAgcGain) return;
 
             // If we paused for longer than the analysis window (TX,
             // just-toggled-on, RX dropout) the
             // window may hold stale samples — clear before re-accumulating.
             if (_lastAgcTickMs != long.MinValue && nowMs - _lastAgcTickMs > AgcNoiseFloorWindowSamples * 500)
             {
-                _noiseFloorWindowFill = 0;
-                _noiseFloorWindowIdx = 0;
+                ResetAutoAgcNoiseFloorWindow();
             }
 
             // Fast-attack: a band-scale VFO move makes the old band's samples
@@ -1828,8 +1916,7 @@ public sealed class RadioService : IDisposable
             if (_lastAutoAgcVfoHz != long.MinValue &&
                 Math.Abs(_state.VfoHz - _lastAutoAgcVfoHz) > AgcFastAttackVfoDeltaHz)
             {
-                _noiseFloorWindowFill = 0;
-                _noiseFloorWindowIdx = 0;
+                ResetAutoAgcNoiseFloorWindow();
             }
             _lastAutoAgcVfoHz = _state.VfoHz;
 
@@ -1837,9 +1924,30 @@ public sealed class RadioService : IDisposable
                 return;
             _lastAgcTickMs = nowMs;
 
-            if (hasSignalMeter)
+            // Choose the floor source for this tick. A real spectrum floor (#806)
+            // always wins. A BRIEF spectrum dropout (< AgcSpectrumStaleMs) is
+            // treated as transient — hold the window rather than inject the
+            // S-meter proxy, which sits on a different scale and moves with the
+            // signal. Only a SUSTAINED outage (stale frame / <64 valid bins for
+            // longer than that, e.g. an engine that genuinely never produces a
+            // spectrum) falls back to signalDbm, so the loop keeps tracking
+            // instead of freezing. The two sources are never mixed in one
+            // percentile window: switching source re-seeds the window.
+            if (hasSpectrumFloor) _lastSpectrumFloorMs = nowMs;
+            bool spectrumRecent = _lastSpectrumFloorMs != long.MinValue &&
+                                  nowMs - _lastSpectrumFloorMs < AgcSpectrumStaleMs;
+            int floorSource;        // 0 hold, 1 spectrum, 2 S-meter fallback
+            double floorSample;
+            if (hasSpectrumFloor) { floorSource = 1; floorSample = spectrumFloorDbm; }
+            else if (spectrumRecent) { floorSource = 0; floorSample = 0.0; }   // transient: hold
+            else if (hasSignalMeter) { floorSource = 2; floorSample = signalDbm; }
+            else { floorSource = 0; floorSample = 0.0; }
+            if (floorSource != 0)
             {
-                _noiseFloorWindow[_noiseFloorWindowIdx] = signalDbm;
+                if (_autoAgcWindowSource != 0 && _autoAgcWindowSource != floorSource)
+                    ResetAutoAgcNoiseFloorWindow();
+                _autoAgcWindowSource = floorSource;
+                _noiseFloorWindow[_noiseFloorWindowIdx] = floorSample;
                 _noiseFloorWindowIdx = (_noiseFloorWindowIdx + 1) % _noiseFloorWindow.Length;
                 if (_noiseFloorWindowFill < _noiseFloorWindow.Length) _noiseFloorWindowFill++;
             }
@@ -1871,14 +1979,28 @@ public sealed class RadioService : IDisposable
                 const double TargetAudioDb = -40.0;     // desired audio-output noise level
                 double targetEffective = Math.Clamp(
                     TargetAudioDb - noiseFloor, AgcMinEffectiveAgcT, AgcMaxEffectiveAgcT);
-                // Preserve weak/quiet-band behavior: noise-floor tracking can
-                // add live gain, but it does not lower the user's baseline.
-                // Normal WDSP AGC reduction is the loudness normalizer; only
-                // ADC pressure below is allowed to pull AGC-T down.
-                desiredOffset = Math.Max(0.0, targetEffective - _state.AgcTopDb);
+                // SYMMETRIC noise-floor tracking (Thetis parity, #806). Effective
+                // AGC-T follows the floor in BOTH directions: a quiet band raises
+                // gain, a noisy band lowers it. The old Math.Max(0, …) clamp let
+                // the loop only ADD gain above the slider baseline, so with the
+                // default 80 dB baseline the offset stayed pinned at 0 on any
+                // normal band (floor > −120 dBm) — the operator "barely heard a
+                // change". The [20,100] clamp on targetEffective above is the
+                // safety rail (Thetis's threshold clamp equivalent); ADC-pressure
+                // protection below can still pull further. Manual AGC-T is
+                // untouched: SetAgcTop zeroes the offset and disables auto, so
+                // this line never runs in manual mode.
+                desiredOffset = targetEffective - _state.AgcTopDb;
             }
             else if (_agcOffsetDb < 0.0 && (!hasAgcGain || agcGainDb >= AgcCutStressThresholdDb || !adcUnderPressure))
             {
+                // Warm-up release: the window isn't ready yet (just re-seeded / too
+                // few samples) but a leftover negative offset from an earlier
+                // ADC-pressure cut is still applied. If the stress has cleared,
+                // release it to 0 until the noise-floor path can take over once the
+                // window fills. (With symmetric tracking, a steady-state negative
+                // offset is normal and is owned by the windowReady branch above —
+                // this branch only governs the not-ready transient.)
                 desiredOffset = 0.0;
             }
 
@@ -2046,6 +2168,115 @@ public sealed class RadioService : IDisposable
     // fresh connection sees the current PA snapshot without waiting for the
     // next state change.
     public void ReplayPaSnapshot() => RecomputePaAndPush();
+
+    // Global audio front-end push (external-audio-jacks re-port). Server-
+    // authoritative: read AudioSettingsStore, clamp per-board, push to the P1
+    // client directly and fire AudioFrontEndChanged for the P2 forwarder + the
+    // radio-mic STREAM gate. Called on store edit and on connect (P1 + P2).
+    // Mirrors the PA RecomputePaAndPush discipline but for the GLOBAL (not
+    // per-band) audio state. Defaults (Host, no boost/bias, gain 0) reproduce
+    // today's wire output bit-for-bit on every board.
+    private void PushAudioFrontEnd()
+    {
+        var sel = _audioStore?.Get() ?? AudioSourceSelection.Default;
+        var board = EffectiveBoardKind;
+        var variant = EffectiveOrionMkIIVariant;
+        var caps = BoardCapabilitiesTable.For(board, variant);
+
+        // CLAMP the persisted source against the connected board's capabilities
+        // (external-audio-jacks re-port, safety invariant 5). Any source the
+        // board can't honour falls back to Host so the wire is never handed a
+        // jack the hardware lacks:
+        //   - HL2 (no onboard codec) is Host-only — any radio source → Host.
+        //   - RadioLineIn requires HasRadioLineIn (10E + 100D/200D + 0x0A).
+        //   - RadioBalancedXlr requires HasBalancedXlr (G2 / G2-1K only).
+        //   - RadioMic requires the stream codec.
+        // The mic-bias param is additionally suppressed on boards without
+        // HasMicBias, so a stale bias bit can never reach a non-bias board.
+        var resolved = ClampAudioSource(sel, caps);
+
+        // Encode the wire bytes as PURE FUNCTIONS of the resolved source. Host →
+        // literal zero on every surface, byte-identical to today; no param
+        // fallthrough.
+        var encoder = ExternalPortEncoders.For(board, variant);
+        var portState = new ExternalPortState(
+            Source: resolved.Source,
+            MicBoost: resolved.MicBoost,
+            MicBias: resolved.MicBias,
+            LineInGain: resolved.LineInGain);
+
+        // P1 codec boards (Hermes-class): mic_boost / mic_linein on the 0x12
+        // frame. HL2 is Host-only in v1 — the encoder returns all-clear, and
+        // ControlFrame's read-modify-write keeps the PS bit + C4 PGA intact.
+        // mic_trs / mic_bias / line_in_gain (HL2 0x14) stay clear in v1 (the HL2
+        // mic front-end is inert plumbing), so the host pipeline is unchanged.
+        var (p1Boost, p1LineIn) = encoder.EncodeP1CodecAudioBits(in portState);
+        ActiveClient?.SetAudioFrontEnd(
+            micBoost: p1Boost,
+            micLineIn: p1LineIn,
+            micTrs: false,
+            micBias: false,
+            lineInGain: 0);
+
+        // P2 (0x0A Saturn family): forward the resolved literal byte-50
+        // mic_control + byte-51 line_in_gain to the live Protocol2Client via
+        // DspPipelineService. The forwarder does no source interpretation. The
+        // same event drives the radio-mic STREAM (1026) single-select gate.
+        byte micControl = encoder.EncodeP2MicControlByte(in portState);
+        byte lineInGain = encoder.EncodeP2LineInGainByte(in portState);
+        AudioFrontEndChanged?.Invoke(new AudioFrontEndPush(
+            Source: resolved.Source,
+            MicControlByte: micControl,
+            LineInGain: lineInGain));
+
+        // Mirror the RESOLVED source into StateDto so the frontend hydrates from
+        // the server and never clobbers it on connect (PR #359/#360 pattern).
+        Mutate(s => s.TxAudioSource == resolved.Source ? s : s with { TxAudioSource = resolved.Source });
+    }
+
+    /// <summary>
+    /// Clamp a persisted <see cref="AudioSourceSelection"/> against a board's
+    /// capabilities (external-audio-jacks re-port). Returns Host (with no params)
+    /// whenever the board cannot honour the requested jack, and drops the
+    /// mic-bias param on boards without <c>HasMicBias</c>. Pure — no side
+    /// effects — so the endpoint and the push share one definition.
+    /// </summary>
+    internal static AudioSourceSelection ClampAudioSource(AudioSourceSelection sel, BoardCapabilities caps)
+    {
+        // A board with neither the stream codec nor the HL2 mic front-end has no
+        // audio jacks at all → Host.
+        bool audioCapable = caps.HasOnboardCodec || caps.HermesLite2MicFrontEnd;
+        if (!audioCapable) return AudioSourceSelection.Default;
+
+        switch (sel.Source)
+        {
+            case TxAudioSource.RadioMic:
+                // RadioMic needs the stream codec (HL2's mic front-end is inert
+                // plumbing in v1). Drop bias on non-bias boards.
+                if (!caps.HasOnboardCodec) return AudioSourceSelection.Default;
+                return sel with { MicBias = sel.MicBias && caps.HasMicBias };
+
+            case TxAudioSource.RadioLineIn:
+                if (!caps.HasOnboardCodec || !caps.HasRadioLineIn)
+                    return AudioSourceSelection.Default;
+                // Line-in carries gain, not mic params.
+                return new AudioSourceSelection(TxAudioSource.RadioLineIn, MicBoost: false, MicBias: false, LineInGain: sel.LineInGain);
+
+            case TxAudioSource.RadioBalancedXlr:
+                if (!caps.HasOnboardCodec || !caps.HasBalancedXlr)
+                    return AudioSourceSelection.Default;
+                return sel with { MicBias = sel.MicBias && caps.HasMicBias, LineInGain = 0 };
+
+            case TxAudioSource.Host:
+            default:
+                return AudioSourceSelection.Default;
+        }
+    }
+
+    // DspPipelineService calls this right after a P2 client is created so the
+    // fresh connection picks up the persisted audio front-end without waiting
+    // for a store edit. Public so the P2-connect hook can drive it.
+    public void ReplayAudioFrontEnd() => PushAudioFrontEnd();
 
     /// <summary>
     /// HL2 Band Volts PWM enable (issue #279). Updates the persisted
@@ -2227,6 +2458,24 @@ public sealed class RadioService : IDisposable
         ActiveClient?.SetDriveByte(driveByte);
         ActiveClient?.SetOcMasks(bandCfg.OcTx, bandCfg.OcRx);
 
+        // ---- External-antenna resolution (antenna slice — #804) ----
+        // Server-authoritative: resolve the active band's persisted TX/RX
+        // antenna + RX-aux, gate the aux against the connected board's
+        // capability set (HL2's None collapses any stale value), and push.
+        // P1 RX-antenna goes straight to the active client; P2 (TX antenna +
+        // RX-aux state-mux) rides the PaRuntimeSnapshot into
+        // DspPipelineService.SetAntennas. The wire layer clamps HL2 RX to ANT1
+        // and defers any mid-key relay change to the unkey edge; PS owns the
+        // K36/BYPASS relay while armed regardless of an aux=BYPASS pick.
+        var caps = BoardCapabilitiesTable.For(ConnectedBoardKind, EffectiveOrionMkIIVariant);
+        var antSel = (_antennaStore is not null && bandName is not null)
+            ? _antennaStore.GetBand(bandName)
+            : new AntennaBandSelection(bandName ?? "unknown", HpsdrAntenna.Ant1, HpsdrAntenna.Ant1, RxAuxInputSel.None);
+        int rxAuxWire = GateRxAux(antSel.RxAux, caps.RxAuxInputs);
+        // P1: RX-antenna relay (C3[7:5], HL2-clamped at the wire). ActiveClient
+        // is null on P2 — the P2 RX-antenna rides the SetAntennas path below.
+        ActiveClient?.SetAntennaRx(antSel.RxAnt);
+
         PaSnapshotChanged?.Invoke(new PaRuntimeSnapshot(
             DriveByte: driveByte,
             OcTxMask: bandCfg.OcTx,
@@ -2238,8 +2487,31 @@ public sealed class RadioService : IDisposable
             // gated by board+variant, so non-Anvelina radios receive a
             // SetOcDxMasks call but the bytes never reach the wire.
             OcDxTxMask: bandCfg.OcDxTx,
-            OcDxRxMask: bandCfg.OcDxRx));
+            OcDxRxMask: bandCfg.OcDxRx,
+            // External antenna (#804). HasTxAntennaRelays gates the alex0[26:24]
+            // emission on the P2 client; RxAuxInput/MkiiBpfRxSelect drive the
+            // operator RX-aux ORs (composed strictly before the PS coupler).
+            TxAntenna: antSel.TxAnt,
+            RxAntenna: antSel.RxAnt,
+            HasTxAntennaRelays: caps.HasTxAntennaRelays,
+            RxAuxInput: rxAuxWire,
+            MkiiBpfRxSelect: caps.MkiiBpf));
     }
+
+    // Gate a persisted per-band RX-aux pick against the connected board's
+    // capability set (antenna slice — #804). Band rows are board-agnostic (no
+    // board column), so a stale aux persisted on an ANAN must collapse to None
+    // (base ANT relay) on a board that does not expose it — notably HL2, whose
+    // RxAuxInputs is None. Returns the 1-based wire selector the P2 client uses
+    // (0=None .. 4=BYPASS); the RxAuxInputSel byte already maps 1:1.
+    private static int GateRxAux(RxAuxInputSel sel, RxAuxInputs available) => sel switch
+    {
+        RxAuxInputSel.Ext1   => available.HasFlag(RxAuxInputs.Ext1)   ? (int)sel : 0,
+        RxAuxInputSel.Ext2   => available.HasFlag(RxAuxInputs.Ext2)   ? (int)sel : 0,
+        RxAuxInputSel.Xvtr   => available.HasFlag(RxAuxInputs.Xvtr)   ? (int)sel : 0,
+        RxAuxInputSel.Bypass => available.HasFlag(RxAuxInputs.Bypass) ? (int)sel : 0,
+        _                    => 0,
+    };
 
     // Back-compat shim for callers/tests that predate IRadioDriveProfile.
     // Runtime RecomputePaAndPush no longer goes through here — it uses the
@@ -2249,12 +2521,16 @@ public sealed class RadioService : IDisposable
     internal static byte ComputeDriveByte(int drivePct, double paGainDb, int maxWatts)
         => DriveByteMath.ComputeFullByte(drivePct, paGainDb, maxWatts);
 
-    // Thetis "AGC Top" slider — max post-AGC gain in dB. Clamped to the
-    // Thetis UI range (−20..120). DspPipelineService picks this up through the
-    // StateChanged event and forwards it to the active engine.
+    // "AGC Top" slider — max post-AGC gain in dB. Clamped to the operator
+    // baseline range (MinAgcTopDb..MaxAgcTopDb = 30..80); below 30 the audio
+    // is effectively muted and above 80 it's the loudest the AGC drives, so the
+    // wider raw-Thetis span was dead travel. This clamp is authoritative for
+    // BOTH the REST /api/agcGain endpoint and the TCI agc_gain command.
+    // DspPipelineService picks this up through the StateChanged event and
+    // forwards it to the active engine.
     public StateDto SetAgcTop(double topDb)
     {
-        double clamped = Math.Clamp(topDb, -20.0, 120.0);
+        double clamped = Math.Clamp(topDb, MinAgcTopDb, MaxAgcTopDb);
         // Grabbing the AGC-T slider takes MANUAL control. The value pushed to
         // WDSP is the EFFECTIVE AGC-T = AgcTopDb + AgcOffsetDb, where the offset
         // is the Auto-AGC control-loop accumulator. If Auto-AGC kept running,
@@ -2269,8 +2545,7 @@ public sealed class RadioService : IDisposable
         {
             _agcOffsetDb = 0.0;
             _lastAgcTickMs = long.MinValue;
-            _noiseFloorWindowFill = 0;
-            _noiseFloorWindowIdx = 0;
+            ResetAutoAgcNoiseFloorWindow();
             return s with { AgcTopDb = clamped, AgcOffsetDb = 0.0, AutoAgcEnabled = false };
         });
         // Persist only the user-baseline (AgcTopDb); the offset is live-recomputed.
@@ -2752,6 +3027,10 @@ public sealed class RadioService : IDisposable
     public void Dispose()
     {
         _paStore.Changed -= RecomputePaAndPush;
+        if (_antennaStore is not null)
+            _antennaStore.Changed -= RecomputePaAndPush;
+        if (_audioStore is not null)
+            _audioStore.Changed -= PushAudioFrontEnd;
         try { DisconnectAsync(CancellationToken.None).GetAwaiter().GetResult(); }
         catch { /* best-effort */ }
         _stateFlushTimer?.Dispose();

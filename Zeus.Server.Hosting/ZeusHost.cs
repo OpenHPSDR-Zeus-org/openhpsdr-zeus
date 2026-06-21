@@ -224,8 +224,25 @@ public static class ZeusHost
         builder.Services.AddSingleton<Zeus.Protocol1.TxIqRing>();
         builder.Services.AddSingleton<Zeus.Protocol1.ITxIqSource>(sp =>
             sp.GetRequiredService<Zeus.Protocol1.TxIqRing>());
+        // Global (per-radio) TX-audio source store (external-audio-jacks
+        // re-port). Registered before RadioService so the latter's optional
+        // AudioSettingsStore? ctor param resolves it and wires the Changed →
+        // PushAudioFrontEnd push. Shares zeus-prefs.db (single global row).
+        builder.Services.AddSingleton<AudioSettingsStore>();
         builder.Services.AddSingleton<RadioService>();
         builder.Services.AddSingleton<StreamingHub>();
+        // WebRTC remote-access data plane (docs/designs/remote-access-webrtc.md).
+        // Phase-0 spike service; the dev-only /api/rtc/spike/offer endpoint that
+        // uses it is gated behind ZEUS_RTC_SPIKE=1 in ZeusEndpoints.
+        builder.Services.AddSingleton<Zeus.Server.Hosting.Remote.WebRtcSpikeService>();
+        // Remote-access session password verifier (SPAKE2+, ADR-0008).
+        builder.Services.AddSingleton<Zeus.Server.Hosting.Remote.RemotePasswordStore>();
+        // Remote-access WebRTC signaling (Phase 1). Answers offers with a session
+        // gated behind the SPAKE2+ password handshake.
+        builder.Services.AddSingleton<Zeus.Server.Hosting.Remote.RemoteWebRtcService>();
+        // Radio-side broker glue (Phase 3). Inert until a remote-access password
+        // is set; then it keeps a "host" socket on the broker and answers offers.
+        builder.Services.AddHostedService<Zeus.Server.Hosting.Remote.RemoteBrokerClient>();
         // RX audio publish seam (Phase 1). DspPipelineService.PublishAudio
         // fans each AudioFrame across every registered IRxAudioSink.
         //
@@ -301,7 +318,17 @@ public static class ZeusHost
         // Clients are told to keep Connect disabled until phase=Ready.
         builder.Services.AddSingleton<WdspWisdomInitializer>();
         builder.Services.AddHostedService<WisdomBootstrapService>();
-        builder.Services.AddSingleton<DspPipelineService>();
+        // DspPipelineService takes a lazy TxAudioIngest factory so the
+        // radio-mic (UDP 1026) stream can be routed into the TX pipeline without
+        // a DI cycle (TxAudioIngest depends on DspPipelineService). The Func is
+        // only invoked on the first radio-source switch, well after both
+        // singletons are constructed (feedback_di_cycle_iservice_provider).
+        builder.Services.AddSingleton<DspPipelineService>(sp =>
+        {
+            Func<TxAudioIngest?> txIngestFactory = () => sp.GetService<TxAudioIngest>();
+            return Microsoft.Extensions.DependencyInjection.ActivatorUtilities
+                .CreateInstance<DspPipelineService>(sp, txIngestFactory);
+        });
         builder.Services.AddHostedService(sp => sp.GetRequiredService<DspPipelineService>());
         // Per-radio frequency calibration (issue #325). Stateless coordinator —
         // owns no resources, just a SemaphoreSlim to prevent re-entry.
@@ -358,7 +385,15 @@ public static class ZeusHost
         // PTT line) into a host MOX request — without it the gateware-driven
         // CW carrier transmits while Zeus stays unkeyed (UI off, meters at
         // idle cadence, FR-6 timeout disarmed).
+        // Per-install hardware-PTT-IN → MOX enable gate (default OFF). Gates
+        // whether ExternalPttService promotes a footswitch edge to MOX; the
+        // PTT-IN status lamp tracks the footswitch regardless.
+        builder.Services.AddSingleton<PttSettingsStore>();
         builder.Services.AddSingleton<ExternalPttService>();
+        // Per-band external antenna (TX/RX relay + RX-aux) selection (external-
+        // ports plan — antenna slice, #804). RadioService takes it as an
+        // optional ctor param and re-pushes on its Changed event.
+        builder.Services.AddSingleton<AntennaSettingsStore>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<ExternalPttService>());
 
         // QRZ.com XML client. HttpClient default timeout is 100 s — cap at 10 s so a
@@ -454,6 +489,8 @@ public static class ZeusHost
         builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.ExternalPttProvider>();
         builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.Protocol2TxIqProvider>();
         builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.DspPipelineProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.RxIngestDiagnosticsProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.TxDiagnosticsProvider>();
         builder.Services.AddSingleton<Diagnostics.DiagnosticsProviderRegistry>();
         builder.Services.AddSingleton<Diagnostics.DiagnosticsSelfCheckCache>();
         builder.Services.AddSingleton<Diagnostics.DiagnosticsFramePublisher>();
@@ -584,6 +621,19 @@ public static class ZeusHost
         builder.Services.AddSingleton<AudioProcessingModeStore>();
         builder.Services.AddSingleton<AudioProcessingModeService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioProcessingModeService>());
+
+        // VstEngineInstaller — the in-app "Get VST Engine" downloader. The engine
+        // is fetched from its upstream release and staged at the Zeus-managed path,
+        // never vendored/bundled (GPLv3 isolation — see VstEngineInstaller). The
+        // named HttpClient carries the User-Agent the GitHub API requires and a
+        // generous timeout for the multi-MB engine download.
+        builder.Services.AddHttpClient("ZeusVstEngine", c =>
+        {
+            c.Timeout = TimeSpan.FromMinutes(5);
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("OpenHPSDR-Zeus");
+            c.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        });
+        builder.Services.AddSingleton<VstEngineInstaller>();
 
         // TxAudioProfileService — orchestrates the unified TX Audio Profile
         // system: capture (mic/leveler/CFC/bandpass/processing-mode/chain shape/

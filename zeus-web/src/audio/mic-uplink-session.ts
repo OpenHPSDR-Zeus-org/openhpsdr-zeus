@@ -15,6 +15,7 @@ import { useMicUplinkDiagnosticsStore } from './mic-uplink-diagnostics-store';
 import { createMicUplinkAutoGain } from './mic-uplink-gain';
 import { sendMicPcm } from '../realtime/ws-client';
 import { useAudioDeviceStore } from '../state/audio-device-store';
+import { useAudioStore } from '../state/audio-store';
 import { useTxStore } from '../state/tx-store';
 import { warnOnce } from '../util/logger';
 
@@ -35,6 +36,21 @@ function micErrorMessage(err: unknown): string {
 }
 
 function onMicBlock(samples: Float32Array, peak: number): void {
+  // Single-select: when a RADIO audio source is active (Radio Mic / Line In /
+  // Balanced) the host browser mic is neither metered nor streamed — otherwise
+  // the operator would see host-mic level on a radio source (the meter would
+  // "lie") and we'd churn the WS with PCM the backend already drops. Park the
+  // meter at the silence floor on the normal visual cadence and bail.
+  if (useAudioStore.getState().settings.source !== 'Host') {
+    const nowSuppressed = performance.now();
+    if (nowSuppressed - lastEmit >= MIC_VISUAL_INTERVAL_MS) {
+      useTxStore.getState().setMicDbfs(MIC_DBFS_FLOOR);
+      lastEmit = nowSuppressed;
+      windowPeak = 0;
+    }
+    return;
+  }
+
   const tx = useTxStore.getState();
   const shouldSend = forceTxSend || tx.localMicArmed || tx.txMonitorEnabled;
   const outbound = shouldSend

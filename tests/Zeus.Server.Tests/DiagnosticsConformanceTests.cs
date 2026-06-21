@@ -187,6 +187,25 @@ public sealed class DiagnosticsConformanceTests : IClassFixture<DiagnosticsConfo
             v2Snap.GetProperty("status").GetString());
     }
 
+    [Fact]
+    public async Task V2TxDiagnostics_MatchesLegacyRoute()
+    {
+        using var client = _factory.CreateClient();
+        using var v2 = await GetJson(client, $"{Base}/tx");
+        using var legacy = await GetJson(client, "/api/tx/diag");
+
+        var v2Snap = v2.RootElement.GetProperty("snapshot");
+        Assert.Equal(
+            legacy.RootElement.GetProperty("iqSourceIsRing").GetBoolean(),
+            v2Snap.GetProperty("iqSourceIsRing").GetBoolean());
+        Assert.Equal(
+            legacy.RootElement.GetProperty("audioPath").GetProperty("status").GetString(),
+            v2Snap.GetProperty("audioPath").GetProperty("status").GetString());
+        Assert.Equal(
+            legacy.RootElement.GetProperty("egress").GetProperty("healthStatus").GetString(),
+            v2Snap.GetProperty("egress").GetProperty("healthStatus").GetString());
+    }
+
     private static async Task<JsonDocument> GetJson(HttpClient client, string url)
     {
         var resp = await client.GetAsync(url);

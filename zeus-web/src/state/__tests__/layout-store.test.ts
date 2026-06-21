@@ -40,11 +40,16 @@ describe('layout-store / workspace tile mutators', () => {
     vi.useRealTimers();
   });
 
-  it('addTile appends a new tile with a fresh uid', () => {
-    const before = useLayoutStore.getState().workspace.tiles.length;
+  it('addTile adds a tile with a fresh uid and default span when the page has room', () => {
+    // Empty page → the tile fits, so no pagination: it lands on the current
+    // workspace.
+    useLayoutStore.setState({ workspace: EMPTY_WORKSPACE_LAYOUT });
+    const activeBefore = useLayoutStore.getState().activeLayoutId;
     const uid = useLayoutStore.getState().addTile('cw');
-    const after = useLayoutStore.getState().workspace.tiles;
-    expect(after.length).toBe(before + 1);
+    const state = useLayoutStore.getState();
+    expect(state.activeLayoutId).toBe(activeBefore); // did not paginate
+    const after = state.workspace.tiles;
+    expect(after.length).toBe(1);
     const tile = after[after.length - 1];
     expect(tile?.panelId).toBe('cw');
     expect(tile?.uid).toBe(uid);
@@ -54,15 +59,23 @@ describe('layout-store / workspace tile mutators', () => {
     expect(tile?.h).toBe(8);
   });
 
-  it('addTile places the new tile at y = max(existing y+h)', () => {
-    // DEFAULT_WORKSPACE_LAYOUT's tallest existing y+h is hero/dsp at
-    // y=16+32 / y=38+10 = 48 on the 24×48 grid. So the new tile lands at y=48.
+  it('addTile spills onto a new workspace when the current page is full', () => {
+    // DEFAULT_WORKSPACE_LAYOUT fills the 24×48 page (no free 8×8 slot), so the
+    // workspace never scrolls — instead the panel paginates: a new workspace tab
+    // is created, switched to, and the panel lands at the origin of the fresh
+    // page.
+    const layoutsBefore = useLayoutStore.getState().layouts.length;
+    const activeBefore = useLayoutStore.getState().activeLayoutId;
     const uid = useLayoutStore.getState().addTile('cw');
-    const tile = useLayoutStore
-      .getState()
-      .workspace.tiles.find((t) => t.uid === uid);
-    expect(tile?.y).toBe(48);
+    const state = useLayoutStore.getState();
+    expect(state.layouts.length).toBe(layoutsBefore + 1);
+    expect(state.activeLayoutId).not.toBe(activeBefore);
+    const tiles = state.workspace.tiles;
+    expect(tiles.length).toBe(1);
+    const tile = tiles.find((t) => t.uid === uid);
+    expect(tile?.panelId).toBe('cw');
     expect(tile?.x).toBe(0);
+    expect(tile?.y).toBe(0);
   });
 
   it('addTile allows multi-instance panels (meters) to be added more than once', () => {

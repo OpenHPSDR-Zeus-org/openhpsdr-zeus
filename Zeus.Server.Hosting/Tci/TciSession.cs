@@ -1146,8 +1146,9 @@ public sealed class TciSession : IDisposable
     private void HandleAgcGain(string[] args)
     {
         // agc_gain:<rx>,<db> or agc_gain:<rx> (query)
-        // ExpertSDR3 TCI spec: AGC gain is synonymous with AGC top (max gain)
-        // Range: -20 to 120 dB per Thetis convention
+        // ExpertSDR3 TCI spec: AGC gain is synonymous with AGC top (max gain).
+        // The value is clamped to the operator baseline range (30..80 dB) by
+        // RadioService.SetAgcTop — same authority as the REST slider.
         if (args.Length < 1) return;
         if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
 

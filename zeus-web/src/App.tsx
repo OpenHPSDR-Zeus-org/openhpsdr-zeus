@@ -89,6 +89,8 @@ import { useFilterRibbonOpenSync } from './components/filter/filterRibbonShared'
 import { CONTACTS, bandOf } from './components/design/data';
 import { bearingDeg, distanceKm } from './components/design/geo';
 import { startRealtime } from './realtime/ws-client';
+import { isRemoteMode } from './remote/remote-client';
+import { RemoteGate } from './remote/RemoteGate';
 import { getServerBaseUrl, isCapacitorRuntime } from './serverUrl';
 import { getAudioClient } from './audio/audio-client';
 import { setAudioHostMode } from './audio/host-mode';
@@ -130,6 +132,10 @@ const STATE_POLL_MS = 1000;
 
 export default function App() {
   const detachedLayoutId = useMemo(() => currentDetachedWorkspaceLayoutId(), []);
+  // Remote (WebRTC) RX-monitoring mode — ?remote=<CALLSIGN>. Frames arrive over
+  // the broker instead of the local /ws; RemoteGate prompts for the session
+  // password and owns that transport.
+  const remoteMode = useMemo(() => isRemoteMode(), []);
   const settingsViewOpen = useLayoutStore((s) => s.settingsViewOpen);
   const settingsInitialTab = useLayoutStore((s) => s.settingsInitialTab);
   const setSettingsView = useLayoutStore((s) => s.setSettingsView);
@@ -276,11 +282,15 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Remote (WebRTC) mode sources frames over the broker, not the local
+    // websocket — RemoteGate owns that transport. Starting startRealtime() here
+    // too would open a second, doomed /ws connection.
+    if (remoteMode) return;
     const stop = startRealtime();
     return () => {
       stop();
     };
-  }, []);
+  }, [remoteMode]);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -894,6 +904,7 @@ export default function App() {
           <Suspense fallback={null}>
             <MobileApp />
           </Suspense>
+          {remoteMode && <RemoteGate />}
         </SpectrumWheelActionsContext.Provider>
       </WorkspaceContext.Provider>
     );
@@ -1132,6 +1143,7 @@ export default function App() {
       />
       <UpdatePrompt show={updateAvailable} onUpdate={installUpdate} />
       <ReportProblemModal />
+      {remoteMode && <RemoteGate />}
     </div>
     </SpectrumWheelActionsContext.Provider>
     </WorkspaceContext.Provider>

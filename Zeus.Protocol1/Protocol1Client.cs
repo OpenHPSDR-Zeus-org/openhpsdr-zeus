@@ -87,6 +87,12 @@ public sealed class Protocol1Client : IProtocol1Client
     private int _preamp;       // 0 / 1
     private int _attenDb;      // 0..31 dB (HpsdrAtten value)
     private int _antenna = (int)HpsdrAntenna.Ant1;
+    // RX-antenna relay change deferred while keyed (external-ports plan —
+    // antenna slice, #804). SAFETY: the Alex relay matrix must never be
+    // hot-switched under power. While MOX is on, SetAntennaRx stashes the
+    // desired antenna here (-1 = nothing pending) instead of mutating the live
+    // _antenna; it is flushed on the unkey edge in SetMox(false). -1 = none.
+    private int _pendingAntenna = -1;
     // HL2 Band Volts PWM enable. Wire encoding is C3 bit 3 of the Config
     // frame — same bit that legacy HPSDR boards used for ADC DITHER, which
     // HL2's AD9866 doesn't need (see hermes-lite2-protocol.md line 39 and
@@ -124,6 +130,16 @@ public sealed class Protocol1Client : IProtocol1Client
     // a no-op until the operator opts into iambic. See zeus-bks.
     private int _cwKeyerSpeedWpm;
     private int _cwKeyerMode; // CwKeyerMode as int for Interlocked
+    // TX audio front-end (external-audio-jacks re-port). mic_boost / mic_linein
+    // ride the 0x12 frame on codec boards; mic_trs / mic_bias / line_in_gain
+    // ride the 0x14 frame on HL2 (read-modify-write — see ControlFrame). All
+    // default to the off / zero state so an untouched radio is byte-identical
+    // to today. mic_bias defaults OFF (floating-connector PTT-hang guard).
+    private int _micBoost;     // 0 / 1
+    private int _micLineIn;    // 0 / 1
+    private int _micTrs;       // 0 / 1
+    private int _micBias;      // 0 / 1
+    private int _lineInGain;   // 0..31 (5-bit HL2 line_in_gain)
     private long _droppedFrames;
     private long _totalFrames;
 
@@ -567,12 +583,40 @@ public sealed class Protocol1Client : IProtocol1Client
     public void SetSampleRate(HpsdrSampleRate rate) => Interlocked.Exchange(ref _rate, (int)rate);
     public void SetPreamp(bool on) => Interlocked.Exchange(ref _preamp, on ? 1 : 0);
     public void SetAttenuator(HpsdrAtten atten) => Interlocked.Exchange(ref _attenDb, atten.ClampedDb);
-    public void SetAntennaRx(HpsdrAntenna ant) => Interlocked.Exchange(ref _antenna, (int)ant);
+    /// <summary>
+    /// Select the RX antenna relay (ANT1/2/3). SAFETY (external-ports plan —
+    /// antenna slice, #804): while keyed, the Alex/relay matrix must not be
+    /// hot-switched, so the selection is stashed into <see cref="_pendingAntenna"/>
+    /// and applied on the unkey edge in <see cref="SetMox"/>(false). At idle it
+    /// is applied immediately. The HL2 single-jack clamp lives at the wire layer
+    /// (<c>ControlFrame.EncodeRxAntennaC3Bits</c>), so this method stores the raw
+    /// selection on every board.
+    /// </summary>
+    public void SetAntennaRx(HpsdrAntenna ant)
+    {
+        if (Volatile.Read(ref _mox) != 0)
+        {
+            Interlocked.Exchange(ref _pendingAntenna, (int)ant);
+            return;
+        }
+        Interlocked.Exchange(ref _antenna, (int)ant);
+    }
     public void SetBoardKind(HpsdrBoardKind board) => Interlocked.Exchange(ref _boardKind, (int)board);
 
     public HpsdrBoardKind BoardKind => (HpsdrBoardKind)Volatile.Read(ref _boardKind);
     public void SetHasN2adr(bool hasN2adr) => Interlocked.Exchange(ref _hasN2adr, hasN2adr ? 1 : 0);
-    public void SetMox(bool on) => Interlocked.Exchange(ref _mox, on ? 1 : 0);
+    public void SetMox(bool on)
+    {
+        Interlocked.Exchange(ref _mox, on ? 1 : 0);
+        // Unkey edge: apply any RX-antenna change deferred while keyed
+        // (external-ports plan — antenna slice, #804) so the relay matrix
+        // switches at idle, never under power.
+        if (!on)
+        {
+            int pending = Interlocked.Exchange(ref _pendingAntenna, -1);
+            if (pending >= 0) Interlocked.Exchange(ref _antenna, pending);
+        }
+    }
     public void SetDrive(int percent) =>
         Interlocked.Exchange(ref _drivePct, Math.Clamp(percent, 0, 100));
 
@@ -629,6 +673,26 @@ public sealed class Protocol1Client : IProtocol1Client
     {
         Interlocked.Exchange(ref _cwKeyerSpeedWpm, wpm);
         Interlocked.Exchange(ref _cwKeyerMode, (int)mode);
+    }
+
+    /// <summary>
+    /// Set the TX audio front-end (external-audio-jacks re-port). Global,
+    /// per-radio — not per-band. <paramref name="micBoost"/> /
+    /// <paramref name="micLineIn"/> ride the 0x12 frame on Hermes-class codec
+    /// boards; <paramref name="micTrs"/> / <paramref name="micBias"/> /
+    /// <paramref name="lineInGain"/> ride the 0x14 frame on HL2. Which fields
+    /// actually reach the wire is gated per-board in ControlFrame, so a value
+    /// for the wrong board is simply ignored. mic_bias defaults OFF and the
+    /// caller (RadioService / REST) guards the gate; passing it true is the
+    /// operator's explicit opt-in.
+    /// </summary>
+    public void SetAudioFrontEnd(bool micBoost, bool micLineIn, bool micTrs, bool micBias, int lineInGain)
+    {
+        Interlocked.Exchange(ref _micBoost, micBoost ? 1 : 0);
+        Interlocked.Exchange(ref _micLineIn, micLineIn ? 1 : 0);
+        Interlocked.Exchange(ref _micTrs, micTrs ? 1 : 0);
+        Interlocked.Exchange(ref _micBias, micBias ? 1 : 0);
+        Interlocked.Exchange(ref _lineInGain, Math.Clamp(lineInGain, 0, 31));
     }
 
     public void SetHl2TxStepAttenuationDb(int db)
@@ -709,7 +773,12 @@ public sealed class Protocol1Client : IProtocol1Client
             // untouched, fall through to the RX-side encoding above.
             Hl2TxAttnDb: Volatile.Read(ref _hl2TxAttnDb),
             CwKeyerSpeedWpm: Volatile.Read(ref _cwKeyerSpeedWpm),
-            CwKeyerMode: (CwKeyerMode)Volatile.Read(ref _cwKeyerMode));
+            CwKeyerMode: (CwKeyerMode)Volatile.Read(ref _cwKeyerMode),
+            MicBoost: Volatile.Read(ref _micBoost) != 0,
+            MicLineIn: Volatile.Read(ref _micLineIn) != 0,
+            MicTrs: Volatile.Read(ref _micTrs) != 0,
+            MicBias: Volatile.Read(ref _micBias) != 0,
+            LineInGain: (byte)Volatile.Read(ref _lineInGain));
     }
 
     private void RxLoop()

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// v2 provider wrapping the DSP modernization evidence bundle. Reproduces the
-// legacy GET /api/dsp/modernization-snapshot lambda verbatim.
+// v2 provider owning the DSP modernization evidence bundle. The legacy
+// GET /api/dsp/modernization-snapshot route delegates here.
 
 using Zeus.Contracts;
 

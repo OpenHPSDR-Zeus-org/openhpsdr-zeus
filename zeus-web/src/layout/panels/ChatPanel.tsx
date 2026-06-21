@@ -1009,6 +1009,7 @@ export function ChatPanel() {
 
   const refreshStatus = useChatStore((s) => s.refreshStatus);
   const setEnabled = useChatStore((s) => s.setEnabled);
+  const setPanelVisible = useChatStore((s) => s.setPanelVisible);
   const send = useChatStore((s) => s.send);
   const loadHistory = useChatStore((s) => s.loadHistory);
   const loadRoster = useChatStore((s) => s.loadRoster);
@@ -1049,6 +1050,18 @@ export function ChatPanel() {
     void loadRooms();
     void loadFriends();
   }, [refreshStatus, loadHistory, loadRoster, loadRooms, loadFriends]);
+
+  // Presence is gated on the operator actually showing this panel: heartbeat
+  // "visible" while mounted (re-pinged so a closed browser lapses on the
+  // backend timeout) and "hidden" on unmount, which drops us off the roster.
+  useEffect(() => {
+    void setPanelVisible(true);
+    const id = window.setInterval(() => void setPanelVisible(true), 15_000);
+    return () => {
+      window.clearInterval(id);
+      void setPanelVisible(false);
+    };
+  }, [setPanelVisible]);
 
   // Auto-scroll to newest message in the active room
   const activeMessages = messagesByRoom[activeRoom] ?? [];

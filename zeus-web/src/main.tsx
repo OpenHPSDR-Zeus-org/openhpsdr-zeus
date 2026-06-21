@@ -90,6 +90,9 @@ import App from './App.tsx';
 import { AppErrorBoundary } from './layout/AppErrorBoundary';
 import { installFetchInterceptor } from './serverUrl';
 import { loadInstalledPluginUis } from './plugins/runtime/pluginRuntime';
+// Side-effect import: registers the `beforeinstallprompt` capture before the
+// lazily-loaded mobile shell mounts, so the install banner can replay it.
+import './pwa/pwa-install';
 
 // Capacitor / standalone-host builds set localStorage["zeus.serverUrl"]
 // to a LAN address; on plain web this is a no-op (relative paths).
