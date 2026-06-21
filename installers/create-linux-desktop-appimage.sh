@@ -84,6 +84,13 @@ echo "Staging publish output into AppDir..."
 cp -r "${PUBLISH_DIR}"/* "${APPDIR}/usr/bin/"
 chmod +x "${APPDIR}/usr/bin/OpenhpsdrZeus"
 
+# Runtime dependency-check helper, sourced by AppRun to verify WebKitGTK
+# (Photino's webview backend) before opening the native window. Lands next to
+# the binary so AppRun can source it after cd'ing into usr/bin. The server-mode
+# AppDir below is copied from this one, so it inherits the helper automatically.
+cp "${SCRIPT_DIR}/linux-zeus-preflight.sh" "${APPDIR}/usr/bin/zeus-preflight.sh"
+chmod +x "${APPDIR}/usr/bin/zeus-preflight.sh"
+
 # Icon — top-level zeus.png is what AppImageLauncher / file managers show.
 if [ -f "${ICON_SOURCE}" ]; then
     cp "${ICON_SOURCE}" "${APPDIR}/usr/share/icons/hicolor/512x512/apps/zeus.png"
@@ -118,7 +125,14 @@ cat > "${APPDIR}/AppRun" << 'EOF'
 HERE="$(dirname "$(readlink -f "${0}")")"
 export LD_LIBRARY_PATH="${HERE}/usr/bin/runtimes/linux-x64/native:${HERE}/usr/bin/runtimes/linux-arm64/native:${LD_LIBRARY_PATH}"
 cd "${HERE}/usr/bin"
-exec ./OpenhpsdrZeus --desktop "$@"
+# Verify WebKitGTK before opening the Photino window; offer to install it /
+# fall back to the browser UI if it's missing.
+# shellcheck source=/dev/null
+. "./zeus-preflight.sh"
+if zeus_ensure_webkit; then
+    exec ./OpenhpsdrZeus --desktop "$@"
+fi
+zeus_run_service_with_browser "$@"
 EOF
 chmod +x "${APPDIR}/AppRun"
 
@@ -141,6 +155,10 @@ REQUIREMENTS
       Debian/Ubuntu:  sudo apt install libwebkit2gtk-4.1-0
       Fedora:         sudo dnf install webkit2gtk4.1
       Arch:           sudo pacman -S webkit2gtk-4.1
+
+  The AppImage detects WebKitGTK automatically: if it's missing it offers to
+  install it (when launched from a terminal) and otherwise falls back to the
+  browser UI so Zeus still starts.
 
   WebKitGTK is intentionally NOT bundled — at ~150 MB it would more than
   triple the AppImage size and lock us to a specific WebKit release. As a
@@ -200,7 +218,14 @@ cat > "${SERVER_APPDIR}/AppRun" << 'EOF'
 HERE="$(dirname "$(readlink -f "${0}")")"
 export LD_LIBRARY_PATH="${HERE}/usr/bin/runtimes/linux-x64/native:${HERE}/usr/bin/runtimes/linux-arm64/native:${LD_LIBRARY_PATH}"
 cd "${HERE}/usr/bin"
-exec ./OpenhpsdrZeus --server "$@"
+# Server mode also opens a Photino (WebKitGTK) status window — same check,
+# same browser-UI fallback as desktop mode.
+# shellcheck source=/dev/null
+. "./zeus-preflight.sh"
+if zeus_ensure_webkit; then
+    exec ./OpenhpsdrZeus --server "$@"
+fi
+zeus_run_service_with_browser "$@"
 EOF
 chmod +x "${SERVER_APPDIR}/AppRun"
 

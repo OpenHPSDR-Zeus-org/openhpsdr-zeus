@@ -9,5 +9,13 @@ vc_redist.x64.exe
 vc_redist.arm64.exe
 vc_redist.x86.exe
 
+# Microsoft Edge WebView2 Evergreen Runtime bootstrapper — downloaded on-demand
+# by the release CI (release.yml "Download Edge WebView2 Runtime" step) before
+# iscc bundles it into the Windows installer. Local iscc builds need it fetched
+# manually; see the Source: line comment in zeus-windows.iss for the curl
+# command. Never commit it — Microsoft's fwlink redirect is the authoritative
+# source and the binary would bloat the repo.
+MicrosoftEdgeWebview2Setup.exe
+
 # Inno Setup build output goes into installers/output/ at install time.
 output/

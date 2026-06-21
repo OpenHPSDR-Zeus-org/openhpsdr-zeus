@@ -815,6 +815,24 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
           Get-Item $out | Select-Object Name, Length
 
+      # Download the Microsoft Edge WebView2 Evergreen Runtime bootstrapper.
+      # zeus-windows.iss bundles it and runs it at install time, guarded by a
+      # WebView2Needed() registry check so it skips machines that already have
+      # the runtime. Without WebView2, Photino cannot create the desktop window
+      # and Zeus flash-and-closes on first launch — common on Windows 11 LTSC /
+      # IoT / Enterprise N and debloated images. The fwlink redirect is
+      # Microsoft's stable evergreen URL; the same universal bootstrapper covers
+      # both x64 and arm64 (it detects the host arch), so it is not arch-suffixed.
+      - name: Download Edge WebView2 Runtime
+        if: matrix.config.os == 'windows'
+        shell: pwsh
+        run: |
+          $url = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+          $out = "installers\MicrosoftEdgeWebview2Setup.exe"
+          Write-Host "Downloading $url -> $out"
+          Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
+          Get-Item $out | Select-Object Name, Length
+
       - name: Build Windows Installer (Inno Setup)
         if: matrix.config.os == 'windows'
         shell: pwsh
