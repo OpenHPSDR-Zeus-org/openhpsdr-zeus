@@ -4967,6 +4967,49 @@ export function uploadPrefsDatabase(
   );
 }
 
+/** Download an existing prefs database (.db) to the user's machine. Fetches the
+ *  bytes and saves them via a temporary object URL (rather than navigating to
+ *  the endpoint) so server-side errors surface as exceptions the caller can show
+ *  instead of opening a JSON error blob in a new tab. */
+export async function exportPrefsDatabase(
+  relativePath: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const url = `/api/prefs/databases/export?relativePath=${encodeURIComponent(relativePath)}`;
+  const res = await fetch(url, { signal });
+  if (!res.ok) {
+    let message = `${res.status} ${res.statusText}`;
+    try {
+      const body = (await res.json()) as { error?: unknown };
+      if (typeof body?.error === 'string') message = body.error;
+    } catch {
+      /* non-JSON body — keep status text */
+    }
+    throw new ApiError(res.status, message);
+  }
+
+  const blob = await res.blob();
+  // Prefer the server's Content-Disposition filename; fall back to the leaf of
+  // the relative path.
+  const cd = res.headers.get('content-disposition') ?? '';
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+  const fileName = match?.[1]
+    ? decodeURIComponent(match[1])
+    : relativePath.split('/').pop() || 'zeus-prefs.db';
+
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 /** Ask the backend to relaunch itself (a fresh copy with the same args, after
  *  this process exits). Used after switching the active prefs database. */
 export function restartApp(
