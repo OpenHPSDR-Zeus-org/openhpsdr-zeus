@@ -16,7 +16,7 @@
  * resampling.algorithm=ma_resample_algorithm_linear (low-CPU, low-latency,
  * adequate for voice).
  *
- * Copyright (C) 2026 Brian Keating (EI6LF) and contributors.
+ * Copyright (C) 2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 

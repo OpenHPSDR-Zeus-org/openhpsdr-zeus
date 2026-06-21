@@ -314,4 +314,4 @@ full text.
 
 73 and welcome aboard.
 
-— Doug (KB2UKA) and Brian (EI6LF)
+— Doug (KB2UKA), Brian (EI6LF), and Christian (N9WAR)

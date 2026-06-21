@@ -148,7 +148,7 @@ OpenHPSDR Zeus gratefully acknowledges the Thetis contributors:
 
 OpenHPSDR Zeus contributors to date: **Brian Keating (EI6LF)** — project lead,
 **Douglas J. Cerrato (KB2UKA)**, **Ramón Martínez (EA5IUE)**, and
-**Christian (N9WAR)**.
+**Christian Suarez (N9WAR)**.
 
 See [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md) for the full provenance statement,
 per-component licensing, and the per-file header convention OpenHPSDR Zeus
