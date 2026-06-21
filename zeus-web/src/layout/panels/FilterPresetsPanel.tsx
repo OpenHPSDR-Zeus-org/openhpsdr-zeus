@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // Filter Presets panel — the preset chip grid (F1..F10 + VAR1/VAR2) plus the
 // custom Lo/Hi Hz row, split out of the Bandwidth Filter panel so the operator

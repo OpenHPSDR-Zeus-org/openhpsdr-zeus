@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // Desktop-mode TX mic capture: replaces the browser → WS MicPcm uplink with
 // a direct miniaudio capture device feed into TxAudioIngest. The two paths

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // FlexWorkspace — react-grid-layout (RGL) substrate for the desktop
 // workspace. Replaces the flexlayout-react implementation that lived here
@@ -272,14 +272,15 @@ function WorkspaceCanvas({
     return () => ro.disconnect();
   }, [containerRef]);
 
-  // Static-size workspace. Capture the grid's pixel metrics ONCE — at the first
-  // valid measurement — and hold them across every later window resize. The
-  // workspace then behaves like a fixed-size page: panels and grid rows keep the
-  // size they had when the page was laid out instead of scaling with the window.
-  // Subsequent container-size changes are intentionally ignored; if the window
-  // later shrinks below the frozen page, the canvas scrolls (see all-panels.css)
-  // rather than rescaling every panel. (A future enhancement spills overflow
-  // onto a new workspace instead of scrolling.)
+  // Fixed-cell workspace. Capture the grid's pixel metrics ONCE — at the first
+  // valid measurement — so a column and a row keep a CONSTANT pixel size and
+  // panels never rescale when the window is resized. The column COUNT, however,
+  // tracks the live window width: growing the window adds columns (more room to
+  // arrange panels into) and shrinking removes them — down to the base 24, or to
+  // whatever the current layout already occupies, so existing tiles are never
+  // shoved. Vertically the page grows downward and the canvas scrolls
+  // (all-panels.css). Net effect: panels stay a fixed size, but the usable area
+  // always fills the window instead of being capped at the first size.
   const [frozen, setFrozen] = useState<{ width: number; height: number } | null>(
     null,
   );
@@ -289,21 +290,54 @@ function WorkspaceCanvas({
       setFrozen({ width, height: containerHeight });
     }
   }, [frozen, mounted, width, containerHeight]);
-  const gridWidth = frozen?.width ?? width;
+  // Frozen height drives the (fixed) row height via deriveWorkspaceLayout.
   const gridHeight = frozen?.height ?? containerHeight;
-  // The workspace must NEVER show a scrollbar — it fits the viewport like a
-  // hardware front panel. So the grid is fit-to-viewport: the cell size is
-  // sized so the whole layout fits the container height.
+  // Fixed column width, captured from the first layout at the base 24-column
+  // count. RGL's column width = (containerWidth - margin*(cols-1)) / cols, so we
+  // invert that to recover the per-column pixel pitch and then hold it constant.
+  const baseColWidth =
+    frozen && frozen.width > 0
+      ? (frozen.width - WORKSPACE_GRID_MARGIN_PX * (WORKSPACE_GRID_COLS - 1)) /
+        WORKSPACE_GRID_COLS
+      : 0;
+  // Never drop below the base count or below the rightmost tile already placed,
+  // so a window-shrink never clamps an existing tile inward (RGL would otherwise
+  // shove any tile whose x+w exceeds cols).
+  const occupiedCols = useMemo(
+    () => tiles.reduce((m, t) => Math.max(m, t.x + t.w), WORKSPACE_GRID_COLS),
+    [tiles],
+  );
+  const cols =
+    baseColWidth > 0
+      ? Math.max(
+          occupiedCols,
+          Math.floor(
+            (width + WORKSPACE_GRID_MARGIN_PX) /
+              (baseColWidth + WORKSPACE_GRID_MARGIN_PX),
+          ),
+        )
+      : occupiedCols;
+  // Exact width for `cols` columns at the fixed pitch, so RGL's derived column
+  // width is exactly baseColWidth (no sub-pixel rescale as the window resizes).
+  const gridWidth =
+    baseColWidth > 0
+      ? cols * baseColWidth + (cols - 1) * WORKSPACE_GRID_MARGIN_PX
+      : frozen?.width ?? width;
+  // Stable ref so the drag/resize-stop callbacks read the live column count
+  // without being recreated (and re-binding RGL) on every resize tick.
+  const colsRef = useRef(cols);
+  colsRef.current = cols;
+  // deriveWorkspaceLayout sizes the (fixed) row height from the frozen container
+  // height; with nothing locked it is a pure passthrough of the stored geometry.
   //
-  // deriveWorkspaceLayout owns the whole fit. With no locked tiles it
-  // reproduces the legacy uniform shrink (divisor = max(layoutRows, target), so
-  // rearranging within the design fold never rescales a panel; only a layout
-  // taller than the fold shrinks the cell). When a tile is locked AND the
-  // layout would overflow, it instead pins rowHeight at the authored height —
-  // so locked tiles render at their exact authored pixel size, invariant to the
-  // workspace getting longer/shorter — and shrinks only the unlocked tiles to
-  // fit, recompacting around the static locked tiles. The result is a RENDER
-  // layout; the stored layout is untouched (see reconcile below).
+  // Locking is deliberately NOT fed into the solver. In the fixed-cell page model
+  // a panel never rescales — a locked tile is simply made `static` (non-draggable
+  // / non-resizable) in rglLayouts below. The old behaviour re-solved rowHeight
+  // and shrank the unlocked tiles whenever a tile was locked (to hold the locked
+  // one at a frozen pixel height while fitting the viewport); with a constant
+  // cell size that only made the panel visibly change size on lock/unlock. So we
+  // pass `locked: false` here to keep the solver on its inert passthrough path
+  // regardless of lock state.
   const deriveTiles = useMemo<DeriveTile[]>(
     () =>
       tiles.map((t) => {
@@ -316,14 +350,12 @@ function WorkspaceCanvas({
           y: t.y,
           w,
           h,
-          locked: workspaceLocked || t.locked === true,
+          // Lock is a pure static flag now — never a size-compensation trigger.
+          locked: false,
           minH: def?.minH ?? WORKSPACE_TILE_MIN_H,
-          ...(t.lockedHeightPx !== undefined
-            ? { lockedHeightPx: t.lockedHeightPx }
-            : {}),
         };
       }),
-    [tiles, pluginPanelKey, workspaceLocked],
+    [tiles, pluginPanelKey],
   );
 
   const derived = useMemo(
@@ -473,7 +505,7 @@ function WorkspaceCanvas({
         skipPostDropLayoutChangeRef.current = false;
       }, 250);
       persist(
-        autoFitDroppedPanel(layout, WORKSPACE_GRID_COLS, previousDropItem),
+        autoFitDroppedPanel(layout, colsRef.current, previousDropItem),
       );
     }
   }, [persist]);
@@ -494,7 +526,7 @@ function WorkspaceCanvas({
     window.setTimeout(() => {
       skipPostDropLayoutChangeRef.current = false;
     }, 250);
-    persist(resolveResizeOverlaps(layout, resizedId, WORKSPACE_GRID_COLS));
+    persist(resolveResizeOverlaps(layout, resizedId, colsRef.current));
   }, [persist]);
   const handleLayoutChange = useCallback(
     (next: Layout) => {
@@ -566,7 +598,7 @@ function WorkspaceCanvas({
           }`}
           width={gridWidth}
           breakpoints={{ lg: 0 }}
-          cols={{ lg: WORKSPACE_GRID_COLS }}
+          cols={{ lg: cols }}
           rowHeight={rowHeight}
           margin={[WORKSPACE_GRID_MARGIN_PX, rowMargin]}
           containerPadding={[0, 0]}

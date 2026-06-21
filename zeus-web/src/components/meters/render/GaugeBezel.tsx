@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // GaugeBezel — the machined chrome ring framing a gauge so it sits IN the
 // panel, not ON it. Layer (4), the single biggest "whoa" tell. Elevated over

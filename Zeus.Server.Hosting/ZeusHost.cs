@@ -795,7 +795,7 @@ public static class ZeusHost
         Console.WriteLine("═══════════════════════════════════════════════════════════════");
         Console.WriteLine("  Zeus — OpenHPSDR Protocol 1 / Protocol 2 Client");
         Console.WriteLine($"  Version: {version}");
-        Console.WriteLine("  Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors");
+        Console.WriteLine("  Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors");
         Console.WriteLine("  Licensed under GPL-2.0-or-later");
         Console.WriteLine("═══════════════════════════════════════════════════════════════");
         Console.WriteLine();

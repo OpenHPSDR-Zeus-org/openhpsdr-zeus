@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // Regression for issue #486: the logbook used to render QSO timestamps
 // in the browser's local timezone, drifting the clock by the user's

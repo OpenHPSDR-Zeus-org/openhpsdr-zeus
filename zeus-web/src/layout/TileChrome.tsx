@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // Workspace-tile chrome: 24 px header strip with a drag-handle grip on the
 // left, the panel title in the middle, and an X remove button on the right.

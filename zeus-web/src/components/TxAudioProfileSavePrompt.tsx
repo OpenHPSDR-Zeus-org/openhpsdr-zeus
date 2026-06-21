@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // "TX Audio Profile '{name}' changed — save?" prompt. Shown on the in-app
 // Disconnect path when the live TX-audio settings have drifted from the loaded

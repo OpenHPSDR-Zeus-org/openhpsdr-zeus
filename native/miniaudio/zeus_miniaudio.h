@@ -14,7 +14,7 @@
  * is intentionally not surfaced — operator-facing logs are produced on the
  * C# side using the success/failure boolean plus the device-info getters.
  *
- * Copyright (C) 2026 Brian Keating (EI6LF) and contributors.
+ * Copyright (C) 2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #ifndef ZEUS_MINIAUDIO_H
