@@ -49,6 +49,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
+using OpenhpsdrZeus;
 using Photino.NET;
 using Zeus.Plugins.Host.Audio;
 using Zeus.Server;
@@ -160,6 +161,12 @@ public partial class Program
             return VerifyVstBridge();
         }
 
+        // Verbose preflight + crash tracer. Writes a full environment/dependency
+        // report and per-phase markers to %LOCALAPPDATA%/Zeus/zeus-startup.log on
+        // every launch, and installs last-resort exception handlers. This is the
+        // durable record we ask a user to send when "the window just closes".
+        StartupDiagnostics.Begin(args);
+
         if (args.Contains("--desktop"))
         {
             HideConsoleOnWindows();
@@ -170,6 +177,15 @@ public partial class Program
             catch (Exception ex) when (IsAddressInUse(ex))
             {
                 ReportStartupAddressInUse(ex);
+                return 1;
+            }
+            catch (Exception ex)
+            {
+                // Any other startup failure would otherwise escape Main and the
+                // process would vanish silently — the console is already detached
+                // (HideConsoleOnWindows), so the operator sees the window flash
+                // and close with no diagnostics. Record it and surface a dialog.
+                ReportStartupFatal(ex);
                 return 1;
             }
         }
@@ -189,6 +205,11 @@ public partial class Program
             catch (Exception ex) when (IsAddressInUse(ex))
             {
                 ReportStartupAddressInUse(ex);
+                return 1;
+            }
+            catch (Exception ex)
+            {
+                ReportStartupFatal(ex);
                 return 1;
             }
         }
@@ -297,9 +318,13 @@ public partial class Program
             PrintConsoleBanner = false,
         };
 
+        StartupDiagnostics.Phase("desktop: ZeusHost.Build");
         var app = ZeusHost.Build(args, hostOptions);
+        StartupDiagnostics.Phase("desktop: ZeusHost.InitializeAsync");
         ZeusHost.InitializeAsync(app).GetAwaiter().GetResult();
+        StartupDiagnostics.Phase("desktop: app.StartAsync (Kestrel + hosted services)");
         app.StartAsync().GetAwaiter().GetResult();
+        StartupDiagnostics.Phase("desktop: host started");
 
         // Resolve the bound URLs after Start — Kestrel writes the OS-assigned
         // loopback port (plus the LAN HTTPS port we configured) into
@@ -361,6 +386,9 @@ public partial class Program
         var iconPath = Path.Combine(AppContext.BaseDirectory, iconFileName);
         var detachedWorkspaceWindows = new List<PhotinoWindow>();
 
+        // Window construction is where a missing WebView2 runtime throws — the
+        // last phase marker in the log will be this one if that's the cause.
+        StartupDiagnostics.Phase("desktop: creating Photino window (needs WebView2)");
         var window = new PhotinoWindow()
             .SetTitle("Zeus")
             .SetUseOsDefaultLocation(false)
@@ -500,6 +528,7 @@ public partial class Program
         // WaitForClose blocks the main thread until the user closes the window. On
         // macOS this satisfies Cocoa's "UI on main thread" requirement; Kestrel
         // runs on its own thread-pool, untouched by the windowing loop.
+        StartupDiagnostics.Phase("desktop: window created, entering message loop");
         window.WaitForClose();
         foreach (var child in detachedWorkspaceWindows.ToArray())
         {
@@ -719,6 +748,71 @@ public partial class Program
         Console.Error.WriteLine($"{title}: {message}");
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             _ = MessageBoxW(IntPtr.Zero, message, title, 0x00000040);
+    }
+
+    // A startup failure other than port-in-use. The desktop/server paths detach
+    // the console (FreeConsole) before this runs, so an uncaught exception would
+    // make the process vanish with the window never appearing and nothing logged.
+    // Persist the full exception to the shared startup log and show a dialog so
+    // the operator gets an actionable message instead of a silent flash-and-close.
+    private static void ReportStartupFatal(Exception ex)
+    {
+        var baseEx = ex.GetBaseException();
+        var missingWebView2 = LooksLikeMissingWebView2(ex);
+
+        // The full exception goes to the same zeus-startup.log the preflight
+        // wrote, so the dependency report and the crash sit in one file.
+        StartupDiagnostics.LogException("desktop startup failed", ex);
+
+        string title;
+        string message;
+        if (missingWebView2)
+        {
+            // The single most common fresh-Windows cause: Photino renders the UI
+            // through WebView2, which is absent on Windows 11 LTSC / IoT /
+            // Enterprise N, debloated images, and some VMs. Point the operator
+            // straight at the fix.
+            title = "Zeus needs the Microsoft Edge WebView2 Runtime";
+            message =
+                "Zeus could not open its window because the Microsoft Edge WebView2 " +
+                "Runtime is not installed on this PC.\n\n" +
+                "Install it (free, from Microsoft), then launch Zeus again:\n" +
+                "https://developer.microsoft.com/microsoft-edge/webview2/\n\n" +
+                $"Technical detail: {baseEx.GetType().Name}: {baseEx.Message}";
+        }
+        else
+        {
+            title = "Zeus failed to start";
+            message =
+                "Zeus hit an unexpected error while starting and had to close.\n\n" +
+                $"{baseEx.GetType().Name}: {baseEx.Message}\n\n" +
+                $"A full log was written to:\n{StartupDiagnostics.LogPath}";
+        }
+
+        // Console is detached on Windows desktop/server mode; on macOS/Linux this
+        // still reaches the launching terminal.
+        Console.Error.WriteLine($"{title}: {message}");
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            _ = MessageBoxW(IntPtr.Zero, message, title, 0x00000010); // MB_ICONERROR
+    }
+
+    // Heuristic: does this exception chain look like a missing WebView2 runtime?
+    // Photino surfaces the absence in different shapes across versions (a COM
+    // HRESULT, a DllNotFound, or a message naming WebView2 / msedgewebview2), so
+    // we match on the text across the whole inner-exception chain rather than a
+    // single exception type.
+    private static bool LooksLikeMissingWebView2(Exception ex)
+    {
+        for (var cur = ex; cur is not null; cur = cur.InnerException)
+        {
+            var m = cur.Message;
+            if (string.IsNullOrEmpty(m)) continue;
+            if (m.Contains("WebView2", StringComparison.OrdinalIgnoreCase) ||
+                m.Contains("msedgewebview2", StringComparison.OrdinalIgnoreCase) ||
+                m.Contains("Edge WebView", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     private static int RunServerWithStatus(string[] args)

@@ -76,6 +76,21 @@ Source: "..\OpenhpsdrZeus\bin\Release\net10.0\win-{#Arch}\publish\*"; DestDir: "
 ;   x64:   curl -L -o installers/vc_redist.x64.exe   https://aka.ms/vs/17/release/vc_redist.x64.exe
 ;   arm64: curl -L -o installers/vc_redist.arm64.exe https://aka.ms/vs/17/release/vc_redist.arm64.exe
 Source: "vc_redist.{#Arch}.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: VCRedistNeeded
+; Microsoft Edge WebView2 Evergreen Runtime bootstrapper. Photino renders the
+; Zeus desktop UI through WebView2; without the runtime the Photino window
+; cannot be created and Zeus exits immediately on launch — the window "flashes
+; and closes" with no UI (the desktop console is detached, so there is no
+; visible error). WebView2 ships with stock Windows 11 but is ABSENT on
+; Windows 11 LTSC / IoT / Enterprise N, debloated/custom images, and some VMs.
+; The ~2 MB online bootstrapper installs the matching per-arch runtime and is
+; skipped via WebView2Needed() when a runtime is already present. It is the
+; same universal bootstrapper for x64 and arm64 (it detects the host arch), so
+; unlike vc_redist this file is NOT arch-suffixed.
+;
+; The release CI downloads it from Microsoft's stable fwlink redirect before
+; iscc runs. For LOCAL iscc builds, fetch it into the installers/ folder:
+;   curl -L -o installers/MicrosoftEdgeWebview2Setup.exe https://go.microsoft.com/fwlink/p/?LinkId=2124703
+Source: "MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: WebView2Needed
 
 [Icons]
 ; Two Start Menu shortcuts under the "Openhpsdr Zeus" group:
@@ -99,6 +114,14 @@ Name: "{autodesktop}\{#MyAppShortName} Server"; Filename: "{app}\{#MyAppExeName}
 ; ~10-second silent reinstall and the UAC prompt for operators who already
 ; have it). See issue #452 for the symptoms this fix prevents.
 Filename: "{tmp}\vc_redist.{#Arch}.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ Runtime..."; Check: VCRedistNeeded; Flags: waituntilterminated
+
+; Install the Microsoft Edge WebView2 Runtime BEFORE launching Zeus — the
+; Photino desktop window cannot be created without it (Zeus would flash-and-
+; close on first launch). Skipped via WebView2Needed() when already present.
+; The bootstrapper is an online installer; /silent /install runs it without UI.
+; If the machine is offline at install time this step fails gracefully and the
+; app's own startup guard surfaces a "needs WebView2" dialog on first launch.
+Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; StatusMsg: "Installing Microsoft Edge WebView2 Runtime..."; Check: WebView2Needed; Flags: waituntilterminated
 
 ; Post-install launch lands the operator in the desktop window — no console,
 ; no browser dance. Server mode is one Start Menu click away for the LAN /
@@ -200,6 +223,39 @@ end;
 function VCRedistNeeded: Boolean;
 begin
   Result := not VCRedistInstalled;
+end;
+
+// WebView2RuntimeInstalled — True when the Microsoft Edge WebView2 Evergreen
+// Runtime is present. Detection follows Microsoft's documented signal: a
+// non-empty "pv" (version) value under the Evergreen Runtime client GUID
+// {F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}. A pv of "" or "0.0.0.0" means
+// "registered but not actually installed", so both are treated as absent.
+//   https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution
+//
+// The runtime can be installed three ways, so we check all three locations:
+//   - per-machine x64:        HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\... (EdgeUpdate is 32-bit)
+//   - per-machine arm64/native: HKLM\SOFTWARE\Microsoft\EdgeUpdate\...
+//   - per-user:               HKCU\Software\Microsoft\EdgeUpdate\...
+function WebView2VersionPresent(RootKey: Integer; const SoftwarePrefix: String): Boolean;
+var
+  Version: String;
+begin
+  Result := RegQueryStringValue(RootKey,
+    SoftwarePrefix + '\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+    'pv', Version) and (Version <> '') and (Version <> '0.0.0.0');
+end;
+
+function WebView2RuntimeInstalled: Boolean;
+begin
+  Result :=
+    WebView2VersionPresent(HKLM, 'SOFTWARE\WOW6432Node') or
+    WebView2VersionPresent(HKLM, 'SOFTWARE') or
+    WebView2VersionPresent(HKCU, 'Software');
+end;
+
+function WebView2Needed: Boolean;
+begin
+  Result := not WebView2RuntimeInstalled;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
