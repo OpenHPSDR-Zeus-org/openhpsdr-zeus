@@ -462,6 +462,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.ExternalPttProvider>();
         builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.Protocol2TxIqProvider>();
         builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.DspPipelineProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.RxIngestDiagnosticsProvider>();
         builder.Services.AddSingleton<Diagnostics.DiagnosticsProviderRegistry>();
         builder.Services.AddSingleton<Diagnostics.DiagnosticsSelfCheckCache>();
         builder.Services.AddSingleton<Diagnostics.DiagnosticsFramePublisher>();

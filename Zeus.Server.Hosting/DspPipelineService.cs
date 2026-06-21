@@ -4090,6 +4090,64 @@ public class DspPipelineService : BackgroundService,
     public Zeus.Protocol2.Protocol2Client? ActiveP2Client => _p2Client;
 
     /// <summary>
+    /// Live per-DDC / per-receiver RX ingest health for the diagnostics surface
+    /// (overflow/underrun verification at high sample rate + multi-DDC). Reads
+    /// only cached, lock-free snapshots — no realtime/WDSP work on this path:
+    ///   * per-WDSP-channel ingest health (queue depth/cap, frames-in, queue-full,
+    ///     dropped-oldest, worker avg/max ms vs the per-frame budget, audio
+    ///     overrun) from <see cref="WdspDspEngine.SnapshotRxChannels"/>; and
+    ///   * per-DDC UDP packet rate (last ~1 s window) from the active P2 client,
+    ///     indexed by DDC (0..MaxRxDdc-1) — the ground truth for which DDCs the
+    ///     radio is actually streaming.
+    /// </summary>
+    public object SnapshotRxIngestHealth()
+    {
+        var channels = (CurrentEngine as WdspDspEngine)?.SnapshotRxChannels()
+                       ?? (IReadOnlyList<WdspDspEngine.RxChannelHealth>)System.Array.Empty<WdspDspEngine.RxChannelHealth>();
+        long[] portRates = ActiveP2Client?.SnapshotRxPortPacketRates() ?? System.Array.Empty<long>();
+
+        var channelDtos = new object[channels.Count];
+        for (int i = 0; i < channels.Count; i++)
+        {
+            var h = channels[i];
+            // Per-frame WDSP budget: a 1024-sample frame must be processed in
+            // (1000·1024/rate) ms on average or the queue backs up. workerMaxMs
+            // approaching this is the realtime "CPU-bound" signal.
+            double frameBudgetMs = h.SampleRateHz > 0 ? 1000.0 * 1024.0 / h.SampleRateHz : 0.0;
+            double headroomPct = frameBudgetMs > 0
+                ? System.Math.Round(100.0 * (1.0 - h.WorkerMaxMs / frameBudgetMs), 1)
+                : 0.0;
+            channelDtos[i] = new
+            {
+                channelId = h.ChannelId,
+                sampleRateHz = h.SampleRateHz,
+                queueDepth = h.QueueDepth,
+                queueCapacity = h.QueueCapacity,
+                framesInPerWindow = h.FramesInPerWindow,
+                queueFullPerWindow = h.QueueFullPerWindow,
+                droppedPerWindow = h.DroppedPerWindow,
+                workerFramesPerWindow = h.WorkerFramesPerWindow,
+                workerAvgMs = System.Math.Round(h.WorkerAvgMs, 3),
+                workerMaxMs = System.Math.Round(h.WorkerMaxMs, 3),
+                frameBudgetMs = System.Math.Round(frameBudgetMs, 3),
+                workerHeadroomPct = headroomPct,
+                audioRingDepth = h.AudioRingDepth,
+                audioOverrunPerWindow = h.AudioOverrunPerWindow,
+                ageMs = h.AgeMs,
+            };
+        }
+
+        return new
+        {
+            schemaVersion = 1,
+            maxRxDdc = Zeus.Protocol2.Protocol2Client.MaxRxDdc,
+            activeChannels = channels.Count,
+            rxPortPacketRates = portRates,
+            channels = channelDtos,
+        };
+    }
+
+    /// <summary>
     /// Panadapter pixel column width — exposed so the frequency-calibration
     /// service (issue #325) can size its capture buffer correctly without
     /// hard-coding the constant.
@@ -4215,9 +4273,12 @@ public class DspPipelineService : BackgroundService,
     }
 
     // ---- IRxPacketSink (Protocol 2) -----------------------------------------
-    // Same shape as P1; P2 doesn't ArrayPool its sample buffer (per
-    // Protocol2Client.cs:1024 — a freshly allocated double[] per packet), so
-    // no buffer return is required.
+    // Same shape as P1, but the buffer lifetime is owned by the PRODUCER: when a
+    // sink is attached, Protocol2Client.HandleDdcPacket rents the IQ buffer and
+    // returns it to the pool in its own finally right after this call returns
+    // (safe because everything below consumes the span synchronously). So this
+    // sink must NOT retain frame.InterleavedSamples past the call and does not
+    // return any buffer itself.
     void Zeus.Protocol2.IRxPacketSink.OnIqFrame(in Zeus.Protocol2.IqFrame frame)
     {
         DrainDspCommands();

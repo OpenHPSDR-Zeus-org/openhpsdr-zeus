@@ -179,6 +179,31 @@ public sealed class WdspDspEngine : IDspEngine
     // consumer: ReadAudio caller on pipeline thread). Drops oldest when over capacity.
     private const int AudioRingCapacity = OutputRate;
 
+    /// <summary>
+    /// Per-RX-channel ingest health, latched once per ~1 s window by
+    /// <see cref="EmitRxDiag"/> and read lock-free by the diagnostics provider
+    /// (immutable record swapped behind a volatile field). All "PerWindow"
+    /// counts are over the last completed ~1 s window. This is the realtime
+    /// overflow/underrun signal for high-sample-rate / multi-DDC operation:
+    /// <c>DroppedPerWindow &gt; 0</c> means the worker fell behind and IQ frames
+    /// were dropped (drop-oldest); <c>WorkerMaxMs</c> approaching the per-frame
+    /// budget (1000·InSize/SampleRateHz) means the channel is CPU-bound.
+    /// </summary>
+    public sealed record RxChannelHealth(
+        int ChannelId,
+        int SampleRateHz,
+        int QueueDepth,
+        int QueueCapacity,
+        long FramesInPerWindow,
+        long QueueFullPerWindow,
+        long DroppedPerWindow,
+        long WorkerFramesPerWindow,
+        double WorkerAvgMs,
+        double WorkerMaxMs,
+        int AudioRingDepth,
+        long AudioOverrunPerWindow,
+        long AgeMs);
+
     private sealed class ChannelState
     {
         public required int Id;
@@ -188,6 +213,9 @@ public sealed class WdspDspEngine : IDspEngine
         public required int OutDoubles;
         public required Thread Worker;
         public required BlockingCollection<double[]> InQueue;
+        // Rate-scaled bound of InQueue (frames). Captured so diagnostics can show
+        // depth-vs-capacity; see ComputeInQueueCapacity.
+        public required int InQueueCapacity;
         public readonly ConcurrentQueue<double[]> FreeFrames = new();
         public double[] PartialFrame = new double[2 * InSize];
         public int PartialFill;
@@ -227,22 +255,43 @@ public sealed class WdspDspEngine : IDspEngine
         public int ZoomLevel = 1;
         public readonly object AnalyzerLock = new();
 
-        // --- TEMP diagnostics for RX2 crackle/lag (issue zeus-gdc7) ---
-        // All counters are reset each 1 Hz emit in ReadAudio. Cheap Interlocked
-        // increments on the hot paths; no allocation. Remove once the dual-RX
-        // realtime stall is root-caused.
+        // --- RX ingest health telemetry (issue zeus-gdc7; now permanent) ---
+        // Live overflow/underrun counters for high-sample-rate operation, reset
+        // each 1 Hz emit in EmitRxDiag. Cheap Interlocked increments on the hot
+        // paths; no allocation. These are the realtime signal that the worker is
+        // keeping up with the IQ frame rate at 768/1536 kHz with all DDCs active.
         public long DiagFramesIn;          // frames handed to InQueue this window
-        public long DiagEnqueueFull;       // enqueues where the bounded InQueue was already full (Add would block the RX net thread)
+        public long DiagEnqueueFull;       // enqueues that found the bounded InQueue full (worker fell behind)
+        public long DiagDroppedOldest;     // frames dropped (oldest evicted) to keep the RX thread non-blocking — bounded, deliberate glitch
         public long DiagWorkerFrames;      // frames the worker processed this window
         public long DiagWorkerTotalTicks;  // Σ per-frame fexchange0+Spectrum0 Stopwatch ticks
         public long DiagWorkerMaxTicks;    // max single-frame processing ticks
         public long DiagAudioOverrun;      // PushAudio writes that overwrote an unread sample (ring full → discontinuity)
         public long DiagLastLogTicks;      // Stopwatch timestamp of last 1 Hz emit
+        // Latched once per ~1 s by EmitRxDiag; read lock-free by the diagnostics
+        // provider via SnapshotRxChannels. Immutable record behind a volatile
+        // reference → no torn reads, no lock on the snapshot path.
+        public volatile RxChannelHealth? LastHealth;
     }
 
-    // Bounded depth of each channel's InQueue — mirrors the boundedCapacity
-    // passed at construction so the diagnostic "would-block" check matches.
-    private const int InQueueCapacity = 32;
+    // Each RX channel hands 1024-sample IQ frames from the realtime RX sink
+    // thread to its WDSP worker through a bounded queue. The frame RATE scales
+    // with the RX sample rate (≈47/s at 48 kHz … ≈1500/s at 1536 kHz), so a
+    // fixed frame count gave a 32× smaller TIME cushion at the top of the
+    // ladder. ComputeInQueueCapacity sizes the queue to hold ~InQueueTargetMs
+    // of IQ regardless of rate, floored at the legacy 32 frames and capped to
+    // bound memory/latency (each frame is 2*InSize doubles ≈ 16 KB, so the
+    // ceiling is ≈4 MB per channel — comfortable even with all DDCs running).
+    private const int InQueueFloorFrames = 32;
+    private const int InQueueCeilFrames = 256;
+    private const double InQueueTargetMs = 80.0;
+
+    private static int ComputeInQueueCapacity(int sampleRateHz)
+    {
+        double framesPerSec = (double)sampleRateHz / InSize;
+        int target = (int)Math.Ceiling(framesPerSec * (InQueueTargetMs / 1000.0));
+        return Math.Clamp(target, InQueueFloorFrames, InQueueCeilFrames);
+    }
 
     private readonly ConcurrentDictionary<int, ChannelState> _channels = new();
     private readonly object _nativeSlotLock = new();
@@ -551,6 +600,7 @@ public sealed class WdspDspEngine : IDspEngine
         ConfigureAnalyzer(id, sampleRateHz, InSize, pixelWidth, zoomLevel: 1, AnalyzerFftSize, AnalyzerWindow, AnalyzerKaiserPi);
         ConfigureDisplayAveraging(id);
 
+        int inQueueCapacity = ComputeInQueueCapacity(sampleRateHz);
         var state = new ChannelState
         {
             Id = id,
@@ -558,7 +608,8 @@ public sealed class WdspDspEngine : IDspEngine
             SampleRateHz = sampleRateHz,
             PixelWidth = pixelWidth,
             OutDoubles = outDoubles,
-            InQueue = new BlockingCollection<double[]>(boundedCapacity: InQueueCapacity),
+            InQueue = new BlockingCollection<double[]>(boundedCapacity: inQueueCapacity),
+            InQueueCapacity = inQueueCapacity,
             Worker = null!,
         };
 
@@ -624,15 +675,36 @@ public sealed class WdspDspEngine : IDspEngine
                     state.PartialFill = 0;
                     if (!state.InQueue.IsAddingCompleted)
                     {
-                        // TEMP diag (zeus-gdc7): a full bounded InQueue means the
-                        // next Add BLOCKS this thread — and FeedIq runs on the
-                        // realtime P2/P1 RX sink thread, so a stalled worker
-                        // stalls UDP intake (crackle + UI lag at modest CPU).
                         state.DiagFramesIn++;
-                        if (state.InQueue.Count >= InQueueCapacity)
-                            state.DiagEnqueueFull++;
-                        try { state.InQueue.Add(frame); }
-                        catch (InvalidOperationException) { state.FreeFrames.Enqueue(frame); }
+                        // Non-blocking hand-off with drop-OLDEST. FeedIq runs on
+                        // the realtime P1/P2 RX sink thread; a blocking Add would
+                        // stall UDP intake whenever the worker falls behind, and a
+                        // stalled intake lets the kernel socket buffer overflow →
+                        // dropped packets → sequence gaps (the cascading failure
+                        // this guard prevents). Instead, when the queue is full we
+                        // evict the OLDEST queued frame and keep the newest, so
+                        // display/audio latency stays bounded and the glitch is a
+                        // single counted dropped frame rather than a stall. Pairs
+                        // with the rate-scaled capacity (ComputeInQueueCapacity).
+                        try
+                        {
+                            if (!state.InQueue.TryAdd(frame))
+                            {
+                                state.DiagEnqueueFull++;
+                                if (state.InQueue.TryTake(out var stale))
+                                {
+                                    state.DiagDroppedOldest++;
+                                    state.FreeFrames.Enqueue(stale);
+                                }
+                                if (!state.InQueue.TryAdd(frame))
+                                    state.FreeFrames.Enqueue(frame);
+                            }
+                        }
+                        catch (InvalidOperationException)
+                        {
+                            // CompleteAdding raced the enqueue — recycle.
+                            state.FreeFrames.Enqueue(frame);
+                        }
                     }
                     else
                     {
@@ -1219,6 +1291,7 @@ public sealed class WdspDspEngine : IDspEngine
 
         long framesIn = Interlocked.Exchange(ref state.DiagFramesIn, 0);
         long enqueueFull = Interlocked.Exchange(ref state.DiagEnqueueFull, 0);
+        long droppedOldest = Interlocked.Exchange(ref state.DiagDroppedOldest, 0);
         long workerFrames = Interlocked.Exchange(ref state.DiagWorkerFrames, 0);
         long workerTotalTicks = Interlocked.Exchange(ref state.DiagWorkerTotalTicks, 0);
         long workerMaxTicks = Interlocked.Exchange(ref state.DiagWorkerMaxTicks, 0);
@@ -1232,12 +1305,53 @@ public sealed class WdspDspEngine : IDspEngine
         lock (state.AudioGate) audioRingDepth = state.AudioCount;
 
         _log.LogInformation(
-            "wdsp.rxdiag ch={Id} framesIn={FramesIn} queueDepth={QueueDepth} queueFull={QueueFull} " +
-            "workerFrames={WorkerFrames} workerAvgMs={WorkerAvgMs:F2} workerMaxMs={WorkerMaxMs:F2} " +
-            "audioRingDepth={AudioRingDepth} audioOverrun={AudioOverrun}",
-            state.Id, framesIn, queueDepth, enqueueFull,
-            workerFrames, workerAvgMs, workerMaxMs,
+            "wdsp.rxdiag ch={Id} rate={RateHz} framesIn={FramesIn} queueDepth={QueueDepth}/{QueueCap} " +
+            "queueFull={QueueFull} dropped={Dropped} workerFrames={WorkerFrames} workerAvgMs={WorkerAvgMs:F2} " +
+            "workerMaxMs={WorkerMaxMs:F2} audioRingDepth={AudioRingDepth} audioOverrun={AudioOverrun}",
+            state.Id, state.SampleRateHz, framesIn, queueDepth, state.InQueueCapacity,
+            enqueueFull, droppedOldest, workerFrames, workerAvgMs, workerMaxMs,
             audioRingDepth, audioOverrun);
+
+        // Latch the same window for on-demand diagnostics (live /api/diagnostics
+        // surface + 0x36 health push). Immutable record swap — lock-free read.
+        state.LastHealth = new RxChannelHealth(
+            ChannelId: state.Id,
+            SampleRateHz: state.SampleRateHz,
+            QueueDepth: queueDepth,
+            QueueCapacity: state.InQueueCapacity,
+            FramesInPerWindow: framesIn,
+            QueueFullPerWindow: enqueueFull,
+            DroppedPerWindow: droppedOldest,
+            WorkerFramesPerWindow: workerFrames,
+            WorkerAvgMs: workerAvgMs,
+            WorkerMaxMs: workerMaxMs,
+            AudioRingDepth: audioRingDepth,
+            AudioOverrunPerWindow: audioOverrun,
+            AgeMs: 0);
+    }
+
+    /// <summary>
+    /// Lock-free snapshot of every open RX channel's latest ingest-health window
+    /// (see <see cref="RxChannelHealth"/>). Allocation-light and free of any
+    /// realtime/WDSP work — safe to call from the diagnostics request thread.
+    /// <c>AgeMs</c> is filled in here from the latch timestamp so callers can
+    /// tell a live window from a stalled one. Channels with no completed window
+    /// yet are omitted.
+    /// </summary>
+    public IReadOnlyList<RxChannelHealth> SnapshotRxChannels()
+    {
+        long nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        double ticksToMs = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        var list = new List<RxChannelHealth>(_channels.Count);
+        foreach (var kv in _channels)
+        {
+            var h = kv.Value.LastHealth;
+            if (h is null) continue;
+            long stamp = kv.Value.DiagLastLogTicks;
+            long ageMs = stamp != 0 ? (long)((nowTicks - stamp) * ticksToMs) : 0;
+            list.Add(h with { AgeMs = ageMs });
+        }
+        return list;
     }
 
     private static void PushAudio(ChannelState state, ReadOnlySpan<double> interleavedStereo, int monoSampleCount)

@@ -43,6 +43,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net;
@@ -102,6 +103,22 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // demux helper below accepts both forms for RX2.
     private const int G2RxDdc = 2;
 
+    // OpenHPSDR Protocol-2 "DDC Command" (port 1025) enables DDCs via a SINGLE
+    // bitmask byte at offset 7 → DDC0..DDC7, so 8 concurrent DDCs is the hard
+    // protocol ceiling (verified 2026-06-21 against the openHPSDR P2 spec and
+    // the matthew-wolf-n4mtt/openhpsdr-e Wireshark dissector; pihpsdr + Zeus
+    // both already use only byte[7]). There is no second enable byte — "10
+    // DDCs" is not representable in standard P2. On Orion-family boards DDC0/1
+    // are reserved for the PureSignal feedback pair when PS is armed, leaving 6
+    // user receivers; with PS off, all 8. The N-receiver pipeline keys off this
+    // constant so the ceiling is a single-line change if firmware ever extends
+    // the enable field.
+    public const int MaxRxDdc = 8;
+
+    // RX IQ data arrives on UDP source ports RxDataPortBase + ddcIndex, i.e.
+    // 1035 (DDC0) .. 1035 + MaxRxDdc - 1 (DDC7).
+    private const int RxDataPortBase = 1035;
+
     // Hermes-class radios (Brick2 is the live consumer) use a single ADC
     // and have no PureSignal feedback DDCs reserved at the front of the pool.
     // The user-visible RX maps to DDC0 directly. Radio sends DDC0 IQ from
@@ -140,12 +157,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private int _rx2Enabled;
     private uint _rx2FreqHz = 7_100_000;
     // Per-source-port IQ packet rate (packets in the last completed ~1 s
-    // window) for UDP ports 1035..1041 → index 0..6 → DDC 0..6. Written by the
-    // single RX thread on each window roll; read by the diagnostics thread
-    // under _rxPortRateLock. Surfaces multi-DDC RX streaming health (e.g. a
-    // second receiver whose DDC the radio isn't actually sending).
+    // window) for UDP ports RxDataPortBase..RxDataPortBase+MaxRxDdc-1 (1035..1042)
+    // → index 0..7 → DDC 0..7. Written by the single RX thread on each window
+    // roll; read by the diagnostics thread under _rxPortRateLock. Surfaces
+    // per-DDC RX streaming health (e.g. a receiver whose DDC the radio isn't
+    // actually sending) — the ground truth for full multi-DDC operation.
     private readonly object _rxPortRateLock = new();
-    private readonly long[] _rxPortRateSnapshot = new long[7];
+    private readonly long[] _rxPortRateSnapshot = new long[MaxRxDdc];
     private long _rxPortRateWindowMs;
     // Frequency-correction factor (issue #325) — dimensionless multiplier
     // near 1.0 applied to the incoming dial Hz before _rxFreqHz is updated,
@@ -436,7 +454,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // Matched port convention — PC binds 1025, radio sends back with source
         // ports 1025/1026/1027/1035.. which we demux by fromaddr.
         sock.Bind(new IPEndPoint(localBind, 1025));
-        sock.ReceiveBufferSize = 1 << 20;
+        // 4 MiB RX socket buffer. At 1536 kHz a single DDC pushes ~9.3 MB/s, and
+        // with several DDCs streaming concurrently the kernel buffer must absorb
+        // scheduling jitter without dropping datagrams. 4 MiB ≈ 110 ms of one
+        // full-rate DDC (the OS may clamp to rmem_max on Linux — a hint, not a
+        // guarantee). See ComputeInQueueCapacity for the matching DSP-side cushion.
+        try { sock.ReceiveBufferSize = 4 << 20; }
+        catch (SocketException) { sock.ReceiveBufferSize = 1 << 20; }
         _sock = sock;
         _log.LogInformation(
             "p2.connect radio={Radio} localBind={Local} localPort=1025",
@@ -571,9 +595,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
     /// <summary>
     /// IQ packet rate (packets in the last completed ~1 s window) per UDP
-    /// source port 1035..1041 → index 0..6 → DDC 0..6. The RX2 DDC is
-    /// <see cref="Rx2Ddc"/>. A zero at the RX2 DDC index while RX2 is enabled
-    /// means the radio isn't streaming the second receiver at all. Returns a
+    /// source port 1035..1042 → index 0..7 → DDC 0..7. The RX2 DDC is
+    /// <see cref="Rx2Ddc"/>. A zero at an enabled DDC's index means the radio
+    /// isn't streaming that receiver at all. Returns a
     /// fresh copy; safe to call from any thread.
     /// </summary>
     public long[] SnapshotRxPortPacketRates()
@@ -1497,6 +1521,91 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         return p;
     }
 
+    /// <summary>
+    /// A single user receiver's DDC assignment for the generalized
+    /// Receive-Specific composer: which physical ADC feeds it (0 or 1 on a
+    /// dual-ADC board) and its IQ sample rate in kHz. The DDC index is derived
+    /// from the board's RX base (<see cref="RxBaseDdc"/>) plus the receiver's
+    /// position in the list.
+    /// </summary>
+    internal readonly record struct DdcReceiverSpec(byte AdcSource, ushort SampleRateKhz);
+
+    /// <summary>
+    /// Generalized "Receive Specific" composer for up to <see cref="MaxRxDdc"/>
+    /// concurrent DDCs, each independently assignable to either ADC and to its
+    /// own sample rate — the N-receiver foundation for full multi-RX operation.
+    /// The legacy <see cref="ComposeCmdRxBuffer"/> covers the RX1(+RX2)(+PS)
+    /// special case and stays byte-pinned by the wire tests; this method
+    /// produces byte-identical output for the equivalent single-/dual-receiver
+    /// inputs (see ComposeCmdRxBufferForReceiversTests) and extends cleanly to
+    /// all 8 DDCs.
+    ///
+    /// Receiver <c>i</c> is placed on DDC <c>RxBaseDdc(board) + i</c>.
+    /// PureSignal, when armed on Orion-family boards, additionally claims
+    /// DDC0/DDC1 for its feedback pair (192 kHz/24-bit + the byte-1363 sync)
+    /// exactly as the legacy composer does; callers must not assign user
+    /// receivers onto those reserved slots while PS is armed.
+    /// </summary>
+    internal static byte[] ComposeCmdRxBufferForReceivers(
+        uint seq,
+        byte numAdc,
+        IReadOnlyList<DdcReceiverSpec> receivers,
+        bool psEnabled = false,
+        HpsdrBoardKind boardKind = HpsdrBoardKind.OrionMkII,
+        bool adcDitherEnabled = false,
+        bool adcRandomEnabled = false)
+    {
+        ArgumentNullException.ThrowIfNull(receivers);
+        var p = new byte[BufLen];
+        WriteBeU32(p, 0, seq);
+        p[4] = numAdc;
+        byte adcMask = AdcOptionMask(numAdc);
+        p[5] = adcDitherEnabled ? adcMask : (byte)0;
+        p[6] = adcRandomEnabled ? adcMask : (byte)0;
+
+        int baseDdc = RxBaseDdc(boardKind);
+        byte ddcEnable = 0;
+
+        // PS feedback pair is Orion-family-only (DDC0+DDC1, byte 1363 sync) —
+        // mirror the legacy composer exactly; no-op on single-ADC Hermes-class.
+        bool psHardware = boardKind != HpsdrBoardKind.Hermes &&
+                          boardKind != HpsdrBoardKind.HermesII &&
+                          boardKind != HpsdrBoardKind.HermesC10;
+        if (psEnabled && psHardware)
+        {
+            ddcEnable |= 0x01;
+            WriteDdcConfigBlock(p, ddc: 0, adc: 0x00, sampleRateKhz: 192);
+            WriteDdcConfigBlock(p, ddc: 1, adc: numAdc, sampleRateKhz: 192);
+            p[1363] = 0x02;
+        }
+
+        for (int i = 0; i < receivers.Count; i++)
+        {
+            int ddc = baseDdc + i;
+            if (ddc > MaxRxDdc - 1)
+                throw new ArgumentOutOfRangeException(nameof(receivers),
+                    $"receiver {i} maps to DDC{ddc}, exceeding the {MaxRxDdc}-DDC protocol ceiling");
+            ddcEnable |= (byte)(1 << ddc);
+            WriteDdcConfigBlock(p, ddc, receivers[i].AdcSource, receivers[i].SampleRateKhz);
+        }
+
+        p[7] = ddcEnable;
+        return p;
+    }
+
+    // Writes one DDC's 6-byte Receive-Specific config block at offset
+    // 17 + ddc*6: [+0] ADC source, [+1..2] sample rate (kHz, big-endian),
+    // [+5] sample size (bit depth). Matches the inline writes in
+    // ComposeCmdRxBuffer byte-for-byte; bits defaults to 24 (the only depth any
+    // supported board uses).
+    private static void WriteDdcConfigBlock(byte[] p, int ddc, byte adc, ushort sampleRateKhz, byte bits = 24)
+    {
+        int off = 17 + ddc * 6;
+        p[off + 0] = adc;
+        WriteBeU16(p, off + 1, sampleRateKhz);
+        p[off + 5] = bits;
+    }
+
     private void SendCmdRx()
     {
         // Mirrors pihpsdr new_protocol_receive_specific for the MkII:
@@ -2087,7 +2196,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // per ~1 s for diagnostics (SnapshotRxPortPacketRates). Shows which DDC
         // ports the radio is actually streaming — the ground truth for RX2/
         // multi-receiver health. Single-threaded loop, so plain locals here.
-        var portPkts = new long[7];
+        var portPkts = new long[MaxRxDdc];
         long lastPortRollMs = Environment.TickCount64;
 
         try
@@ -2119,24 +2228,24 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 }
 
                 var srcPort = ((IPEndPoint)from).Port;
-                if (srcPort >= 1035 && srcPort <= 1041)
+                if (srcPort >= RxDataPortBase && srcPort < RxDataPortBase + MaxRxDdc)
                 {
-                    portPkts[srcPort - 1035]++;
+                    portPkts[srcPort - RxDataPortBase]++;
                     long nowMs = Environment.TickCount64;
                     if (nowMs - lastPortRollMs >= 1000)
                     {
                         lock (_rxPortRateLock)
                         {
-                            Array.Copy(portPkts, _rxPortRateSnapshot, 7);
+                            Array.Copy(portPkts, _rxPortRateSnapshot, MaxRxDdc);
                             _rxPortRateWindowMs = nowMs;
                         }
                         Array.Clear(portPkts);
                         lastPortRollMs = nowMs;
                     }
                 }
-                if (srcPort >= 1035 && srcPort <= 1041 && n == BufLen)
+                if (srcPort >= RxDataPortBase && srcPort < RxDataPortBase + MaxRxDdc && n == BufLen)
                 {
-                    int ddcIndex = srcPort - 1035;
+                    int ddcIndex = srcPort - RxDataPortBase;
                     if (_psFeedbackEnabled && ddcIndex == 0)
                     {
                         // PS-armed paired-DDC packet: 6B DDC0 (TX-mod-IQ) + 6B
@@ -2182,11 +2291,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         }
 
         // 238 complex samples: I (int24 BE) + Q (int24 BE), starting at byte 16.
-        // We own the array for the lifetime of the IqFrame the downstream
-        // pump consumes; there's no back-channel to Return it to a pool, so
-        // plain GC allocation is both simpler and correct.
         const int samplesPerPacket = DiscoverySamplesPerPacket;
-        var samples = new double[samplesPerPacket * 2];
+        int sampleDoubles = samplesPerPacket * 2;
+        // Pool the IQ buffer when a synchronous sink is attached (the normal DSP
+        // path): OnIqFrame copies the samples inline (engine.FeedIq) and the
+        // RxIqAvailable contract requires subscribers to copy, so the array is
+        // dead the instant OnIqFrame returns and we recycle it in the finally
+        // below. At 1536 kHz (~6.5k packets/s) this removes ~24 MB/s of Gen0
+        // garbage whose GC pauses were a direct cause of worker stalls. The
+        // channel fallback (no sink) hands the array to an async reader with no
+        // return back-channel, so it keeps plain GC allocation.
+        var sinkSnap = Volatile.Read(ref _rxSink);
+        bool pooled = sinkSnap != null;
+        double[] samples = pooled
+            ? ArrayPool<double>.Shared.Rent(sampleDoubles)
+            : new double[sampleDoubles];
         // 1/2^23 normalises int24 to [-1,+1]; the per-board correction is 1.0
         // for everything except Hermes@48 kHz (Brick2 quirk — see IqGainCorrection).
         double scale = (1.0 / 8388608.0) * IqGainCorrection(_boardKind, _sampleRateKhz);
@@ -2219,13 +2338,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             ReceiverIndex: receiverIndex);
 
         Interlocked.Increment(ref _totalFrames);
-        // iter5: prefer the synchronous sink when attached — bypasses the
+        // iter5: prefer the synchronous sink (snapshotted above) — bypasses the
         // Channel<T> hop that costs a TP wake-up per frame on the consumer.
-        var sinkSnap = Volatile.Read(ref _rxSink);
-        if (sinkSnap != null)
+        if (pooled)
         {
-            try { sinkSnap.OnIqFrame(in frame); }
+            try { sinkSnap!.OnIqFrame(in frame); }
             catch (Exception ex) { _log.LogError(ex, "p2.rx.sink_threw kind=iq"); }
+            finally { ArrayPool<double>.Shared.Return(samples); }
         }
         else
         {
