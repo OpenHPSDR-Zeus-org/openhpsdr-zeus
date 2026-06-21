@@ -152,22 +152,34 @@ public sealed class RemoteWebRtcSessionTests
     }
 
     /// <summary>
-    /// Drive <paramref name="broadcast"/> repeatedly (≈10 Hz, ≤15 s) until the
-    /// client's next-frame task completes, then return the received bytes. This
-    /// mirrors the real radio's continuous frame flow and removes both the
-    /// RemoteFrameSink attach-race and the single-shot latency-timeout fragility
-    /// that flakes on slow/loaded CI runners. Re-firing is safe — the prover's
-    /// frame TCS uses TrySetResult, so a late frame still resolves the await.
+    /// Await the client's next-frame task while re-driving <paramref name="broadcast"/>
+    /// at ≈10 Hz, bounded only by a generous CI backstop. Re-firing is required, not
+    /// merely defensive: a frame broadcast before the server's RemoteFrameSink attaches
+    /// (or before SCTP/DTLS is carrying data) is dropped, never queued — so we keep
+    /// firing until the awaited frame TCS resolves. This mirrors the real radio's
+    /// continuous 5–60 Hz frame flow and removes the attach-race together with the
+    /// single-shot latency-timeout fragility that flaked on the slowest loaded runner
+    /// (macOS arm64), where a fixed ~15 s window plus a tight final 1 s await could race
+    /// out. The frame TCS uses TrySetResult, so re-firing past resolution is a no-op,
+    /// and the 30 s backstop turns a genuine never-arrives into a deterministic failure
+    /// (OperationCanceledException) rather than a tight-timeout flake.
     /// </summary>
     private static async Task<byte[]> BroadcastUntilReceived(ProverClient client, Action broadcast)
     {
+        using var backstop = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var next = client.NextFrame();
-        for (int i = 0; i < 150 && !next.IsCompleted; i++)
+        while (true)
         {
             broadcast();
-            await Task.WhenAny(next, Task.Delay(100));
+            try
+            {
+                return await next.WaitAsync(TimeSpan.FromMilliseconds(100), backstop.Token);
+            }
+            catch (TimeoutException)
+            {
+                // 100 ms tick elapsed with no frame — re-broadcast and keep awaiting.
+            }
         }
-        return await next.WaitAsync(TimeSpan.FromSeconds(1));
     }
 
     /// <summary>Minimal in-process SPAKE2+ prover over WebRTC — what the browser will do.</summary>
