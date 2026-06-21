@@ -29,7 +29,8 @@ public static class ZeusEndpoints
         var log = app.Services.GetRequiredService<ILogger<object>>();
 
         // Live Diagnostics API v2 — unified, registry-driven surface
-        // (/api/diagnostics/v2). Legacy diagnostics routes below stay as-is.
+        // (/api/diagnostics/v2). Legacy diagnostics routes below delegate to
+        // the same providers for wire-compatible snapshots.
         app.MapDiagnosticsV2();
 
         app.MapGet("/api/version", () =>
@@ -835,87 +836,10 @@ public static class ZeusEndpoints
 
         app.MapGet("/api/state", (RadioService r) => r.Snapshot());
 
-        // TX diagnostic — exposes the producer/consumer counts for the mic-to-IQ ring
-        // so we can verify end-to-end wiring without relying on logging. Safe to leave
-        // in as it's free to call and reveals nothing that isn't already in DI.
-        // TX wiring diagnostic: verifies producer (TxAudioIngest) and consumer
-        // (Protocol1Client via ITxIqSource) stats. Useful for "is the mic reaching
-        // TXA, and is the EP2 packer actually reading the ring" questions without
-        // hunting through logs. Free to call, exposes no secrets.
-        app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSource src, TxAudioIngest ingest, DspPipelineService dsp, TxService tx, RadioService radio, StreamingHub hub, HardwareDiagnosticsService hardware, ExternalPttService externalPtt, AudioPluginBridge? pluginBridge, Zeus.Plugins.Host.Audio.VstEngineController? vstEngine, RxVstEngineService? rxVstEngine) =>
-        {
-            var generatedUtc = DateTimeOffset.UtcNow;
-            var p2Tx = dsp.ActiveP2Client?.TxIqDiagnosticsSnapshot();
-            var micUplink = hub.MicInboundDiagnosticsSnapshot(generatedUtc);
-            var radioState = radio.Snapshot();
-            var keying = hardware.KeyingSnapshot(externalPtt.Snapshot());
-            var power = hardware.PowerCalibrationSnapshot();
-            bool hostTxActive = tx.IsMoxOn || tx.IsTunOn || tx.IsTwoToneOn;
-            bool txStageActive = hostTxActive || radioState.TxMonitorEnabled;
-            bool requiresMicUplink = tx.IsMoxOn && !tx.IsTunOn && !tx.IsTwoToneOn;
-            var txStage = dsp.CurrentEngine?.GetTxStageMeters() ?? TxStageMeters.Silent;
-            var activePower = string.Equals(power.ActiveProtocol, "P2", StringComparison.OrdinalIgnoreCase)
-                ? power.P2
-                : power.P1;
-            bool? hardwarePtt = string.Equals(keying.ActiveProtocol, "P2", StringComparison.OrdinalIgnoreCase)
-                ? keying.P2PttIn
-                : keying.P1HardwarePtt;
-            return Results.Ok(new
-            {
-                generatedUtc,
-                iqSourceType = src.GetType().FullName,
-                iqSourceIsRing = ReferenceEquals(src, ring),
-                ring = new { ring.TotalWritten, ring.TotalRead, ring.Count, ring.Dropped, ring.Capacity, ring.RecentMag },
-                micUplink,
-                ingest = new { ingest.TotalMicSamples, ingest.TotalTxBlocks, ingest.DroppedFrames },
-                protocol2 = p2Tx,
-                audioPath = BuildTxAudioPathHealth(
-                    generatedUtc,
-                    ring.TotalWritten,
-                    ring.TotalRead,
-                    ring.Count,
-                    ring.Dropped,
-                    ring.Capacity,
-                    ring.RecentMag,
-                    ingest.TotalMicSamples,
-                    ingest.TotalTxBlocks,
-                    ingest.DroppedFrames,
-                    p2Tx,
-                    hostTxActive,
-                    micUplink,
-                    requiresMicUplink),
-                stage = BuildTxStageDiagnostics(txStage, txStageActive),
-                egress = BuildTxEgressHealth(
-                    generatedUtc,
-                    ring.TotalWritten,
-                    ring.Dropped,
-                    p2Tx,
-                    tx.IsMoxOn,
-                    tx.IsTunOn,
-                    tx.IsTwoToneOn,
-                    hardwarePtt,
-                    activePower.FwdWatts,
-                    radioState.Mode,
-                    IsG2DutyGuidance(power.EffectiveBoard, power.OrionMkIIVariant)),
-                txPlugins = pluginBridge is null ? null : new
-                {
-                    masterBypassed = pluginBridge.IsMasterBypassed,
-                    bypassedForRemoteTx = pluginBridge.IsBypassedForRemoteTxSource,
-                },
-                vstEngine = vstEngine is null ? null : new
-                {
-                    active = vstEngine.IsActive,
-                    degradedBlocks = vstEngine.DegradedBlocks,
-                },
-                rxVstEngine = rxVstEngine is null ? null : new
-                {
-                    active = rxVstEngine.EngineActive,
-                    available = rxVstEngine.EngineAvailable,
-                    activePlugins = rxVstEngine.ActivePluginCount,
-                    degradedBlocks = rxVstEngine.DegradedBlocks,
-                },
-            });
-        });
+        // Compatibility route for the TX diagnostics snapshot. The read path is
+        // owned by TxDiagnosticsProvider so legacy and v2 diagnostics cannot drift.
+        app.MapGet("/api/tx/diag", (DiagnosticsProviderRegistry diagnostics) =>
+            Results.Ok(DiagnosticsSnapshot(diagnostics, "tx")));
 
         app.MapGet("/api/radios", async (
             IRadioDiscovery p1Discovery,
@@ -2023,43 +1947,43 @@ public static class ZeusEndpoints
         // discovery/state, Thetis-derived static capabilities, and decoded
         // P1/P2 wire telemetry so new hardware fields can be mapped before
         // they become operator-configurable controls.
-        app.MapGet("/api/radio/diagnostics", (HardwareDiagnosticsService diag) =>
+        app.MapGet("/api/radio/diagnostics", (DiagnosticsProviderRegistry diagnostics) =>
         {
-            return Results.Ok(diag.Snapshot());
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "hardware"));
         });
 
-        app.MapPost("/api/radio/diagnostics/map/reset", (HardwareDiagnosticsService diag) =>
+        app.MapPost("/api/radio/diagnostics/map/reset", (HardwareDiagnosticsService diag, DiagnosticsProviderRegistry diagnostics) =>
         {
             diag.ResetMapping();
-            return Results.Ok(diag.Snapshot());
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "hardware"));
         });
 
-        app.MapPost("/api/radio/diagnostics/map/marker", (HardwareDiagnosticsMarkerRequest req, HardwareDiagnosticsService diag) =>
+        app.MapPost("/api/radio/diagnostics/map/marker", (HardwareDiagnosticsMarkerRequest req, HardwareDiagnosticsService diag, DiagnosticsProviderRegistry diagnostics) =>
         {
             diag.AddMappingMarker(req.Label, req.Notes);
-            return Results.Ok(diag.Snapshot());
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "hardware"));
         });
 
-        app.MapPost("/api/radio/diagnostics/dsp-scene", (FrontendDspSceneDiagnosticsRequest req, FrontendDspSceneDiagnosticsService scene) =>
+        app.MapPost("/api/radio/diagnostics/dsp-scene", (FrontendDspSceneDiagnosticsRequest req, FrontendDspSceneDiagnosticsService scene, DiagnosticsProviderRegistry diagnostics) =>
         {
             scene.Update(req);
-            return Results.Ok(scene.Snapshot());
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "frontend-dsp-scene"));
         });
 
-        app.MapGet("/api/radio/diagnostics/dsp-scene", (FrontendDspSceneDiagnosticsService scene) =>
+        app.MapGet("/api/radio/diagnostics/dsp-scene", (DiagnosticsProviderRegistry diagnostics) =>
         {
-            return Results.Ok(scene.Snapshot());
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "frontend-dsp-scene"));
         });
 
-        app.MapPost("/api/radio/diagnostics/audio-playback", (FrontendAudioPlaybackDiagnosticsRequest req, FrontendAudioPlaybackDiagnosticsService playback) =>
+        app.MapPost("/api/radio/diagnostics/audio-playback", (FrontendAudioPlaybackDiagnosticsRequest req, FrontendAudioPlaybackDiagnosticsService playback, DiagnosticsProviderRegistry diagnostics) =>
         {
             playback.Update(req);
-            return Results.Ok(playback.Snapshot());
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "frontend-audio-playback"));
         });
 
-        app.MapGet("/api/radio/diagnostics/audio-playback", (FrontendAudioPlaybackDiagnosticsService playback) =>
+        app.MapGet("/api/radio/diagnostics/audio-playback", (DiagnosticsProviderRegistry diagnostics) =>
         {
-            return Results.Ok(playback.Snapshot());
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "frontend-audio-playback"));
         });
 
         app.MapGet("/api/dsp/nr-condition", (FrontendDspSceneDiagnosticsService scene, DspPipelineService dsp, RadioService radio) =>
@@ -2070,13 +1994,9 @@ public static class ZeusEndpoints
                 BuildSmartNrRxChainRuntime(state, radio.GetAdcProtectionStatus())));
         });
 
-        app.MapGet("/api/dsp/live-diagnostics", (FrontendDspSceneDiagnosticsService scene, DspPipelineService dsp, RadioService radio) =>
+        app.MapGet("/api/dsp/live-diagnostics", (DiagnosticsProviderRegistry diagnostics) =>
         {
-            var state = radio.Snapshot();
-            var condition = scene.SmartNrCondition(
-                dsp.SnapshotNrRuntime(),
-                BuildSmartNrRxChainRuntime(state, radio.GetAdcProtectionStatus()));
-            return Results.Ok(DspLiveDiagnosticsService.Build(condition, dsp.SnapshotLiveRuntimeEvidence(), state));
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "dsp-live"));
         });
 
         app.MapGet("/api/dsp/external-engine-candidates", () =>
@@ -2104,21 +2024,9 @@ public static class ZeusEndpoints
             return Results.Ok(DspBenchmarkCaptureManifestService.Build(live, DspBenchmarkPlanCatalog.Build()));
         });
 
-        app.MapGet("/api/dsp/modernization-snapshot", (FrontendDspSceneDiagnosticsService scene, DspPipelineService dsp, RadioService radio) =>
+        app.MapGet("/api/dsp/modernization-snapshot", (DiagnosticsProviderRegistry diagnostics) =>
         {
-            var state = radio.Snapshot();
-            var condition = scene.SmartNrCondition(
-                dsp.SnapshotNrRuntime(),
-                BuildSmartNrRxChainRuntime(state, radio.GetAdcProtectionStatus()));
-            var live = DspLiveDiagnosticsService.Build(condition, dsp.SnapshotLiveRuntimeEvidence(), state);
-            var plan = DspBenchmarkPlanCatalog.Build();
-            var manifest = DspBenchmarkCaptureManifestService.Build(live, plan);
-            return Results.Ok(DspModernizationEvidenceSnapshotService.Build(
-                condition,
-                live,
-                plan,
-                manifest,
-                DspExternalEngineCandidateCatalog.All()));
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "dsp-modernization"));
         });
 
         app.MapGet("/api/tx/external-ptt", (ExternalPttService externalPtt) =>
@@ -3581,6 +3489,15 @@ public static class ZeusEndpoints
             SquelchAdaptive: squelch.Adaptive,
             SquelchLevel: squelch.Level,
             PreampOn: state.PreampOn);
+    }
+
+    private static object DiagnosticsSnapshot(DiagnosticsProviderRegistry registry, string routeSegment)
+    {
+        if (registry.TryGetByRoute(routeSegment, out var provider))
+            return provider.Snapshot();
+
+        throw new InvalidOperationException(
+            $"Diagnostics provider route '{routeSegment}' is not registered.");
     }
 
     internal static object BuildTxStageDiagnostics(TxStageMeters stage, bool hostTxActive)

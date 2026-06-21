@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// v2 provider wrapping the existing DSP modernization scorecard. Reproduces the
-// exact body of the legacy GET /api/dsp/live-diagnostics lambda so the unified
-// surface and the legacy route return byte-identical JSON. No behaviour change.
+// v2 provider owning the existing DSP modernization scorecard. The legacy
+// GET /api/dsp/live-diagnostics route delegates here so the unified surface and
+// compatibility route return the same payload. No behaviour change.
 
 using Zeus.Contracts;
 
