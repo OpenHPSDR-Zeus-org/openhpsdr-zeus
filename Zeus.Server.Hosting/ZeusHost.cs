@@ -237,9 +237,24 @@ public static class ZeusHost
         builder.Services.AddSingleton<Zeus.Server.Hosting.Remote.WebRtcSpikeService>();
         // Remote-access session password verifier (SPAKE2+, ADR-0008).
         builder.Services.AddSingleton<Zeus.Server.Hosting.Remote.RemotePasswordStore>();
+        // Loopback HttpClient for the read-only remote API tunnel. Post-unlock
+        // GET/HEAD requests on the WebRTC "api" channel are proxied to this
+        // server's own local Kestrel (127.0.0.1:HttpPort) and the response
+        // returned to the remote monitor. Short timeout — chrome endpoints are
+        // small and local.
+        builder.Services.AddHttpClient(
+            Zeus.Server.Hosting.Remote.RemoteWebRtcSession.LoopbackHttpClientName,
+            c => c.Timeout = TimeSpan.FromSeconds(10));
         // Remote-access WebRTC signaling (Phase 1). Answers offers with a session
-        // gated behind the SPAKE2+ password handshake.
-        builder.Services.AddSingleton<Zeus.Server.Hosting.Remote.RemoteWebRtcService>();
+        // gated behind the SPAKE2+ password handshake. The read-only API tunnel
+        // loopback-proxies to this host's own Kestrel on HttpPort (or :0 disabled).
+        builder.Services.AddSingleton<Zeus.Server.Hosting.Remote.RemoteWebRtcService>(sp =>
+            new Zeus.Server.Hosting.Remote.RemoteWebRtcService(
+                sp.GetRequiredService<Zeus.Server.Hosting.Remote.RemotePasswordStore>(),
+                sp.GetRequiredService<ILogger<Zeus.Server.Hosting.Remote.RemoteWebRtcService>>(),
+                sp.GetService<StreamingHub>(),
+                sp.GetService<IHttpClientFactory>(),
+                options.HttpPort != 0 ? $"http://127.0.0.1:{options.HttpPort}" : null));
         // Radio-side broker glue (Phase 3). Inert until a remote-access password
         // is set; then it keeps a "host" socket on the broker and answers offers.
         builder.Services.AddHostedService<Zeus.Server.Hosting.Remote.RemoteBrokerClient>();

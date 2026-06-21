@@ -1,3 +1,5 @@
+using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using SIPSorcery.Net;
@@ -29,8 +31,15 @@ public sealed class RemoteWebRtcSession
     private readonly Zeus.Server.StreamingHub? _hub;
     private readonly Guid _sinkId = Guid.NewGuid();
 
+    // Loopback REST tunnel (read-only). When supplied, post-unlock GET/HEAD
+    // requests on the "api" channel are proxied to the radio's own local
+    // Kestrel and the response returned. Null → the api channel is inert.
+    private readonly IHttpClientFactory? _httpFactory;
+    private readonly string? _loopbackBaseUrl;
+
     private RTCDataChannel? _control;
     private RTCDataChannel? _frames;
+    private RTCDataChannel? _api;
     private RemoteFrameSink? _sink;
 
     // Post-unlock binary stream-request control frames (RX monitoring, Phase A):
@@ -42,13 +51,51 @@ public sealed class RemoteWebRtcSession
     private bool _wantsDisplay;
     private bool _wantsAudio;
 
+    // Named HttpClient used for the loopback REST tunnel (see ZeusHost.cs).
+    internal const string LoopbackHttpClientName = "RemoteApiLoopback";
+
+    // Cap on a tunnelled response body (1 MiB). Larger replies are refused with
+    // 502 — the read-only chrome endpoints are all small JSON; a giant body
+    // would be an export/dump path we don't want to relay anyway.
+    private const int MaxResponseBytes = 1 * 1024 * 1024;
+
+    /// <summary>
+    /// Sensitive-endpoint denylist for the read-only API tunnel. Even a GET to
+    /// one of these paths is refused (403, no loopback) so a remote monitor
+    /// cannot exfiltrate credentials, secrets, or the prefs database. Matching
+    /// is case-insensitive prefix on the URL path (query string ignored).
+    ///
+    /// Derived by scanning ZeusEndpoints.cs for GET endpoints that touch
+    /// credentials/identity/secrets or that export the prefs DB:
+    ///   /api/remote/password   — remote-access session password store/status
+    ///   /api/qrz               — QRZ status carries the signed-in operator's
+    ///                            callsign/identity; login/credentials live here
+    ///   /api/chat              — chat identity/roster/friends derive from the
+    ///                            QRZ session; conservative full-prefix deny
+    ///   /api/prefs/databases/export — downloads the entire prefs LiteDB
+    ///                            (contains the QRZ password + remote verifier)
+    ///   /api/log/export        — full logbook export (PII / ADIF dump)
+    /// Conservative by design: when unsure, deny.
+    /// </summary>
+    private static readonly string[] DeniedPathPrefixes =
+    {
+        "/api/remote/password",
+        "/api/qrz",
+        "/api/chat",
+        "/api/prefs/databases/export",
+        "/api/log/export",
+    };
+
     public RemoteWebRtcSession(
         RemoteVerifierMaterial verifier, ILogger log,
-        IReadOnlyList<RTCIceServer>? iceServers = null, Zeus.Server.StreamingHub? hub = null)
+        IReadOnlyList<RTCIceServer>? iceServers = null, Zeus.Server.StreamingHub? hub = null,
+        IHttpClientFactory? httpFactory = null, string? loopbackBaseUrl = null)
     {
         _verifier = verifier;
         _log = log;
         _hub = hub;
+        _httpFactory = httpFactory;
+        _loopbackBaseUrl = loopbackBaseUrl?.TrimEnd('/');
 
         var gate = new Spake2PlusAuthGate(
             RemoteAuthConstants.Context, RemoteAuthConstants.IdProver, RemoteAuthConstants.IdVerifier,
@@ -138,6 +185,13 @@ public sealed class RemoteWebRtcSession
             case "frames":
                 _frames = dc;
                 break;
+            case "api":
+                // Read-only REST tunnel. Deny-by-default: each message is
+                // ignored until the session is UNLOCKED (checked in the handler),
+                // and only GET/HEAD to non-denylisted paths ever reach loopback.
+                _api = dc;
+                dc.onmessage += (_, _, data) => OnApiMessage(data);
+                break;
             default:
                 _log.LogWarning("rtc.remote unexpected data channel '{Label}'", dc.label);
                 break;
@@ -201,6 +255,148 @@ public sealed class RemoteWebRtcSession
                 _hub.AdjustAudioRequests(enable ? 1 : -1);
                 break;
         }
+    }
+
+    // -- Read-only REST tunnel ----------------------------------------------
+    //
+    // Post-unlock only. Each "api" message is {id, method, path}. The radio
+    // loopback-proxies GET/HEAD to its own local Kestrel and replies with
+    // {id, status, contentType, body}. Safety gates, in order:
+    //   1. LOCKED            → ignore entirely (deny-by-default, fail-closed).
+    //   2. method != GET/HEAD→ 405 (read-only; never touches the radio).
+    //   3. denylisted path   → 403 (no loopback; can't exfiltrate secrets).
+    //   4. otherwise         → loopback GET; 502 on >1 MiB body or any error.
+    // Fire-and-forget like the control handling — never block the data-channel
+    // callback thread, and never throw out of the handler.
+
+    private void OnApiMessage(byte[] data)
+    {
+        if (!_session.IsUnlocked) return; // pre-unlock API input is ignored
+        _ = HandleApiRequestAsync(data);
+    }
+
+    private async Task HandleApiRequestAsync(byte[] data)
+    {
+        int id = 0;
+        try
+        {
+            string method;
+            string path;
+            using (var doc = JsonDocument.Parse(data))
+            {
+                var root = doc.RootElement;
+                id = root.TryGetProperty("id", out var idEl) ? idEl.GetInt32() : 0;
+                method = (root.TryGetProperty("method", out var mEl) ? mEl.GetString() : null)
+                    ?? "GET";
+                path = (root.TryGetProperty("path", out var pEl) ? pEl.GetString() : null) ?? "";
+            }
+
+            // Read-only: only GET/HEAD ever leave this server toward the radio.
+            if (!IsReadOnlyMethod(method))
+            {
+                SendApiReply(id, 405);
+                return;
+            }
+
+            if (_httpFactory is null || string.IsNullOrEmpty(_loopbackBaseUrl) || !path.StartsWith('/'))
+            {
+                SendApiReply(id, 502);
+                return;
+            }
+
+            // Reject path traversal outright. Without this, a path like
+            // "/api/state/../prefs/databases/export" slips past the denylist
+            // (it prefix-matches nothing) yet Uri canonicalisation collapses the
+            // "../" so the loopback GET lands on a denied endpoint — a bypass that
+            // would exfiltrate the prefs DB. Legit SPA /api paths never contain
+            // dot-segments or percent-encoded ones.
+            if (path.Contains("..", StringComparison.Ordinal)
+                || path.Contains("%2e", StringComparison.OrdinalIgnoreCase))
+            {
+                _log.LogWarning("rtc.remote api DENY (traversal) {Path}", path);
+                SendApiReply(id, 403);
+                return;
+            }
+
+            // Build the loopback target once and denylist-check the CANONICAL
+            // path that will actually be requested — never the raw input. Verify
+            // it stays on loopback so a crafted authority can't redirect the GET
+            // off-box (SSRF).
+            if (!Uri.TryCreate(_loopbackBaseUrl + path, UriKind.Absolute, out var target)
+                || !target.IsLoopback)
+            {
+                SendApiReply(id, 502);
+                return;
+            }
+
+            // Sensitive-endpoint denylist — refuse before any loopback call.
+            if (IsDenied(target.AbsolutePath))
+            {
+                _log.LogWarning("rtc.remote api DENY {Path}", target.AbsolutePath);
+                SendApiReply(id, 403);
+                return;
+            }
+
+            var client = _httpFactory.CreateClient(LoopbackHttpClientName);
+            using var req = new HttpRequestMessage(
+                HttpMethod.Get, target); // HEAD proxied as GET; body discarded below
+            using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead)
+                .ConfigureAwait(false);
+
+            // Cap the body so the tunnel can't be used as a bulk-export channel.
+            if (resp.Content.Headers.ContentLength is long len && len > MaxResponseBytes)
+            {
+                SendApiReply(id, 502);
+                return;
+            }
+            var bytes = await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            if (bytes.Length > MaxResponseBytes)
+            {
+                SendApiReply(id, 502);
+                return;
+            }
+
+            var contentType = resp.Content.Headers.ContentType?.ToString();
+            var body = string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase)
+                ? ""
+                : Encoding.UTF8.GetString(bytes);
+            SendApiReply(id, (int)resp.StatusCode, contentType, body);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "rtc.remote api request failed — replying 502");
+            try { SendApiReply(id, 502); } catch { /* channel gone */ }
+        }
+    }
+
+    private static bool IsReadOnlyMethod(string method)
+        => string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsDenied(string path)
+    {
+        // Compare on the path only (strip any query string) so a denied prefix
+        // can't be smuggled past with a "?..." suffix.
+        int q = path.IndexOf('?');
+        var p = q >= 0 ? path[..q] : path;
+        foreach (var prefix in DeniedPathPrefixes)
+            if (p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
+
+    private void SendApiReply(int id, int status, string? contentType = null, string? body = null)
+    {
+        if (_api is null) return;
+        var payload = new Dictionary<string, object?>
+        {
+            ["id"] = id,
+            ["status"] = status,
+        };
+        if (contentType is not null) payload["contentType"] = contentType;
+        if (body is not null) payload["body"] = body;
+        if (contentType is not null) payload["headers"] = new Dictionary<string, string> { ["content-type"] = contentType };
+        try { _api.send(JsonSerializer.Serialize(payload)); } catch { /* channel closed */ }
     }
 
     private async Task HandleControlAsync(byte[] data)
