@@ -93,7 +93,7 @@ public static class TciHandshake
         cmds.Add(TciProtocol.Command("mon_volume", -20));
         cmds.Add(TciProtocol.Command("mon_enable", false));
 
-        cmds.Add(TciProtocol.Command("dds", 0, state.VfoHz));
+        cmds.Add(TciProtocol.Command("dds", 0, CwOffset.EffectiveLoHz(state)));
         cmds.Add(TciProtocol.Command("if", 0, 0, 0));
         cmds.Add(TciProtocol.Command("if", 0, 1, 0));
         cmds.Add(TciProtocol.Command("vfo", 0, 0, state.VfoHz));

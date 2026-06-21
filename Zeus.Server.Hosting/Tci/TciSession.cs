@@ -893,7 +893,7 @@ public sealed class TciSession : IDisposable
         {
             // Query
             var state = _radio.Snapshot();
-            Send(TciProtocol.Command("dds", rx, state.VfoHz));
+            Send(TciProtocol.Command("dds", rx, CwOffset.EffectiveLoHz(state)));
         }
         else if (args.Length >= 2 && TciProtocol.TryParseLong(args[1], out long hz))
         {
