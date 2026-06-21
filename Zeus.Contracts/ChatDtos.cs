@@ -117,6 +117,15 @@ public sealed record ChatFriendsDto(
 
 public sealed record ChatEnableRequest(bool Enabled);
 
+/// <summary>
+/// Heartbeat from the web client reporting whether the operator currently has
+/// the Chat panel displayed. Presence (the relay connection) is gated on this
+/// in addition to <see cref="ChatEnableRequest"/>: an enabled operator who is
+/// not showing the panel stays off everyone's roster. Sent on panel mount, on
+/// a periodic interval while shown, and as <c>false</c> on unmount.
+/// </summary>
+public sealed record ChatVisibleRequest(bool Visible);
+
 /// <summary>Outgoing message; <paramref name="Room"/> defaults to the public lobby.</summary>
 public sealed record ChatSendRequest(string Text, string? Room = null);
 

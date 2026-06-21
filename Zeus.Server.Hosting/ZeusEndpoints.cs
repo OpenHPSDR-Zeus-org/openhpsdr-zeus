@@ -2449,6 +2449,11 @@ public static class ZeusEndpoints
         // ── ZeusChat — operator-to-operator chat over the Cloudflare relay ──
         app.MapGet("/api/chat/status", (ChatService chat) => chat.GetStatus());
 
+        // Web-client heartbeat: presence is published only while the operator is
+        // showing the Chat panel (so closing/hiding it drops them off the roster).
+        app.MapPost("/api/chat/visible", (ChatVisibleRequest req, ChatService chat) =>
+            Results.Ok(chat.ReportPanelVisible(req.Visible)));
+
         app.MapPost("/api/chat/enable", (ChatEnableRequest req, ChatService chat) =>
         {
             log.LogInformation("api.chat.enable enabled={Enabled}", req.Enabled);
