@@ -590,6 +590,19 @@ public static class ZeusHost
         builder.Services.AddSingleton<AudioProcessingModeService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioProcessingModeService>());
 
+        // VstEngineInstaller — the in-app "Get VST Engine" downloader. The engine
+        // is fetched from its upstream release and staged at the Zeus-managed path,
+        // never vendored/bundled (GPLv3 isolation — see VstEngineInstaller). The
+        // named HttpClient carries the User-Agent the GitHub API requires and a
+        // generous timeout for the multi-MB engine download.
+        builder.Services.AddHttpClient("ZeusVstEngine", c =>
+        {
+            c.Timeout = TimeSpan.FromMinutes(5);
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("OpenHPSDR-Zeus");
+            c.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        });
+        builder.Services.AddSingleton<VstEngineInstaller>();
+
         // TxAudioProfileService — orchestrates the unified TX Audio Profile
         // system: capture (mic/leveler/CFC/bandpass/processing-mode/chain shape/
         // VST blobs + native plugin dumps/fidelity), apply (write-through the

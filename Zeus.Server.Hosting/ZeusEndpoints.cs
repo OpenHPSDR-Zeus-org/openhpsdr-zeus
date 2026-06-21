@@ -226,6 +226,41 @@ public static class ZeusEndpoints
             });
         });
 
+        // VST engine provisioning — the in-app "Get VST Engine" flow. The engine
+        // is the upstream KlayaR/VSTHost headless binary, fetched from its latest
+        // release and staged at the Zeus-managed path; it is never bundled in the
+        // Zeus installer (GPLv3 isolation — see VstEngineInstaller). GET reports
+        // install progress + whether the engine is already present; POST starts a
+        // background download (idempotent — no-op if already installed/running).
+        // The frontend polls GET until phase is "done" / "failed", then re-reads
+        // the processing-mode endpoint so the new engine is picked up.
+        static object EngineInstallDto(VstEngineInstaller installer)
+        {
+            var s = installer.Current;
+            return new
+            {
+                phase = s.Phase.ToString().ToLowerInvariant(),
+                percent = s.Percent,
+                message = s.Message,
+                version = s.Version,
+                engineAvailable = installer.EngineInstalled,
+            };
+        }
+        app.MapGet("/api/audio-suite/vst-engine/install", (VstEngineInstaller installer) =>
+            Results.Ok(EngineInstallDto(installer)));
+        app.MapGet("/api/tx-audio-suite/vst-engine/install", (VstEngineInstaller installer) =>
+            Results.Ok(EngineInstallDto(installer)));
+        app.MapPost("/api/audio-suite/vst-engine/install", (VstEngineInstaller installer) =>
+        {
+            installer.Start();
+            return Results.Ok(EngineInstallDto(installer));
+        });
+        app.MapPost("/api/tx-audio-suite/vst-engine/install", (VstEngineInstaller installer) =>
+        {
+            installer.Start();
+            return Results.Ok(EngineInstallDto(installer));
+        });
+
         // Audio plugin chain order — operator's preferred sequence for
         // the plugins in the Audio Suite window. GET returns the
         // canonical ordered list of plugin IDs; PUT accepts a new

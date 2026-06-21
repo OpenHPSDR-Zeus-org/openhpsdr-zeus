@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties, type Rea
 import { RefreshCw } from 'lucide-react';
 import { CfcSettingsPanel } from './CfcSettingsPanel';
 import { DownloadAudioSuiteButton } from './DownloadAudioSuiteButton';
+import { DownloadVstEngineButton } from './DownloadVstEngineButton';
 import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
 import type { RegisteredPluginPanel } from '../plugins/runtime/pluginRuntime';
 import {
@@ -614,6 +615,7 @@ function TxChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) 
         <>
           <SuiteButton route="tx" />
           {!vstMode && <DownloadAudioSuiteButton />}
+          {vstMode && <DownloadVstEngineButton />}
         </>
       }
     >

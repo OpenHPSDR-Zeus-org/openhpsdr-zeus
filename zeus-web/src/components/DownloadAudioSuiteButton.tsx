@@ -12,7 +12,7 @@
 // after install finishes we show a modal telling the operator to restart
 // Zeus. No auto-restart — operator decides.
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { installPlugin } from '../plugins/api/plugins';
 import { fetchInstalledPlugins } from '../plugins/api/plugins';
 import type { PluginDto } from '../plugins/api/plugins';
@@ -85,6 +85,25 @@ export function DownloadAudioSuiteButton() {
   const [rows, setRows] = useState<ProgressRow[]>([]);
   const [restartModalOpen, setRestartModalOpen] = useState(false);
   const [showProgress, setShowProgress] = useState(false);
+  // Hide the affordance once every suite plugin is already on disk — there's
+  // nothing left to download. Probed on mount; re-probed after our own install.
+  // Fail-open: if the probe errors we keep the button so the operator isn't
+  // blocked from installing.
+  const [allInstalled, setAllInstalled] = useState(false);
+
+  const probeInstalled = useCallback(async () => {
+    try {
+      const listing = await fetchInstalledPlugins();
+      const ids = new Set(listing.plugins.map((p: PluginDto) => p.id));
+      setAllInstalled(AUDIO_SUITE.every((p) => ids.has(p.id)));
+    } catch {
+      setAllInstalled(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void probeInstalled();
+  }, [probeInstalled]);
 
   const totals = useMemo(() => {
     let ok = 0; let skipped = 0; let errors = 0;
@@ -153,7 +172,11 @@ export function DownloadAudioSuiteButton() {
     // landed — skipped-only runs don't need a restart.
     const anyInstalled = working.some((r) => r.state === 'ok');
     if (anyInstalled) setRestartModalOpen(true);
-  }, []);
+    void probeInstalled();
+  }, [probeInstalled]);
+
+  // Already fully installed and nothing in flight → nothing to offer.
+  if (allInstalled && !busy && !showProgress) return null;
 
   return (
     <>
