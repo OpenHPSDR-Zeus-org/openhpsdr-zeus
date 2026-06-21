@@ -19,6 +19,13 @@
 
 import { useEffect } from 'react';
 import { usePttStore } from '../state/ptt-store';
+import {
+  useAntennaStore,
+  type AntennaName,
+  type RxAuxName,
+} from '../state/antenna-store';
+
+const ANTENNA_OPTIONS: AntennaName[] = ['Ant1', 'Ant2', 'Ant3'];
 
 export function RadioSettingsPanel() {
   const pttKeyed = usePttStore((s) => s.keyed);
@@ -28,9 +35,25 @@ export function RadioSettingsPanel() {
   const loadPtt = usePttStore((s) => s.load);
   const setPttEnabled = usePttStore((s) => s.setEnabled);
 
+  const antSettings = useAntennaStore((s) => s.settings);
+  const antInflight = useAntennaStore((s) => s.inflight);
+  const loadAntenna = useAntennaStore((s) => s.load);
+  const setAntennaBand = useAntennaStore((s) => s.setBand);
+
   useEffect(() => {
     void loadPtt();
-  }, [loadPtt]);
+    void loadAntenna();
+  }, [loadPtt, loadAntenna]);
+
+  // The antenna card renders only when the connected board exposes at least one
+  // antenna control — otherwise (HL2's single jack) there's nothing to set.
+  const showAntenna =
+    antSettings.hasTxAntennaRelays ||
+    antSettings.hasRxAntennaRelays ||
+    antSettings.availableRxAux.length > 0;
+  // Order the bands by the server's HF list as returned.
+  const bands = antSettings.bands;
+  const rxAuxOptions: RxAuxName[] = ['None', ...antSettings.availableRxAux];
 
   return (
     <div className="ps-shell">
@@ -97,6 +120,100 @@ export function RadioSettingsPanel() {
           <span style={{ color: 'var(--fg-2)' }}>{pttHangMs} ms</span>
         </div>
       </div>
+
+      {showAntenna && (
+        <div className="ps-card">
+          <h4>
+            <svg className="ps-ic-sm" viewBox="0 0 12 12">
+              <path d="M6 1.5v9M3 3.5l3-2 3 2M2 6.5l4 4 4-4" fill="none" />
+            </svg>
+            Antenna
+            <span className="ps-card-hint">per-band TX / RX relay + RX-aux</span>
+          </h4>
+
+          {bands.map((b) => (
+            <div className="ps-field" key={b.band}>
+              <div className="ps-name">
+                {b.band}
+                <em>
+                  TX / RX antenna relay and auxiliary RX input for this band.
+                </em>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                {antSettings.hasTxAntennaRelays && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                    <span style={{ color: 'var(--fg-2)', fontSize: '0.8em' }}>TX</span>
+                    <select
+                      value={b.txAnt}
+                      disabled={antInflight}
+                      onChange={(e) =>
+                        void setAntennaBand(
+                          b.band,
+                          e.target.value as AntennaName,
+                          b.rxAnt,
+                          b.rxAux,
+                        )
+                      }
+                    >
+                      {ANTENNA_OPTIONS.map((a) => (
+                        <option key={a} value={a}>
+                          {a}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {antSettings.hasRxAntennaRelays && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                    <span style={{ color: 'var(--fg-2)', fontSize: '0.8em' }}>RX</span>
+                    <select
+                      value={b.rxAnt}
+                      disabled={antInflight}
+                      onChange={(e) =>
+                        void setAntennaBand(
+                          b.band,
+                          b.txAnt,
+                          e.target.value as AntennaName,
+                          b.rxAux,
+                        )
+                      }
+                    >
+                      {ANTENNA_OPTIONS.map((a) => (
+                        <option key={a} value={a}>
+                          {a}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {antSettings.availableRxAux.length > 0 && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                    <span style={{ color: 'var(--fg-2)', fontSize: '0.8em' }}>AUX</span>
+                    <select
+                      value={b.rxAux}
+                      disabled={antInflight}
+                      onChange={(e) =>
+                        void setAntennaBand(
+                          b.band,
+                          b.txAnt,
+                          b.rxAnt,
+                          e.target.value as RxAuxName,
+                        )
+                      }
+                    >
+                      {rxAuxOptions.map((a) => (
+                        <option key={a} value={a}>
+                          {a}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

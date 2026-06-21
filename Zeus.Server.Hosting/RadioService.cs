@@ -63,6 +63,10 @@ public sealed class RadioService : IDisposable
     private readonly ILogger<RadioService> _log;
     private readonly DspSettingsStore _dspSettingsStore;
     private readonly PaSettingsStore _paStore;
+    // Per-band external-antenna selection (external-ports plan — antenna slice,
+    // #804). Optional so existing constructions (tests) stay valid; null → the
+    // antenna path resolves to ANT1/ANT1/None (byte-identical to today).
+    private readonly AntennaSettingsStore? _antennaStore;
     private readonly PreferredRadioStore? _preferredRadioStore;
     private readonly PsSettingsStore? _psStore;
     private readonly FilterPresetStore? _filterPresetStore;
@@ -252,17 +256,23 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AntennaSettingsStore? antennaStore = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
         _dspSettingsStore = dspSettingsStore;
         _paStore = paStore;
+        _antennaStore = antennaStore;
         _preferredRadioStore = preferredRadioStore;
         _psStore = psStore;
         _filterPresetStore = filterPresetStore;
         _radioStateStore = radioStateStore;
         _paStore.Changed += RecomputePaAndPush;
+        // An antenna edit re-pushes the active band's selection server-
+        // authoritatively through the same RecomputePaAndPush fan-out (P1
+        // SetAntennaRx directly / P2 via PaSnapshotChanged → SetAntennas).
+        if (_antennaStore is not null)
+            _antennaStore.Changed += RecomputePaAndPush;
         if (_preferredRadioStore is not null)
             _preferredRadioStore.Changed += RecomputePaAndPush;
         _txIqSource = txIqSource;
@@ -2227,6 +2237,24 @@ public sealed class RadioService : IDisposable
         ActiveClient?.SetDriveByte(driveByte);
         ActiveClient?.SetOcMasks(bandCfg.OcTx, bandCfg.OcRx);
 
+        // ---- External-antenna resolution (antenna slice — #804) ----
+        // Server-authoritative: resolve the active band's persisted TX/RX
+        // antenna + RX-aux, gate the aux against the connected board's
+        // capability set (HL2's None collapses any stale value), and push.
+        // P1 RX-antenna goes straight to the active client; P2 (TX antenna +
+        // RX-aux state-mux) rides the PaRuntimeSnapshot into
+        // DspPipelineService.SetAntennas. The wire layer clamps HL2 RX to ANT1
+        // and defers any mid-key relay change to the unkey edge; PS owns the
+        // K36/BYPASS relay while armed regardless of an aux=BYPASS pick.
+        var caps = BoardCapabilitiesTable.For(ConnectedBoardKind, EffectiveOrionMkIIVariant);
+        var antSel = (_antennaStore is not null && bandName is not null)
+            ? _antennaStore.GetBand(bandName)
+            : new AntennaBandSelection(bandName ?? "unknown", HpsdrAntenna.Ant1, HpsdrAntenna.Ant1, RxAuxInputSel.None);
+        int rxAuxWire = GateRxAux(antSel.RxAux, caps.RxAuxInputs);
+        // P1: RX-antenna relay (C3[7:5], HL2-clamped at the wire). ActiveClient
+        // is null on P2 — the P2 RX-antenna rides the SetAntennas path below.
+        ActiveClient?.SetAntennaRx(antSel.RxAnt);
+
         PaSnapshotChanged?.Invoke(new PaRuntimeSnapshot(
             DriveByte: driveByte,
             OcTxMask: bandCfg.OcTx,
@@ -2238,8 +2266,31 @@ public sealed class RadioService : IDisposable
             // gated by board+variant, so non-Anvelina radios receive a
             // SetOcDxMasks call but the bytes never reach the wire.
             OcDxTxMask: bandCfg.OcDxTx,
-            OcDxRxMask: bandCfg.OcDxRx));
+            OcDxRxMask: bandCfg.OcDxRx,
+            // External antenna (#804). HasTxAntennaRelays gates the alex0[26:24]
+            // emission on the P2 client; RxAuxInput/MkiiBpfRxSelect drive the
+            // operator RX-aux ORs (composed strictly before the PS coupler).
+            TxAntenna: antSel.TxAnt,
+            RxAntenna: antSel.RxAnt,
+            HasTxAntennaRelays: caps.HasTxAntennaRelays,
+            RxAuxInput: rxAuxWire,
+            MkiiBpfRxSelect: caps.MkiiBpf));
     }
+
+    // Gate a persisted per-band RX-aux pick against the connected board's
+    // capability set (antenna slice — #804). Band rows are board-agnostic (no
+    // board column), so a stale aux persisted on an ANAN must collapse to None
+    // (base ANT relay) on a board that does not expose it — notably HL2, whose
+    // RxAuxInputs is None. Returns the 1-based wire selector the P2 client uses
+    // (0=None .. 4=BYPASS); the RxAuxInputSel byte already maps 1:1.
+    private static int GateRxAux(RxAuxInputSel sel, RxAuxInputs available) => sel switch
+    {
+        RxAuxInputSel.Ext1   => available.HasFlag(RxAuxInputs.Ext1)   ? (int)sel : 0,
+        RxAuxInputSel.Ext2   => available.HasFlag(RxAuxInputs.Ext2)   ? (int)sel : 0,
+        RxAuxInputSel.Xvtr   => available.HasFlag(RxAuxInputs.Xvtr)   ? (int)sel : 0,
+        RxAuxInputSel.Bypass => available.HasFlag(RxAuxInputs.Bypass) ? (int)sel : 0,
+        _                    => 0,
+    };
 
     // Back-compat shim for callers/tests that predate IRadioDriveProfile.
     // Runtime RecomputePaAndPush no longer goes through here — it uses the
@@ -2752,6 +2803,8 @@ public sealed class RadioService : IDisposable
     public void Dispose()
     {
         _paStore.Changed -= RecomputePaAndPush;
+        if (_antennaStore is not null)
+            _antennaStore.Changed -= RecomputePaAndPush;
         try { DisconnectAsync(CancellationToken.None).GetAwaiter().GetResult(); }
         catch { /* best-effort */ }
         _stateFlushTimer?.Dispose();

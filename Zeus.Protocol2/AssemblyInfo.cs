@@ -46,3 +46,7 @@
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("Zeus.Protocol2.Tests")]
+// The external-port encoder seam (Zeus.Server.Hosting.IExternalPortEncoder)
+// delegates to Protocol2Client's pure antenna-bit helpers so the firewall and
+// the wire path share one copy of the math — byte-identical by construction.
+[assembly: InternalsVisibleTo("Zeus.Server.Hosting")]
