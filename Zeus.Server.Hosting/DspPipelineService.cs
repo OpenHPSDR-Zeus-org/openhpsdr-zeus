@@ -687,15 +687,33 @@ public class DspPipelineService : BackgroundService,
     private readonly object _engineLock = new();
     private IDspEngine? _engine;
     private int _channelId;
-    private int _rx2ChannelId = -1;
-    // RX2's hardware DDC centre (the second receiver's analogue of RadioLoHz).
-    // Under CTUN it stays frozen while VFO B roams within the window (dial moves,
-    // panel stays put); with CTUN off it follows VFO B (panel recentres on the
-    // dial). Auto-recentres when the dial would leave the captured DDC bandwidth.
-    // Server-side only — not in StateDto — so RX2 gets RX1's CTUN feel without a
-    // wire-contract change. See UpdateRx2Lo.
-    private long _rx2LoHz;
-    private bool _rx2LoInit;
+
+    // Secondary receivers (RX2..RXn). RX1 is the clock-master in _channelId; each
+    // secondary is a slaved DDC broadcast every tick with its own RxId. Indexed by
+    // RECEIVER INDEX — slot [1] is the historical RX2; slot [0] is unused (RX1 lives
+    // in _channelId). Sized to the protocol DDC ceiling so the pipeline can drive
+    // every DDC once B3/B4 wire the per-receiver state + UI. Today only slot 1 is
+    // ever activated (Rx2Enabled), so behaviour is identical to the previous
+    // hardcoded RX1/RX2 pair. ChannelId is read/written via Volatile on the hot
+    // path exactly as the old _rx2ChannelId was.
+    internal const int MaxReceivers = Zeus.Protocol2.Protocol2Client.MaxRxDdc;
+    private sealed class SecondaryRx
+    {
+        public int ChannelId = -1; // -1 = inactive; Volatile.Read/Write(ref ChannelId)
+        // Hardware DDC centre (this receiver's analogue of RX1's RadioLoHz). Under
+        // CTUN it stays frozen while the dial roams within the window; with CTUN off
+        // it follows the dial. Recentres if the dial would leave the captured DDC
+        // bandwidth. Server-side only — not in StateDto. See UpdateRxLo.
+        public long LoHz;
+        public bool LoInit;
+        public readonly float[] PanBuf = new float[Width];
+        public readonly float[] WfBuf = new float[Width];
+        public readonly float[] AudioBuf = new float[AudioDrainCapacity];
+        public int PanCnt;  // 1 Hz panadapter freshness tally (display probe)
+        public int WfCnt;   // 1 Hz waterfall freshness tally
+        public long IqRmsLogMs; // 1 Hz IQ RMS/peak probe gate
+    }
+    private readonly SecondaryRx[] _secondaryRx;
     private int _sampleRateHz;
 
     // Protocol 2 path (parallel to the RadioService-owned P1 path). Held
@@ -928,18 +946,16 @@ public class DspPipelineService : BackgroundService,
     // ExecuteAsync), so no synchronisation is needed.
     private readonly float[] _panBuf = new float[Width];
     private readonly float[] _wfBuf = new float[Width];
-    private readonly float[] _rx2PanBuf = new float[Width];
-    private readonly float[] _rx2WfBuf = new float[Width];
-    // RX2 frozen-panadapter probe: 1 Hz tally of how often each receiver's
-    // pan/wf pixout reports fresh data. If rx2wf advances but rx2pan stays ~0,
-    // the freeze is backend (pan pixout never goes fresh); if both advance like
-    // RX1, the freeze is frontend rendering.
+    // Per-receiver display/audio probe: 1 Hz tally of how often each receiver's
+    // pan/wf pixout reports fresh data. If a secondary's wf advances but pan stays
+    // ~0, the freeze is backend (pan pixout never goes fresh); if both advance like
+    // RX1, the freeze is frontend rendering. RX1 counters are _rx1*; each secondary
+    // tracks its own PanCnt/WfCnt (see SecondaryRx).
     private long _dispFlagLogMs;
     // 1 Hz throttle for the TX pixel dB-range diagnostic (see Tick).
     private long _txPixelDbgMs;
-    private int _dispTicks, _rx1PanCnt, _rx1WfCnt, _rx2PanCnt, _rx2WfCnt;
+    private int _dispTicks, _rx1PanCnt, _rx1WfCnt;
     private readonly float[] _audioBuf = new float[AudioDrainCapacity];
-    private readonly float[] _rx2AudioBuf = new float[AudioDrainCapacity];
 
     // Cached panadapter snapshot for the frequency-calibration service
     // (issue #325). Tick fills this every cycle that produced a valid
@@ -1041,6 +1057,12 @@ public class DspPipelineService : BackgroundService,
         _loggerFactory = loggerFactory;
         _displaySettings = displaySettings;
         _log = loggerFactory.CreateLogger<DspPipelineService>();
+        // Allocate secondary-receiver slots 1..N-1 up front (slot 0 stays null —
+        // RX1 is _channelId). Buffers live for the service lifetime, mirroring the
+        // old _rx2* fields; only activated slots open a WDSP channel.
+        _secondaryRx = new SecondaryRx[MaxReceivers];
+        for (int i = 1; i < MaxReceivers; i++)
+            _secondaryRx[i] = new SecondaryRx();
     }
 
     // Persisted TX display analyzer config (live TX waterfall feature). Optional
@@ -1743,8 +1765,8 @@ public class DspPipelineService : BackgroundService,
             {
                 rx1Panadapter = Math.Max(0, Volatile.Read(ref _rx1PanCnt)),
                 rx1Waterfall = Math.Max(0, Volatile.Read(ref _rx1WfCnt)),
-                rx2Panadapter = Math.Max(0, Volatile.Read(ref _rx2PanCnt)),
-                rx2Waterfall = Math.Max(0, Volatile.Read(ref _rx2WfCnt)),
+                rx2Panadapter = Math.Max(0, Volatile.Read(ref _secondaryRx[1].PanCnt)),
+                rx2Waterfall = Math.Max(0, Volatile.Read(ref _secondaryRx[1].WfCnt)),
             },
             iqSignal = new
             {
@@ -2941,7 +2963,7 @@ public class DspPipelineService : BackgroundService,
         {
             Volatile.Write(ref _engine, engine);
             Volatile.Write(ref _channelId, channelId);
-            Volatile.Write(ref _rx2ChannelId, -1);
+            ResetSecondaryRxChannels();
             Volatile.Write(ref _sampleRateHz, SyntheticSampleRateHz);
         }
         _log.LogInformation("dsp.pipeline engine=synthetic channel={Id}", channelId);
@@ -2971,7 +2993,7 @@ public class DspPipelineService : BackgroundService,
             oldChannel = _channelId;
             Volatile.Write(ref _engine, wdsp);
             Volatile.Write(ref _channelId, channelId);
-            Volatile.Write(ref _rx2ChannelId, -1);
+            ResetSecondaryRxChannels();
             Volatile.Write(ref _sampleRateHz, rate);
         }
 
@@ -3037,7 +3059,7 @@ public class DspPipelineService : BackgroundService,
             oldChannel = _channelId;
             Volatile.Write(ref _engine, synth);
             Volatile.Write(ref _channelId, channelId);
-            Volatile.Write(ref _rx2ChannelId, -1);
+            ResetSecondaryRxChannels();
             Volatile.Write(ref _sampleRateHz, SyntheticSampleRateHz);
         }
 
@@ -3070,8 +3092,8 @@ public class DspPipelineService : BackgroundService,
         // Tune RX2's DDC to its (CTUN-frozen) centre, not the raw dial, so the
         // panel holds still while VFO B roams under CTUN. The WDSP shift in
         // ApplyStateToRx2Channel moves the dial within that window.
-        UpdateRx2Lo(s);
-        p2?.SetVfoBHz(_rx2LoHz);
+        UpdateRxLo(1, s);
+        p2?.SetVfoBHz(_secondaryRx[1].LoHz);
 
         // Issue #597 Phase 0: arm the RX display fast-attack when the LO
         // moves. First callback after construction only records the LO
@@ -3098,7 +3120,7 @@ public class DspPipelineService : BackgroundService,
         var engine = _engine;
         int channel = _channelId;
         if (engine is null) return;
-        int rx2Channel = EnsureRx2Channel(engine, s);
+        int rx2Channel = EnsureSecondaryRxChannel(engine, 1, s);
 
         if (s.Mode != _appliedMode)
         {
@@ -3552,19 +3574,30 @@ public class DspPipelineService : BackgroundService,
         _appliedZoomLevel = s.ZoomLevel;
     }
 
-    private int EnsureRx2Channel(IDspEngine engine, StateDto s)
+    // Whether secondary receiver <paramref name="rxIndex"/> (1..MaxReceivers-1) is
+    // enabled for the current state. Today only slot 1 (the historical RX2) has
+    // wire/UI state, so it's the only one that can be active; B3 replaces this with
+    // s.Receivers[rxIndex].Enabled once StateDto carries the receiver array.
+    private static bool SecondaryReceiverEnabled(int rxIndex, StateDto s) =>
+        rxIndex == 1 && s.Rx2Enabled;
+
+    // Convenience helper: open/sync/close the WDSP channel for one secondary
+    // receiver, mirroring RX1's lifecycle. Returns the channel id (or -1 when the
+    // receiver is disabled). Generalised from the old EnsureRx2Channel.
+    private int EnsureSecondaryRxChannel(IDspEngine engine, int rxIndex, StateDto s)
     {
-        int rx2Channel = Volatile.Read(ref _rx2ChannelId);
-        if (!s.Rx2Enabled)
+        var rx = _secondaryRx[rxIndex];
+        int chan = Volatile.Read(ref rx.ChannelId);
+        if (!SecondaryReceiverEnabled(rxIndex, s))
         {
-            CloseRx2Channel(engine, rx2Channel);
+            CloseSecondaryRxChannel(engine, rxIndex, chan);
             return -1;
         }
 
-        if (rx2Channel >= 0)
+        if (chan >= 0)
         {
-            ApplyStateToRx2Channel(engine, rx2Channel, s);
-            return rx2Channel;
+            ApplyStateToSecondaryRxChannel(engine, rxIndex, chan, s);
+            return chan;
         }
 
         int rateHz = Volatile.Read(ref _sampleRateHz);
@@ -3572,10 +3605,11 @@ public class DspPipelineService : BackgroundService,
         int opened = engine.OpenChannel(rateHz, Width);
         try
         {
-            ApplyStateToRx2Channel(engine, opened, s);
-            Volatile.Write(ref _rx2ChannelId, opened);
+            ApplyStateToSecondaryRxChannel(engine, rxIndex, opened, s);
+            Volatile.Write(ref rx.ChannelId, opened);
             _log.LogInformation(
-                "dsp.pipeline rx2 opened channel={Channel} rate={Rate} vfoBHz={VfoBHz}",
+                "dsp.pipeline rx{Rx} opened channel={Channel} rate={Rate} vfoHz={VfoHz}",
+                rxIndex + 1,
                 opened,
                 rateHz,
                 s.VfoBHz);
@@ -3588,16 +3622,25 @@ public class DspPipelineService : BackgroundService,
         }
     }
 
-    private void CloseRx2Channel(IDspEngine engine, int rx2Channel)
+    private void CloseSecondaryRxChannel(IDspEngine engine, int rxIndex, int chan)
     {
-        if (rx2Channel < 0) return;
-        Volatile.Write(ref _rx2ChannelId, -1);
-        try { engine.CloseChannel(rx2Channel); }
+        if (chan < 0) return;
+        Volatile.Write(ref _secondaryRx[rxIndex].ChannelId, -1);
+        try { engine.CloseChannel(chan); }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "dsp.pipeline rx2 close failed channel={Channel}", rx2Channel);
+            _log.LogDebug(ex, "dsp.pipeline rx{Rx} close failed channel={Channel}", rxIndex + 1, chan);
         }
-        _log.LogInformation("dsp.pipeline rx2 closed channel={Channel}", rx2Channel);
+        _log.LogInformation("dsp.pipeline rx{Rx} closed channel={Channel}", rxIndex + 1, chan);
+    }
+
+    // Reset all secondary-receiver channel ids to -1 WITHOUT closing (used by the
+    // engine-swap sites, where the whole engine — and thus its channels — is being
+    // torn down/replaced, so there's nothing to close on the old engine).
+    private void ResetSecondaryRxChannels()
+    {
+        for (int i = 1; i < MaxReceivers; i++)
+            Volatile.Write(ref _secondaryRx[i].ChannelId, -1);
     }
 
     /// <summary>
@@ -3608,22 +3651,23 @@ public class DspPipelineService : BackgroundService,
     /// stand-in for RX1's band-button SetRadioLo, which RX2 has no UI for).
     /// Idempotent and deterministic, so it can run from several tick paths.
     /// </summary>
-    private void UpdateRx2Lo(StateDto s)
+    private void UpdateRxLo(int rxIndex, StateDto s)
     {
-        if (!s.Rx2Enabled)
+        var rx = _secondaryRx[rxIndex];
+        if (!SecondaryReceiverEnabled(rxIndex, s))
         {
-            _rx2LoInit = false; // re-enabling recentres from scratch
+            rx.LoInit = false; // re-enabling recentres from scratch
             return;
         }
         long effB = CwOffset.EffectiveLoHz(s.ModeB, s.VfoBHz);
         long span = Volatile.Read(ref _sampleRateHz);
         if (span <= 0) span = s.SampleRate > 0 ? s.SampleRate : SyntheticSampleRateHz;
         long edge = (long)(span * 0.45); // recentre before the dial hits the DDC edge
-        if (!_rx2LoInit || !s.CtunEnabled || Math.Abs(effB - _rx2LoHz) > edge)
+        if (!rx.LoInit || !s.CtunEnabled || Math.Abs(effB - rx.LoHz) > edge)
         {
-            _rx2LoHz = effB;
+            rx.LoHz = effB;
         }
-        _rx2LoInit = true;
+        rx.LoInit = true;
     }
 
     internal static int ComputeRx2CtunShiftHz(
@@ -3637,23 +3681,24 @@ public class DspPipelineService : BackgroundService,
             : (int)(effectiveVfoBHz - s.RadioLoHz);
     }
 
-    private void ApplyStateToRx2Channel(IDspEngine engine, int channelId, StateDto s)
+    private void ApplyStateToSecondaryRxChannel(IDspEngine engine, int rxIndex, int channelId, StateDto s)
     {
+        var rx = _secondaryRx[rxIndex];
         var nr = NormalizeNrConfig(s.Nr ?? new NrConfig());
         var agc = s.Agc ?? new AgcConfig(AgcMode.Med);
         var squelch = s.Squelch ?? new SquelchConfig();
         engine.SetMode(channelId, s.ModeB);
         engine.SetFilter(channelId, s.FilterLowHzB, s.FilterHighHzB);
         engine.SetVfoHz(channelId, s.VfoBHz);
-        UpdateRx2Lo(s);
-        // P2 true-DDC: RX2's hardware DDC sits at _rx2LoHz, so the WDSP shift
-        // roams the dial within that window — EffectiveLoHz(VfoB) − _rx2LoHz.
-        // Under CTUN off, _rx2LoHz == EffectiveLoHz(VfoB) so the shift is 0 and
-        // the panel recentres on the dial. P1 / synthetic RX2 is a sub-receiver
-        // of RX1's window, so it still shifts against RadioLoHz.
+        UpdateRxLo(rxIndex, s);
+        // P2 true-DDC: the secondary's hardware DDC sits at rx.LoHz, so the WDSP
+        // shift roams the dial within that window — EffectiveLoHz(VfoB) − rx.LoHz.
+        // Under CTUN off, rx.LoHz == EffectiveLoHz(VfoB) so the shift is 0 and the
+        // panel recentres on the dial. P1 / synthetic secondaries are sub-receivers
+        // of RX1's window, so they still shift against RadioLoHz.
         int shiftHz = ComputeRx2CtunShiftHz(
             s,
-            _rx2LoHz,
+            rx.LoHz,
             protocol2: _p2Client is not null);
         engine.SetCtunShift(channelId, shiftHz);
         engine.SetAgcTop(channelId, s.AgcTopDb + s.AgcOffsetDb);
@@ -3809,7 +3854,7 @@ public class DspPipelineService : BackgroundService,
             oldChannel = _channelId;
             Volatile.Write(ref _engine, newEngine);
             Volatile.Write(ref _channelId, newChannelId);
-            Volatile.Write(ref _rx2ChannelId, -1);
+            ResetSecondaryRxChannels();
             Volatile.Write(ref _sampleRateHz, rateHz);
         }
         TeardownEngine(old, oldChannel);
@@ -3985,13 +4030,16 @@ public class DspPipelineService : BackgroundService,
         if (engine is null) return;
 
         int oldChannel = Volatile.Read(ref _channelId);
-        int oldRx2Channel = Volatile.Read(ref _rx2ChannelId);
         try
         {
-            if (oldRx2Channel >= 0)
+            // Re-rate keeps the SAME engine, so close every open secondary channel
+            // here (they reopen at the new rate via EnsureSecondaryRxChannel below).
+            for (int i = 1; i < MaxReceivers; i++)
             {
-                Volatile.Write(ref _rx2ChannelId, -1);
-                try { engine.CloseChannel(oldRx2Channel); } catch { /* best-effort */ }
+                int sc = Volatile.Read(ref _secondaryRx[i].ChannelId);
+                if (sc < 0) continue;
+                Volatile.Write(ref _secondaryRx[i].ChannelId, -1);
+                try { engine.CloseChannel(sc); } catch { /* best-effort */ }
             }
             engine.CloseChannel(oldChannel);
             int newChannel = engine.OpenChannel(rateHz, Width);
@@ -4003,7 +4051,8 @@ public class DspPipelineService : BackgroundService,
             Volatile.Write(ref _channelId, newChannel);
             Volatile.Write(ref _sampleRateHz, rateHz);
             var state = _radio.Snapshot();
-            if (state.Rx2Enabled) _ = EnsureRx2Channel(engine, state);
+            for (int i = 1; i < MaxReceivers; i++)
+                _ = EnsureSecondaryRxChannel(engine, i, state);
             // RX channel is ready at the new rate — now tell the radio to re-rate
             // its DDC (re-emits the RX-spec). Ordering this last means new-rate
             // IQ only starts arriving once the channel can decode it.
@@ -4067,7 +4116,7 @@ public class DspPipelineService : BackgroundService,
             oldChannel = _channelId;
             Volatile.Write(ref _engine, synth);
             Volatile.Write(ref _channelId, channelId);
-            Volatile.Write(ref _rx2ChannelId, -1);
+            ResetSecondaryRxChannels();
             Volatile.Write(ref _sampleRateHz, SyntheticSampleRateHz);
         }
         TeardownEngine(old, oldChannel);
@@ -4239,7 +4288,7 @@ public class DspPipelineService : BackgroundService,
                 FeedProtocol1Iq(
                     engine,
                     channel,
-                    Volatile.Read(ref _rx2ChannelId),
+                    Volatile.Read(ref _secondaryRx[1].ChannelId),
                     frame.InterleavedSamples.Span);
                 RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
             }
@@ -4285,17 +4334,21 @@ public class DspPipelineService : BackgroundService,
         var engine = Volatile.Read(ref _engine);
         if (engine is not null)
         {
-            if (frame.ReceiverIndex == 1)
+            if (frame.ReceiverIndex >= 1)
             {
-                // RX2's own DDC stream (true second receiver). Feed ONLY the RX2
-                // channel — RX2 used to be fed RX1's DDC, which made both
-                // waterfalls identical. Display/TX cadence is paced by the RX1
-                // frames below, so this path takes no tick.
-                int rx2Channel = Volatile.Read(ref _rx2ChannelId);
-                LogRxIqRms(1, frame.InterleavedSamples.Span, ref _rx2IqRmsLogMs);
-                if (rx2Channel >= 0)
+                // A secondary receiver's own DDC stream (true independent RX). Feed
+                // ONLY that secondary's channel — display/TX cadence is paced by the
+                // RX1 frames below, so this path takes no tick. Indexed by receiver
+                // index so every DDC routes to its own WDSP channel (today only
+                // slot 1 / RX2 is ever active).
+                int ri = frame.ReceiverIndex;
+                if (ri < MaxReceivers)
                 {
-                    engine.FeedIq(rx2Channel, frame.InterleavedSamples.Span);
+                    var rx = _secondaryRx[ri];
+                    int secChan = Volatile.Read(ref rx.ChannelId);
+                    LogRxIqRms(ri, frame.InterleavedSamples.Span, ref rx.IqRmsLogMs);
+                    if (secChan >= 0)
+                        engine.FeedIq(secChan, frame.InterleavedSamples.Span);
                 }
                 return;
             }
@@ -4319,7 +4372,7 @@ public class DspPipelineService : BackgroundService,
     // while packets stream at full rate — distinguishing "radio not streaming"
     // from "streaming silence" (wrong ADC source) for RX2.
     private long _rx1IqRmsLogMs;
-    private long _rx2IqRmsLogMs;
+    // Secondary receivers' IQ-RMS probe timestamps live in SecondaryRx.IqRmsLogMs.
     private void LogRxIqRms(int rx, ReadOnlySpan<double> iq, ref long lastMs)
     {
         long now = Environment.TickCount64;
@@ -4435,7 +4488,7 @@ public class DspPipelineService : BackgroundService,
             channel = _channelId;
             Volatile.Write(ref _engine, null);
             Volatile.Write(ref _channelId, 0);
-            Volatile.Write(ref _rx2ChannelId, -1);
+            ResetSecondaryRxChannels();
         }
         TeardownEngine(engine, channel);
     }
@@ -4527,7 +4580,7 @@ public class DspPipelineService : BackgroundService,
         }
 
         engine.SetVfoHz(channel, state.VfoHz);
-        int rx2Channel = Volatile.Read(ref _rx2ChannelId);
+        int rx2Channel = Volatile.Read(ref _secondaryRx[1].ChannelId);
         if (state.Rx2Enabled && rx2Channel >= 0)
             engine.SetVfoHz(rx2Channel, state.VfoBHz);
 
@@ -4752,51 +4805,62 @@ public class DspPipelineService : BackgroundService,
 
             _hub.Broadcast(frame);
 
-            if (state.Rx2Enabled && rx2Channel >= 0)
+            // Secondary receivers (RX2..RXn): each open secondary broadcasts its
+            // own DisplayFrame (RxId = receiver index) stamped with its DDC centre
+            // (CTUN-frozen under CTUN, so the panel holds still while the dial
+            // roams — matching RX1). Today only slot 1 (RX2) is ever active; the
+            // loop is N-ready for B3/B4. UpdateRxLo is idempotent.
+            bool anySecondary = false;
+            for (int ri = 1; ri < MaxReceivers; ri++)
             {
-                bool rx2Pan = engine.TryGetDisplayPixels(rx2Channel, DisplayPixout.Panadapter, _rx2PanBuf);
-                bool rx2Wf = engine.TryGetDisplayPixels(rx2Channel, DisplayPixout.Waterfall, _rx2WfBuf);
-                if (rx2Pan) Array.Reverse(_rx2PanBuf);
-                if (rx2Wf) Array.Reverse(_rx2WfBuf);
-                if (rx2Pan) SanitizeDisplayBuffer(_rx2PanBuf);
-                if (rx2Wf) SanitizeDisplayBuffer(_rx2WfBuf);
+                var rx = _secondaryRx[ri];
+                int secChan = Volatile.Read(ref rx.ChannelId);
+                if (!SecondaryReceiverEnabled(ri, state) || secChan < 0) continue;
+                anySecondary = true;
 
-                var rx2Flags = DisplayBodyFlags.None;
-                if (rx2Pan) rx2Flags |= DisplayBodyFlags.PanValid;
-                if (rx2Wf) rx2Flags |= DisplayBodyFlags.WfValid;
+                bool secPan = engine.TryGetDisplayPixels(secChan, DisplayPixout.Panadapter, rx.PanBuf);
+                bool secWf = engine.TryGetDisplayPixels(secChan, DisplayPixout.Waterfall, rx.WfBuf);
+                if (secPan) { Array.Reverse(rx.PanBuf); SanitizeDisplayBuffer(rx.PanBuf); rx.PanCnt++; }
+                if (secWf) { Array.Reverse(rx.WfBuf); SanitizeDisplayBuffer(rx.WfBuf); rx.WfCnt++; }
 
+                var secFlags = DisplayBodyFlags.None;
+                if (secPan) secFlags |= DisplayBodyFlags.PanValid;
+                if (secWf) secFlags |= DisplayBodyFlags.WfValid;
+
+                UpdateRxLo(ri, state);
+                var secFrame = new DisplayFrame(
+                    Seq: ++_seq,
+                    TsUnixMs: nowMs,
+                    RxId: (byte)ri,
+                    BodyFlags: secFlags,
+                    Width: Width,
+                    CenterHz: rx.LoHz,
+                    HzPerPixel: hzPerPixel,
+                    PanDb: rx.PanBuf,
+                    WfDb: rx.WfBuf);
+                _hub.Broadcast(secFrame);
+            }
+
+            if (anySecondary)
+            {
                 _dispTicks++;
                 if (pan) _rx1PanCnt++;
                 if (wf) _rx1WfCnt++;
-                if (rx2Pan) _rx2PanCnt++;
-                if (rx2Wf) _rx2WfCnt++;
                 long dispNowMs = Environment.TickCount64;
                 if (dispNowMs - _dispFlagLogMs >= 1000)
                 {
                     _dispFlagLogMs = dispNowMs;
+                    var rx2 = _secondaryRx[1];
                     _log.LogInformation(
                         "p2.display.flags ticks={T} rx1pan={A} rx1wf={B} rx2pan={C} rx2wf={D}",
-                        _dispTicks, _rx1PanCnt, _rx1WfCnt, _rx2PanCnt, _rx2WfCnt);
-                    _dispTicks = _rx1PanCnt = _rx1WfCnt = _rx2PanCnt = _rx2WfCnt = 0;
+                        _dispTicks, _rx1PanCnt, _rx1WfCnt, rx2.PanCnt, rx2.WfCnt);
+                    _dispTicks = _rx1PanCnt = _rx1WfCnt = 0;
+                    for (int i = 1; i < MaxReceivers; i++)
+                    {
+                        _secondaryRx[i].PanCnt = 0;
+                        _secondaryRx[i].WfCnt = 0;
+                    }
                 }
-
-                // Stamp the RX2 frame with its DDC centre (CTUN-frozen under
-                // CTUN), so the panel holds still and the dial roams — matching
-                // RX1. UpdateRx2Lo is idempotent; calling it here guarantees the
-                // centre is fresh for this frame regardless of the tick path.
-                UpdateRx2Lo(state);
-                var rx2Frame = new DisplayFrame(
-                    Seq: ++_seq,
-                    TsUnixMs: nowMs,
-                    RxId: 1,
-                    BodyFlags: rx2Flags,
-                    Width: Width,
-                    CenterHz: _rx2LoHz,
-                    HzPerPixel: hzPerPixel,
-                    PanDb: _rx2PanBuf,
-                    WfDb: _rx2WfBuf);
-
-                _hub.Broadcast(rx2Frame);
             }
         }
         else
@@ -4830,15 +4894,15 @@ public class DspPipelineService : BackgroundService,
             // for the next tick, so no RX2 audio is dropped. RX2-only mode still
             // drains RX2 fully (RX2 is the master there).
             Span<float> rx2Span = state.Rx2AudioMode == Rx2AudioMode.Both
-                ? _rx2AudioBuf.AsSpan(0, Math.Min(audioSampleCount, _rx2AudioBuf.Length))
-                : _rx2AudioBuf.AsSpan();
+                ? _secondaryRx[1].AudioBuf.AsSpan(0, Math.Min(audioSampleCount, _secondaryRx[1].AudioBuf.Length))
+                : _secondaryRx[1].AudioBuf.AsSpan();
             rx2AudioSampleCount = engine.ReadAudio(rx2Channel, rx2Span);
         }
         audioSampleCount = SelectRxAudio(
             state.Rx2AudioMode,
             audioBuf,
             audioSampleCount,
-            _rx2AudioBuf,
+            _secondaryRx[1].AudioBuf,
             rx2AudioSampleCount);
         if (audioSampleCount > 0)
         {
