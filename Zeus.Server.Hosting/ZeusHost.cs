@@ -235,6 +235,9 @@ public static class ZeusHost
         // Remote-access WebRTC signaling (Phase 1). Answers offers with a session
         // gated behind the SPAKE2+ password handshake.
         builder.Services.AddSingleton<Zeus.Server.Hosting.Remote.RemoteWebRtcService>();
+        // Radio-side broker glue (Phase 3). Inert until a remote-access password
+        // is set; then it keeps a "host" socket on the broker and answers offers.
+        builder.Services.AddHostedService<Zeus.Server.Hosting.Remote.RemoteBrokerClient>();
         // RX audio publish seam (Phase 1). DspPipelineService.PublishAudio
         // fans each AudioFrame across every registered IRxAudioSink.
         //
