@@ -3188,6 +3188,37 @@ public class DspPipelineService : BackgroundService,
         if (engine is null) return;
         int rx2Channel = EnsureSecondaryRxChannel(engine, 1, s);
 
+        // RX3+ (full multi-DDC): count the contiguous enabled receivers beyond
+        // RX2 from the canonical Receivers[] array, push their DDC enable + NCO
+        // tunes to the radio (P2 only), then ensure each WDSP channel. The
+        // RX1/RX2 wire path above is unchanged; extras never touch the PureSignal
+        // DDC0/1 pair (SetExtraReceivers uses the N-receiver composer which keeps
+        // the PS branch intact).
+        int extraCount = 0;
+        if (s.Receivers is { } rcvrs)
+            for (int ri = 2; ri < rcvrs.Count && ri < MaxReceivers && rcvrs[ri].Enabled; ri++)
+                extraCount++;
+        if (p2 is not null)
+        {
+            if (extraCount > 0)
+            {
+                var adc = new byte[extraCount];
+                for (int k = 0; k < extraCount; k++) adc[k] = s.Receivers![2 + k].AdcSource;
+                p2.SetExtraReceivers(extraCount, adc);
+                for (int ri = 2; ri <= 1 + extraCount; ri++)
+                {
+                    UpdateRxLo(ri, s);
+                    p2.SetExtraReceiverFreqHz(ri, _secondaryRx[ri].LoHz);
+                }
+            }
+            else
+            {
+                p2.SetExtraReceivers(0);
+            }
+        }
+        for (int ri = 2; ri < MaxReceivers; ri++)
+            _ = EnsureSecondaryRxChannel(engine, ri, s);
+
         if (s.Mode != _appliedMode)
         {
             engine.SetMode(channel, s.Mode);
@@ -3644,8 +3675,27 @@ public class DspPipelineService : BackgroundService,
     // enabled for the current state. Today only slot 1 (the historical RX2) has
     // wire/UI state, so it's the only one that can be active; B3 replaces this with
     // s.Receivers[rxIndex].Enabled once StateDto carries the receiver array.
+    // RX2 (index 1) keeps reading the flat Rx2Enabled flag so its behaviour is
+    // byte-exact; RX3+ (index >= 2) read the canonical StateDto.Receivers[]
+    // (B3 projection / per-receiver store) so full multi-DDC lights up without
+    // touching the proven RX1/RX2 path.
     private static bool SecondaryReceiverEnabled(int rxIndex, StateDto s) =>
-        rxIndex == 1 && s.Rx2Enabled;
+        rxIndex == 1
+            ? s.Rx2Enabled
+            : rxIndex >= 2 && s.Receivers is { } rs && rxIndex < rs.Count && rs[rxIndex].Enabled;
+
+    // Per-secondary-receiver tuning params. RX2 reads the flat RX2/VFO-B fields
+    // (byte-exact); RX3+ read the per-receiver StateDto.Receivers[] entry.
+    private static (RxMode mode, long vfoHz, int filterLow, int filterHigh, double afGainDb)
+        SecondaryRxParams(StateDto s, int rxIndex)
+    {
+        if (rxIndex == 1)
+            return (s.ModeB, s.VfoBHz, s.FilterLowHzB, s.FilterHighHzB, s.Rx2AfGainDb);
+        var r = s.Receivers is { } rs && rxIndex >= 0 && rxIndex < rs.Count ? rs[rxIndex] : null;
+        return r is null
+            ? (RxMode.USB, 0L, 100, 2850, 0.0)
+            : (r.Mode, r.VfoHz, r.FilterLowHz, r.FilterHighHz, r.AfGainDb);
+    }
 
     // Convenience helper: open/sync/close the WDSP channel for one secondary
     // receiver, mirroring RX1's lifecycle. Returns the channel id (or -1 when the
@@ -3725,7 +3775,8 @@ public class DspPipelineService : BackgroundService,
             rx.LoInit = false; // re-enabling recentres from scratch
             return;
         }
-        long effB = CwOffset.EffectiveLoHz(s.ModeB, s.VfoBHz);
+        var (mode, vfoHz, _, _, _) = SecondaryRxParams(s, rxIndex);
+        long effB = CwOffset.EffectiveLoHz(mode, vfoHz);
         long span = Volatile.Read(ref _sampleRateHz);
         if (span <= 0) span = s.SampleRate > 0 ? s.SampleRate : SyntheticSampleRateHz;
         long edge = (long)(span * 0.45); // recentre before the dial hits the DDC edge
@@ -3747,28 +3798,41 @@ public class DspPipelineService : BackgroundService,
             : (int)(effectiveVfoBHz - s.RadioLoHz);
     }
 
+    // N-receiver generalization of ComputeRx2CtunShiftHz: the WDSP shift for any
+    // secondary, from its own mode/VFO. For RX2 (mode=ModeB, vfo=VfoBHz) this
+    // returns the same value as ComputeRx2CtunShiftHz, keeping RX2 byte-exact.
+    private static int ComputeSecondaryCtunShiftHz(
+        StateDto s, RxMode mode, long vfoHz, long rxLoHz, bool protocol2)
+    {
+        long eff = CwOffset.EffectiveLoHz(mode, vfoHz);
+        return protocol2 ? (int)(eff - rxLoHz) : (int)(eff - s.RadioLoHz);
+    }
+
     private void ApplyStateToSecondaryRxChannel(IDspEngine engine, int rxIndex, int channelId, StateDto s)
     {
         var rx = _secondaryRx[rxIndex];
         var nr = NormalizeNrConfig(s.Nr ?? new NrConfig());
         var agc = s.Agc ?? new AgcConfig(AgcMode.Med);
         var squelch = s.Squelch ?? new SquelchConfig();
-        engine.SetMode(channelId, s.ModeB);
-        engine.SetFilter(channelId, s.FilterLowHzB, s.FilterHighHzB);
-        engine.SetVfoHz(channelId, s.VfoBHz);
+        var (mode, vfoHz, filterLow, filterHigh, afGainDb) = SecondaryRxParams(s, rxIndex);
+        engine.SetMode(channelId, mode);
+        engine.SetFilter(channelId, filterLow, filterHigh);
+        engine.SetVfoHz(channelId, vfoHz);
         UpdateRxLo(rxIndex, s);
         // P2 true-DDC: the secondary's hardware DDC sits at rx.LoHz, so the WDSP
-        // shift roams the dial within that window — EffectiveLoHz(VfoB) − rx.LoHz.
-        // Under CTUN off, rx.LoHz == EffectiveLoHz(VfoB) so the shift is 0 and the
+        // shift roams the dial within that window — EffectiveLoHz(vfo) − rx.LoHz.
+        // Under CTUN off, rx.LoHz == EffectiveLoHz(vfo) so the shift is 0 and the
         // panel recentres on the dial. P1 / synthetic secondaries are sub-receivers
         // of RX1's window, so they still shift against RadioLoHz.
-        int shiftHz = ComputeRx2CtunShiftHz(
+        int shiftHz = ComputeSecondaryCtunShiftHz(
             s,
+            mode,
+            vfoHz,
             rx.LoHz,
             protocol2: _p2Client is not null);
         engine.SetCtunShift(channelId, shiftHz);
         engine.SetAgcTop(channelId, s.AgcTopDb + s.AgcOffsetDb);
-        engine.SetRxAfGainDb(channelId, s.Rx2AfGainDb);
+        engine.SetRxAfGainDb(channelId, afGainDb);
         engine.SetNoiseReduction(channelId, nr);
         engine.SetAgc(channelId, agc);
         engine.SetSquelch(channelId, squelch);

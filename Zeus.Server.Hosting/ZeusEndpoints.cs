@@ -1031,6 +1031,27 @@ public static class ZeusEndpoints
             return r.SetRx2(req);
         });
 
+        // Configure any receiver by index for full multi-DDC (RX1=0, RX2=1,
+        // RX3+=2..). Index 0/1 delegate to the RX1/RX2 setters; index >= 2 drives
+        // an extra hardware DDC. Only supplied fields change.
+        app.MapPost("/api/receivers/{index:int}", (int index, ReceiverSetRequest req, RadioService r) =>
+        {
+            if (index < 0 || index >= Zeus.Contracts.WireContract.MaxReceivers)
+                return Results.BadRequest(new { error = $"receiver index out of range (0..{Zeus.Contracts.WireContract.MaxReceivers - 1})" });
+            log.LogInformation(
+                "api.receivers index={Index} enabled={Enabled} vfoHz={VfoHz} adc={Adc} mode={Mode}",
+                index, req.Enabled, req.VfoHz, req.AdcSource, req.Mode);
+            return Results.Ok(r.SetReceiver(
+                index,
+                enabled: req.Enabled,
+                vfoHz: req.VfoHz,
+                adcSource: req.AdcSource,
+                mode: req.Mode,
+                filterLowHz: req.FilterLowHz,
+                filterHighHz: req.FilterHighHz,
+                afGainDb: req.AfGainDb));
+        });
+
         app.MapPost("/api/tx/vfo", (TxVfoSetRequest req, RadioService r) =>
         {
             if (!Enum.IsDefined(req.TxVfo))

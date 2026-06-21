@@ -1200,6 +1200,20 @@ public sealed record Rx2SetRequest(
     Rx2AudioMode? AudioMode = null,
     double? AfGainDb = null);
 
+/// <summary>Configure one receiver by index (RX1=0, RX2=1, RX3+=2..) for the
+/// full multi-DDC model — the body of <c>POST /api/receivers/{index}</c>. Every
+/// field is optional; only the supplied ones change. For index ≥ 2 these drive
+/// an extra hardware DDC (<c>AdcSource</c> selects the phase-synchronous ADC 0/1).
+/// </summary>
+public sealed record ReceiverSetRequest(
+    bool? Enabled = null,
+    long? VfoHz = null,
+    byte? AdcSource = null,
+    RxMode? Mode = null,
+    int? FilterLowHz = null,
+    int? FilterHighHz = null,
+    double? AfGainDb = null);
+
 /// <summary>Operator settings for the POTA/SOTA Spots feature. Persisted in
 /// zeus-prefs.db (<c>SpotsSettingsStore</c>) and shared with the frontend.
 /// <para>The server-side poller honours <see cref="Enabled"/> /

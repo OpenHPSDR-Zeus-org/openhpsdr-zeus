@@ -138,6 +138,31 @@ public sealed class RadioService : IDisposable
 
     private StateDto _state;
 
+    // Session-only per-receiver config for the extra DDC receivers (RX3+, index
+    // 2..MaxReceivers-1). RX1/RX2 stay on the flat StateDto fields; these feed
+    // ProjectReceivers for the extra entries and, via that array, the
+    // DspPipelineService multi-DDC path. Not persisted — the operator re-enables
+    // extra receivers each session (no silent auto-spin-up of DDCs on restart).
+    // Guarded by _sync. Indices 0/1 are unused (RX1/RX2 are the flat fields).
+    private sealed class ExtraReceiver
+    {
+        public bool Enabled;
+        public long VfoHz = 14_200_000;
+        public RxMode Mode = RxMode.USB;
+        public int FilterLowHz = 100;
+        public int FilterHighHz = 2850;
+        public string? FilterPresetName = "VAR1";
+        public double AfGainDb;
+        public byte AdcSource;   // 0 = ADC0 (same antenna as RX1) by default
+    }
+    private readonly ExtraReceiver[] _extraReceivers = CreateExtraReceivers();
+    private static ExtraReceiver[] CreateExtraReceivers()
+    {
+        var a = new ExtraReceiver[Zeus.Contracts.WireContract.MaxReceivers];
+        for (int i = 2; i < a.Length; i++) a[i] = new ExtraReceiver();
+        return a;
+    }
+
     // Latched MOX bit — populated via SetMox so the auto-ATT loop can pause
     // itself during TX without a service-locator pattern back to TxService.
     private bool _mox;
@@ -934,16 +959,71 @@ public sealed class RadioService : IDisposable
 
     /// <summary>Receiver-indexed VFO setter for the multi-DDC model.
     /// <paramref name="rxIndex"/> 0 → RX1 (<see cref="SetVfo(long)"/>), 1 → RX2
-    /// (<see cref="SetVfoB(long)"/>). Generalizes the RX1/RX2 A/B split so
-    /// callers (the /api/vfo endpoint, CAT/TCI, future per-DDC controls) can
-    /// address a receiver by index. Indices ≥ 2 are reserved until DDC 2..N
-    /// control lands and currently return the snapshot unchanged.</summary>
+    /// (<see cref="SetVfoB(long)"/>), ≥ 2 → an extra DDC receiver
+    /// (<see cref="SetReceiver"/>). Generalizes the RX1/RX2 A/B split so callers
+    /// (the /api/vfo + /api/receivers endpoints, CAT/TCI) can address a receiver
+    /// by index.</summary>
     public StateDto SetReceiverVfo(int rxIndex, long hz) => rxIndex switch
     {
         0 => SetVfo(hz),
         1 => SetVfoB(hz),
-        _ => Snapshot(),
+        _ => SetReceiver(rxIndex, vfoHz: hz),
     };
+
+    /// <summary>
+    /// Configure any receiver by index for full multi-DDC operation. Index 0/1
+    /// delegate to the RX1/RX2 setters; index ≥ 2 updates the session per-receiver
+    /// store (RX3+) and re-projects + broadcasts so DspPipelineService opens the
+    /// WDSP channel and the P2 client is told to stream the new DDC. Only the
+    /// supplied fields change.
+    /// <para>Extra receivers are contiguous (the P2 DDC run has no gaps):
+    /// enabling RX(n) implicitly enables RX2..RX(n−1); disabling RX(n) disables
+    /// RX(n+1).. . Enabling any extra also turns RX2 on. This never touches the
+    /// PureSignal DDC0/1 pair.</para>
+    /// </summary>
+    public StateDto SetReceiver(
+        int index,
+        bool? enabled = null,
+        long? vfoHz = null,
+        byte? adcSource = null,
+        RxMode? mode = null,
+        int? filterLowHz = null,
+        int? filterHighHz = null,
+        double? afGainDb = null)
+    {
+        if (index == 0)
+            return vfoHz is long v0 ? SetVfo(v0) : Snapshot();
+        if (index == 1)
+            return SetRx2(new Rx2SetRequest(Enabled: enabled, VfoBHz: vfoHz, AfGainDb: afGainDb));
+        if (index < 2 || index >= _extraReceivers.Length)
+            throw new ArgumentOutOfRangeException(
+                nameof(index), index, $"receiver index out of range (0..{_extraReceivers.Length - 1})");
+
+        bool enabling = enabled == true;
+        lock (_sync)
+        {
+            var e = _extraReceivers[index];
+            if (vfoHz is long v) e.VfoHz = Math.Clamp(v, 0L, 60_000_000L);
+            if (adcSource is byte a) e.AdcSource = a;
+            if (mode is RxMode m) e.Mode = m;
+            if (filterLowHz is int fl) e.FilterLowHz = fl;
+            if (filterHighHz is int fh) e.FilterHighHz = fh;
+            if (afGainDb is double af) e.AfGainDb = Math.Clamp(af, -50.0, 20.0);
+            if (enabled is bool en)
+            {
+                e.Enabled = en;
+                if (en)
+                    for (int j = 2; j < index; j++) _extraReceivers[j].Enabled = true;       // contiguity below
+                else
+                    for (int j = index + 1; j < _extraReceivers.Length; j++) _extraReceivers[j].Enabled = false; // cascade above
+            }
+        }
+        // Re-project + broadcast (StateChanged → DspPipelineService opens channels
+        // and pushes SetExtraReceivers/SetExtraReceiverFreqHz to the radio).
+        // Enabling an extra DDC requires RX2 (no DDC gap), so turn it on.
+        Mutate(s => enabling && !s.Rx2Enabled ? s with { Rx2Enabled = true } : s);
+        return Snapshot();
+    }
 
     public StateDto SetRx2(Rx2SetRequest req)
     {
@@ -3086,8 +3166,10 @@ public sealed class RadioService : IDisposable
     // ADCs; SampleRateHz is the shared capture rate. Additional DDCs (index ≥ 2)
     // are appended here once DDC 2..N control exists. Pure + allocation-light
     // (called on every Mutate / Snapshot).
-    private static IReadOnlyList<ReceiverDto> ProjectReceivers(StateDto s) =>
-        new[]
+    // Caller holds _sync (Mutate / Snapshot) — reads _extraReceivers.
+    private IReadOnlyList<ReceiverDto> ProjectReceivers(StateDto s)
+    {
+        var list = new List<ReceiverDto>(2)
         {
             new ReceiverDto(
                 Index: 0, Enabled: true, AdcSource: 0,
@@ -3102,6 +3184,22 @@ public sealed class RadioService : IDisposable
                 FilterPresetName: s.FilterPresetNameB,
                 AfGainDb: s.Rx2AfGainDb, SampleRateHz: s.SampleRate),
         };
+        // Extra DDC receivers (RX3+). Appended contiguously while enabled — the
+        // P2 multi-DDC path requires no DDC gaps, so the first disabled slot
+        // ends the run. SampleRate is the shared capture rate for now.
+        for (int i = 2; i < _extraReceivers.Length; i++)
+        {
+            var e = _extraReceivers[i];
+            if (e is null || !e.Enabled) break;
+            list.Add(new ReceiverDto(
+                Index: i, Enabled: true, AdcSource: e.AdcSource,
+                VfoHz: e.VfoHz, Mode: e.Mode,
+                FilterLowHz: e.FilterLowHz, FilterHighHz: e.FilterHighHz,
+                FilterPresetName: e.FilterPresetName,
+                AfGainDb: e.AfGainDb, SampleRateHz: s.SampleRate));
+        }
+        return list;
+    }
 
     // Debounce flush: called by _stateFlushTimer every 1 s.
     // Captures the latest StateDto + family-filter memory under _sync and
