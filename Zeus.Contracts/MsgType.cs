@@ -220,4 +220,15 @@ public enum MsgType : byte
     // shapes are richer than the other control frames. UI ignores unknown
     // kinds so older builds tolerate additions cleanly. See ChatEventFrame.cs.
     ChatEvent = 0x35,
+
+    // Server → client (Live Diagnostics v2 aggregate health). Broadcast by
+    // DiagnosticsFramePublisher at low rate (1-2 Hz) whenever clients are
+    // connected, and pushed once per client on WS attach (mirrors SpotList /
+    // ChatEvent push-on-attach). Carries the worst-of provider health so a
+    // dashboard can render live status without polling the REST endpoints.
+    // Payload: [type:1][UTF-8 JSON of DiagnosticsHealthDto]. JSON for the same
+    // reasons as ChatEvent; UI ignores unknown types so older builds tolerate
+    // it cleanly. Encoded by DiagnosticsFramePublisher (source-gen serialised
+    // for the hot push path).
+    DiagnosticsHealth = 0x36,
 }

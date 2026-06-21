@@ -9,12 +9,68 @@ on:
 
 jobs:
   build-and-test:
-    name: Build and Test (${{ matrix.os }})
+    name: Build and Test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    # continue-on-error is driven per-leg from the matrix. Legs whose runner
+    # availability for THIS repo is not yet confirmed (native arm64, Intel
+    # macOS) are marked experimental so an infra gap does not turn the whole
+    # required check red. Promote them to hard gates (drop `experimental`)
+    # once a green run on real hardware confirms the runner label resolves.
+    continue-on-error: ${{ matrix.experimental || false }}
     strategy:
+      # fail-fast: false so one architecture failing still reports the others.
+      # We want to SEE which arch broke, not have GitHub cancel the siblings.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          # ---- Hard-gated legs (required) --------------------------------
+          # x64 across all three OSes. These have always run and stay required.
+          - name: linux-x64
+            os: ubuntu-latest
+            arch: x64
+          - name: windows-x64
+            os: windows-latest
+            arch: x64
+          - name: macos-arm64
+            # macos-latest is Apple Silicon (arm64) as of the macOS 14 image.
+            os: macos-latest
+            arch: arm64
+
+          # ---- arm64 .NET test legs (NEW) --------------------------------
+          # GitHub's native arm64 runners are GA for public repos:
+          #   ubuntu-24.04-arm  -> Linux arm64 (covers Raspberry Pi class ABI)
+          #   windows-11-arm    -> Windows arm64
+          # We run `dotnet test` natively here rather than QEMU so the DSP /
+          # native-load path is exercised on real arm64 silicon. QEMU was
+          # rejected: it cannot validate the WDSP native .so/.dll load reliably
+          # (emulated syscalls + missing arm64 native runtimes) and is far
+          # slower. If a native arm runner label is ever disabled for this repo
+          # these legs will fail to schedule — that is why they are flagged
+          # experimental below until a maintainer confirms a green run.
+          # TODO(maintainer): drop `experimental: true` on these two legs once
+          # a run on the real arm64 runners is confirmed green; then they
+          # become required, satisfying the "green on every arch" rule.
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            arch: arm64
+            experimental: true
+          - name: windows-arm64
+            os: windows-11-arm
+            arch: arm64
+            experimental: true
+
+          # ---- macOS x64 (Intel) coverage (NEW) --------------------------
+          # macos-13 is the last x64 (Intel) hosted image. Apple Silicon is the
+          # default now, so without this leg Intel Macs are silently untested.
+          # Tradeoff: Intel macOS hosted capacity is limited and the image is on
+          # a deprecation track, so this is experimental (informational) rather
+          # than a hard gate — we still want the signal when it is available.
+          # TODO(maintainer): keep an eye on macos-13 availability; if/when it
+          # is retired, drop this leg and note Intel macOS is best-effort.
+          - name: macos-x64
+            os: macos-13
+            arch: x64
+            experimental: true
 
     steps:
       - uses: actions/checkout@v4
@@ -41,8 +97,28 @@ jobs:
       - name: Restore .NET dependencies
         run: dotnet restore Zeus.slnx
 
+      # Warnings-as-errors is enforced globally via Directory.Build.props
+      # (<TreatWarningsAsErrors>true</TreatWarningsAsErrors>), so this build
+      # already fails on any C# warning. We pass `-warnaserror` redundantly as
+      # a belt-and-suspenders guard: if the prop is ever dropped or overridden
+      # by a project, CI still treats warnings as errors. Do NOT add
+      # `-p:TreatWarningsAsErrors=false` or `-warnaserror-` anywhere — that
+      # would silently re-open the warnings gate.
       - name: Build .NET solution
-        run: dotnet build Zeus.slnx --configuration Release --no-restore
+        run: dotnet build Zeus.slnx --configuration Release --no-restore -warnaserror
+
+      # Verify the WDSP native library actually loads on THIS OS/arch.
+      # tests/Zeus.Dsp.Tests/WdspNativeLoaderTests.cs probes
+      # WdspDspEngine.NativeLibraryLoadable via a SkippableFact — it does not
+      # hard-fail when the native runtime is absent/stale (common on a feature
+      # branch where committed native binaries may lag the platform set). We run
+      # the Zeus.Dsp.Tests project with detailed console output so the
+      # native-load result (loaded / skipped + reason) is VISIBLE per OS/arch in
+      # the log. This is informational on purpose: a stale committed runtime
+      # should surface as a clear skip message, not a red required check. The
+      # full DSP-correctness gates still run in the "Run .NET tests" step below.
+      - name: Probe WDSP native load (informational, per OS/arch)
+        run: dotnet test tests/Zeus.Dsp.Tests/Zeus.Dsp.Tests.csproj --configuration Release --no-build --logger "console;verbosity=detailed"
 
       # The "DspModernization" trait covers the WDSP-v2 evidence/validation
       # tooling suites (bakeoff-report ranking, artifact-manifest scaffolds,
@@ -52,7 +128,8 @@ jobs:
       # modernization combinatorics as opt-in diagnostics rather than PR gates.
       # They run on a schedule via dsp-modernization-tests.yml instead. The
       # DSP-correctness + channel-lifecycle gates (Zeus.Dsp.Tests, etc.) stay
-      # in the per-PR run below.
+      # in the per-PR run below. The diagnostics-conformance tests in
+      # Zeus.Server.Tests are NOT in this category, so this filter runs them.
       - name: Run .NET tests
         run: dotnet test Zeus.slnx --configuration Release --no-build --verbosity normal --filter "Category!=DspModernization"
 
@@ -68,10 +145,12 @@ jobs:
         run: npm run lint
         working-directory: zeus-web
 
+      # Type-check is a hard gate. Previously continue-on-error masked real type
+      # regressions ("missing @types in CI"); `npm ci` installs devDependencies
+      # so the types ARE present and a failure here is a genuine type error.
       - name: Type-check frontend
         run: npm run typecheck
         working-directory: zeus-web
-        continue-on-error: true  # Type checking may fail due to missing @types packages in CI
 
       - name: Run frontend tests
         run: npm test

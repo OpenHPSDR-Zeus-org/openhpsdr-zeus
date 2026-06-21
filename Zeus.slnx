@@ -17,4 +17,5 @@
   <Project Path="Zeus.Protocol2/Zeus.Protocol2.csproj" />
   <Project Path="OpenhpsdrZeus/OpenhpsdrZeus.csproj" />
   <Project Path="Zeus.Server.Hosting/Zeus.Server.Hosting.csproj" />
+  <Project Path="Zeus.Diagnostics.TestGen/Zeus.Diagnostics.TestGen.csproj" />
 </Solution>

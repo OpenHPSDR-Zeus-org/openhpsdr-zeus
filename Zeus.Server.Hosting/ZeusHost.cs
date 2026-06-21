@@ -66,8 +66,21 @@ public static class ZeusHost
         // Emit enums as strings on the wire ("USB", not 1) per doc 04 §3. The
         // converter also accepts ordinal integers on read, so older clients that
         // POST numeric mode values keep working.
+        //
+        // Diagnostics API v2 (perf): prepend the source-generated DiagnosticsJsonContext
+        // so the v2 DTOs serialise through fast generated metadata. The reflection
+        // resolver stays in the chain (we ensure it's present), so every other DTO —
+        // including the anonymous hardware-diagnostics snapshot and all legacy
+        // contracts — serialises exactly as before. CamelCase + string enums in the
+        // context match the Web defaults, so the wire output is byte-identical.
         builder.Services.Configure<JsonOptions>(o =>
-            o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+        {
+            var json = o.SerializerOptions;
+            json.TypeInfoResolverChain.Insert(0, Diagnostics.DiagnosticsJsonContext.Default);
+            if (!json.TypeInfoResolverChain.OfType<System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver>().Any())
+                json.TypeInfoResolverChain.Add(new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver());
+            json.Converters.Add(new JsonStringEnumConverter());
+        });
 
         // Self-diagnostic log capture (the "Report a problem" footer button). A
         // singleton ring buffer always retains the last ~1000 formatted log lines
@@ -421,6 +434,30 @@ public static class ZeusHost
         builder.Services.AddSingleton<FrontendAudioPlaybackDiagnosticsService>();
         builder.Services.AddSingleton<HardwareDiagnosticsService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<HardwareDiagnosticsService>());
+
+        // Live Diagnostics API v2. Each provider self-registers as
+        // IDiagnosticsProvider; the registry collects them once at startup and the
+        // unified /api/diagnostics/v2 surface + push publisher are driven entirely
+        // off that collection. Adding a future provider is a single AddSingleton
+        // line here — it then auto-appears on the API, in the health frame, and in
+        // the conformance test harness with zero further wiring.
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.DspLiveDiagnosticsProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.DspModernizationProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.HardwareDiagnosticsProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.FrontendDspSceneProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.FrontendAudioPlaybackProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.PlatformDiagnosticsProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.StreamingHubProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.RadioStateProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.RadioCapabilitiesProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.HamClockProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.ExternalPttProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.Protocol2TxIqProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.DspPipelineProvider>();
+        builder.Services.AddSingleton<Diagnostics.DiagnosticsProviderRegistry>();
+        builder.Services.AddSingleton<Diagnostics.DiagnosticsSelfCheckCache>();
+        builder.Services.AddSingleton<Diagnostics.DiagnosticsFramePublisher>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Diagnostics.DiagnosticsFramePublisher>());
 
         // Regional band planning (issue #65 PRD). BandPlanStore loads shipped
         // JSON under BandPlans/ at startup and resolves parent→override chains;

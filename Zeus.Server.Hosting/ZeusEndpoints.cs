@@ -28,6 +28,10 @@ public static class ZeusEndpoints
     {
         var log = app.Services.GetRequiredService<ILogger<object>>();
 
+        // Live Diagnostics API v2 — unified, registry-driven surface
+        // (/api/diagnostics/v2). Legacy diagnostics routes below stay as-is.
+        app.MapDiagnosticsV2();
+
         app.MapGet("/api/version", () =>
         {
             var assembly = System.Reflection.Assembly.GetExecutingAssembly();

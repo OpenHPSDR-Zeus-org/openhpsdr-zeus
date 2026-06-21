@@ -17,18 +17,19 @@
 }
 
 /* Inner workspace shell — measured by useContainerWidth and hosts the RGL
- * grid. FlexWorkspace freezes the grid's pixel metrics at first paint, so the
- * page is a fixed size: panels and rows do not rescale when the window is
- * resized. */
+ * grid. FlexWorkspace holds the per-cell pixel size constant, so panels never
+ * rescale when the window is resized; the column count grows/shrinks with the
+ * window instead. */
 .all-panels-workspace {
   position: relative;
   width: 100%;
   height: 100%;
-  /* The page is a fixed size. When the window is larger than the page, the
-   * extra space is workspace ground; when it is smaller, the canvas scrolls so
-   * no panel is clipped out of reach. (A future enhancement spills overflow
-   * onto a new workspace instead of scrolling.) */
-  overflow: auto;
+  /* The workspace NEVER shows a scrollbar — it reads like a hardware front
+   * panel. The grid fills the window width (column count tracks it) and the
+   * default layout fits the height. When a panel is added with no room the
+   * desktop window grows to accommodate it (see window auto-grow) rather than
+   * introducing a scrollbar. */
+  overflow: hidden;
   /* v3 Lifted Dark: workspace ground is the distinct mid-grey "table"
    * (--bg-workspace), so the chrome (--bg-0) and the panels (--bg-1) each
    * read as their own surface. */

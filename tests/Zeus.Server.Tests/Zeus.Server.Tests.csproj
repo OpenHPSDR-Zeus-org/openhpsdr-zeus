@@ -25,6 +25,13 @@
     <ProjectReference Include="..\..\Zeus.Protocol1\Zeus.Protocol1.csproj" />
     <ProjectReference Include="..\..\Zeus.Contracts\Zeus.Contracts.csproj" />
     <ProjectReference Include="..\..\Zeus.Dsp\Zeus.Dsp.csproj" />
+
+    <!-- Live Diagnostics API v2 — Layer 2: source generator emits one named
+         xUnit test class per IDiagnosticsProvider. Analyzer reference only; its
+         assembly is not part of the test project's runtime closure. -->
+    <ProjectReference Include="..\..\Zeus.Diagnostics.TestGen\Zeus.Diagnostics.TestGen.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>
