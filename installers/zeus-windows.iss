@@ -123,10 +123,24 @@ Filename: "{tmp}\vc_redist.{#Arch}.exe"; Parameters: "/install /quiet /norestart
 ; app's own startup guard surfaces a "needs WebView2" dialog on first launch.
 Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; StatusMsg: "Installing Microsoft Edge WebView2 Runtime..."; Check: WebView2Needed; Flags: waituntilterminated
 
+; Windows Firewall inbound rule for HPSDR receive UDP. Without this,
+; Tailscale and some other VPN/security tools reclassify the LAN adapter as
+; a "Public" network and Windows Firewall silently drops incoming HPSDR RX
+; packets — TX works but RX is completely silent (issue #643). The delete
+; step is idempotent (succeeds even if no prior rule exists). Both steps
+; require administrator rights; if the installer runs non-elevated they
+; fail silently (netsh exits non-zero) and Inno continues normally.
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""OpenHPSDR Zeus (HPSDR receive)"""; Flags: runhidden waituntilterminated
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""OpenHPSDR Zeus (HPSDR receive)"" dir=in action=allow program=""{app}\{#MyAppExeName}"" enable=yes"; Flags: runhidden waituntilterminated
+
 ; Post-install launch lands the operator in the desktop window — no console,
 ; no browser dance. Server mode is one Start Menu click away for the LAN /
 ; remote operator.
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--desktop"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; Remove the Windows Firewall inbound rule added during install.
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""OpenHPSDR Zeus (HPSDR receive)"""; Flags: runhidden waituntilterminated
 
 [Code]
 // Legacy AppIds shipped by earlier Zeus installers. We silently uninstall

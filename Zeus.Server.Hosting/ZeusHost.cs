@@ -630,6 +630,23 @@ public static class ZeusHost
             startupLog.LogInformation(
                 "Zeus listening:  http://localhost:{HttpPort}{HttpsBit}{LanLines}",
                 options.HttpPort, httpsBit, lanLines);
+
+            // Tailscale (CGNAT 100.64.0.0/10) commonly reclassifies the physical
+            // LAN adapter as 'Public' on Windows, causing the Windows Firewall to
+            // silently drop inbound HPSDR receive UDP — TX works, RX is silent.
+            // Warn early so the operator has a clue before they connect.
+            if (OperatingSystem.IsWindows())
+            {
+                var tailscaleIps = lanIps.Where(IsTailscaleAddress).ToList();
+                if (tailscaleIps.Count > 0)
+                    startupLog.LogWarning(
+                        "firewall.tailscale.detected ips={Ips} — Tailscale (or another CGNAT VPN) " +
+                        "is active. On Windows this can reclassify your LAN adapter as a 'Public' " +
+                        "network, causing Windows Firewall to block incoming HPSDR receive UDP " +
+                        "packets silently. TX will work; RX will be silent. Add an inbound " +
+                        "Windows Firewall rule for OpenhpsdrZeus.exe to fix this.",
+                        string.Join(", ", tailscaleIps));
+            }
         }
 
         app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
@@ -757,5 +774,12 @@ public static class ZeusHost
         Console.WriteLine();
         Console.WriteLine("  Server starting...");
         Console.WriteLine();
+    }
+
+    private static bool IsTailscaleAddress(IPAddress ip)
+    {
+        if (ip.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) return false;
+        var b = ip.GetAddressBytes();
+        return b[0] == 100 && b[1] >= 64 && b[1] <= 127;
     }
 }
