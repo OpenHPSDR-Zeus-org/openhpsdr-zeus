@@ -89,6 +89,28 @@ public class PaSettingsStoreDefaultsTests : IDisposable
     }
 
     [Fact]
+    public void Orion_MaxPowerWatts_Is_200W()
+    {
+        // ANAN-200D (wire byte 0x05, HpsdrBoardKind.Orion) is rated at 200 W.
+        // Regression pin for issue #780 — was hard-capped at 100 W, limiting TX
+        // calibration to half rated output.
+        using var store = NewStore();
+        var d = store.GetDefaults(HpsdrBoardKind.Orion);
+        Assert.Equal(200, d.Global.PaMaxPowerWatts);
+    }
+
+    [Fact]
+    public void Angelia_MaxPowerWatts_Is_100W()
+    {
+        // ANAN-100D (wire byte 0x04, HpsdrBoardKind.Angelia) is rated at 100 W.
+        // Pins the Angelia value so a refactor can't accidentally merge the two
+        // ANAN dual-ADC boards into one bucket.
+        using var store = NewStore();
+        var d = store.GetDefaults(HpsdrBoardKind.Angelia);
+        Assert.Equal(100, d.Global.PaMaxPowerWatts);
+    }
+
+    [Fact]
     public void OrionMkII_Uses_G2_Class_Defaults()
     {
         using var store = NewStore();

@@ -3727,7 +3727,13 @@ public class DspPipelineService : BackgroundService,
         // Tell the P2 client which board it's talking to so RX-decode quirks
         // (Hermes-on-P2 48 kHz IQ gain correction; future per-board branches)
         // are gated correctly. boardKind == Unknown leaves all quirks off.
-        client.SetBoardKind(boardKind);
+        // Use the override-aware board kind when Override Detection is on so
+        // the TX command stream (DDC slots, ALEX words, log) carries the
+        // correct board identity. ConnectedBoardKind returns the preference
+        // when override is active even before MarkProtocol2Connected is called;
+        // falls back to Unknown (→ raw boardKind) when override is off.
+        var connectedKind = _radio.ConnectedBoardKind;
+        client.SetBoardKind(connectedKind != HpsdrBoardKind.Unknown ? connectedKind : boardKind);
         // 0x0A wire-byte alias variant (issue #218). For non-OrionMkII
         // boards the value is ignored; for OrionMkII it picks the right
         // calibration/PA constants AND unlocks the Anvelina-PRO3 DX OC

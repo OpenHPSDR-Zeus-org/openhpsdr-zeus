@@ -177,8 +177,8 @@ internal static class PaDefaults
         HpsdrBoardKind.Hermes      => 100,    // Hermes / ANAN-10 / Brick2
         HpsdrBoardKind.Metis       => 100,    // Metis paired with HermesGains bracket
         HpsdrBoardKind.HermesII     => 100,    // HermesII / ANAN-10E
-        HpsdrBoardKind.Angelia     => 100,    // ANAN-100 / ANAN-100B / ANAN-8000D: 100 W
-        HpsdrBoardKind.Orion       => 100,    // ANAN-100D / ANAN-200D: 100 W
+        HpsdrBoardKind.Angelia     => 100,    // ANAN-100D: 100 W
+        HpsdrBoardKind.Orion       => 200,    // ANAN-200D: 200 W
         HpsdrBoardKind.OrionMkII   => variant switch
         {
             OrionMkIIVariant.Anan8000DLE => 200,

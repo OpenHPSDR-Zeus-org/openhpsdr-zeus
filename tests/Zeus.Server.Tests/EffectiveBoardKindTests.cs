@@ -91,6 +91,36 @@ public class EffectiveBoardKindTests : IDisposable
     }
 
     [Fact]
+    public void ConnectedBoardKind_With_OverrideDetection_Returns_Preferred_Before_P2Connect()
+    {
+        // Regression pin for issue #780: when Override Detection is ON,
+        // ConnectedBoardKind returns the preferred board even before
+        // MarkProtocol2Connected is called. ConnectP2Async relies on this to
+        // seed the Protocol2Client with the correct board kind so the TX
+        // command stream carries the right identity for the duration of the
+        // session.
+        using var prefs = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        prefs.Set(HpsdrBoardKind.Orion, overrideDetection: true);
+        using var radio = BuildRadio(prefs);
+
+        Assert.Equal(HpsdrBoardKind.Orion, radio.ConnectedBoardKind);
+    }
+
+    [Fact]
+    public void ConnectedBoardKind_Without_OverrideDetection_Is_Unknown_Before_P2Connect()
+    {
+        // When Override Detection is OFF, ConnectedBoardKind returns Unknown
+        // before any radio is physically connected (even if a preference is
+        // stored). ConnectP2Async falls back to the raw discovery byte in
+        // that case.
+        using var prefs = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        prefs.Set(HpsdrBoardKind.Orion);  // preference stored but override is off
+        using var radio = BuildRadio(prefs);
+
+        Assert.Equal(HpsdrBoardKind.Unknown, radio.ConnectedBoardKind);
+    }
+
+    [Fact]
     public void Null_PreferredStore_Falls_Back_To_Connected_Unknown()
     {
         // RadioService is constructed without the preferred-radio store
