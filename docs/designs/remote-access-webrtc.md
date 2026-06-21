@@ -84,6 +84,26 @@ Source of truth: `Zeus.Server.Hosting/StreamingHub.cs`, `ZeusEndpoints.cs` (`/ws
 
 Peak total ≈ 100 KB/s — comfortably inside a single WebRTC peer; no media SFU needed (1:1 peering).
 
+## Build status (PR #811)
+
+| Area | State | Verified by |
+|---|---|---|
+| WebRTC works on our stack (Phase 0) | ✅ done | 2-peer DataChannel echo test |
+| Deny-by-default LOCKED session gate | ✅ done | 5 tests |
+| SPAKE2+ verifier (server, C#) | ✅ done | RFC 9383 vectors, byte-exact |
+| SPAKE2+ prover (browser, TS) | ✅ done | RFC 9383 vectors + cross-lang Argon2 agreement |
+| Argon2id registration + password store + UI | ✅ done | killer end-to-end + store tests |
+| Phase 1 server transport (auth over DataChannel, gated egress) | ✅ done | 2-peer transport test: correct→frame flows, wrong→nothing |
+| Browser connect flow (`connect.ts`) | ✅ written | `tsc`; live WebRTC needs a browser bench |
+| Scan-to-remote QR | ✅ done | 7 tests |
+
+**Needs a live bench / deploy (not headlessly verifiable):**
+- StreamingHub → frames-channel bridge (real audio/IQ onto the unlocked session) and the browser
+  media path (frame decode + WebAudio). The transport exposes `TrySendFrame`; wiring it to the live
+  frame pipeline + measuring real RTT is bench work.
+- Phase 3 Cloudflare broker (Worker + Durable Object): signalling relay over the domain, QRZ
+  identity, TURN-cred minting. Needs deployment to the `openhpsdrzeus.com` Cloudflare account.
+
 ## Implementation phases
 
 **Phase 0 — Spike (de-risk the .NET↔browser WebRTC path).**
