@@ -675,6 +675,21 @@ public static class ZeusEndpoints
             _                            => Results.StatusCode(500),
         };
 
+        // When the operator has selected the out-of-process VST route but the
+        // engine isn't routing, an editor open would otherwise fall through to
+        // the in-process bridge and surface the in-process "set
+        // ZEUS_ENABLE_VST_LOAD=1" hint — which is irrelevant to VST mode and
+        // sends a new operator down the wrong path. Point them at the actual
+        // fix instead: install the engine (the "Download VST Engine" affordance)
+        // or wait for it to come up. Returns null in every other case so Native
+        // mode keeps the existing in-process editor behaviour unchanged.
+        static IResult? VstEngineEditorGuard(AudioProcessingModeService mode)
+        {
+            var error = VstEditorHint.EngineUnavailableMessage(
+                mode.Mode, mode.EngineActive, AudioProcessingModeService.FindEngineExe() is not null);
+            return error is null ? null : Results.Json(new { error }, statusCode: 409);
+        }
+
         // Editor routing is mode-aware (host consolidation): when the
         // out-of-process engine is active (VST processing mode) the editor is
         // hosted crash-isolated in the engine process — the same instance that
@@ -693,11 +708,15 @@ public static class ZeusEndpoints
         app.MapPost("/api/audio-suite/plugins/{id}/editor",
             (string id, AudioPluginBridge bridge, AudioProcessingModeService mode, RxVstEngineService rxVst) =>
             {
-                var result = rxVst.HasEngineSlot(id)
-                    ? rxVst.OpenEditor(id)
-                    : mode.EngineActive && mode.HasEngineSlot(id)
-                        ? mode.OpenEditor(id)
-                        : bridge.OpenEditor(id);
+                // RX engine slots route to the RX engine regardless of the TX
+                // processing mode; only the TX path is gated on the VST engine.
+                if (rxVst.HasEngineSlot(id))
+                    return MapEditorResult(rxVst.OpenEditor(id), open: true);
+                if (VstEngineEditorGuard(mode) is { } guard)
+                    return guard;
+                var result = mode.EngineActive && mode.HasEngineSlot(id)
+                    ? mode.OpenEditor(id)
+                    : bridge.OpenEditor(id);
                 return MapEditorResult(result, open: true);
             });
 
@@ -723,6 +742,8 @@ public static class ZeusEndpoints
         app.MapPost("/api/tx-audio-suite/plugins/{id}/editor",
             (string id, AudioPluginBridge bridge, AudioProcessingModeService mode) =>
             {
+                if (VstEngineEditorGuard(mode) is { } guard)
+                    return guard;
                 var result = mode.EngineActive && mode.HasEngineSlot(id)
                     ? mode.OpenEditor(id)
                     : bridge.OpenEditor(id);
