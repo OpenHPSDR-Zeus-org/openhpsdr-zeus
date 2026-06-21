@@ -227,6 +227,29 @@ public sealed class RemoteWebRtcSessionTests
     }
 
     [Fact]
+    public async Task PostUnlock_TraversalToDenylistedPath_Refused_WithoutTouchingLoopback()
+    {
+        var factory = new StubHttpClientFactory(_ =>
+            throw new InvalidOperationException("loopback must NOT be reached via a traversal path"));
+        ApiSession(factory, out var server);
+        await using var client = new ProverClient(Password);
+        await UnlockAsync(server, client);
+
+        // "/api/state/../prefs/databases/export" prefix-matches no denylist entry
+        // as raw text, but Uri canonicalisation collapses the "../" onto the
+        // denied prefs-DB export. The server must refuse it (traversal guard /
+        // canonical denylist) and never reach loopback — otherwise the QRZ
+        // password + remote verifier leak.
+        var replyJson = await SendApiUntilReply(
+            client, 11, "GET", "/api/state/../prefs/databases/export?relativePath=zeus-prefs.db");
+        using var doc = JsonDocument.Parse(replyJson);
+        Assert.Equal(403, doc.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal(0, factory.CallCount);
+
+        server.Close();
+    }
+
+    [Fact]
     public async Task PreUnlock_ApiInput_DoesNothing()
     {
         var factory = new StubHttpClientFactory(_ =>

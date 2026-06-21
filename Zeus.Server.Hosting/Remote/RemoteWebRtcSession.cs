@@ -298,23 +298,48 @@ public sealed class RemoteWebRtcSession
                 return;
             }
 
-            // Sensitive-endpoint denylist — refuse before any loopback call.
-            if (IsDenied(path))
-            {
-                _log.LogWarning("rtc.remote api DENY {Path}", path);
-                SendApiReply(id, 403);
-                return;
-            }
-
             if (_httpFactory is null || string.IsNullOrEmpty(_loopbackBaseUrl) || !path.StartsWith('/'))
             {
                 SendApiReply(id, 502);
                 return;
             }
 
+            // Reject path traversal outright. Without this, a path like
+            // "/api/state/../prefs/databases/export" slips past the denylist
+            // (it prefix-matches nothing) yet Uri canonicalisation collapses the
+            // "../" so the loopback GET lands on a denied endpoint — a bypass that
+            // would exfiltrate the prefs DB. Legit SPA /api paths never contain
+            // dot-segments or percent-encoded ones.
+            if (path.Contains("..", StringComparison.Ordinal)
+                || path.Contains("%2e", StringComparison.OrdinalIgnoreCase))
+            {
+                _log.LogWarning("rtc.remote api DENY (traversal) {Path}", path);
+                SendApiReply(id, 403);
+                return;
+            }
+
+            // Build the loopback target once and denylist-check the CANONICAL
+            // path that will actually be requested — never the raw input. Verify
+            // it stays on loopback so a crafted authority can't redirect the GET
+            // off-box (SSRF).
+            if (!Uri.TryCreate(_loopbackBaseUrl + path, UriKind.Absolute, out var target)
+                || !target.IsLoopback)
+            {
+                SendApiReply(id, 502);
+                return;
+            }
+
+            // Sensitive-endpoint denylist — refuse before any loopback call.
+            if (IsDenied(target.AbsolutePath))
+            {
+                _log.LogWarning("rtc.remote api DENY {Path}", target.AbsolutePath);
+                SendApiReply(id, 403);
+                return;
+            }
+
             var client = _httpFactory.CreateClient(LoopbackHttpClientName);
             using var req = new HttpRequestMessage(
-                HttpMethod.Get, _loopbackBaseUrl + path); // HEAD proxied as GET; body discarded below
+                HttpMethod.Get, target); // HEAD proxied as GET; body discarded below
             using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead)
                 .ConfigureAwait(false);
 
