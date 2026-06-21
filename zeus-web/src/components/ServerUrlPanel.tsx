@@ -20,8 +20,8 @@ import { useQrzStore } from '../state/qrz-store';
 // users on the bundled deploy normally leave this blank — relative paths
 // already reach the same-origin server.
 
-const TUNNEL_OPTIN_KEY = 'zeus.tunnel.optIn';
-const TUNNEL_BROKER_ORIGIN = 'https://openhpsdrzeus.com';
+// Origin that hosts the operator's /go/<callsign> remote vanity address.
+const REMOTE_GO_ORIGIN = 'https://openhpsdrzeus.com';
 
 export function ServerUrlPanel() {
   const [value, setValue] = useState(() => getServerBaseUrl());
@@ -255,8 +255,6 @@ export function ServerUrlPanel() {
       <RemotePasswordSection />
 
       <RemoteQrSection />
-
-      <TunnelSection />
     </div>
   );
 }
@@ -443,7 +441,7 @@ function RemoteQrSection() {
   const home = useQrzStore((s) => s.home);
   const callsign = home?.callsign?.trim().toUpperCase() ?? '';
   const remoteUrl = callsign
-    ? `${TUNNEL_BROKER_ORIGIN}/go/${encodeURIComponent(callsign)}`
+    ? `${REMOTE_GO_ORIGIN}/go/${encodeURIComponent(callsign)}`
     : null;
   const qrSrc = remoteUrl
     ? `${getServerBaseUrl()}/api/remote/qr.svg?data=${encodeURIComponent(remoteUrl)}`
@@ -517,126 +515,6 @@ function RemoteQrSection() {
             openhpsdrzeus.com/go/&lt;your-callsign&gt;
           </code>
           .
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Stage 1: opt-in UI for the Cloudflare tunnel feature. Frontend-only;
-// the backend wiring (Google sign-in, cloudflared subprocess, JWT
-// middleware) lands in Stages 2-4 — see
-// docs/superpowers/specs/2026-05-24-cloudflare-tunnel-zeus-side.md.
-function TunnelSection() {
-  const [optIn, setOptIn] = useState<boolean>(() => {
-    try { return localStorage.getItem(TUNNEL_OPTIN_KEY) === 'true'; }
-    catch { return false; }
-  });
-  const [notice, setNotice] = useState<string | null>(null);
-
-  const persistOptIn = (v: boolean) => {
-    setOptIn(v);
-    try { localStorage.setItem(TUNNEL_OPTIN_KEY, v ? 'true' : 'false'); }
-    catch { /* noop */ }
-    if (!v) setNotice(null);
-  };
-
-  const handlePunch = () => {
-    // Backend lands in Stage 2-3. For now, surface a clear notice so
-    // the operator sees that the broker exists and where to find it.
-    setNotice(
-      `Broker live at ${TUNNEL_BROKER_ORIGIN}. ` +
-        'Backend wiring (Google sign-in + cloudflared spawn) is staged — ' +
-        'this button becomes functional once /api/broker/tunnel is implemented.',
-    );
-  };
-
-  return (
-    <div style={{ marginTop: 28 }}>
-      <h3
-        style={{
-          margin: '0 0 14px',
-          fontSize: 11,
-          fontWeight: 700,
-          letterSpacing: '0.12em',
-          textTransform: 'uppercase',
-          color: 'var(--fg-2)',
-        }}
-      >
-        CLOUDFLARE TUNNEL
-      </h3>
-
-      <p style={{ fontSize: 12, color: 'var(--fg-2)', lineHeight: 1.5, marginTop: 0 }}>
-        Expose this Zeus.Server to the public internet via a Cloudflare
-        Tunnel at <code style={{ fontFamily: 'monospace', color: 'var(--fg-1)' }}>{'<slug>.openhpsdrzeus.com'}</code>.
-        Access is gated by Google sign-in on{' '}
-        <a
-          href={TUNNEL_BROKER_ORIGIN}
-          target="_blank"
-          rel="noreferrer"
-          style={{ color: 'var(--accent)' }}
-        >openhpsdrzeus.com</a>; nobody can reach your radio without authenticating.
-      </p>
-
-      <label
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          marginTop: 16,
-          fontSize: 12,
-          color: 'var(--fg-1)',
-          cursor: 'pointer',
-        }}
-      >
-        <input
-          type="checkbox"
-          checked={optIn}
-          onChange={(e) => persistOptIn(e.target.checked)}
-        />
-        Enable Cloudflare tunnel
-      </label>
-
-      <div style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center' }}>
-        <button
-          type="button"
-          onClick={handlePunch}
-          disabled={!optIn}
-          style={{
-            padding: '8px 16px',
-            fontSize: 11,
-            fontWeight: 700,
-            letterSpacing: '0.1em',
-            textTransform: 'uppercase',
-            color: optIn ? 'var(--fg-0)' : 'var(--fg-2)',
-            background: optIn ? 'var(--accent)' : 'var(--bg-2)',
-            border: '1px solid var(--panel-border)',
-            borderRadius: 'var(--r-sm)',
-            cursor: optIn ? 'pointer' : 'not-allowed',
-            opacity: optIn ? 1 : 0.6,
-          }}
-        >
-          Punch tunnel
-        </button>
-        <span style={{ fontSize: 11, color: 'var(--fg-2)' }}>
-          {optIn ? 'No tunnel running.' : 'Tunnel disabled.'}
-        </span>
-      </div>
-
-      {notice && (
-        <div
-          style={{
-            marginTop: 14,
-            padding: 10,
-            fontSize: 11,
-            lineHeight: 1.5,
-            color: 'var(--fg-2)',
-            background: 'var(--bg-2)',
-            border: '1px solid var(--panel-border)',
-            borderRadius: 'var(--r-sm)',
-          }}
-        >
-          {notice}
         </div>
       )}
     </div>
