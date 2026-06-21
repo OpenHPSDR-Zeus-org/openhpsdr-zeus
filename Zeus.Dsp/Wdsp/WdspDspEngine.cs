@@ -1277,7 +1277,10 @@ public sealed class WdspDspEngine : IDspEngine
             return 0;
         }
 
-        EmitRxDiag(state);
+        // RX ingest health is emitted from the channel worker (RunWorker) now,
+        // not here — so a receiver whose audio isn't read out (e.g. RX3+ in
+        // multi-DDC, where only RX1/RX2 audio is currently mixed) still reports
+        // per-DDC health. Emitting here would gate health on audio consumption.
 
         lock (state.AudioGate)
         {
@@ -3375,7 +3378,7 @@ public sealed class WdspDspEngine : IDspEngine
         }
     }
 
-    private static void RunWorker(ChannelState state)
+    private void RunWorker(ChannelState state)
     {
         double[] audio = new double[state.OutDoubles];
         double[] spectrumIq = new double[2 * InSize];
@@ -3435,6 +3438,13 @@ public sealed class WdspDspEngine : IDspEngine
                 state.DiagWorkerFrames++;
                 state.DiagWorkerTotalTicks += frameTicks;
                 if (frameTicks > state.DiagWorkerMaxTicks) state.DiagWorkerMaxTicks = frameTicks;
+
+                // Latch per-DDC ingest health from the worker (the single thread
+                // that processes this channel's IQ). Self-gated to ~1 Hz. Doing it
+                // here rather than in ReadAudio means every fed receiver reports
+                // health — including RX3+ whose audio isn't read out — which is
+                // the realtime overflow/underrun signal for multi-DDC operation.
+                EmitRxDiag(state);
             }
         }
         catch (OperationCanceledException) { }

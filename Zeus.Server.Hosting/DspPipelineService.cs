@@ -712,6 +712,8 @@ public class DspPipelineService : BackgroundService,
         public int PanCnt;  // 1 Hz panadapter freshness tally (display probe)
         public int WfCnt;   // 1 Hz waterfall freshness tally
         public long IqRmsLogMs; // 1 Hz IQ RMS/peak probe gate
+        public long RoutedFrames; // diag: IQ frames routed to this receiver index
+        public long FedFrames;    // diag: IQ frames actually FeedIq'd (channel open)
     }
     private readonly SecondaryRx[] _secondaryRx;
     private int _sampleRateHz;
@@ -4396,7 +4398,13 @@ public class DspPipelineService : BackgroundService,
         // from "channel open but starved".
         var secondaryIds = new object[MaxReceivers - 1];
         for (int i = 1; i < MaxReceivers; i++)
-            secondaryIds[i - 1] = new { receiverIndex = i, channelId = Volatile.Read(ref _secondaryRx[i].ChannelId) };
+            secondaryIds[i - 1] = new
+            {
+                receiverIndex = i,
+                channelId = Volatile.Read(ref _secondaryRx[i].ChannelId),
+                routedFrames = _secondaryRx[i].RoutedFrames,
+                fedFrames = _secondaryRx[i].FedFrames,
+            };
 
         return new
         {
@@ -4607,9 +4615,13 @@ public class DspPipelineService : BackgroundService,
                 {
                     var rx = _secondaryRx[ri];
                     int secChan = Volatile.Read(ref rx.ChannelId);
+                    rx.RoutedFrames++;
                     LogRxIqRms(ri, frame.InterleavedSamples.Span, ref rx.IqRmsLogMs);
                     if (secChan >= 0)
+                    {
                         engine.FeedIq(secChan, frame.InterleavedSamples.Span);
+                        rx.FedFrames++;
+                    }
                 }
                 return;
             }
