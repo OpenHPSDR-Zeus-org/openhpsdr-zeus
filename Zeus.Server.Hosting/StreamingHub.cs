@@ -367,6 +367,23 @@ public sealed class StreamingHub
     /// </summary>
     internal void AttachSink(Guid id, IClientSink sink) => _clients[id] = sink;
 
+    /// <summary>
+    /// Bump the global display-stream gate by <paramref name="delta"/> (+1/−1).
+    /// A non-WebSocket sink (the remote WebRTC session) holds no ClientSession,
+    /// so it adjusts the aggregate directly here — mirroring how
+    /// <c>ClientSession.SetWantsDisplay</c> moves the same counter — to open the
+    /// panadapter frame fan-out (Broadcast(in DisplayFrame) gates on this).
+    /// </summary>
+    internal void AdjustDisplayRequests(int delta) => Interlocked.Add(ref _displayStreamRequests, delta);
+
+    /// <summary>
+    /// Bump the global audio-stream gate by <paramref name="delta"/> (+1/−1) for
+    /// a non-WebSocket sink (remote WebRTC session), mirroring
+    /// <c>ClientSession.SetWantsAudio</c>. Drives the desktop-mode on-demand
+    /// 0x02 RX-audio stream the same way a /ws client's 0x21 does.
+    /// </summary>
+    internal void AdjustAudioRequests(int delta) => Interlocked.Add(ref _audioStreamRequests, delta);
+
     /// <summary>Remove a previously-attached remote sink.</summary>
     internal void DetachSink(Guid id) => _clients.TryRemove(id, out _);
 

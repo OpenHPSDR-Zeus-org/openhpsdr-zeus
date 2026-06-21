@@ -244,6 +244,23 @@ const SPOT_LIST_MIN_BYTES = 3; // type + count
 let activeWs: WebSocket | null = null;
 let micTransportWaiters: Array<() => void> = [];
 
+// Optional control-frame override. When a remote (WebRTC) client is active it
+// installs a sender here so the 2-byte stream-request control frames
+// (0x21/0x22) travel over the WebRTC control DataChannel instead of the local
+// websocket. Null (the default) leaves the WS behaviour untouched for local
+// clients. Mic PCM (0x20) deliberately stays WS-only — no TX over remote in
+// Phase A.
+let controlSender: ((bytes: ArrayBuffer) => void) | null = null;
+
+/**
+ * Install (or clear, with null) a transport for the 2-byte stream-request
+ * control frames. The remote client sets this after the WebRTC session unlocks
+ * so display/audio enables reach the radio over the control DataChannel.
+ */
+export function setRemoteControlSender(fn: ((bytes: ArrayBuffer) => void) | null): void {
+  controlSender = fn;
+}
+
 // Speaker playback is just another RX audio bus consumer. AudioClient.push()
 // self-suppresses in native/desktop mode, so this single subscription is
 // correct in every host mode — the decoder subscribes separately. Registered
@@ -258,12 +275,16 @@ getAudioBus().subscribe((frame) => getAudioClient().push(frame));
 const MSG_TYPE_AUDIO_STREAM_REQUEST = 0x21;
 export const MSG_TYPE_DISPLAY_STREAM_REQUEST = 0x22;
 export function sendAudioStreamRequest(enable: boolean): void {
-  const ws = activeWs;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const buf = new ArrayBuffer(2);
   const view = new DataView(buf);
   view.setUint8(0, MSG_TYPE_AUDIO_STREAM_REQUEST);
   view.setUint8(1, enable ? 1 : 0);
+  if (controlSender) {
+    controlSender(buf);
+    return;
+  }
+  const ws = activeWs;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
   try {
     ws.send(buf);
   } catch (err) {
@@ -272,12 +293,16 @@ export function sendAudioStreamRequest(enable: boolean): void {
 }
 
 export function sendDisplayStreamRequest(enable: boolean): void {
-  const ws = activeWs;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const buf = new ArrayBuffer(2);
   const view = new DataView(buf);
   view.setUint8(0, MSG_TYPE_DISPLAY_STREAM_REQUEST);
   view.setUint8(1, enable ? 1 : 0);
+  if (controlSender) {
+    controlSender(buf);
+    return;
+  }
+  const ws = activeWs;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
   try {
     ws.send(buf);
   } catch (err) {
@@ -362,13 +387,389 @@ export function sendMicPcm(samples: Float32Array): MicPcmSendResult {
   }
 }
 
+/**
+ * Decode and dispatch a single binary radio frame into the stores. Transport-
+ * agnostic: the local websocket path (startRealtime) and the remote WebRTC
+ * client (remote-client.ts) both feed frames through here, so display /
+ * waterfall / meters / audio render identically regardless of origin.
+ *
+ * The body is the verbatim former ws.onmessage switch; `ev` is a thin shim so
+ * every `ev.data` reference resolves without a per-site rewrite.
+ */
+export function dispatchServerFrame(data: ArrayBuffer): void {
+  const ev = { data };
+  try {
+    const peekType = new DataView(ev.data).getUint8(0);
+    if (peekType === MSG_TYPE_DISPLAY_FRAME) {
+      // Skip the decode + push when no spectrum surface is mounted.
+      // decodeDisplayFrame allocates two Float32Arrays per tick and
+      // pushFrame fans the new state through every store subscriber —
+      // both are wasted when the panadapter, waterfall, and filter
+      // mini-pan are all closed. Consumers register via
+      // registerFrameConsumer() in display-store.ts; the moment any of
+      // them mounts we resume decoding on the next tick.
+      if (!hasActiveFrameConsumers()) return;
+      const frame = decodeDisplayFrame(ev.data);
+      useDisplayStore.getState().pushFrame(frame);
+      return;
+    }
+    if (peekType === MSG_TYPE_AUDIO_PCM) {
+      // Decode once and publish to the RX audio bus, which fans the single
+      // stream out to speaker playback (AudioClient — which self-suppresses
+      // in native/desktop mode) and any taps (the CW decoder). We do NOT
+      // gate on isNativeAudio() here on purpose: in desktop mode the server
+      // sends 0x02 only on demand (when a decoder asks via 0x21), and those
+      // frames must reach the bus so the decoder can consume them. Playback
+      // opts out downstream in AudioClient.push(), not here.
+      const audio = decodeAudioFrame(ev.data);
+      getAudioBus().publish(audio);
+      return;
+    }
+    if (peekType === MSG_TYPE_TX_METERS_V2) {
+      if (ev.data.byteLength < TX_METERS_V2_BYTES) {
+        warnOnce(
+          'ws-tx-meters-v2-short',
+          `tx meters v2 frame too short: ${ev.data.byteLength}`,
+        );
+        return;
+      }
+      const dv = new DataView(ev.data);
+      useTxStore.getState().setMeters({
+        fwdWatts: dv.getFloat32(1, true),
+        refWatts: dv.getFloat32(5, true),
+        swr: dv.getFloat32(9, true),
+        micPk: dv.getFloat32(13, true),
+        micAv: dv.getFloat32(17, true),
+        eqPk: dv.getFloat32(21, true),
+        eqAv: dv.getFloat32(25, true),
+        lvlrPk: dv.getFloat32(29, true),
+        lvlrAv: dv.getFloat32(33, true),
+        lvlrGr: dv.getFloat32(37, true),
+        cfcPk: dv.getFloat32(41, true),
+        cfcAv: dv.getFloat32(45, true),
+        cfcGr: dv.getFloat32(49, true),
+        compPk: dv.getFloat32(53, true),
+        compAv: dv.getFloat32(57, true),
+        alcPk: dv.getFloat32(61, true),
+        alcAv: dv.getFloat32(65, true),
+        alcGr: dv.getFloat32(69, true),
+        outPk: dv.getFloat32(73, true),
+        outAv: dv.getFloat32(77, true),
+      });
+      return;
+    }
+    if (peekType === MSG_TYPE_MIC_PEAK) {
+      // Phase 4 — desktop-mode mic level. In browser mode the server
+      // does not emit this frame (NativeMicCapture isn't registered);
+      // if a misconfigured server ever pushes it, the existing
+      // AudioWorklet path is authoritative and we drop the wire frame.
+      if (!isNativeAudio()) return;
+      if (ev.data.byteLength < MIC_PEAK_BYTES) {
+        warnOnce(
+          'ws-mic-peak-short',
+          `mic peak frame too short: ${ev.data.byteLength}`,
+        );
+        return;
+      }
+      const dv = new DataView(ev.data);
+      const peakDbfs = dv.getFloat32(1, true);
+      // i64 LE — DataView gives us BigInt; convert to number (safe up
+      // to 2^53 ms ≈ year +287,000 AD, comfortably beyond any wall
+      // clock we'll see).
+      const tsUnixMs = Number(dv.getBigInt64(5, true));
+      useMicPeakStore.getState().setPeak(peakDbfs, tsUnixMs);
+      return;
+    }
+    if (peekType === MSG_TYPE_AUDIO_CHAIN_ORDER) {
+      // Variable-length CSV payload — empty payload encodes the
+      // "no plugins installed" empty-chain case.
+      const bytes = new Uint8Array(ev.data, 1);
+      const csv = new TextDecoder('utf-8').decode(bytes);
+      const ids = csv.length === 0 ? [] : csv.split(',');
+      useAudioSuiteStore.getState().setChainOrderFromServer(ids);
+      return;
+    }
+    if (peekType === MSG_TYPE_RX_AUDIO_CHAIN_ORDER) {
+      const bytes = new Uint8Array(ev.data, 1);
+      const csv = new TextDecoder('utf-8').decode(bytes);
+      const ids = csv.length === 0 ? [] : csv.split(',');
+      useAudioSuiteStore.getState().setRxChainOrderFromServer(ids);
+      return;
+    }
+    if (peekType === MSG_TYPE_CHAT_EVENT) {
+      // Variable-length UTF-8 JSON payload after the type byte.
+      const bytes = new Uint8Array(ev.data, 1);
+      const json = new TextDecoder('utf-8').decode(bytes);
+      try {
+        const envelope = JSON.parse(json) as ChatEnvelope;
+        useChatStore.getState().ingest(envelope);
+      } catch (err) {
+        warnOnce('ws-chat-event-parse', 'chat event frame parse failed', err);
+      }
+      return;
+    }
+    if (peekType === MSG_TYPE_CW_ENGINE_STATUS) {
+      if (ev.data.byteLength < CW_ENGINE_STATUS_HEADER_BYTES) {
+        warnOnce(
+          'ws-cw-status-short',
+          `cw status frame too short: ${ev.data.byteLength}`,
+        );
+        return;
+      }
+      const dv = new DataView(ev.data);
+      const stateByte = dv.getUint8(1);
+      const wpm = dv.getUint16(2, true);
+      const queueDepth = dv.getUint16(4, true);
+      const textLen = dv.getUint16(6, true);
+      if (ev.data.byteLength < CW_ENGINE_STATUS_HEADER_BYTES + textLen) {
+        warnOnce(
+          'ws-cw-status-truncated',
+          `cw status text claims ${textLen} bytes but only ${
+            ev.data.byteLength - CW_ENGINE_STATUS_HEADER_BYTES
+          } follow`,
+        );
+        return;
+      }
+      const text =
+        textLen === 0
+          ? ''
+          : new TextDecoder('utf-8').decode(
+              new Uint8Array(ev.data, CW_ENGINE_STATUS_HEADER_BYTES, textLen),
+            );
+      const state = CW_STATE_FROM_BYTE[stateByte] ?? 'idle';
+      useCwStore.getState().setStatusFromServer({
+        state,
+        text,
+        wpm,
+        queueDepth,
+        receivedAtMs: Date.now(),
+      });
+      return;
+    }
+    // 0x31 CwDecodedText (classic server-side decoder) was retired in
+    // favour of the browser-side DeepCW neural decoder (plugins/deepcw).
+    // The MSG_TYPE_CW_DECODED_TEXT value stays reserved; the server no
+    // longer broadcasts it.
+    if (peekType === MSG_TYPE_AUDIO_MASTER_BYPASS) {
+      if (ev.data.byteLength < AUDIO_MASTER_BYPASS_BYTES) {
+        warnOnce(
+          'ws-audio-master-bypass-short',
+          `audio master-bypass frame too short: ${ev.data.byteLength}`,
+        );
+        return;
+      }
+      const bypassed = new DataView(ev.data).getUint8(1) !== 0;
+      useAudioSuiteStore.getState().setMasterBypassedFromServer(bypassed);
+      return;
+    }
+    if (peekType === MSG_TYPE_RX_AUDIO_MASTER_BYPASS) {
+      if (ev.data.byteLength < RX_AUDIO_MASTER_BYPASS_BYTES) {
+        warnOnce(
+          'ws-rx-audio-master-bypass-short',
+          `rx audio master-bypass frame too short: ${ev.data.byteLength}`,
+        );
+        return;
+      }
+      const bypassed = new DataView(ev.data).getUint8(1) !== 0;
+      useAudioSuiteStore.getState().setRxMasterBypassedFromServer(bypassed);
+      return;
+    }
+    if (peekType === MSG_TYPE_PTT_STATUS) {
+      if (ev.data.byteLength < PTT_STATUS_BYTES) {
+        warnOnce(
+          'ws-ptt-status-short',
+          `PTT status frame too short: ${ev.data.byteLength}`,
+        );
+        return;
+      }
+      const keyed = new DataView(ev.data).getUint8(1) !== 0;
+      usePttStore.getState().setKeyed(keyed);
+      return;
+    }
+    if (peekType === MSG_TYPE_PA_TEMP) {
+      if (ev.data.byteLength < PA_TEMP_BYTES) {
+        warnOnce(
+          'ws-pa-temp-short',
+          `PA temp frame too short: ${ev.data.byteLength}`,
+        );
+        return;
+      }
+      const tempC = new DataView(ev.data).getFloat32(1, true);
+      useTxStore.getState().setPaTempC(tempC);
+      return;
+    }
+    if (peekType === MSG_TYPE_PS_METERS) {
+      if (ev.data.byteLength < PS_METERS_BYTES) {
+        warnOnce(
+          'ws-ps-meters-short',
+          `PS meters frame too short: ${ev.data.byteLength}`,
+        );
+        return;
+      }
+      const dv = new DataView(ev.data);
+      useTxStore.getState().setPsMeters({
+        feedbackLevel: dv.getFloat32(1, true),
+        correctionDb: dv.getFloat32(5, true),
+        calState: dv.getUint8(9),
+        correcting: dv.getUint8(10) !== 0,
+        maxTxEnvelope: dv.getFloat32(11, true),
+      });
+      return;
+    }
+    if (peekType === MSG_TYPE_RX_METER) {
+      if (ev.data.byteLength < RX_METER_BYTES) {
+        warnOnce(
+          'ws-rx-meter-short',
+          `rx meter frame too short: ${ev.data.byteLength}`,
+        );
+        return;
+      }
+      const dbm = new DataView(ev.data).getFloat32(1, true);
+      useTxStore.getState().setRxDbm(dbm);
+      return;
+    }
+    if (peekType === MSG_TYPE_RX_METERS_V2) {
+      if (ev.data.byteLength < RX_METERS_V2_BYTES) {
+        warnOnce(
+          'ws-rx-meters-v2-short',
+          `rx meters v2 frame too short: ${ev.data.byteLength}`,
+        );
+        return;
+      }
+      const dv = new DataView(ev.data);
+      useRxMetersStore.getState().setMeters({
+        signalPk: dv.getFloat32(1, true),
+        signalAv: dv.getFloat32(5, true),
+        adcPk: dv.getFloat32(9, true),
+        adcAv: dv.getFloat32(13, true),
+        agcGain: dv.getFloat32(17, true),
+        agcEnvPk: dv.getFloat32(21, true),
+        agcEnvAv: dv.getFloat32(25, true),
+      });
+      return;
+    }
+    if (peekType === MSG_TYPE_WISDOM_STATUS) {
+      if (ev.data.byteLength < WISDOM_STATUS_MIN_BYTES) {
+        warnOnce(
+          'ws-wisdom-short',
+          `wisdom frame too short: ${ev.data.byteLength}`,
+        );
+        return;
+      }
+      const raw = new DataView(ev.data).getUint8(1);
+      const phase: WisdomPhase =
+        raw === 1 ? 'building' : raw === 2 ? 'ready' : 'idle';
+      const status =
+        ev.data.byteLength > WISDOM_STATUS_MIN_BYTES
+          ? new TextDecoder('utf-8').decode(
+              new Uint8Array(ev.data, WISDOM_STATUS_MIN_BYTES),
+            )
+          : '';
+      const store = useConnectionStore.getState();
+      store.setWisdomPhase(phase);
+      store.setWisdomStatus(status);
+      return;
+    }
+    if (peekType === MSG_TYPE_ALERT) {
+      if (ev.data.byteLength < 2) {
+        warnOnce('ws-alert-short', `alert frame too short: ${ev.data.byteLength}`);
+        return;
+      }
+      const dv = new DataView(ev.data);
+      const kind = dv.getUint8(1);
+      const msgBytes = new Uint8Array(ev.data, 2);
+      const message = new TextDecoder('utf-8').decode(msgBytes);
+      useTxStore.getState().setAlert({ kind, message });
+      // A SWR / TX-timeout trip force-drops MOX on the server, which also
+      // disarms any running two-tone test. Clear the local latch so the
+      // TwoTone button doesn't stay lit (and desynced) after the trip —
+      // moxOn/tunOn are cleared separately by the MoxStateFrame off-edge.
+      if (kind === AlertKind.SwrTrip || kind === AlertKind.TxTimeout) {
+        useTxStore.getState().setTwoToneOn(false);
+      }
+      return;
+    }
+    if (peekType === MSG_TYPE_BAND_PLAN_CHANGED) {
+      void useBandPlanStore.getState().refresh();
+      return;
+    }
+    if (peekType === MSG_TYPE_MOX_STATE) {
+      if (ev.data.byteLength < MOX_STATE_BYTES) {
+        warnOnce('ws-mox-state-short', `mox state frame too short: ${ev.data.byteLength}`);
+        return;
+      }
+      const dv = new DataView(ev.data);
+      const moxOn = dv.getUint8(1) !== 0;
+      const tunOn = dv.getUint8(2) !== 0;
+      const txStore = useTxStore.getState();
+      if (moxOn) {
+        txStore.setMoxOn(true);
+        txStore.setTxMonitorEnabled(false);
+      } else if (tunOn) {
+        txStore.setTunOn(true);
+        txStore.setTxMonitorEnabled(false);
+      } else {
+        txStore.setMoxOn(false);
+        txStore.setTunOn(false);
+        // Server forced MOX off (SWR trip, TX timeout, TCI key-up) — also
+        // disarm the local mic so the browser stops pushing samples even if
+        // the operator never released their MoxButton / spacebar. Inverse
+        // is intentional asymmetric: server-side MOX-on never raises
+        // localMicArmed (only local interaction does — see issue #346).
+        if (txStore.localMicArmed) txStore.setLocalMicArmed(false);
+      }
+      return;
+    }
+    if (peekType === MSG_TYPE_SPOT_LIST) {
+      if (ev.data.byteLength < SPOT_LIST_MIN_BYTES) {
+        warnOnce('ws-spot-list-short', `spot list frame too short: ${ev.data.byteLength}`);
+        return;
+      }
+      const dv = new DataView(ev.data);
+      const count = dv.getUint16(1, true);
+      const spots: { callsign: string; mode: string; freqHz: number; argb: number; comment?: string }[] = [];
+      let offset = 3;
+      const td = new TextDecoder('utf-8');
+      for (let i = 0; i < count; i++) {
+        if (offset + 16 > ev.data.byteLength) break; // minimum per-spot fixed bytes
+        const freqHz = Number(dv.getBigInt64(offset, true)); offset += 8;
+        const argb = dv.getUint32(offset, true); offset += 4;
+        const callsignLen = dv.getUint8(offset); offset += 1;
+        if (offset + callsignLen > ev.data.byteLength) break;
+        const callsign = td.decode(new Uint8Array(ev.data, offset, callsignLen)); offset += callsignLen;
+        const modeLen = dv.getUint8(offset); offset += 1;
+        if (offset + modeLen > ev.data.byteLength) break;
+        const mode = td.decode(new Uint8Array(ev.data, offset, modeLen)); offset += modeLen;
+        if (offset + 2 > ev.data.byteLength) break;
+        const commentLen = dv.getUint16(offset, true); offset += 2;
+        if (offset + commentLen > ev.data.byteLength) break;
+        const comment = commentLen > 0 ? td.decode(new Uint8Array(ev.data, offset, commentLen)) : undefined;
+        offset += commentLen;
+        spots.push({ callsign, mode, freqHz, argb, comment });
+      }
+      useSpotStore.getState().setSpots(spots);
+      return;
+    }
+    warnOnce(
+      `ws-msgtype-${peekType}`,
+      `ignoring msgType 0x${peekType.toString(16)}`,
+    );
+  } catch (err) {
+    if (err instanceof FrameDecodeError || err instanceof AudioFrameDecodeError) {
+      warnOnce(`ws-decode-${err.message.slice(0, 32)}`, err.message);
+    } else {
+      warnOnce('ws-decode-unknown', 'frame decode failed', err);
+    }
+  }
+}
+
 export function startRealtime(path = '/ws'): () => void {
   let ws: WebSocket | null = null;
   let backoff = INITIAL_BACKOFF_MS;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
 
-  const { pushFrame, setConnected } = useDisplayStore.getState();
+  const { setConnected } = useDisplayStore.getState();
   const syncDisplayStreamRequest = (active = hasActiveFrameConsumers()) => {
     sendDisplayStreamRequest(active);
   };
@@ -414,369 +815,7 @@ export function startRealtime(path = '/ws'): () => void {
     };
     ws.onmessage = (ev) => {
       if (!(ev.data instanceof ArrayBuffer)) return;
-      try {
-        const peekType = new DataView(ev.data).getUint8(0);
-        if (peekType === MSG_TYPE_DISPLAY_FRAME) {
-          // Skip the decode + push when no spectrum surface is mounted.
-          // decodeDisplayFrame allocates two Float32Arrays per tick and
-          // pushFrame fans the new state through every store subscriber —
-          // both are wasted when the panadapter, waterfall, and filter
-          // mini-pan are all closed. Consumers register via
-          // registerFrameConsumer() in display-store.ts; the moment any of
-          // them mounts we resume decoding on the next tick.
-          if (!hasActiveFrameConsumers()) return;
-          const frame = decodeDisplayFrame(ev.data);
-          pushFrame(frame);
-          return;
-        }
-        if (peekType === MSG_TYPE_AUDIO_PCM) {
-          // Decode once and publish to the RX audio bus, which fans the single
-          // stream out to speaker playback (AudioClient — which self-suppresses
-          // in native/desktop mode) and any taps (the CW decoder). We do NOT
-          // gate on isNativeAudio() here on purpose: in desktop mode the server
-          // sends 0x02 only on demand (when a decoder asks via 0x21), and those
-          // frames must reach the bus so the decoder can consume them. Playback
-          // opts out downstream in AudioClient.push(), not here.
-          const audio = decodeAudioFrame(ev.data);
-          getAudioBus().publish(audio);
-          return;
-        }
-        if (peekType === MSG_TYPE_TX_METERS_V2) {
-          if (ev.data.byteLength < TX_METERS_V2_BYTES) {
-            warnOnce(
-              'ws-tx-meters-v2-short',
-              `tx meters v2 frame too short: ${ev.data.byteLength}`,
-            );
-            return;
-          }
-          const dv = new DataView(ev.data);
-          useTxStore.getState().setMeters({
-            fwdWatts: dv.getFloat32(1, true),
-            refWatts: dv.getFloat32(5, true),
-            swr: dv.getFloat32(9, true),
-            micPk: dv.getFloat32(13, true),
-            micAv: dv.getFloat32(17, true),
-            eqPk: dv.getFloat32(21, true),
-            eqAv: dv.getFloat32(25, true),
-            lvlrPk: dv.getFloat32(29, true),
-            lvlrAv: dv.getFloat32(33, true),
-            lvlrGr: dv.getFloat32(37, true),
-            cfcPk: dv.getFloat32(41, true),
-            cfcAv: dv.getFloat32(45, true),
-            cfcGr: dv.getFloat32(49, true),
-            compPk: dv.getFloat32(53, true),
-            compAv: dv.getFloat32(57, true),
-            alcPk: dv.getFloat32(61, true),
-            alcAv: dv.getFloat32(65, true),
-            alcGr: dv.getFloat32(69, true),
-            outPk: dv.getFloat32(73, true),
-            outAv: dv.getFloat32(77, true),
-          });
-          return;
-        }
-        if (peekType === MSG_TYPE_MIC_PEAK) {
-          // Phase 4 — desktop-mode mic level. In browser mode the server
-          // does not emit this frame (NativeMicCapture isn't registered);
-          // if a misconfigured server ever pushes it, the existing
-          // AudioWorklet path is authoritative and we drop the wire frame.
-          if (!isNativeAudio()) return;
-          if (ev.data.byteLength < MIC_PEAK_BYTES) {
-            warnOnce(
-              'ws-mic-peak-short',
-              `mic peak frame too short: ${ev.data.byteLength}`,
-            );
-            return;
-          }
-          const dv = new DataView(ev.data);
-          const peakDbfs = dv.getFloat32(1, true);
-          // i64 LE — DataView gives us BigInt; convert to number (safe up
-          // to 2^53 ms ≈ year +287,000 AD, comfortably beyond any wall
-          // clock we'll see).
-          const tsUnixMs = Number(dv.getBigInt64(5, true));
-          useMicPeakStore.getState().setPeak(peakDbfs, tsUnixMs);
-          return;
-        }
-        if (peekType === MSG_TYPE_AUDIO_CHAIN_ORDER) {
-          // Variable-length CSV payload — empty payload encodes the
-          // "no plugins installed" empty-chain case.
-          const bytes = new Uint8Array(ev.data, 1);
-          const csv = new TextDecoder('utf-8').decode(bytes);
-          const ids = csv.length === 0 ? [] : csv.split(',');
-          useAudioSuiteStore.getState().setChainOrderFromServer(ids);
-          return;
-        }
-        if (peekType === MSG_TYPE_RX_AUDIO_CHAIN_ORDER) {
-          const bytes = new Uint8Array(ev.data, 1);
-          const csv = new TextDecoder('utf-8').decode(bytes);
-          const ids = csv.length === 0 ? [] : csv.split(',');
-          useAudioSuiteStore.getState().setRxChainOrderFromServer(ids);
-          return;
-        }
-        if (peekType === MSG_TYPE_CHAT_EVENT) {
-          // Variable-length UTF-8 JSON payload after the type byte.
-          const bytes = new Uint8Array(ev.data, 1);
-          const json = new TextDecoder('utf-8').decode(bytes);
-          try {
-            const envelope = JSON.parse(json) as ChatEnvelope;
-            useChatStore.getState().ingest(envelope);
-          } catch (err) {
-            warnOnce('ws-chat-event-parse', 'chat event frame parse failed', err);
-          }
-          return;
-        }
-        if (peekType === MSG_TYPE_CW_ENGINE_STATUS) {
-          if (ev.data.byteLength < CW_ENGINE_STATUS_HEADER_BYTES) {
-            warnOnce(
-              'ws-cw-status-short',
-              `cw status frame too short: ${ev.data.byteLength}`,
-            );
-            return;
-          }
-          const dv = new DataView(ev.data);
-          const stateByte = dv.getUint8(1);
-          const wpm = dv.getUint16(2, true);
-          const queueDepth = dv.getUint16(4, true);
-          const textLen = dv.getUint16(6, true);
-          if (ev.data.byteLength < CW_ENGINE_STATUS_HEADER_BYTES + textLen) {
-            warnOnce(
-              'ws-cw-status-truncated',
-              `cw status text claims ${textLen} bytes but only ${
-                ev.data.byteLength - CW_ENGINE_STATUS_HEADER_BYTES
-              } follow`,
-            );
-            return;
-          }
-          const text =
-            textLen === 0
-              ? ''
-              : new TextDecoder('utf-8').decode(
-                  new Uint8Array(ev.data, CW_ENGINE_STATUS_HEADER_BYTES, textLen),
-                );
-          const state = CW_STATE_FROM_BYTE[stateByte] ?? 'idle';
-          useCwStore.getState().setStatusFromServer({
-            state,
-            text,
-            wpm,
-            queueDepth,
-            receivedAtMs: Date.now(),
-          });
-          return;
-        }
-        // 0x31 CwDecodedText (classic server-side decoder) was retired in
-        // favour of the browser-side DeepCW neural decoder (plugins/deepcw).
-        // The MSG_TYPE_CW_DECODED_TEXT value stays reserved; the server no
-        // longer broadcasts it.
-        if (peekType === MSG_TYPE_AUDIO_MASTER_BYPASS) {
-          if (ev.data.byteLength < AUDIO_MASTER_BYPASS_BYTES) {
-            warnOnce(
-              'ws-audio-master-bypass-short',
-              `audio master-bypass frame too short: ${ev.data.byteLength}`,
-            );
-            return;
-          }
-          const bypassed = new DataView(ev.data).getUint8(1) !== 0;
-          useAudioSuiteStore.getState().setMasterBypassedFromServer(bypassed);
-          return;
-        }
-        if (peekType === MSG_TYPE_RX_AUDIO_MASTER_BYPASS) {
-          if (ev.data.byteLength < RX_AUDIO_MASTER_BYPASS_BYTES) {
-            warnOnce(
-              'ws-rx-audio-master-bypass-short',
-              `rx audio master-bypass frame too short: ${ev.data.byteLength}`,
-            );
-            return;
-          }
-          const bypassed = new DataView(ev.data).getUint8(1) !== 0;
-          useAudioSuiteStore.getState().setRxMasterBypassedFromServer(bypassed);
-          return;
-        }
-        if (peekType === MSG_TYPE_PTT_STATUS) {
-          if (ev.data.byteLength < PTT_STATUS_BYTES) {
-            warnOnce(
-              'ws-ptt-status-short',
-              `PTT status frame too short: ${ev.data.byteLength}`,
-            );
-            return;
-          }
-          const keyed = new DataView(ev.data).getUint8(1) !== 0;
-          usePttStore.getState().setKeyed(keyed);
-          return;
-        }
-        if (peekType === MSG_TYPE_PA_TEMP) {
-          if (ev.data.byteLength < PA_TEMP_BYTES) {
-            warnOnce(
-              'ws-pa-temp-short',
-              `PA temp frame too short: ${ev.data.byteLength}`,
-            );
-            return;
-          }
-          const tempC = new DataView(ev.data).getFloat32(1, true);
-          useTxStore.getState().setPaTempC(tempC);
-          return;
-        }
-        if (peekType === MSG_TYPE_PS_METERS) {
-          if (ev.data.byteLength < PS_METERS_BYTES) {
-            warnOnce(
-              'ws-ps-meters-short',
-              `PS meters frame too short: ${ev.data.byteLength}`,
-            );
-            return;
-          }
-          const dv = new DataView(ev.data);
-          useTxStore.getState().setPsMeters({
-            feedbackLevel: dv.getFloat32(1, true),
-            correctionDb: dv.getFloat32(5, true),
-            calState: dv.getUint8(9),
-            correcting: dv.getUint8(10) !== 0,
-            maxTxEnvelope: dv.getFloat32(11, true),
-          });
-          return;
-        }
-        if (peekType === MSG_TYPE_RX_METER) {
-          if (ev.data.byteLength < RX_METER_BYTES) {
-            warnOnce(
-              'ws-rx-meter-short',
-              `rx meter frame too short: ${ev.data.byteLength}`,
-            );
-            return;
-          }
-          const dbm = new DataView(ev.data).getFloat32(1, true);
-          useTxStore.getState().setRxDbm(dbm);
-          return;
-        }
-        if (peekType === MSG_TYPE_RX_METERS_V2) {
-          if (ev.data.byteLength < RX_METERS_V2_BYTES) {
-            warnOnce(
-              'ws-rx-meters-v2-short',
-              `rx meters v2 frame too short: ${ev.data.byteLength}`,
-            );
-            return;
-          }
-          const dv = new DataView(ev.data);
-          useRxMetersStore.getState().setMeters({
-            signalPk: dv.getFloat32(1, true),
-            signalAv: dv.getFloat32(5, true),
-            adcPk: dv.getFloat32(9, true),
-            adcAv: dv.getFloat32(13, true),
-            agcGain: dv.getFloat32(17, true),
-            agcEnvPk: dv.getFloat32(21, true),
-            agcEnvAv: dv.getFloat32(25, true),
-          });
-          return;
-        }
-        if (peekType === MSG_TYPE_WISDOM_STATUS) {
-          if (ev.data.byteLength < WISDOM_STATUS_MIN_BYTES) {
-            warnOnce(
-              'ws-wisdom-short',
-              `wisdom frame too short: ${ev.data.byteLength}`,
-            );
-            return;
-          }
-          const raw = new DataView(ev.data).getUint8(1);
-          const phase: WisdomPhase =
-            raw === 1 ? 'building' : raw === 2 ? 'ready' : 'idle';
-          const status =
-            ev.data.byteLength > WISDOM_STATUS_MIN_BYTES
-              ? new TextDecoder('utf-8').decode(
-                  new Uint8Array(ev.data, WISDOM_STATUS_MIN_BYTES),
-                )
-              : '';
-          const store = useConnectionStore.getState();
-          store.setWisdomPhase(phase);
-          store.setWisdomStatus(status);
-          return;
-        }
-        if (peekType === MSG_TYPE_ALERT) {
-          if (ev.data.byteLength < 2) {
-            warnOnce('ws-alert-short', `alert frame too short: ${ev.data.byteLength}`);
-            return;
-          }
-          const dv = new DataView(ev.data);
-          const kind = dv.getUint8(1);
-          const msgBytes = new Uint8Array(ev.data, 2);
-          const message = new TextDecoder('utf-8').decode(msgBytes);
-          useTxStore.getState().setAlert({ kind, message });
-          // A SWR / TX-timeout trip force-drops MOX on the server, which also
-          // disarms any running two-tone test. Clear the local latch so the
-          // TwoTone button doesn't stay lit (and desynced) after the trip —
-          // moxOn/tunOn are cleared separately by the MoxStateFrame off-edge.
-          if (kind === AlertKind.SwrTrip || kind === AlertKind.TxTimeout) {
-            useTxStore.getState().setTwoToneOn(false);
-          }
-          return;
-        }
-        if (peekType === MSG_TYPE_BAND_PLAN_CHANGED) {
-          void useBandPlanStore.getState().refresh();
-          return;
-        }
-        if (peekType === MSG_TYPE_MOX_STATE) {
-          if (ev.data.byteLength < MOX_STATE_BYTES) {
-            warnOnce('ws-mox-state-short', `mox state frame too short: ${ev.data.byteLength}`);
-            return;
-          }
-          const dv = new DataView(ev.data);
-          const moxOn = dv.getUint8(1) !== 0;
-          const tunOn = dv.getUint8(2) !== 0;
-          const txStore = useTxStore.getState();
-          if (moxOn) {
-            txStore.setMoxOn(true);
-            txStore.setTxMonitorEnabled(false);
-          } else if (tunOn) {
-            txStore.setTunOn(true);
-            txStore.setTxMonitorEnabled(false);
-          } else {
-            txStore.setMoxOn(false);
-            txStore.setTunOn(false);
-            // Server forced MOX off (SWR trip, TX timeout, TCI key-up) — also
-            // disarm the local mic so the browser stops pushing samples even if
-            // the operator never released their MoxButton / spacebar. Inverse
-            // is intentional asymmetric: server-side MOX-on never raises
-            // localMicArmed (only local interaction does — see issue #346).
-            if (txStore.localMicArmed) txStore.setLocalMicArmed(false);
-          }
-          return;
-        }
-        if (peekType === MSG_TYPE_SPOT_LIST) {
-          if (ev.data.byteLength < SPOT_LIST_MIN_BYTES) {
-            warnOnce('ws-spot-list-short', `spot list frame too short: ${ev.data.byteLength}`);
-            return;
-          }
-          const dv = new DataView(ev.data);
-          const count = dv.getUint16(1, true);
-          const spots: { callsign: string; mode: string; freqHz: number; argb: number; comment?: string }[] = [];
-          let offset = 3;
-          const td = new TextDecoder('utf-8');
-          for (let i = 0; i < count; i++) {
-            if (offset + 16 > ev.data.byteLength) break; // minimum per-spot fixed bytes
-            const freqHz = Number(dv.getBigInt64(offset, true)); offset += 8;
-            const argb = dv.getUint32(offset, true); offset += 4;
-            const callsignLen = dv.getUint8(offset); offset += 1;
-            if (offset + callsignLen > ev.data.byteLength) break;
-            const callsign = td.decode(new Uint8Array(ev.data, offset, callsignLen)); offset += callsignLen;
-            const modeLen = dv.getUint8(offset); offset += 1;
-            if (offset + modeLen > ev.data.byteLength) break;
-            const mode = td.decode(new Uint8Array(ev.data, offset, modeLen)); offset += modeLen;
-            if (offset + 2 > ev.data.byteLength) break;
-            const commentLen = dv.getUint16(offset, true); offset += 2;
-            if (offset + commentLen > ev.data.byteLength) break;
-            const comment = commentLen > 0 ? td.decode(new Uint8Array(ev.data, offset, commentLen)) : undefined;
-            offset += commentLen;
-            spots.push({ callsign, mode, freqHz, argb, comment });
-          }
-          useSpotStore.getState().setSpots(spots);
-          return;
-        }
-        warnOnce(
-          `ws-msgtype-${peekType}`,
-          `ignoring msgType 0x${peekType.toString(16)}`,
-        );
-      } catch (err) {
-        if (err instanceof FrameDecodeError || err instanceof AudioFrameDecodeError) {
-          warnOnce(`ws-decode-${err.message.slice(0, 32)}`, err.message);
-        } else {
-          warnOnce('ws-decode-unknown', 'frame decode failed', err);
-        }
-      }
+      dispatchServerFrame(ev.data);
     };
   };
 
