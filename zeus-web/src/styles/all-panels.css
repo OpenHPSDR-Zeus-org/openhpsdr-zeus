@@ -24,12 +24,14 @@
   position: relative;
   width: 100%;
   height: 100%;
-  /* The workspace NEVER shows a scrollbar — it reads like a hardware front
-   * panel. The grid fills the window width (column count tracks it) and the
-   * default layout fits the height. When a panel is added with no room the
-   * desktop window grows to accommodate it (see window auto-grow) rather than
-   * introducing a scrollbar. */
-  overflow: hidden;
+  /* Fixed-cell grid: a column and a row are a CONSTANT pixel size (set in
+   * FlexWorkspace), so panels never rescale when the window is resized. The
+   * column count tracks the window width; vertically the grid grows downward.
+   * When the layout is larger than the viewport — because the operator expanded
+   * panels, or shrank the window below the content — the workspace SCROLLS to
+   * the content instead of squashing or clipping it. A layout that fits shows
+   * no scrollbar and still reads like a hardware front panel. */
+  overflow: auto;
   /* v3 Lifted Dark: workspace ground is the distinct mid-grey "table"
    * (--bg-workspace), so the chrome (--bg-0) and the panels (--bg-1) each
    * read as their own surface. */

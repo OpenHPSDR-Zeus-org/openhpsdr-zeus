@@ -1014,7 +1014,7 @@ public static class ZeusEndpoints
         app.MapPost("/api/vfo", (VfoSetRequest req, RadioService r) =>
         {
             log.LogInformation("api.vfo receiver={Receiver} hz={Hz}", req.Receiver, req.Hz);
-            return req.Receiver == 1 ? r.SetVfoB(req.Hz) : r.SetVfo(req.Hz);
+            return r.SetReceiverVfo(req.Receiver, req.Hz);
         });
 
         app.MapPost("/api/vfo/swap", (RadioService r) =>
