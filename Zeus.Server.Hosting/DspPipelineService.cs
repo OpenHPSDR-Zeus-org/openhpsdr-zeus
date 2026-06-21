@@ -3934,6 +3934,18 @@ public class DspPipelineService : BackgroundService,
         // stay at zero per EU2AV's reserved-bit rule.
         p2.SetOcDxMasks(snap.OcDxTxMask, snap.OcDxRxMask);
         p2.SetPaEnabled(snap.PaEnabled);
+        // External antenna (antenna slice — #804). HpsdrAntenna.Ant1=0 → wire 1
+        // → ALEX_TX_ANTENNA_1, so the +1 maps the 0-based enum to the 1-based
+        // wire selector. SetAntennas gates the TX-antenna emission on
+        // HasTxAntennaRelays, defers a mid-key relay change to the unkey edge,
+        // and routes the operator RX-aux strictly BEFORE the PS coupler OR
+        // (the PS-K36 firewall lives in Protocol2Client.SendCmdHighPriority).
+        p2.SetAntennas(
+            (int)snap.TxAntenna + 1,
+            (int)snap.RxAntenna + 1,
+            snap.HasTxAntennaRelays,
+            snap.RxAuxInput,
+            snap.MkiiBpfRxSelect);
     }
 
     private void OnAudioFrontEndChanged(AudioFrontEndPush a)

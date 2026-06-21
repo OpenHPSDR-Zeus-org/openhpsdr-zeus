@@ -80,6 +80,69 @@ public class ExternalPortEncoderTests
         Assert.Equal(RadioProtocol.Protocol1, ExternalPortEncoders.DefaultProtocolFor(HpsdrBoardKind.HermesLite2));
     }
 
+    // ---- byte-identity: encoder output == wire path for the default state ----
+
+    [Theory]
+    [InlineData(HpsdrAntenna.Ant1, 0x00)]
+    [InlineData(HpsdrAntenna.Ant2, 0x20)]
+    [InlineData(HpsdrAntenna.Ant3, 0x40)]
+    public void P1Encoder_RxAntennaC3Bits_MatchWirePath(HpsdrAntenna ant, byte expected)
+    {
+        var encoder = ExternalPortEncoders.For(HpsdrBoardKind.Hermes);
+        byte bits = encoder.EncodeP1RxAntennaC3Bits(new ExternalPortState(RxAnt: ant));
+        Assert.Equal(expected, bits);
+    }
+
+    [Theory]
+    [InlineData(HpsdrAntenna.Ant1)]
+    [InlineData(HpsdrAntenna.Ant2)]
+    [InlineData(HpsdrAntenna.Ant3)]
+    public void Hl2Encoder_RxAntennaC3Bits_ClampedToAnt1(HpsdrAntenna requested)
+    {
+        // Phase 2: HL2 has no RX-antenna relay — C3[7:5] is hard-clamped to
+        // ANT1 (0x00) at the wire layer regardless of the requested antenna,
+        // so a stale per-band ANT2/3 can never flip the N2ADR antenna pad.
+        var encoder = ExternalPortEncoders.For(HpsdrBoardKind.HermesLite2);
+        byte bits = encoder.EncodeP1RxAntennaC3Bits(new ExternalPortState(RxAnt: requested));
+        Assert.Equal(0x00, bits);
+    }
+
+    [Theory]
+    [InlineData(HpsdrAntenna.Ant1, 0x01000000u)]
+    [InlineData(HpsdrAntenna.Ant2, 0x02000000u)]
+    [InlineData(HpsdrAntenna.Ant3, 0x04000000u)]
+    public void P2Encoder_TxAntennaBits_ThreadSelection_OnRelayBoard(HpsdrAntenna ant, uint expected)
+    {
+        // Phase 2: a relay-capable variant (G2 / OrionMkII) threads the real
+        // per-band TX antenna into alex0[26:24].
+        var encoder = ExternalPortEncoders.For(HpsdrBoardKind.OrionMkII);
+        uint bits = encoder.EncodeP2TxAntennaBits(new ExternalPortState(TxAnt: ant));
+        Assert.Equal(expected, bits);
+    }
+
+    [Theory]
+    [InlineData(HpsdrAntenna.Ant1)]
+    [InlineData(HpsdrAntenna.Ant2)]
+    [InlineData(HpsdrAntenna.Ant3)]
+    public void P1Encoder_TxAntennaBits_AlwaysAnt1(HpsdrAntenna ant)
+    {
+        // P1 boards are ANT1-hardwired on transmit (no P2 Alex word).
+        var encoder = ExternalPortEncoders.For(HpsdrBoardKind.Hermes);
+        uint bits = encoder.EncodeP2TxAntennaBits(new ExternalPortState(TxAnt: ant));
+        Assert.Equal(0x01000000u, bits); // ALEX_TX_ANTENNA_1
+    }
+
+    [Theory]
+    [InlineData(HpsdrAntenna.Ant1)]
+    [InlineData(HpsdrAntenna.Ant2)]
+    [InlineData(HpsdrAntenna.Ant3)]
+    public void Hl2Encoder_TxAntennaBits_AlwaysAnt1(HpsdrAntenna ant)
+    {
+        // HL2 has no P2 Alex word and is ANT1-hardwired on transmit.
+        var encoder = ExternalPortEncoders.For(HpsdrBoardKind.HermesLite2);
+        uint bits = encoder.EncodeP2TxAntennaBits(new ExternalPortState(TxAnt: ant));
+        Assert.Equal(0x01000000u, bits);
+    }
 
     // ---- TX-audio source: P2 byte-50/51 PURE FUNCTIONS (external-ports §2) ----
 

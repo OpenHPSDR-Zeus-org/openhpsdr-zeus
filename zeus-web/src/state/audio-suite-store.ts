@@ -267,6 +267,27 @@ interface AudioSuiteState {
   loadProcessingModeFromServer(): Promise<void>;
   loadRxProcessingModeFromServer(): Promise<void>;
   setProcessingMode(mode: 'native' | 'vst'): Promise<void>;
+
+  // "Get VST Engine" provisioning. The out-of-process VST engine is fetched
+  // from its upstream release and staged by the server (never bundled). The
+  // operator triggers it from the Audio Suite when VST mode is selected but no
+  // engine is installed; this store polls the server install status until it
+  // finishes, then refreshes the processing-mode so the new engine is picked up.
+  // phase lifecycle: idle → downloading → extracting → staging (server) →
+  // configuring (client switches to VST mode) → done (installed AND usable).
+  vstEngineInstall: {
+    phase:
+      | 'idle'
+      | 'downloading'
+      | 'extracting'
+      | 'staging'
+      | 'configuring'
+      | 'done'
+      | 'failed';
+    percent: number;
+    message: string | null;
+  };
+  installVstEngine(): Promise<void>;
 }
 
 type AudioSuitePersistedState = Pick<
@@ -351,6 +372,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       rxVstEngineActive: false,
       rxVstActivePlugins: 0,
       rxVstDegradedBlocks: 0,
+      vstEngineInstall: { phase: 'idle', percent: 0, message: null },
       isDragging: false,
       collapsed: {},
       selectedChainId: null,
@@ -1147,6 +1169,118 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           set({ processingMode: prev });
 
           console.warn('audio-suite processing-mode PUT threw', err);
+        }
+      },
+
+      installVstEngine: async () => {
+        const phase = get().vstEngineInstall.phase;
+        if (phase === 'downloading' || phase === 'extracting' || phase === 'staging') {
+          return; // already running
+        }
+        set({ vstEngineInstall: { phase: 'downloading', percent: 0, message: 'Starting…' } });
+        try {
+          const res = await fetch('/api/tx-audio-suite/vst-engine/install', {
+            method: 'POST',
+          });
+          if (!res.ok) {
+            set({
+              vstEngineInstall: {
+                phase: 'failed',
+                percent: 0,
+                message: `Install request rejected (${res.status}).`,
+              },
+            });
+            return;
+          }
+
+          // Poll the server install status until it finishes. The engine
+          // download is multi-MB, so allow a generous ceiling before giving up
+          // on the poll loop (the server keeps working regardless).
+          for (let i = 0; i < 600; i += 1) {
+            await new Promise((r) => setTimeout(r, 1000));
+            let body: {
+              phase?: string;
+              percent?: number;
+              message?: string | null;
+            };
+            try {
+              const poll = await fetch('/api/tx-audio-suite/vst-engine/install');
+              if (!poll.ok) continue;
+              body = await poll.json();
+            } catch {
+              continue;
+            }
+            const p = (body.phase ?? 'idle') as
+              | 'idle'
+              | 'downloading'
+              | 'extracting'
+              | 'staging'
+              | 'done'
+              | 'failed';
+            if (p === 'done') {
+              // Configure: switch the TX route to VST so the freshly-staged
+              // engine activates and audio runs through it — the operator gets
+              // working VST without a second click. A direct PUT (not
+              // setProcessingMode, which short-circuits when the mode is
+              // unchanged) so the server re-activates even if VST was already
+              // the selected route when the engine was missing.
+              set({
+                vstEngineInstall: {
+                  phase: 'configuring',
+                  percent: 100,
+                  message: 'Configuring VST mode…',
+                },
+              });
+              try {
+                const put = await fetch('/api/tx-audio-suite/processing-mode', {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ mode: 'vst' }),
+                });
+                if (put.ok) {
+                  const pm = (await put.json()) as {
+                    mode?: string;
+                    engineAvailable?: boolean;
+                    engineActive?: boolean;
+                  };
+                  set({
+                    processingMode: pm.mode === 'vst' ? 'vst' : 'native',
+                    vstEngineAvailable: pm.engineAvailable === true,
+                    vstEngineActive: pm.engineActive === true,
+                  });
+                } else {
+                  await get().loadProcessingModeFromServer();
+                }
+              } catch {
+                await get().loadProcessingModeFromServer();
+              }
+              set({
+                vstEngineInstall: {
+                  phase: 'done',
+                  percent: 100,
+                  message: 'VST engine ready — TX audio now routes through VST.',
+                },
+              });
+              return;
+            }
+            set({
+              vstEngineInstall: {
+                phase: p,
+                percent: typeof body.percent === 'number' ? body.percent : 0,
+                message: body.message ?? null,
+              },
+            });
+            if (p === 'failed') return;
+          }
+        } catch (err) {
+          set({
+            vstEngineInstall: {
+              phase: 'failed',
+              percent: 0,
+              message: 'Install failed (network?).',
+            },
+          });
+          console.warn('vst-engine install threw', err);
         }
       },
     }),

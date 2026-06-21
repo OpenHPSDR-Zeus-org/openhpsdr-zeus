@@ -2093,3 +2093,36 @@ public sealed record RepoUpdateStatus(
     public long? ReleaseAssetSizeBytes { get; init; }
     public string? ReleaseAssetDigest { get; init; }
 }
+
+// ---- External antenna ports (external-ports plan — antenna slice, #804) ----
+//
+// Per-band TX/RX antenna relay + RX-aux selection. Surfaced via
+// /api/radio/antenna, NEVER via StateDto — antenna state is server-authoritative
+// and pushed to the live client on the Changed → RecomputePaAndPush path, so a
+// frontend reconnect can never clobber it (PR #359/#360 no-clobber pattern).
+//
+// TxAnt / RxAnt are antenna strings ("Ant1" | "Ant2" | "Ant3"); RxAux is the
+// auxiliary RX input string ("None" | "Ext1" | "Ext2" | "Xvtr" | "Bypass").
+// "Ant1" / "None" reproduce today's wire bytes bit-for-bit (default-inert).
+public sealed record AntennaBandDto(string Band, string TxAnt, string RxAnt, string RxAux = "None");
+
+// GET /api/radio/antenna response. HasTxAntennaRelays / HasRxAntennaRelays are
+// the board-capability gates the frontend renders the right selectors from; the
+// per-band rows list every HF band. AvailableRxAux is the set of aux-input
+// strings the connected board exposes (empty on HL2 — no aux). AlexRevision is
+// always "Modern" in this slice: the wire path routes PureSignal external
+// feedback to the BYPASS/K36 bit (Rev 24+ behaviour), and the operator-set
+// legacy Rev15/16 EXT1 routing is not wire-discoverable so it is deferred.
+public sealed record AntennaSettingsDto(
+    bool HasTxAntennaRelays,
+    bool HasRxAntennaRelays,
+    IReadOnlyList<AntennaBandDto> Bands,
+    IReadOnlyList<string>? AvailableRxAux = null,
+    string AlexRevision = "Modern");
+
+// PUT /api/radio/antenna — sets ONE band's antenna + RX-aux selection. Band must
+// be a known HF band; TxAnt/RxAnt must parse to HpsdrAntenna; RxAux to the
+// server-side RxAuxInputSel. The server returns 409 for a relay/aux the
+// connected board lacks (non-ANT1 on a relay-less board, an aux the board does
+// not expose), 400 on a malformed body / unknown band / unparseable value.
+public sealed record AntennaSetRequest(string Band, string TxAnt, string RxAnt, string RxAux = "None");

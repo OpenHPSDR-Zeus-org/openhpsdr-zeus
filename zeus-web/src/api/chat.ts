@@ -185,6 +185,24 @@ export function chatSetEnabled(enabled: boolean, signal?: AbortSignal): Promise<
   );
 }
 
+/**
+ * Heartbeat telling the backend whether this client currently has the Chat
+ * panel displayed. Presence (the relay connection) is gated on this, so an
+ * enabled operator who isn't showing the panel stays off everyone's roster.
+ */
+export function chatSetVisible(visible: boolean, signal?: AbortSignal): Promise<ChatStatus> {
+  return jsonFetch(
+    '/api/chat/visible',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ visible }),
+      signal,
+    },
+    normalizeStatus,
+  );
+}
+
 export function chatSend(text: string, room?: string, signal?: AbortSignal): Promise<{ ok: boolean }> {
   return jsonFetch(
     '/api/chat/send',

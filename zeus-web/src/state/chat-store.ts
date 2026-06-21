@@ -26,6 +26,7 @@ import { create } from 'zustand';
 import {
   chatStatus,
   chatSetEnabled,
+  chatSetVisible,
   chatSend,
   chatDm,
   chatMessages,
@@ -116,6 +117,8 @@ export type ChatStoreState = {
 
   refreshStatus: () => Promise<void>;
   setEnabled: (enabled: boolean) => Promise<void>;
+  /** Report whether the Chat panel is currently displayed (gates presence). */
+  setPanelVisible: (visible: boolean) => Promise<void>;
   send: (text: string) => Promise<boolean>;
   loadHistory: () => Promise<void>;
   loadRoster: () => Promise<void>;
@@ -212,6 +215,15 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
       set(applyStatus(await chatSetEnabled(enabled)));
     } catch (err) {
       set({ relayError: errMsg(err) });
+    }
+  },
+
+  setPanelVisible: async (visible) => {
+    try {
+      set(applyStatus(await chatSetVisible(visible)));
+    } catch {
+      // Best-effort presence heartbeat; a missed ping just lapses on the
+      // backend timeout and the next interval tick re-asserts visibility.
     }
   },
 

@@ -556,7 +556,11 @@ internal static class ControlFrame
         // them, so the rename is purely client-side.
         if (s.EnableHl2BandVolts) c3 |= 1 << 3;
         if (s.PreampOn) c3 |= 1 << 4;             // Q#2: single global preamp bit for MVP.
-        c3 |= (byte)(((byte)s.RxAntenna & 0x07) << 5);
+        // RX-antenna relay select C3[7:5]. Routed through the shared pure helper
+        // so the wire-layer HL2 clamp (single jack → ANT1) and the external-port
+        // encoder seam emit identical bytes. Co-tenant C3[3] (band-volts) and
+        // C3[4] (preamp) are already OR'd above; the helper only touches [7:5].
+        c3 |= EncodeRxAntennaC3Bits(s.RxAntenna, s.Board);
         c14[2] = c3;
 
         // C4: Alex TX antenna [1:0] = 0 (RX-only MVP), duplex [2] = 1 (always, per
@@ -568,6 +572,42 @@ internal static class ControlFrame
         c4 |= (byte)((s.NumReceiversMinusOne & 0x07) << 3);
         c14[3] = c4;
     }
+
+    /// <summary>
+    /// Encode the Config-frame RX-antenna relay bits (C3[7:5]) for the given
+    /// board (external-ports plan — antenna slice, #804). Single source of the
+    /// C3[7:5] math, called both on the wire path (WriteConfigPayload) and from
+    /// the external-port encoder seam, so the two are byte-identical by
+    /// construction.
+    ///
+    /// WIRE-LAYER CLAMP: on a board with no RX-antenna relay (Hermes-Lite 2 —
+    /// its single antenna jack forwards to the N2ADR antenna pad, C3[5] does NOT
+    /// drive an ANT1/2/3 relay), the selection is forced to ANT1 here so a stale
+    /// per-band ANT2/3 value can never flip the N2ADR pad. This is the wire layer
+    /// of the three-layer defence (UI gate / REST 409 / wire clamp) and holds
+    /// even if an upstream layer is bypassed. Relay-capable boards emit the raw
+    /// selection — byte-identical to before this slice, so the default-ANT1
+    /// goldens stay green.
+    /// </summary>
+    internal static byte EncodeRxAntennaC3Bits(HpsdrAntenna rxAntenna, HpsdrBoardKind board)
+    {
+        // The capability record proper lives in Zeus.Server.Hosting (which this
+        // assembly cannot reference), so the single relay-less P1 board is named
+        // directly here — mirrors BoardCapabilities.HasRxAntennaRelays, false for
+        // HL2 only across the P1 lineup.
+        if (!P1BoardHasRxAntennaRelays(board)) rxAntenna = HpsdrAntenna.Ant1;
+        return (byte)(((byte)rxAntenna & 0x07) << 5);
+    }
+
+    /// <summary>
+    /// Whether a Protocol-1 board has switchable RX-antenna relays (ANT1/2/3).
+    /// Mirrors <c>BoardCapabilities.HasRxAntennaRelays</c> for the P1 lineup:
+    /// every ANAN / Hermes-class board does; Hermes-Lite 2 does not (single
+    /// jack). Kept local to the protocol assembly so the wire-layer clamp does
+    /// not need a reference to Zeus.Server.Hosting.
+    /// </summary>
+    internal static bool P1BoardHasRxAntennaRelays(HpsdrBoardKind board) =>
+        board != HpsdrBoardKind.HermesLite2;
 
     /// <summary>
     /// Build a complete 1032-byte Metis data frame with two USB frames carrying

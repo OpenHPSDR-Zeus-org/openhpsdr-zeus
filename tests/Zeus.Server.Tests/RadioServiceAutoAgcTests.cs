@@ -209,8 +209,48 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
     public void SetAgcTop_ClampsBaselineToRange()
     {
         using var radio = NewRadio();
-        Assert.Equal(120.0, radio.SetAgcTop(200.0).AgcTopDb);
-        Assert.Equal(-20.0, radio.SetAgcTop(-50.0).AgcTopDb);
+        // Operator baseline range is 30..80 dB (loudest 80 / quietest 30).
+        Assert.Equal(80.0, radio.SetAgcTop(200.0).AgcTopDb);
+        Assert.Equal(30.0, radio.SetAgcTop(-50.0).AgcTopDb);
+        // Just outside each rail clamps to the rail; in-range passes through.
+        Assert.Equal(80.0, radio.SetAgcTop(80.5).AgcTopDb);
+        Assert.Equal(30.0, radio.SetAgcTop(29.5).AgcTopDb);
+        Assert.Equal(55.0, radio.SetAgcTop(55.0).AgcTopDb);
+    }
+
+    [Fact]
+    public void HydratedBaseline_ClampsLegacyAboveMaxIntoRange()
+    {
+        // A legacy persisted value from the old -20..120 slider must not park
+        // the thumb off the new 30..80 rail on restart.
+        using (var seed = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _basePath + ".dsp.db"))
+        {
+            seed.SetAgcTopDb(120.0);
+        }
+        using var radio = NewRadio(); // reopens the same dsp.db, hydrates on construct
+        Assert.Equal(80.0, radio.Snapshot().AgcTopDb);
+    }
+
+    [Fact]
+    public void HydratedBaseline_ClampsLegacyBelowMinIntoRange()
+    {
+        using (var seed = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _basePath + ".dsp.db"))
+        {
+            seed.SetAgcTopDb(10.0);
+        }
+        using var radio = NewRadio();
+        Assert.Equal(30.0, radio.Snapshot().AgcTopDb);
+    }
+
+    [Fact]
+    public void HydratedBaseline_PreservesInRangePersistedValue()
+    {
+        using (var seed = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _basePath + ".dsp.db"))
+        {
+            seed.SetAgcTopDb(45.0);
+        }
+        using var radio = NewRadio();
+        Assert.Equal(45.0, radio.Snapshot().AgcTopDb);
     }
 
     // ── AGC knee removed: AGC-T is the single manual AGC control ───────────────

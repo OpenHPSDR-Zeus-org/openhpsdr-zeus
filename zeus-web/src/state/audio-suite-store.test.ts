@@ -665,3 +665,69 @@ describe('audio-suite-store profile selection', () => {
     });
   });
 });
+
+describe('audio-suite-store VST engine install', () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    resetStoreState();
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+    vi.useRealTimers();
+    resetStoreState();
+    localStorage.clear();
+  });
+
+  it('downloads the engine and flips availability when staging completes', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/tx-audio-suite/vst-engine/install' && init?.method === 'POST') {
+        return response({ phase: 'downloading', percent: 0 });
+      }
+      if (url === '/api/tx-audio-suite/vst-engine/install') {
+        return response({ phase: 'done', percent: 100, message: 'installed' });
+      }
+      if (url === '/api/tx-audio-suite/processing-mode') {
+        return response({ mode: 'vst', engineAvailable: true, engineActive: true });
+      }
+      return response({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const promise = useAudioSuiteStore.getState().installVstEngine();
+    await vi.advanceTimersByTimeAsync(1100); // step past the 1s poll delay
+    await promise;
+
+    expect(useAudioSuiteStore.getState().vstEngineInstall.phase).toBe('done');
+    // The follow-up processing-mode read makes the engine usable.
+    expect(useAudioSuiteStore.getState().vstEngineAvailable).toBe(true);
+    expect(useAudioSuiteStore.getState().vstEngineActive).toBe(true);
+  });
+
+  it('surfaces a failed install for retry', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/tx-audio-suite/vst-engine/install' && init?.method === 'POST') {
+        return response({ phase: 'downloading', percent: 0 });
+      }
+      if (url === '/api/tx-audio-suite/vst-engine/install') {
+        return response({ phase: 'failed', percent: 0, message: 'no engine in archive' });
+      }
+      return response({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const promise = useAudioSuiteStore.getState().installVstEngine();
+    await vi.advanceTimersByTimeAsync(1100);
+    await promise;
+
+    expect(useAudioSuiteStore.getState().vstEngineInstall.phase).toBe('failed');
+    expect(useAudioSuiteStore.getState().vstEngineInstall.message).toBe('no engine in archive');
+    expect(useAudioSuiteStore.getState().vstEngineAvailable).toBe(false);
+  });
+});

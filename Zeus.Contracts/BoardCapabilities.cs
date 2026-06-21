@@ -11,6 +11,27 @@
 namespace Zeus.Contracts;
 
 /// <summary>
+/// The set of auxiliary RX inputs a board's Alex / filter board exposes
+/// (external-ports plan — antenna slice, issue #804). A <c>[Flags]</c> set
+/// because a board advertises which aux feeds are wired; the per-band
+/// operator selection picks exactly one (see the server-side
+/// <c>RxAuxInputSel</c> single-choice enum). <see cref="All"/> is the full
+/// ANAN / Saturn-BPF set; <see cref="None"/> is Hermes-Lite 2 (single jack,
+/// no aux relays).
+/// </summary>
+[Flags]
+public enum RxAuxInputs
+{
+    None  = 0,
+    Ext1  = 1 << 0,
+    Ext2  = 1 << 1,
+    Xvtr  = 1 << 2,
+    Bypass = 1 << 3,
+    /// <summary>Every aux input — the full Alex / Saturn-BPF set.</summary>
+    All = Ext1 | Ext2 | Xvtr | Bypass,
+}
+
+/// <summary>
 /// Per-board capability fingerprint. Mirrors the facts Thetis MW0LGE
 /// special-cases in <c>clsHardwareSpecific.cs</c> — RX ADC count, MKII
 /// BPF support, ADC supply mV, LR audio swap, telemetry presence,
@@ -103,6 +124,38 @@ public sealed record BoardCapabilities(
     /// feature exists without being able to drive a non-supporting
     /// board.</summary>
     bool SupportsAnvelinaDxOc = false,
+    // ---- External antenna ports (external-ports plan — antenna slice, #804) --
+    /// <summary>True when the board has switchable TX antenna relays
+    /// (ANT1/2/3) — the 0x0A / Saturn OrionMkII family (G2 / G2-1K / 7000DLE /
+    /// 8000DLE / Apache OrionMkII original / ANVELINA-PRO3 / Red Pitaya), which
+    /// emit the alex0[26:24] TX-antenna bits over Protocol 2. Every other board
+    /// is ANT1-hardwired on transmit. The frontend gates the TX-antenna selector
+    /// on this flag; the server returns 409 to a non-ANT1 TX request when it is
+    /// false. External-ports plan — antenna slice (issue #804).</summary>
+    bool HasTxAntennaRelays = false,
+    /// <summary>True when the board has switchable RX antenna relays (ANT1/2/3).
+    /// Every ANAN / Hermes-class Protocol-1 board does (RX-antenna rides
+    /// Config-frame C3[7:5]); the 0x0A family does on the Alex word. FALSE only
+    /// for Hermes-Lite 2 — its single antenna jack forwards to the N2ADR pad and
+    /// is clamped to ANT1 at the wire layer
+    /// (<c>ControlFrame.EncodeRxAntennaC3Bits</c>). The server returns 409 to a
+    /// non-ANT1 RX request when false. External-ports plan — antenna slice
+    /// (issue #804).</summary>
+    bool HasRxAntennaRelays = false,
+    /// <summary>The auxiliary RX inputs the board's Alex / filter board exposes
+    /// (EXT1/EXT2/XVTR/BYPASS-K36). <see cref="Contracts.RxAuxInputs.All"/> for
+    /// the ANAN / Saturn family; <see cref="Contracts.RxAuxInputs.None"/> for
+    /// Hermes-Lite 2. The BYPASS (K36) bit is the SAME alex0 bit (11) PureSignal
+    /// external feedback uses — the wire path ORs PS routing AFTER the operator
+    /// aux so PS always wins while armed (the PS-K36 firewall). External-ports
+    /// plan — antenna slice (issue #804).</summary>
+    RxAuxInputs RxAuxInputs = RxAuxInputs.None,
+    /// <summary>True when the board has a dedicated RX2 antenna path (the
+    /// dual-ADC DDC family: ANAN-100D / ANAN-200D and the 0x0A Saturn family).
+    /// Informational for the frontend; the antenna wire path itself is RX1 /
+    /// shared-relay only in this slice. External-ports plan — antenna slice
+    /// (issue #804).</summary>
+    bool HasRx2AntennaPath = false,
     // ---- TX audio front-end (external-audio-jacks re-port) ----------------
     /// <summary>Board decodes the host→radio audio STREAM (TLV320 codec) — the
     /// path the radio's own analog mic / line-in jack uses. True for Hermes-

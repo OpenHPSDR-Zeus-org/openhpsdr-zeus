@@ -170,6 +170,14 @@ public sealed class VstEngineController : IAsyncDisposable
     /// </summary>
     public static string? FindEngineExe() => VstEngineProcess.FindEngineExe();
 
+    /// <summary>
+    /// The Zeus-managed engine location
+    /// (<c>%LOCALAPPDATA%\Zeus\vst-engine\VSTHostEngine.exe</c> on Windows), or
+    /// null on non-Windows. Where the in-app "Get VST Engine" provisioning flow
+    /// stages a downloaded engine so VST mode works without a manual install.
+    /// </summary>
+    public static string? ManagedEnginePath() => VstEngineProcess.ManagedEnginePath();
+
     /// <summary>True while the realtime tap routes audio through the engine.</summary>
     public bool IsActive => _active;
 

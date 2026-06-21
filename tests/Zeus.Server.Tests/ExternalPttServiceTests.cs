@@ -90,6 +90,43 @@ public class ExternalPttServiceTests : IDisposable
         new P2TelemetryReading(FwdAdc: 0, RevAdc: 0, ExciterAdc: 0, PttIn: on, PllLocked: true);
 
     [Fact]
+    public void P2Connect_Snapshot_ReportsAvailableAndProtocolP2()
+    {
+        // Regression for the bench finding on a G2: a P2-connected radio must
+        // surface in the PTT status (available + protocol "P2"), driven by the
+        // protocol-agnostic raw level — not the P1-only client.
+        using var h = new Harness(_dbPath, _pttDbPath);
+        using var p2 = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
+
+        h.Service.TestP2Connect(p2);
+
+        var snap = h.Service.Snapshot();
+        Assert.True(snap.Available);
+        Assert.Equal("P2", snap.Protocol);
+        Assert.Equal(false, snap.HardwarePtt); // idle until an edge
+
+        h.Service.TestP2Telemetry(Ptt(true));  // footswitch press
+        Assert.True(h.Service.Snapshot().HardwarePtt == true);
+    }
+
+    [Fact]
+    public void Snapshot_Recommendation_ReflectsEnableGate()
+    {
+        using var h = new Harness(_dbPath, _pttDbPath, enabled: true);
+        using var p2 = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
+        h.Service.TestP2Connect(p2);
+
+        var on = h.Service.Snapshot();
+        Assert.True(on.Enabled);
+        Assert.DoesNotContain("will not key MOX", on.DiagnosticRecommendation);
+
+        h.Settings.Set(false);
+        var off = h.Service.Snapshot();
+        Assert.False(off.Enabled);
+        Assert.Contains("will not key MOX", off.DiagnosticRecommendation);
+    }
+
+    [Fact]
     public void P2_PttInRising_KeysMox_WithHardwareSource()
     {
         using var h = new Harness(_dbPath, _pttDbPath);

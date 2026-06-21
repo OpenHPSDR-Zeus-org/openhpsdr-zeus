@@ -378,6 +378,10 @@ public static class ZeusHost
         // PTT-IN status lamp tracks the footswitch regardless.
         builder.Services.AddSingleton<PttSettingsStore>();
         builder.Services.AddSingleton<ExternalPttService>();
+        // Per-band external antenna (TX/RX relay + RX-aux) selection (external-
+        // ports plan — antenna slice, #804). RadioService takes it as an
+        // optional ctor param and re-pushes on its Changed event.
+        builder.Services.AddSingleton<AntennaSettingsStore>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<ExternalPttService>());
 
         // QRZ.com XML client. HttpClient default timeout is 100 s — cap at 10 s so a
@@ -603,6 +607,19 @@ public static class ZeusHost
         builder.Services.AddSingleton<AudioProcessingModeStore>();
         builder.Services.AddSingleton<AudioProcessingModeService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioProcessingModeService>());
+
+        // VstEngineInstaller — the in-app "Get VST Engine" downloader. The engine
+        // is fetched from its upstream release and staged at the Zeus-managed path,
+        // never vendored/bundled (GPLv3 isolation — see VstEngineInstaller). The
+        // named HttpClient carries the User-Agent the GitHub API requires and a
+        // generous timeout for the multi-MB engine download.
+        builder.Services.AddHttpClient("ZeusVstEngine", c =>
+        {
+            c.Timeout = TimeSpan.FromMinutes(5);
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("OpenHPSDR-Zeus");
+            c.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        });
+        builder.Services.AddSingleton<VstEngineInstaller>();
 
         // TxAudioProfileService — orchestrates the unified TX Audio Profile
         // system: capture (mic/leveler/CFC/bandpass/processing-mode/chain shape/

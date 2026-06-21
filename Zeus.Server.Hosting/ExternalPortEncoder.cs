@@ -2,39 +2,71 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
-// External-port AUDIO encoder seam (external-audio-jacks re-port).
+// See ATTRIBUTIONS.md at the repository root for the full provenance
+// statement and per-component attribution.
 //
-// This is the FIREWALL for the TX audio-source feature: every audio-front-end
-// bit on the wire — P2 TxSpecific byte-50 mic_control / byte-51 line_in_gain,
-// and the P1 0x12-codec mic_boost/mic_linein bits — is composed behind one
-// board-branched / protocol-branched encoder instead of scattered bit literals
-// in the emission code.
+// External-port encoder seam — antenna + TX-audio front-end (external-ports
+// plan, issue #804 antenna slice; external-audio-jacks re-port audio slice).
 //
-// Default-inert / byte-identical: at defaults (Host, no boost/bias, gain 0) the
-// encoder produces literal zero on every surface, so the wire bytes are
-// unchanged on every board. The PureSignal golden suites stay green.
+// This is the FIREWALL. Every external-port bit on the wire is composed behind
+// one board-branched / protocol-branched encoder instead of scattered bit
+// literals in the emission code:
 //
-// (The sibling antenna / OC encoder surfaces from the original external-ports
-// plan are NOT part of this audio re-port — they land separately. This seam
-// carries audio only.)
+//   ANTENNA — RX-antenna select (P1 C3[7:5]) and TX-antenna select
+//   (P2 alex0[26:24]). The encoders delegate to the very same pure helpers the
+//   wire path already uses (ControlFrame.EncodeRxAntennaC3Bits on P1;
+//   Protocol2Client.EncodeTxAntennaBits on P2), so the bits are byte-identical
+//   to the wire path for every supported board. The per-board wire-layer clamp
+//   (force ANT1 on relay-less boards) lives in the shared P1 helper itself
+//   (HL2 single-jack case).
+//
+//   TX AUDIO — P2 TxSpecific byte-50 mic_control / byte-51 line_in_gain, and the
+//   P1 0x12-codec mic_boost/mic_linein bits, composed from the selected
+//   TxAudioSource via the shared pure ExternalPortAudio helper below.
+//
+// Default-inert / byte-identical: at defaults (ANT1/ANT1, Host audio, no
+// boost/bias, gain 0) every surface produces literal zero / ANT1, so the wire
+// bytes are unchanged on every board. The PureSignal golden suites stay green.
+//
+// Dependency direction: Zeus.Server.Hosting references Zeus.Protocol1 /
+// Zeus.Protocol2 (not the reverse), so this seam consults the protocol layer's
+// pure helpers via InternalsVisibleTo. The protocol clients never call back
+// into this assembly — that would be a cycle.
+//
+// SCOPE: external antenna relays + RX-aux gating, and the TX audio front-end.
+// RX-aux on P2 rides the Protocol2Client.SetAntennas state path directly (it is
+// state, not a pure per-call encode), so it is not modelled here.
 
 using Zeus.Contracts;
+using Zeus.Protocol1;
+using Zeus.Protocol2;
 
 namespace Zeus.Server;
 
 /// <summary>
-/// Immutable canonical desired TX-audio-source state. Protocol-agnostic — holds
-/// no wire bits, only the operator-meaningful selection. Global per-radio (NOT
-/// per-band). The wire bytes are PURE FUNCTIONS of <see cref="Source"/> (plus
-/// that source's params).
+/// Immutable canonical desired external-port state. Protocol-agnostic — holds no
+/// wire bits, only the operator-meaningful selections. Global per-radio for the
+/// audio source; the antenna picks are the applied TX/RX relay selections. The
+/// wire bytes are PURE FUNCTIONS of this state.
 ///
-/// Source == <see cref="TxAudioSource.Host"/> → every audio surface is literal
-/// zero, byte-identical to today; the encoder must NOT fall through to read the
-/// params under Host.
+/// Defaults (ANT1/ANT1, <see cref="TxAudioSource.Host"/>, no boost/bias, gain 0)
+/// reproduce today's wire emission bit-for-bit on every board. Under
+/// <see cref="TxAudioSource.Host"/> every audio surface is literal zero — the
+/// encoder must NOT fall through to read the audio params under Host.
 /// </summary>
 public readonly record struct ExternalPortState(
+    /// <summary>TX antenna relay select. Honoured only on boards with
+    /// <see cref="BoardCapabilities.HasTxAntennaRelays"/> (0x0A / Saturn family);
+    /// every other board is ANT1-hardwired on transmit — the encoder gates the
+    /// emission so a non-relay board never advertises ANT2/3.</summary>
+    HpsdrAntenna TxAnt = HpsdrAntenna.Ant1,
+    /// <summary>RX antenna relay select (C3[7:5] on P1). Clamped to ANT1 at the
+    /// wire layer on boards without
+    /// <see cref="BoardCapabilities.HasRxAntennaRelays"/> (Hermes-Lite 2).</summary>
+    HpsdrAntenna RxAnt = HpsdrAntenna.Ant1,
     /// <summary>The single mutually-exclusive TX-audio source.</summary>
     TxAudioSource Source = TxAudioSource.Host,
     /// <summary>Mic boost — parameter of <see cref="TxAudioSource.RadioMic"/>
@@ -49,22 +81,42 @@ public readonly record struct ExternalPortState(
     /// source.</summary>
     byte LineInGain = 0)
 {
-    /// <summary>Default state: Host audio, no boost/bias, gain 0 — reproduces
-    /// today's wire emission bit-for-bit on every board.</summary>
+    /// <summary>Default state: ANT1 / ANT1, Host audio, no boost/bias, gain 0 —
+    /// reproduces today's wire emission bit-for-bit on every board.</summary>
     public static readonly ExternalPortState Default = new();
 }
 
 /// <summary>
-/// Per-board / per-protocol TX-audio bit encoder. Mirrors
-/// <see cref="IRadioDriveProfile"/>'s seam: a small strategy interface,
-/// concrete per-protocol implementations, and an
-/// <see cref="ExternalPortEncoders.For(HpsdrBoardKind, OrionMkIIVariant, RadioProtocol)"/>
-/// dispatch. This is the single place external-port audio bit math lives.
+/// Per-board / per-protocol external-port bit encoder. Mirrors
+/// <see cref="IRadioDriveProfile"/>'s seam: a small strategy interface, concrete
+/// per-protocol implementations, and an
+/// <see cref="ExternalPortEncoders.For(HpsdrBoardKind, OrionMkIIVariant, RadioProtocol?)"/>
+/// dispatch. This is the single place external-port antenna-relay and audio bit
+/// math lives.
 /// </summary>
 public interface IExternalPortEncoder
 {
     /// <summary>Diagnostic label for the encoder strategy.</summary>
     string Label { get; }
+
+    // ---- Antenna (external-ports plan — antenna slice, #804) --------------
+
+    /// <summary>
+    /// Encode the Protocol-1 Config-frame RX-antenna relay bits (C3[7:5]) for
+    /// the desired <paramref name="state"/>. Returns the byte to OR into C3.
+    /// Delegates to the wire path's own pure helper so the bytes match exactly
+    /// (including the HL2 wire-layer ANT1 clamp).
+    /// </summary>
+    byte EncodeP1RxAntennaC3Bits(in ExternalPortState state);
+
+    /// <summary>
+    /// Encode the Protocol-2 Alex-word TX-antenna relay bits (alex0[26:24]) for
+    /// the desired <paramref name="state"/>. Returns the bits to OR into the
+    /// Alex word. Delegates to the wire path's own pure helper.
+    /// </summary>
+    uint EncodeP2TxAntennaBits(in ExternalPortState state);
+
+    // ---- TX audio front-end (external-audio-jacks re-port) ----------------
 
     /// <summary>
     /// Encode the Protocol-2 TxSpecific (port 1026) byte-50 mic_control flags as
@@ -101,16 +153,38 @@ public interface IExternalPortEncoder
 
 /// <summary>
 /// Protocol-1 encoder for codec / Alex boards (Hermes-class, ANAN-100D/200D,
-/// ANAN-G2E). Carries mic_boost / mic_linein on the 0x12 codec frame; no P2
-/// TxSpecific bytes.
+/// ANAN-G2E). Emits RX-antenna C3[7:5] from the desired RX antenna (the shared
+/// helper applies the relay-presence clamp) and carries mic_boost / mic_linein
+/// on the 0x12 codec frame. These boards are ANT1-hardwired on transmit (no P2
+/// Alex word) and have no P2 TxSpecific bytes.
 /// </summary>
 public sealed class Protocol1PortEncoder : IExternalPortEncoder
 {
+    private readonly bool _hasRxAntennaRelays;
     private readonly HpsdrBoardKind _board;
 
-    public Protocol1PortEncoder(HpsdrBoardKind board) => _board = board;
+    public Protocol1PortEncoder(HpsdrBoardKind board, bool hasRxAntennaRelays)
+    {
+        _board = board;
+        _hasRxAntennaRelays = hasRxAntennaRelays;
+    }
 
-    public string Label => $"P1({_board})";
+    public string Label => $"P1({_board}, rxRelays={_hasRxAntennaRelays})";
+
+    public byte EncodeP1RxAntennaC3Bits(in ExternalPortState state)
+    {
+        // The shared pure helper applies the wire-layer relay-presence clamp
+        // itself (forcing ANT1 on relay-less boards), so a relay-capable P1 board
+        // emits the raw selection and HL2 is clamped — same bytes the inline wire
+        // path produces. _hasRxAntennaRelays is retained for the encoder's own
+        // gating / diagnostics.
+        _ = _hasRxAntennaRelays;
+        return ControlFrame.EncodeRxAntennaC3Bits(state.RxAnt, _board);
+    }
+
+    public uint EncodeP2TxAntennaBits(in ExternalPortState state)
+        // P1 boards do not emit a P2 Alex word; ANT1-hardwired on transmit.
+        => Protocol2Client.EncodeTxAntennaBits(txAnt: 1);
 
     public byte EncodeP2MicControlByte(in ExternalPortState state)
         // P1 codec boards carry mic_boost/mic_linein on the 0x12 frame, not the
@@ -129,23 +203,47 @@ public sealed class Protocol1PortEncoder : IExternalPortEncoder
 
 /// <summary>
 /// Protocol-2 encoder for the 0x0A / Saturn family (G2 / 7000DLE / 8000DLE /
-/// G2-1K / OrionMkII original / ANVELINA-PRO3 / Red Pitaya). Audio rides the
-/// TxSpecific byte 50 (mic_control) / byte 51 (line_in_gain).
+/// G2-1K / OrionMkII original / ANVELINA-PRO3 / Red Pitaya). These boards have
+/// switchable TX antenna relays (alex0[26:24]); the P1 C3 path is unused. Audio
+/// rides the TxSpecific byte 50 (mic_control) / byte 51 (line_in_gain).
 /// </summary>
 public sealed class Protocol2PortEncoder : IExternalPortEncoder
 {
     private readonly HpsdrBoardKind _board;
     private readonly OrionMkIIVariant _variant;
+    private readonly bool _hasTxAntennaRelays;
     private readonly bool _hasOnboardCodec;
 
-    public Protocol2PortEncoder(HpsdrBoardKind board, OrionMkIIVariant variant, bool hasOnboardCodec)
+    public Protocol2PortEncoder(
+        HpsdrBoardKind board,
+        OrionMkIIVariant variant,
+        bool hasTxAntennaRelays,
+        bool hasOnboardCodec)
     {
         _board = board;
         _variant = variant;
+        _hasTxAntennaRelays = hasTxAntennaRelays;
         _hasOnboardCodec = hasOnboardCodec;
     }
 
-    public string Label => $"P2({_board}/{_variant})";
+    public string Label =>
+        $"P2({_board}/{_variant}, txRelays={_hasTxAntennaRelays}, codec={_hasOnboardCodec})";
+
+    public byte EncodeP1RxAntennaC3Bits(in ExternalPortState state)
+        // P2 boards do not use the P1 Config frame; the RX-antenna select rides
+        // the Alex word on the SetAntennas state path.
+        => 0;
+
+    public uint EncodeP2TxAntennaBits(in ExternalPortState state)
+    {
+        // Gate the alex0[26:24] TX-antenna emission on the variant's relay
+        // population: a board/variant without TX-antenna relays stays on ANT1
+        // regardless of the requested selection, so it can never advertise
+        // ANT2/3. Relay-capable variants thread the real per-band TxAnt through
+        // the shared pure helper (1-based wire selector).
+        int wire = _hasTxAntennaRelays ? (int)state.TxAnt + 1 : 1;
+        return Protocol2Client.EncodeTxAntennaBits(wire);
+    }
 
     public byte EncodeP2MicControlByte(in ExternalPortState state)
     {
@@ -167,6 +265,44 @@ public sealed class Protocol2PortEncoder : IExternalPortEncoder
 
     public (bool MicBoost, bool MicLineIn) EncodeP1CodecAudioBits(in ExternalPortState state)
         // P2 boards do not use the P1 0x12 codec frame.
+        => (false, false);
+}
+
+/// <summary>
+/// Hermes-Lite 2 encoder. HL2 has a single antenna jack: C3[5] does NOT drive an
+/// ANT1/2/3 relay, it forwards to the N2ADR antenna pad, so the RX-antenna
+/// selection is clamped to ANT1 at the wire layer
+/// (<see cref="BoardCapabilities.HasRxAntennaRelays"/> is false for HL2). HL2 has
+/// no P2 Alex word (ANT1-hardwired on transmit), no stream codec and no P2
+/// TxSpecific frame; its mic front-end rides the 0x14 frame and is driven
+/// directly through <c>IProtocol1Client.SetAudioFrontEnd</c> (handled in
+/// <c>ControlFrame</c> via the read-modify-write that preserves the PureSignal
+/// bit + C4 PGA). This encoder therefore emits no codec audio bits.
+/// </summary>
+public sealed class HermesLite2PortEncoder : IExternalPortEncoder
+{
+    public string Label => "HL2(singleJack rxClampToAnt1; 0x14 mic front-end)";
+
+    public byte EncodeP1RxAntennaC3Bits(in ExternalPortState state)
+        // The shared pure helper applies the HL2 clamp, so whatever RxAnt the
+        // operator persisted, the emitted bits are ANT1 — the N2ADR pad never
+        // flips off a stale per-band ANT2/3.
+        => ControlFrame.EncodeRxAntennaC3Bits(state.RxAnt, HpsdrBoardKind.HermesLite2);
+
+    public uint EncodeP2TxAntennaBits(in ExternalPortState state)
+        => Protocol2Client.EncodeTxAntennaBits(txAnt: 1);
+
+    public byte EncodeP2MicControlByte(in ExternalPortState state)
+        // HL2 has no stream codec and no P2 TxSpecific frame at all.
+        => 0;
+
+    public byte EncodeP2LineInGainByte(in ExternalPortState state)
+        // HL2 has no P2 TxSpecific byte 51.
+        => 0;
+
+    public (bool MicBoost, bool MicLineIn) EncodeP1CodecAudioBits(in ExternalPortState state)
+        // HL2 is not a stream-codec board — its 0x12 codec audio bits stay
+        // clear. The HL2 mic front-end (0x14) is encoded in ControlFrame.
         => (false, false);
 }
 
@@ -225,31 +361,6 @@ internal static class ExternalPortAudio
 }
 
 /// <summary>
-/// Hermes-Lite 2 encoder. HL2 has no stream codec and no P2 TxSpecific frame;
-/// its mic front-end rides the 0x14 frame and is handled in
-/// <c>ControlFrame</c> via the read-modify-write that preserves the PureSignal
-/// bit + C4 PGA. This encoder emits no codec audio bits — the HL2 0x14 mic
-/// fields are driven directly through <c>IProtocol1Client.SetAudioFrontEnd</c>.
-/// </summary>
-public sealed class HermesLite2PortEncoder : IExternalPortEncoder
-{
-    public string Label => "HL2(0x14 mic front-end)";
-
-    public byte EncodeP2MicControlByte(in ExternalPortState state)
-        // HL2 has no stream codec and no P2 TxSpecific frame at all.
-        => 0;
-
-    public byte EncodeP2LineInGainByte(in ExternalPortState state)
-        // HL2 has no P2 TxSpecific byte 51.
-        => 0;
-
-    public (bool MicBoost, bool MicLineIn) EncodeP1CodecAudioBits(in ExternalPortState state)
-        // HL2 is not a stream-codec board — its 0x12 codec audio bits stay
-        // clear. The HL2 mic front-end (0x14) is encoded in ControlFrame.
-        => (false, false);
-}
-
-/// <summary>
 /// Which transport a connected board uses, for encoder dispatch. The 0x0A
 /// family runs Protocol 2 in Zeus; every other supported board runs Protocol 1.
 /// </summary>
@@ -267,9 +378,9 @@ public enum RadioProtocol
 public static class ExternalPortEncoders
 {
     /// <summary>
-    /// Resolve the external-port audio encoder for a connected board. The
-    /// protocol is derived from the board kind when not given explicitly: the
-    /// 0x0A OrionMkII family is Protocol 2, everything else Protocol 1.
+    /// Resolve the external-port encoder for a connected board. The protocol is
+    /// derived from the board kind when not given explicitly: the 0x0A OrionMkII
+    /// family is Protocol 2, everything else Protocol 1.
     /// </summary>
     public static IExternalPortEncoder For(
         HpsdrBoardKind board,
@@ -279,14 +390,15 @@ public static class ExternalPortEncoders
         var caps = BoardCapabilitiesTable.For(board, variant);
         var p = protocol ?? DefaultProtocolFor(board);
 
-        // HL2 first — it is the no-codec special case (mic front-end rides the
-        // 0x14 frame, handled in ControlFrame).
+        // HL2 first — it is the single-jack / no-codec special case (one P1
+        // board with no RX-antenna relay; mic front-end rides the 0x14 frame),
+        // so its dedicated encoder owns both clamps.
         if (board == HpsdrBoardKind.HermesLite2)
             return new HermesLite2PortEncoder();
 
         return p == RadioProtocol.Protocol2
-            ? new Protocol2PortEncoder(board, variant, caps.HasOnboardCodec)
-            : new Protocol1PortEncoder(board);
+            ? new Protocol2PortEncoder(board, variant, caps.HasTxAntennaRelays, caps.HasOnboardCodec)
+            : new Protocol1PortEncoder(board, caps.HasRxAntennaRelays);
     }
 
     /// <summary>The transport Zeus uses for a given board kind.</summary>
