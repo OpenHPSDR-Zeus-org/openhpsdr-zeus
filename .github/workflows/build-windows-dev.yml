@@ -1,0 +1,147 @@
+name: Build Windows (dev)
+
+# On-demand Windows installer build for INTERNAL hand-off — NOT a release.
+#
+# Purpose: merge something to `develop`, run this, grab the setup.exe from the
+# run's Artifacts and send it to one person to test. It deliberately does NOT
+# create a GitHub Release, push a tag, or publish anywhere. Artifacts live only
+# on the run page and expire (retention below).
+#
+# Speed: unlike release.yml / nightly.yml this does NOT rebuild the native WDSP
+# / miniaudio / VST-bridge DLLs. It reuses the binaries committed under
+# Zeus.Dsp/runtimes/win-x64/native/ and Zeus.Plugins.Host/runtimes/win-x64/native/.
+# That makes it a single ~few-minute windows-latest job instead of the full
+# multi-OS native matrix. If you changed native C/C++ code and need it in the
+# exe, use the Release workflow (dry-run dispatch) instead — this one will ship
+# the last committed natives.
+#
+# Trigger: manual only (workflow_dispatch). Defaults to develop; override the
+# `ref` input to build any branch / tag / SHA.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag, or SHA to build. Defaults to develop.'
+        required: false
+        default: 'develop'
+
+# Don't pile up concurrent dev builds of the same ref; cancel the older one.
+concurrency:
+  group: build-windows-dev-${{ github.event.inputs.ref || 'develop' }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Windows installer (win-x64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout ${{ github.event.inputs.ref || 'develop' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || 'develop' }}
+          # Need real history so the short SHA used in the version string is
+          # meaningful; submodules pulled selectively below.
+          fetch-depth: 0
+
+      # The frontend build (npm run build) imports the DeepCW ONNX model from
+      # this submodule (model.onnx?url); without it `npm run build` fails.
+      - name: Init DeepCW model submodule (frontend build dependency)
+        run: git submodule update --init zeus-web/external/deepcw-engine
+
+      - name: Determine dev version
+        id: version
+        shell: bash
+        run: |
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          # Clearly-non-release version: 0.0.0-dev.<shortsha>. Inno's AppVersion
+          # accepts arbitrary strings (no numeric VersionInfoVersion in the
+          # .iss), so this rides straight through to the installer filename.
+          VERSION="0.0.0-dev.${SHORT_SHA}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Building dev installer version: ${VERSION}"
+
+      - name: Verify committed native DLLs are present
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "WDSP / miniaudio (Zeus.Dsp/runtimes/win-x64/native):"
+          ls -la Zeus.Dsp/runtimes/win-x64/native/
+          echo "VST bridge (Zeus.Plugins.Host/runtimes/win-x64/native):"
+          ls -la Zeus.Plugins.Host/runtimes/win-x64/native/
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: zeus-web/package-lock.json
+
+      - name: Build frontend
+        run: |
+          npm ci
+          npm run build
+        working-directory: zeus-web
+
+      - name: Publish OpenhpsdrZeus (win-x64, self-contained)
+        # Mirrors release.yml's publish step. Self-contained single binary that
+        # serves both launch modes (service + --desktop). Version suffix lands
+        # in InformationalVersion so the running app reports the dev SHA.
+        shell: bash
+        run: |
+          dotnet publish OpenhpsdrZeus/OpenhpsdrZeus.csproj \
+            -c Release \
+            -r win-x64 \
+            --self-contained true \
+            -p:PublishReadyToRun=true \
+            -p:VersionPrefix=0.0.0 \
+            -p:VersionSuffix=dev.${{ steps.version.outputs.short_sha }} \
+            -p:DebugType=embedded \
+            -p:DebugSymbols=false
+
+      - name: Verify Windows installer payload
+        shell: pwsh
+        run: ./tools/verify-windows-installer-payload.ps1 -PublishDir "OpenhpsdrZeus/bin/Release/net10.0/win-x64/publish" -Arch "x64"
+
+      # Bundled by zeus-windows.iss and run at install time behind a registry
+      # check, so a fresh Windows machine the recipient owns still works.
+      - name: Download Visual C++ Redistributable
+        shell: pwsh
+        run: |
+          $url = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+          $out = "installers\vc_redist.x64.exe"
+          Write-Host "Downloading $url -> $out"
+          Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
+          Get-Item $out | Select-Object Name, Length
+
+      - name: Download Edge WebView2 Runtime
+        shell: pwsh
+        run: |
+          $url = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+          $out = "installers\MicrosoftEdgeWebview2Setup.exe"
+          Write-Host "Downloading $url -> $out"
+          Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
+          Get-Item $out | Select-Object Name, Length
+
+      - name: Build Windows Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup -y
+          $env:PATH += ";C:\Program Files (x86)\Inno Setup 6"
+          iscc /DMyAppVersion="${{ steps.version.outputs.version }}" /DArch="x64" installers\zeus-windows.iss
+
+      - name: Upload Windows Installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeus-windows-dev-${{ steps.version.outputs.version }}
+          path: installers/output/openhpsdr-zeus-${{ steps.version.outputs.version }}-win-x64-setup.exe
+          if-no-files-found: error
+          # Internal test builds — keep them short-lived. Bump if you need
+          # longer, but these are not meant to linger.
+          retention-days: 14
