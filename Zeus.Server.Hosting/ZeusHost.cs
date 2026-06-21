@@ -224,6 +224,11 @@ public static class ZeusHost
         builder.Services.AddSingleton<Zeus.Protocol1.TxIqRing>();
         builder.Services.AddSingleton<Zeus.Protocol1.ITxIqSource>(sp =>
             sp.GetRequiredService<Zeus.Protocol1.TxIqRing>());
+        // Global (per-radio) TX-audio source store (external-audio-jacks
+        // re-port). Registered before RadioService so the latter's optional
+        // AudioSettingsStore? ctor param resolves it and wires the Changed →
+        // PushAudioFrontEnd push. Shares zeus-prefs.db (single global row).
+        builder.Services.AddSingleton<AudioSettingsStore>();
         builder.Services.AddSingleton<RadioService>();
         builder.Services.AddSingleton<StreamingHub>();
         // WebRTC remote-access data plane (docs/designs/remote-access-webrtc.md).
@@ -313,7 +318,17 @@ public static class ZeusHost
         // Clients are told to keep Connect disabled until phase=Ready.
         builder.Services.AddSingleton<WdspWisdomInitializer>();
         builder.Services.AddHostedService<WisdomBootstrapService>();
-        builder.Services.AddSingleton<DspPipelineService>();
+        // DspPipelineService takes a lazy TxAudioIngest factory so the
+        // radio-mic (UDP 1026) stream can be routed into the TX pipeline without
+        // a DI cycle (TxAudioIngest depends on DspPipelineService). The Func is
+        // only invoked on the first radio-source switch, well after both
+        // singletons are constructed (feedback_di_cycle_iservice_provider).
+        builder.Services.AddSingleton<DspPipelineService>(sp =>
+        {
+            Func<TxAudioIngest?> txIngestFactory = () => sp.GetService<TxAudioIngest>();
+            return Microsoft.Extensions.DependencyInjection.ActivatorUtilities
+                .CreateInstance<DspPipelineService>(sp, txIngestFactory);
+        });
         builder.Services.AddHostedService(sp => sp.GetRequiredService<DspPipelineService>());
         // Per-radio frequency calibration (issue #325). Stateless coordinator —
         // owns no resources, just a SemaphoreSlim to prevent re-entry.

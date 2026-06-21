@@ -55,6 +55,7 @@ import {
   setActivePrefsDatabase,
   createPrefsDatabase,
   uploadPrefsDatabase,
+  exportPrefsDatabase,
   restartApp,
   type PrefsDatabaseInfo,
   type RadioInfoDto,
@@ -182,6 +183,22 @@ function PrefsDatabaseRow() {
     }
   }, []);
 
+  // Export the active database so the operator can back it up or move it to
+  // another machine. The dropdown's value tracks the active profile, so this
+  // downloads whichever DB is currently selected.
+  const onExport = useCallback(async () => {
+    if (!activeRel) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await exportPrefsDatabase(activeRel);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to export database');
+    } finally {
+      setBusy(false);
+    }
+  }, [activeRel]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Open the native OS file dialog; the upload runs in onFileChosen once the
@@ -261,6 +278,16 @@ function PrefsDatabaseRow() {
           title="Import an existing .db file"
         >
           Import
+        </button>
+        <button
+          type="button"
+          className="label-xs"
+          disabled={disabled || !activeRel}
+          onClick={() => void onExport()}
+          style={prefsDbButtonStyle}
+          title="Export the active database to a .db file"
+        >
+          Export
         </button>
         <input
           ref={fileInputRef}

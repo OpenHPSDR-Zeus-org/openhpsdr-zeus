@@ -722,6 +722,19 @@ public class DspPipelineService : BackgroundService,
     // keeping it isolated avoids touching any P1 behavior.
     private Zeus.Protocol2.Protocol2Client? _p2Client;
 
+    // Radio-mic (UDP 1026) routing — external-audio-jacks re-port. The
+    // re-blocker buffers 64-sample 1026 packets into the 960-sample mic blocks
+    // TxAudioIngest consumes; it forwards into OnMicPcmBytesFromRadioMic, whose
+    // in-lock _activeSource gate drops them unless a radio jack is armed. The
+    // 1026 handler is attached to the live P2 client ONLY while a radio source
+    // is selected, so Host-default has zero added RX cost. Both are lazily wired
+    // (TxAudioIngest depends on this service, so it's resolved through a factory
+    // to avoid a DI cycle — feedback_di_cycle_iservice_provider pattern).
+    private readonly Func<TxAudioIngest?>? _txIngestFactory;
+    private TxAudioIngest? _txIngest;
+    private RadioMicReceiver? _radioMicReceiver;
+    private bool _radioMicAttached;
+
     private RxMode _appliedMode = RxMode.USB;
     private int _appliedLowHz;
     private int _appliedHighHz;
@@ -967,6 +980,17 @@ public class DspPipelineService : BackgroundService,
     private long _calPanCenterHz;
     private long _calPanSnapshotMs;
     private readonly object _calPanLock = new();
+
+    // Scratch buffer for the auto-AGC noise-floor estimate (issue #806). Filled
+    // and sorted in-place by TryComputeAutoAgcNoiseFloorDbm on the single meter
+    // thread; never read concurrently, so it needs no lock.
+    private readonly float[] _autoAgcFloorBuf = new float[Width];
+    // Low percentile of the valid panadapter bins ⇒ the band noise floor. 0.20
+    // rejects up to ~80% spectrum occupancy (signals are the high bins).
+    private const double AutoAgcFloorPercentile = 0.20;
+    // Reject the estimate unless this many bins are real (not the -200 invalid
+    // sentinel); a near-dead span gives a meaningless floor.
+    private const int AutoAgcFloorMinValidBins = 64;
     private readonly float[] _diagWfSnapshot = new float[Width];
     private long _diagWfSnapshotMs;
     private long _diagDisplayFrameMs;
@@ -1045,7 +1069,8 @@ public class DspPipelineService : BackgroundService,
         ILoggerFactory loggerFactory,
         CwSidetoneSource? sidetone = null,
         FrontendDspSceneDiagnosticsService? frontendDspScene = null,
-        DisplaySettingsStore? displaySettings = null)
+        DisplaySettingsStore? displaySettings = null,
+        Func<TxAudioIngest?>? txIngestFactory = null)
     {
         _radio = radio;
         _hub = hub;
@@ -1056,6 +1081,7 @@ public class DspPipelineService : BackgroundService,
         _frontendDspScene = frontendDspScene;
         _loggerFactory = loggerFactory;
         _displaySettings = displaySettings;
+        _txIngestFactory = txIngestFactory;
         _log = loggerFactory.CreateLogger<DspPipelineService>();
         // Allocate secondary-receiver slots 1..N-1 up front (slot 0 stays null —
         // RX1 is _channelId). Buffers live for the service lifetime, mirroring the
@@ -1063,6 +1089,23 @@ public class DspPipelineService : BackgroundService,
         _secondaryRx = new SecondaryRx[MaxReceivers];
         for (int i = 1; i < MaxReceivers; i++)
             _secondaryRx[i] = new SecondaryRx();
+    }
+
+    // Lazily resolve TxAudioIngest (DI cycle avoidance — see field comment) and
+    // build the radio-mic re-blocker on first use. Returns null in tests that
+    // didn't supply a factory; the radio-mic path then simply no-ops.
+    private TxAudioIngest? ResolveTxIngest()
+    {
+        if (_txIngest is not null) return _txIngest;
+        _txIngest = _txIngestFactory?.Invoke();
+        if (_txIngest is not null && _radioMicReceiver is null)
+        {
+            var ingest = _txIngest;
+            _radioMicReceiver = new RadioMicReceiver(
+                block => ingest.OnMicPcmBytesFromRadioMic(block),
+                _loggerFactory.CreateLogger<RadioMicReceiver>());
+        }
+        return _txIngest;
     }
 
     // Persisted TX display analyzer config (live TX waterfall feature). Optional
@@ -1142,6 +1185,11 @@ public class DspPipelineService : BackgroundService,
         _radio.Disconnected += OnRadioDisconnected;
         _radio.StateChanged += OnRadioStateChanged;
         _radio.PaSnapshotChanged += OnPaSnapshotChanged;
+        // Audio front-end (external-audio-jacks re-port) — global per-radio.
+        // RadioService can't reach the P2 client directly (ActiveClient is
+        // P1-only), so forward TxSpecific bytes 50/51 here, and route the
+        // radio-mic STREAM (1026) gate.
+        _radio.AudioFrontEndChanged += OnAudioFrontEndChanged;
         _radio.MoxChanged += OnRadioMoxChanged;
         _radio.TunActiveChanged += OnRadioTunActiveChanged;
         _radio.PreampChanged += OnRadioPreampChanged;
@@ -1179,6 +1227,7 @@ public class DspPipelineService : BackgroundService,
             _radio.Disconnected -= OnRadioDisconnected;
             _radio.StateChanged -= OnRadioStateChanged;
             _radio.PaSnapshotChanged -= OnPaSnapshotChanged;
+            _radio.AudioFrontEndChanged -= OnAudioFrontEndChanged;
             _radio.MoxChanged -= OnRadioMoxChanged;
             _radio.TunActiveChanged -= OnRadioTunActiveChanged;
             _radio.PreampChanged -= OnRadioPreampChanged;
@@ -3921,6 +3970,11 @@ public class DspPipelineService : BackgroundService,
         // Push current PA snapshot into the brand-new client so byte 345 /
         // byte 1401 / CmdGeneral[58] reflect PaSettingsStore from frame 1.
         _radio.ReplayPaSnapshot();
+        // Push the persisted audio front-end (TxSpecific bytes 50/51) into the
+        // fresh P2 client so mic/line-in/boost/bias/gain are correct from the
+        // first CmdTx, not deferred until a store edit. No-op on boards without
+        // an audio front-end (gated + OFF defaults).
+        _radio.ReplayAudioFrontEnd();
         return sampleRateKhz;
     }
 
@@ -3948,6 +4002,69 @@ public class DspPipelineService : BackgroundService,
             snap.HasTxAntennaRelays,
             snap.RxAuxInput,
             snap.MkiiBpfRxSelect);
+    }
+
+    private void OnAudioFrontEndChanged(AudioFrontEndPush a)
+    {
+        // Route the radio-mic STREAM (external-audio-jacks re-port, §3). This
+        // runs on EVERY resolved-source push (store edit AND connect, via
+        // ReplayAudioFrontEnd) so the pipeline's active source tracks the wire
+        // bytes. Done BEFORE the byte forward and independent of _p2Client so a
+        // switch back to Host always quiesces the gate even mid-disconnect.
+        ApplyRadioMicRouting(a.Source);
+
+        var p2 = _p2Client;
+        if (p2 is null) return;
+        // TxSpecific byte 50 mic_control flags + byte 51 line_in_gain, already
+        // RESOLVED (board-clamped + source-encoded, Host → 0) by
+        // RadioService.PushAudioFrontEnd. The forwarder pushes the literal bytes
+        // with no source interpretation of its own.
+        p2.SetAudioFrontEndBytes(a.MicControlByte, a.LineInGain);
+    }
+
+    // Arm/disarm the radio-mic stream for a resolved TxAudioSource
+    // (external-audio-jacks re-port, §3, atomic single-select). Idempotent and
+    // cheap on Host (the common case): it sets the in-lock _activeSource on
+    // TxAudioIngest (which quiesces its WDSP accumulator), resets the 1026
+    // re-blocker so no pre-switch audio stitches onto the post-switch source,
+    // and attaches / detaches the UDP-1026 decode on the live P2 client so there
+    // is zero added RX cost while Host is selected. P1 radios have no 1026
+    // stream — the handler simply never fires there; the _activeSource gate still
+    // arbitrates host vs (absent) radio harmlessly.
+    private void ApplyRadioMicRouting(TxAudioSource source)
+    {
+        var ingest = ResolveTxIngest();
+        if (ingest is null) return;
+
+        bool radioActive = source != TxAudioSource.Host;
+
+        // Arm the in-lock single-select gate FIRST. Under TxAudioIngest._sync
+        // this flips _activeSource and clears its half-written WDSP block, so the
+        // instant the gate is armed the host mic is dropped (radio armed) or the
+        // radio mic is dropped (Host armed) — no overlap window.
+        ingest.SetActiveSource(source);
+
+        // Always reset the re-blocker on any switch so a <960-sample remainder
+        // of the old source can't stitch onto the new one.
+        _radioMicReceiver?.Reset();
+
+        var p2 = _p2Client;
+        if (radioActive)
+        {
+            // Subscribe the 1026 decode only while a radio jack is armed. No-op
+            // if already attached or if P1 (no 1026 stream / null p2Client).
+            if (!_radioMicAttached && p2 is not null && _radioMicReceiver is not null)
+            {
+                var rb = _radioMicReceiver;
+                p2.AttachRadioMicHandler(rb.Accept);
+                _radioMicAttached = true;
+            }
+        }
+        else if (_radioMicAttached)
+        {
+            p2?.DetachRadioMicHandler();
+            _radioMicAttached = false;
+        }
     }
 
     private void OnRadioMoxChanged(bool on)
@@ -4101,6 +4218,12 @@ public class DspPipelineService : BackgroundService,
         // and no further callbacks land. client.StopAsync joins the RX task,
         // so by the time it returns the RX thread is gone.
         DetachRxSinkP2();
+        // The 1026 radio-mic handler is bound to this client instance; clear our
+        // attach latch so a reconnect (which re-fires ReplayAudioFrontEnd) re-
+        // attaches against the fresh client. The handler reference dies with the
+        // disposed client. Quiesce the re-blocker so no stale remainder survives.
+        _radioMicAttached = false;
+        _radioMicReceiver?.Reset();
         try { await client.StopAsync(ct).ConfigureAwait(false); } catch { }
         await client.DisposeAsync().ConfigureAwait(false);
 
@@ -4238,6 +4361,53 @@ public class DspPipelineService : BackgroundService,
             hzPerPixel = _calPanHzPerPixel;
             centerHz = _calPanCenterHz;
         }
+        return true;
+    }
+
+    /// <summary>
+    /// Estimates the band noise floor (raw display dB) for Auto-AGC from the
+    /// panadapter FFT — the same pre-AGC, per-bin spectrum Thetis tracks
+    /// (display.cs:5240-5264), not the post-AGC S-meter. Reads the cached
+    /// snapshot and delegates the percentile to <see cref="TryNoiseFloorFromDisplayBins"/>.
+    /// Returns false (caller passes NaN; the loop falls back to the S-meter) when
+    /// no fresh spectrum is available — a stale frame, a near-dead span, or any
+    /// engine/display state that did not produce a fresh analyzer frame within
+    /// the freshness window. The caller adds the board RX cal offset. Issue #806.
+    /// </summary>
+    private bool TryComputeAutoAgcNoiseFloorDbm(out double floorDbm)
+    {
+        floorDbm = double.NaN;
+        if (!TryCapturePanadapterSnapshot(_autoAgcFloorBuf, out _, out _, maxAgeMs: 300))
+            return false;
+        return TryNoiseFloorFromDisplayBins(
+            _autoAgcFloorBuf, AutoAgcFloorPercentile, AutoAgcFloorMinValidBins, out floorDbm);
+    }
+
+    /// <summary>
+    /// Pure noise-floor percentile over a panadapter display-dB buffer. Compacts
+    /// the valid bins to the front (SanitizeDisplayBuffer pins invalid bins to
+    /// DisplayInvalidBinDb = -200; excluding those and any absurdly low value
+    /// keeps the estimate on real noise, not dead band edges), then returns the
+    /// requested low percentile of the survivors. Returns false when fewer than
+    /// <paramref name="minValidBins"/> bins are real. NOTE: mutates
+    /// <paramref name="bins"/> in place (compacts + sorts); pass a scratch buffer.
+    /// </summary>
+    internal static bool TryNoiseFloorFromDisplayBins(
+        Span<float> bins, double percentile, int minValidBins, out double floorDbm)
+    {
+        floorDbm = double.NaN;
+        int n = 0;
+        for (int i = 0; i < bins.Length; i++)
+        {
+            float v = bins[i];
+            if (float.IsFinite(v) && v > -190f)
+                bins[n++] = v;
+        }
+        if (n < minValidBins) return false;
+
+        bins.Slice(0, n).Sort();
+        int idx = Math.Clamp((int)Math.Round((n - 1) * percentile), 0, n - 1);
+        floorDbm = bins[idx];
         return true;
     }
 
@@ -5080,7 +5250,22 @@ public class DspPipelineService : BackgroundService,
             //
             var rx = engine.GetRxStageMeters(channel);
             var v2 = BuildRxMetersV2(rx, rxCalOffsetDb);
-            _radio.HandleRxMetersForAutoAgc(dbm, v2.AdcPk, v2.AgcGain, Environment.TickCount64);
+            // Feed Auto-AGC a real spectrum-derived noise floor when one is
+            // available (#806); NaN falls the loop back to the S-meter `dbm`.
+            // Only pay for the snapshot copy + percentile sort when Auto-AGC is
+            // actually engaged — the loop early-returns otherwise anyway.
+            double spectrumFloorDbm = double.NaN;
+            if (state.AutoAgcEnabled &&
+                TryComputeAutoAgcNoiseFloorDbm(out double floorDbm))
+            {
+                // Put the display-pixel floor on the same calibrated dBm scale as
+                // the S-meter path (RX pixels carry no cal offset of their own),
+                // so the loop's TargetAudioDb / [20,100] constants — tuned against
+                // S-meter dBm — apply. Any residual WDSP-display-vs-S-meter delta
+                // beyond this board offset is a bench-tune item (#806).
+                spectrumFloorDbm = floorDbm + rxCalOffsetDb;
+            }
+            _radio.HandleRxMetersForAutoAgc(dbm, spectrumFloorDbm, v2.AdcPk, v2.AgcGain, Environment.TickCount64);
             lock (_rxMeterDiagLock)
             {
                 _diagRxMetersValid = true;

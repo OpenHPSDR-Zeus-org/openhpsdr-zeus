@@ -45,10 +45,32 @@
 
 using System.Buffers.Binary;
 using Microsoft.Extensions.Logging;
+using Zeus.Contracts;
 using Zeus.Dsp;
 using Zeus.Protocol1;
 
 namespace Zeus.Server;
+
+/// <summary>
+/// Internal tag identifying which producer fed a TX-audio block into
+/// <see cref="TxAudioIngest.OnMicPcmBytes"/>. Carried explicitly (NOT inferred
+/// from recency) so the in-lock single-select gate can arbitrate the host mic
+/// against a radio jack deterministically across a source switch
+/// (external-audio-jacks re-port). TCI/WAV remain operator-explicit overrides
+/// and bypass the host/radio arbitration — their precedence is the existing
+/// recency hysteresis.
+/// </summary>
+internal enum MicBlockSource
+{
+    /// <summary>Browser / native host microphone (the default TX-audio source).</summary>
+    Host = 0,
+    /// <summary>Radio-digitised jack audio (Saturn mic/line-in/XLR via UDP 1026).</summary>
+    RadioMic,
+    /// <summary>TCI client TX audio (MSHV / WSJT-X …). Operator-explicit override.</summary>
+    Tci,
+    /// <summary>WAV-recording playback to the air. Operator-explicit override.</summary>
+    Wav,
+}
 
 /// <summary>
 /// Bridges browser-side mic audio to WDSP TXA and onward to the EP2 IQ
@@ -126,6 +148,83 @@ public sealed class TxAudioIngest : IDisposable
     // "live mic" source. Otherwise mobile PTT mixes phone audio with desktop
     // capture silence and feeds TXA at roughly 2x realtime.
     private long _lastBrowserMicTickMs;
+
+    // The currently-armed TX-audio source for HOST↔RADIO arbitration
+    // (external-audio-jacks re-port, "atomic single-select gate"). Read and
+    // written ONLY under _sync. OnMicPcmBytes rejects any Host- or
+    // RadioMic-tagged block whose tag != _activeSource, so when a radio jack is
+    // armed the host mic is dropped immediately by the in-lock compare (no
+    // overlap window) and vice versa. TCI/WAV-tagged blocks bypass this compare.
+    // Default Host so a fresh / un-switched ingest is byte/behaviour-identical
+    // to today.
+    private MicBlockSource _activeSource = MicBlockSource.Host;
+    // Source whose samples currently occupy the WDSP accumulator. Read/written
+    // ONLY under _sync. Enforces that a partially-filled accumulator is NEVER
+    // topped up by a different source: between the cheap top-of-method gate and
+    // the accumulation lock, _activeSource can flip, so the AUTHORITATIVE
+    // arbitration is re-done inside the accumulation lock against this owner.
+    private MicBlockSource _accumulatorSource = MicBlockSource.Host;
+
+    // Peak radio-jack input level (linear 0..1) seen on ACCEPTED RadioMic blocks
+    // since the last meter read. Read/written ONLY under _sync. The desktop mic-
+    // meter heartbeat (NativeMicCapture) consumes this at ~10 Hz so the operator-
+    // facing meter shows the ACTUAL radio input when a radio source is armed —
+    // and reads silence (0) when no radio audio is arriving (no mic connected /
+    // no UDP-1026 stream). Without this, the meter would keep showing the host
+    // mic on a radio source (the reported "still listening to host" bug). Reset
+    // to 0 on any source switch so a stale value can't bleed across sources.
+    private float _radioPeakLinear;
+
+    /// <summary>
+    /// Arm the TX-audio source for the HOST↔RADIO single-select gate
+    /// (external-audio-jacks re-port). Called by the pipeline when the resolved
+    /// <see cref="TxAudioSource"/> changes. Under <see cref="_sync"/> this sets
+    /// the new active source AND clears the WDSP accumulator so no half-block of
+    /// the old source survives onto the new source — the new source fills from
+    /// empty. The 1026 re-blocker (owned upstream) is reset by the same caller.
+    /// Maps every radio jack (Mic/Line-In/XLR) onto
+    /// <see cref="MicBlockSource.RadioMic"/> because they all arrive on the one
+    /// UDP-1026 stream; only Host is distinct here. TCI/WAV are not selectable
+    /// sources — they override transiently.
+    /// </summary>
+    internal void SetActiveSource(TxAudioSource source)
+    {
+        var mapped = source == TxAudioSource.Host
+            ? MicBlockSource.Host
+            : MicBlockSource.RadioMic;
+        lock (_sync)
+        {
+            if (_activeSource == mapped) return;
+            _activeSource = mapped;
+            // Quiesce: drop any partially-accumulated old-source audio so it
+            // can't stitch onto the post-switch source mid-WDSP-block.
+            _accumulatorFill = 0;
+            // Drop any stale radio-meter peak so the meter doesn't carry a value
+            // across a source switch (e.g. host→radio shows fresh radio level,
+            // radio→host stops surfacing a frozen radio peak).
+            _radioPeakLinear = 0f;
+        }
+    }
+
+    /// <summary>Current armed source for the host/radio gate (test/diagnostic).</summary>
+    internal MicBlockSource ActiveSource { get { lock (_sync) return _activeSource; } }
+
+    /// <summary>
+    /// Read and reset the peak radio-jack input level (linear 0..1) seen on
+    /// accepted radio blocks since the last call. The desktop mic-meter heartbeat
+    /// consumes this so the meter reflects the ACTUAL radio input when a radio
+    /// source is armed, and reads silence (0) when no radio audio is arriving.
+    /// Thread-safe.
+    /// </summary>
+    internal float ConsumeRadioPeakLinear()
+    {
+        lock (_sync)
+        {
+            var peak = _radioPeakLinear;
+            _radioPeakLinear = 0f;
+            return peak;
+        }
+    }
 
     /// <summary>
     /// True when a TCI client is the authoritative source of TX audio right now
@@ -238,7 +337,7 @@ public sealed class TxAudioIngest : IDisposable
     internal void OnMicPcmBytesFromTci(ReadOnlyMemory<byte> f32lePayload)
     {
         Volatile.Write(ref _lastTciTickMs, Environment.TickCount64);
-        OnMicPcmBytes(f32lePayload);
+        OnMicPcmBytes(f32lePayload, MicBlockSource.Tci);
     }
 
     /// <summary>
@@ -252,7 +351,7 @@ public sealed class TxAudioIngest : IDisposable
         long now = Environment.TickCount64;
         Volatile.Write(ref _lastBrowserMicTickMs, now);
         if (ShouldSuppressForAuthoritativeSource(now)) return;
-        OnMicPcmBytes(f32lePayload);
+        OnMicPcmBytes(f32lePayload, MicBlockSource.Host);
     }
 
     /// <summary>
@@ -267,7 +366,24 @@ public sealed class TxAudioIngest : IDisposable
         if (ShouldSuppressForAuthoritativeSource(now)) return;
         long lastBrowserMic = Volatile.Read(ref _lastBrowserMicTickMs);
         if (lastBrowserMic != 0 && now - lastBrowserMic < TciHysteresisMs) return;
-        OnMicPcmBytes(f32lePayload);
+        OnMicPcmBytes(f32lePayload, MicBlockSource.Host);
+    }
+
+    /// <summary>
+    /// Source-tagged entry point for radio-digitised jack audio (Saturn mic /
+    /// line-in / balanced-XLR, arriving on UDP 1026 and re-blocked to 960
+    /// samples upstream — external-audio-jacks re-port). Tagged
+    /// <see cref="MicBlockSource.RadioMic"/>; the in-lock
+    /// <see cref="_activeSource"/> compare in <see cref="OnMicPcmBytes"/> drops
+    /// it unless a radio jack is the armed source, so it can never leak onto the
+    /// air under Host. Like the host mic, it yields to a recent TCI/WAV override
+    /// so a remote/playback source is never mixed with radio-jack audio.
+    /// </summary>
+    internal void OnMicPcmBytesFromRadioMic(ReadOnlyMemory<byte> f32lePayload)
+    {
+        long now = Environment.TickCount64;
+        if (ShouldSuppressForAuthoritativeSource(now)) return;
+        OnMicPcmBytes(f32lePayload, MicBlockSource.RadioMic);
     }
 
     private bool ShouldSuppressForAuthoritativeSource(long now)
@@ -287,16 +403,40 @@ public sealed class TxAudioIngest : IDisposable
     internal void OnMicPcmBytesFromWav(ReadOnlyMemory<byte> f32lePayload)
     {
         Volatile.Write(ref _lastWavTickMs, Environment.TickCount64);
-        OnMicPcmBytes(f32lePayload);
+        OnMicPcmBytes(f32lePayload, MicBlockSource.Wav);
     }
 
     // Internal so tests can drive the ingest directly without standing up a WS.
+    // Untagged overload defaults to Host (host path byte/behaviour-identical to
+    // today).
     internal void OnMicPcmBytes(ReadOnlyMemory<byte> f32lePayload)
+        => OnMicPcmBytes(f32lePayload, MicBlockSource.Host);
+
+    // The source tag arbitrates the HOST↔RADIO single-select gate IN-LOCK (see
+    // _activeSource); TCI/WAV bypass that compare as operator-explicit overrides.
+    internal void OnMicPcmBytes(ReadOnlyMemory<byte> f32lePayload, MicBlockSource source)
     {
         if (f32lePayload.Length != MicBlockBytes)
         {
             lock (_sync) _droppedFrames++;
             return;
+        }
+
+        // Cheap early-out for the host/radio gate (external-audio-jacks
+        // re-port). This is NOT the hard gate — _activeSource can still flip
+        // between here and the accumulation lock below, so the AUTHORITATIVE
+        // single-select decision is re-checked atomically with the append (see
+        // "ATOMIC single-select gate" inside the accumulation lock). Doing the
+        // obvious reject here too avoids running the MOX-edge / tap / WDSP-sizing
+        // work for a block the authoritative check would drop anyway. TCI/WAV
+        // bypass this compare — they are operator-explicit overrides gated by the
+        // recency hysteresis above.
+        if (source is MicBlockSource.Host or MicBlockSource.RadioMic)
+        {
+            lock (_sync)
+            {
+                if (source != _activeSource) { _droppedFrames++; return; }
+            }
         }
 
         // Non-destructive mic tap, fired BEFORE the MOX/monitor gate so a
@@ -376,6 +516,51 @@ public sealed class TxAudioIngest : IDisposable
 
         lock (_sync)
         {
+            // ATOMIC single-select gate (external-audio-jacks re-port, the
+            // crux). This is the AUTHORITATIVE host/radio arbitration: it runs
+            // in the SAME critical section as the accumulator append, so no flip
+            // of _activeSource (by SetActiveSource, also under _sync) can slip
+            // between "decide" and "append". A Host/RadioMic block whose tag no
+            // longer matches the armed source is dropped, so two producer threads
+            // straddling a switch resolve to exactly one contributor per WDSP
+            // block — no double-feed. TCI/WAV bypass this (operator-explicit
+            // overrides; recency-gated above). Under Host with a Host block this
+            // is a pure no-op → host path byte/behaviour-identical to today.
+            if (source is MicBlockSource.Host or MicBlockSource.RadioMic
+                && source != _activeSource)
+            {
+                _droppedFrames++;
+                return;
+            }
+            // Guard the accumulator owner: if a half-filled block belongs to a
+            // different source than the one now appending (possible when the
+            // active source flipped while data sat buffered), drop the stale
+            // remainder so the two sources never mix inside one WDSP block.
+            // SetActiveSource already clears on the host/radio switch; this
+            // covers the TCI/WAV interleave as well.
+            if (_accumulatorFill > 0 && _accumulatorSource != source)
+                _accumulatorFill = 0;
+            _accumulatorSource = source;
+
+            // Track the radio-jack input peak for the source-aware mic meter.
+            // Only on accepted RadioMic blocks (the gate above guarantees the
+            // radio jack is the armed source) — the host path is untouched. The
+            // desktop meter heartbeat consumes this via ConsumeRadioPeakLinear,
+            // so the meter shows the real radio level and falls to silence when
+            // no radio audio is arriving.
+            if (source == MicBlockSource.RadioMic)
+            {
+                var rspan = f32lePayload.Span;
+                float radioPeak = 0f;
+                for (int i = 0; i < MicBlockSamples; i++)
+                {
+                    float a = BinaryPrimitives.ReadSingleLittleEndian(rspan.Slice(i * 4, 4));
+                    if (a < 0) a = -a;
+                    if (a > radioPeak) radioPeak = a;
+                }
+                if (radioPeak > _radioPeakLinear) _radioPeakLinear = radioPeak;
+            }
+
             // Decode f32le into accumulator. WDSP wants -1..+1 range; browser
             // ships the same convention.
             var src = f32lePayload.Span;

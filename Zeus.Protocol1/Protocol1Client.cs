@@ -130,6 +130,16 @@ public sealed class Protocol1Client : IProtocol1Client
     // a no-op until the operator opts into iambic. See zeus-bks.
     private int _cwKeyerSpeedWpm;
     private int _cwKeyerMode; // CwKeyerMode as int for Interlocked
+    // TX audio front-end (external-audio-jacks re-port). mic_boost / mic_linein
+    // ride the 0x12 frame on codec boards; mic_trs / mic_bias / line_in_gain
+    // ride the 0x14 frame on HL2 (read-modify-write — see ControlFrame). All
+    // default to the off / zero state so an untouched radio is byte-identical
+    // to today. mic_bias defaults OFF (floating-connector PTT-hang guard).
+    private int _micBoost;     // 0 / 1
+    private int _micLineIn;    // 0 / 1
+    private int _micTrs;       // 0 / 1
+    private int _micBias;      // 0 / 1
+    private int _lineInGain;   // 0..31 (5-bit HL2 line_in_gain)
     private long _droppedFrames;
     private long _totalFrames;
 
@@ -665,6 +675,26 @@ public sealed class Protocol1Client : IProtocol1Client
         Interlocked.Exchange(ref _cwKeyerMode, (int)mode);
     }
 
+    /// <summary>
+    /// Set the TX audio front-end (external-audio-jacks re-port). Global,
+    /// per-radio — not per-band. <paramref name="micBoost"/> /
+    /// <paramref name="micLineIn"/> ride the 0x12 frame on Hermes-class codec
+    /// boards; <paramref name="micTrs"/> / <paramref name="micBias"/> /
+    /// <paramref name="lineInGain"/> ride the 0x14 frame on HL2. Which fields
+    /// actually reach the wire is gated per-board in ControlFrame, so a value
+    /// for the wrong board is simply ignored. mic_bias defaults OFF and the
+    /// caller (RadioService / REST) guards the gate; passing it true is the
+    /// operator's explicit opt-in.
+    /// </summary>
+    public void SetAudioFrontEnd(bool micBoost, bool micLineIn, bool micTrs, bool micBias, int lineInGain)
+    {
+        Interlocked.Exchange(ref _micBoost, micBoost ? 1 : 0);
+        Interlocked.Exchange(ref _micLineIn, micLineIn ? 1 : 0);
+        Interlocked.Exchange(ref _micTrs, micTrs ? 1 : 0);
+        Interlocked.Exchange(ref _micBias, micBias ? 1 : 0);
+        Interlocked.Exchange(ref _lineInGain, Math.Clamp(lineInGain, 0, 31));
+    }
+
     public void SetHl2TxStepAttenuationDb(int db)
     {
         // Range matches mi0bot console.cs:2084 (udTXStepAttData.Minimum=-28,
@@ -743,7 +773,12 @@ public sealed class Protocol1Client : IProtocol1Client
             // untouched, fall through to the RX-side encoding above.
             Hl2TxAttnDb: Volatile.Read(ref _hl2TxAttnDb),
             CwKeyerSpeedWpm: Volatile.Read(ref _cwKeyerSpeedWpm),
-            CwKeyerMode: (CwKeyerMode)Volatile.Read(ref _cwKeyerMode));
+            CwKeyerMode: (CwKeyerMode)Volatile.Read(ref _cwKeyerMode),
+            MicBoost: Volatile.Read(ref _micBoost) != 0,
+            MicLineIn: Volatile.Read(ref _micLineIn) != 0,
+            MicTrs: Volatile.Read(ref _micTrs) != 0,
+            MicBias: Volatile.Read(ref _micBias) != 0,
+            LineInGain: (byte)Volatile.Read(ref _lineInGain));
     }
 
     private void RxLoop()

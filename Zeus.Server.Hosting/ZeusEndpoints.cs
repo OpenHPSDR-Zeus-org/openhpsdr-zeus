@@ -675,6 +675,21 @@ public static class ZeusEndpoints
             _                            => Results.StatusCode(500),
         };
 
+        // When the operator has selected the out-of-process VST route but the
+        // engine isn't routing, an editor open would otherwise fall through to
+        // the in-process bridge and surface the in-process "set
+        // ZEUS_ENABLE_VST_LOAD=1" hint — which is irrelevant to VST mode and
+        // sends a new operator down the wrong path. Point them at the actual
+        // fix instead: install the engine (the "Download VST Engine" affordance)
+        // or wait for it to come up. Returns null in every other case so Native
+        // mode keeps the existing in-process editor behaviour unchanged.
+        static IResult? VstEngineEditorGuard(AudioProcessingModeService mode)
+        {
+            var error = VstEditorHint.EngineUnavailableMessage(
+                mode.Mode, mode.EngineActive, AudioProcessingModeService.FindEngineExe() is not null);
+            return error is null ? null : Results.Json(new { error }, statusCode: 409);
+        }
+
         // Editor routing is mode-aware (host consolidation): when the
         // out-of-process engine is active (VST processing mode) the editor is
         // hosted crash-isolated in the engine process — the same instance that
@@ -693,11 +708,15 @@ public static class ZeusEndpoints
         app.MapPost("/api/audio-suite/plugins/{id}/editor",
             (string id, AudioPluginBridge bridge, AudioProcessingModeService mode, RxVstEngineService rxVst) =>
             {
-                var result = rxVst.HasEngineSlot(id)
-                    ? rxVst.OpenEditor(id)
-                    : mode.EngineActive && mode.HasEngineSlot(id)
-                        ? mode.OpenEditor(id)
-                        : bridge.OpenEditor(id);
+                // RX engine slots route to the RX engine regardless of the TX
+                // processing mode; only the TX path is gated on the VST engine.
+                if (rxVst.HasEngineSlot(id))
+                    return MapEditorResult(rxVst.OpenEditor(id), open: true);
+                if (VstEngineEditorGuard(mode) is { } guard)
+                    return guard;
+                var result = mode.EngineActive && mode.HasEngineSlot(id)
+                    ? mode.OpenEditor(id)
+                    : bridge.OpenEditor(id);
                 return MapEditorResult(result, open: true);
             });
 
@@ -723,6 +742,8 @@ public static class ZeusEndpoints
         app.MapPost("/api/tx-audio-suite/plugins/{id}/editor",
             (string id, AudioPluginBridge bridge, AudioProcessingModeService mode) =>
             {
+                if (VstEngineEditorGuard(mode) is { } guard)
+                    return guard;
                 var result = mode.EngineActive && mode.HasEngineSlot(id)
                     ? mode.OpenEditor(id)
                     : bridge.OpenEditor(id);
@@ -2127,6 +2148,70 @@ public static class ZeusEndpoints
             return Results.Ok(externalPtt.Snapshot());
         });
 
+        // Global (per-radio) TX-audio source (external-audio-jacks re-port). GET
+        // surfaces the per-board capability gates + the RESOLVED (board-clamped)
+        // source so the single-select picker shows only the jacks the connected
+        // board offers and hydrates from what the server is actually pushing.
+        // Always 200 — a board with neither codec nor HL2 mic reports both gates
+        // false and the panel shows nothing.
+        app.MapGet("/api/radio/audio", (RadioService radio, AudioSettingsStore store) =>
+        {
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            var resolved = RadioService.ClampAudioSource(store.Get(), caps);
+            return Results.Ok(new AudioFrontEndDto(
+                HasOnboardCodec: caps.HasOnboardCodec,
+                HermesLite2MicFrontEnd: caps.HermesLite2MicFrontEnd,
+                HasRadioLineIn: caps.HasRadioLineIn,
+                HasBalancedXlr: caps.HasBalancedXlr,
+                HasMicBias: caps.HasMicBias,
+                Source: resolved.Source,
+                MicBoost: resolved.MicBoost,
+                MicBias: resolved.MicBias,
+                LineInGain: resolved.LineInGain));
+        });
+
+        // PUT the whole global TX-audio source. Capability-gated: 409 when the
+        // connected board has no audio front-end at all (neither codec nor HL2
+        // mic), so a non-audio board can never be handed audio bytes. The
+        // requested Source is CLAMPED against the board's capabilities (an
+        // unsupported jack → Host) before persisting, so the store never holds a
+        // source the wire can't emit on this board. LineInGain is clamped 0..31.
+        // The save fires AudioSettingsStore.Changed -> RadioService.PushAudioFrontEnd,
+        // which re-clamps + pushes server-authoritatively to the live client
+        // (P1 SetAudioFrontEnd / P2 TxSpecific 50/51) and mirrors the resolved
+        // source into StateDto — never via the frontend, so no clobber-on-connect.
+        app.MapPut("/api/radio/audio", (AudioFrontEndSetRequest req, RadioService radio, AudioSettingsStore store) =>
+        {
+            if (req is null)
+                return Results.BadRequest(new { error = "body required" });
+
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            bool audioCapable = caps.HasOnboardCodec || caps.HermesLite2MicFrontEnd;
+            if (!audioCapable)
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no audio front-end" });
+
+            var requested = new AudioSourceSelection(
+                Source: req.Source,
+                MicBoost: req.MicBoost,
+                MicBias: req.MicBias,
+                LineInGain: (byte)Math.Clamp(req.LineInGain, 0, 31));
+            // Clamp to the board before persisting — a board that lacks the
+            // requested jack stores Host, never the illegal source.
+            store.Set(RadioService.ClampAudioSource(requested, caps));
+
+            var resolved = RadioService.ClampAudioSource(store.Get(), caps);
+            return Results.Ok(new AudioFrontEndDto(
+                caps.HasOnboardCodec,
+                caps.HermesLite2MicFrontEnd,
+                caps.HasRadioLineIn,
+                caps.HasBalancedXlr,
+                caps.HasMicBias,
+                resolved.Source,
+                resolved.MicBoost,
+                resolved.MicBias,
+                resolved.LineInGain));
+        });
+
         app.MapGet("/api/radio/power-calibration", (HardwareDiagnosticsService diag) =>
         {
             return Results.Ok(diag.PowerCalibrationSnapshot());
@@ -2499,6 +2584,28 @@ public static class ZeusEndpoints
                 return Results.BadRequest(new { error = ex.Message });
             }
         }).DisableAntiforgery();
+
+        // Download an existing profile's .db so the operator can back it up or
+        // move it to another machine. Opens the file shared so the active
+        // database can be exported while it's in use.
+        app.MapGet("/api/prefs/databases/export", (string? relativePath) =>
+        {
+            if (string.IsNullOrWhiteSpace(relativePath))
+                return Results.BadRequest(new { error = "relativePath required" });
+            try
+            {
+                var bytes = PrefsDbPath.ReadProfileBytes(relativePath, out var fileName);
+                return Results.File(bytes, "application/octet-stream", fileName);
+            }
+            catch (FileNotFoundException)
+            {
+                return Results.NotFound(new { error = "Database not found." });
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
 
         app.MapPost("/api/app/restart", (AppRestartService restart) =>
         {

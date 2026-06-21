@@ -124,6 +124,7 @@ public sealed record BoardCapabilities(
     /// feature exists without being able to drive a non-supporting
     /// board.</summary>
     bool SupportsAnvelinaDxOc = false,
+    // ---- External antenna ports (external-ports plan — antenna slice, #804) --
     /// <summary>True when the board has switchable TX antenna relays
     /// (ANT1/2/3) — the 0x0A / Saturn OrionMkII family (G2 / G2-1K / 7000DLE /
     /// 8000DLE / Apache OrionMkII original / ANVELINA-PRO3 / Red Pitaya), which
@@ -154,7 +155,35 @@ public sealed record BoardCapabilities(
     /// Informational for the frontend; the antenna wire path itself is RX1 /
     /// shared-relay only in this slice. External-ports plan — antenna slice
     /// (issue #804).</summary>
-    bool HasRx2AntennaPath = false)
+    bool HasRx2AntennaPath = false,
+    // ---- TX audio front-end (external-audio-jacks re-port) ----------------
+    /// <summary>Board decodes the host→radio audio STREAM (TLV320 codec) — the
+    /// path the radio's own analog mic / line-in jack uses. True for Hermes-
+    /// class and every ANAN board. False for Hermes-Lite 2, which has no stream
+    /// codec. STREAM codec only; does NOT gate the HL2 mic front-end (see
+    /// <see cref="HermesLite2MicFrontEnd"/>). Gates the Radio Mic / Line-In /
+    /// XLR options on the wire and in the UI.</summary>
+    bool HasOnboardCodec = false,
+    /// <summary>Hermes-Lite 2 has an analog mic front-end on Protocol-1
+    /// register 0x0a (wire byte 0x14): mic_trs, mic_bias and a 5-bit
+    /// line_in_gain. Distinct from <see cref="HasOnboardCodec"/> — HL2 has the
+    /// mic front-end but not the stream codec. Kept INERT in v1 (plumbing only)
+    /// until confirmed on hardware; mic_bias defaults OFF. True for HL2 only.</summary>
+    bool HermesLite2MicFrontEnd = false,
+    /// <summary>Board has a switchable analog line-in jack as a selectable
+    /// TX-audio source (<see cref="Contracts.TxAudioSource.RadioLineIn"/>). True
+    /// for the ANAN-10E (HermesII), 100D/200D and the 0x0A Saturn family.</summary>
+    bool HasRadioLineIn = false,
+    /// <summary>Board has a switchable balanced XLR microphone input
+    /// (<see cref="Contracts.TxAudioSource.RadioBalancedXlr"/>). True ONLY for
+    /// the Saturn-FPGA G2 / G2-1K. Use this flag (never
+    /// <see cref="HasAudioAmplifier"/>) to gate XLR.</summary>
+    bool HasBalancedXlr = false,
+    /// <summary>Board can enable the Orion electret mic-bias supply on its mic
+    /// jack. Do NOT derive this from <see cref="HasAudioAmplifier"/>. mic_bias
+    /// defaults OFF (a floating connector with bias can hang PTT). True for
+    /// 100D/200D/7000DLE/8000DLE/G2/G2-1K.</summary>
+    bool HasMicBias = false)
 {
     /// <summary>Safe defaults for an unrecognised / disconnected board.
     /// Single ADC, no extras — minimum-surprise capability set so a

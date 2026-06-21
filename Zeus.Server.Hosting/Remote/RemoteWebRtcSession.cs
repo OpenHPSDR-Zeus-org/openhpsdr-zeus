@@ -26,15 +26,20 @@ public sealed class RemoteWebRtcSession
     private readonly RemoteVerifierMaterial _verifier;
     private readonly RemoteSession _session;
     private readonly RTCPeerConnection _pc;
+    private readonly Zeus.Server.StreamingHub? _hub;
+    private readonly Guid _sinkId = Guid.NewGuid();
 
     private RTCDataChannel? _control;
     private RTCDataChannel? _frames;
+    private RemoteFrameSink? _sink;
 
     public RemoteWebRtcSession(
-        RemoteVerifierMaterial verifier, ILogger log, IReadOnlyList<RTCIceServer>? iceServers = null)
+        RemoteVerifierMaterial verifier, ILogger log,
+        IReadOnlyList<RTCIceServer>? iceServers = null, Zeus.Server.StreamingHub? hub = null)
     {
         _verifier = verifier;
         _log = log;
+        _hub = hub;
 
         var gate = new Spake2PlusAuthGate(
             RemoteAuthConstants.Context, RemoteAuthConstants.IdProver, RemoteAuthConstants.IdVerifier,
@@ -96,6 +101,8 @@ public sealed class RemoteWebRtcSession
     {
         if (Interlocked.Exchange(ref _closed, 1) != 0) return;
         _session.Close();
+        if (_hub is not null) _hub.DetachSink(_sinkId);
+        _sink?.Dispose();
         try { _pc.close(); } catch { /* already torn down */ }
         Closed?.Invoke();
     }
@@ -165,6 +172,16 @@ public sealed class RemoteWebRtcSession
                     {
                         _control!.send(Json("auth-ok", "confirm", outcome.Reply.ToArray()));
                         _log.LogInformation("rtc.remote session UNLOCKED");
+
+                        // Arm the radio data path: register a sink so the hub's
+                        // broadcast fan-out reaches this session's frames channel
+                        // (gated again by TrySendFrame). Only happens post-unlock.
+                        if (_hub is not null)
+                        {
+                            _sink = new RemoteFrameSink(TrySendFrame);
+                            _hub.AttachSink(_sinkId, _sink);
+                        }
+
                         Unlocked?.Invoke();
                     }
                     else

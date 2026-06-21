@@ -249,7 +249,33 @@ internal static class ControlFrame
         // WriteCwKeyerConfigPayload. Default mode Straight makes the write a
         // no-op until the operator opts into iambic. See zeus-bks.
         int CwKeyerSpeedWpm = 0,
-        CwKeyerMode CwKeyerMode = CwKeyerMode.Straight);
+        CwKeyerMode CwKeyerMode = CwKeyerMode.Straight,
+        // ---- Audio front-end (external-audio-jacks re-port) -----------------
+        // Two distinct P1 audio surfaces, both verified against ramdor Thetis
+        // networkproto1.c and piHPSDR old_protocol.c:
+        //
+        //  (a) Hermes-class codec boards — DriveFilter (0x12) frame:
+        //        C2[0] = mic_boost, C2[1] = mic_linein
+        //      (Thetis networkproto1.c:581; piHPSDR old_protocol.c:2154-2156.)
+        //      These default false → byte-identical to today's 0x12 frame.
+        //
+        //  (b) Hermes-Lite 2 — 0x0a / wire-0x14 frame (read-modify-write):
+        //        C1[4] = mic_trs, C1[5] = mic_bias, C2[4:0] = line_in_gain
+        //      (Thetis networkproto1.c:597-599 case 11; same in mi0bot.)
+        //      The SAME frame carries C2[6] = puresignal_run and the C4 PGA /
+        //      step-attenuator byte — those are written by the existing
+        //      WriteAttenuatorPayload logic and MUST survive. The audio fields
+        //      only set their own bits on top.
+        //
+        // mic_bias defaults OFF — enabling it on a floating connector can hang
+        // PTT (BoardCapabilities.HermesLite2MicFrontEnd / HasMicBias guard the
+        // surface). mic_ptt routing is a PTT-IN concern, not this feature, so
+        // it is intentionally not written here (stays 0, as today).
+        bool MicBoost = false,
+        bool MicLineIn = false,
+        bool MicTrs = false,
+        bool MicBias = false,
+        byte LineInGain = 0);
 
     /// <summary>
     /// Write the 5 C&amp;C bytes for <paramref name="register"/> given the current
@@ -297,6 +323,18 @@ internal static class ControlFrame
                 if (state.Board == HpsdrBoardKind.HermesLite2 && state.Mox)
                 {
                     cc[2] |= 0x08;
+                }
+                // Hermes-class codec boards carry mic_boost (C2[0]) and
+                // mic_linein (C2[1]) on this 0x12 frame — Thetis
+                // networkproto1.c:581, piHPSDR old_protocol.c:2154-2156. HL2
+                // has no stream codec and routes mic/line through the 0x14
+                // frame instead, so it is excluded here. Both default false so
+                // an operator who never touches the audio panel emits the same
+                // bytes as today (byte-identical default-unsent).
+                else if (state.Board != HpsdrBoardKind.HermesLite2)
+                {
+                    if (state.MicBoost) cc[2] |= 0x01;   // C2[0] mic_boost
+                    if (state.MicLineIn) cc[2] |= 0x02;  // C2[1] mic_linein
                 }
                 break;
 
@@ -358,6 +396,32 @@ internal static class ControlFrame
         c14[1] = 0;   // C2
         c14[2] = 0;   // C3
         c14[3] = c4;
+
+        // HL2 mic front-end (external-audio-jacks re-port). This C0=0x14 frame
+        // is register 0x0a, which on HL2 carries the real mic/line-in front-
+        // end ALONGSIDE puresignal_run and the C4 step-attenuator byte. The
+        // verified layout (Thetis networkproto1.c:597-599 case 11; identical in
+        // mi0bot):
+        //   C1[4] = mic_trs, C1[5] = mic_bias, C1[6] = mic_ptt
+        //   C2[4:0] = line_in_gain, C2[6] = puresignal_run
+        // We READ-MODIFY-WRITE: set ONLY the audio bits, leaving the C4 PGA /
+        // step-attenuator byte (already in c14[3]) and the C2[6] PS bit (set
+        // below) untouched. mic_ptt is a PTT-IN concern, not this feature, so
+        // C1[6] is intentionally left 0 — same as today. mic_bias (C1[5])
+        // defaults OFF: enabling it on a floating connector can hang PTT, so the
+        // operator must opt in explicitly via the audio panel. At defaults
+        // (mic_trs/mic_bias off, line_in_gain 0) every byte is unchanged, so
+        // this block is byte-identical to today on HL2.
+        if (s.Board == HpsdrBoardKind.HermesLite2)
+        {
+            byte c1 = 0;
+            if (s.MicTrs)  c1 |= 1 << 4;   // C1[4] mic_trs
+            if (s.MicBias) c1 |= 1 << 5;   // C1[5] mic_bias
+            c14[0] = c1;
+            // line_in_gain is the low 5 bits of C2; OR it in so the PS bit
+            // (set below) and the reserved high bits stay clear.
+            c14[1] |= (byte)(s.LineInGain & 0x1F);
+        }
 
         // HL2 PureSignal: register 0x0a bit 22 = puresignal_run. Bit 22 lives
         // in C2 bit 6 (22 - 16 = 6) of this same C0=0x14 frame. mi0bot
