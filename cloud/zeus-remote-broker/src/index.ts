@@ -26,12 +26,18 @@ export default {
     }
 
     // Mint short-lived TURN credentials (clients call this before connecting).
-    if (url.pathname === '/turn' && request.method === 'POST') {
-      if (await rateLimited(env, clientIp(request))) return new Response('rate limited', { status: 429 });
+    // The web client fetches this cross-origin (app.openhpsdrzeus.com → broker),
+    // so EVERY response carries CORS headers — including the 503 fallback, so the
+    // browser can read it and fall back to STUN instead of throwing a CORS error.
+    if (url.pathname === '/turn') {
+      const cors = corsHeaders(env);
+      if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+      if (request.method !== 'POST') return new Response('method not allowed', { status: 405, headers: cors });
+      if (await rateLimited(env, clientIp(request))) return new Response('rate limited', { status: 429, headers: cors });
       try {
-        return Response.json(await mintIceServers(env));
+        return Response.json(await mintIceServers(env), { headers: cors });
       } catch {
-        return new Response('turn unavailable', { status: 503 });
+        return new Response('turn unavailable', { status: 503, headers: cors });
       }
     }
 
@@ -73,6 +79,20 @@ export default {
 
 function clientIp(request: Request): string {
   return request.headers.get('cf-connecting-ip') ?? 'unknown';
+}
+
+// CORS for the browser web client's cross-origin /turn fetch. Allow exactly the
+// configured web-app origin (the SPA on Cloudflare Pages); fall back to '*' only
+// if WEB_APP_ORIGIN is unset. /turn returns short-lived TURN creds, no cookies,
+// so no Allow-Credentials.
+function corsHeaders(env: Env): Record<string, string> {
+  return {
+    'Access-Control-Allow-Origin': env.WEB_APP_ORIGIN ?? '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'content-type',
+    'Access-Control-Max-Age': '86400',
+    Vary: 'Origin',
+  };
 }
 
 async function rateLimited(env: Env, ip: string): Promise<boolean> {
