@@ -2075,6 +2075,23 @@ public static class ZeusEndpoints
             return Results.Ok(diag.KeyingSnapshot(externalPtt.Snapshot()));
         });
 
+        // Hardware-PTT-IN → MOX enable gate (per-install, default OFF). GET
+        // returns the live lamp level + persisted enable flag + hang time; PUT
+        // flips the gate. A persisted ON flag only ARMS the gate — MOX still
+        // requires a physical footswitch edge (edge-triggered, never on
+        // connect/restart). The lamp tracks the footswitch regardless of the
+        // gate. Ungated per board — every board exposes a PTT-IN line.
+        app.MapGet("/api/radio/ptt-status", (ExternalPttService externalPtt) =>
+        {
+            return Results.Ok(externalPtt.Snapshot());
+        });
+
+        app.MapPut("/api/radio/ptt-status", (PttEnableSetRequest req, PttSettingsStore store, ExternalPttService externalPtt) =>
+        {
+            store.Set(req.Enabled);
+            return Results.Ok(externalPtt.Snapshot());
+        });
+
         app.MapGet("/api/radio/power-calibration", (HardwareDiagnosticsService diag) =>
         {
             return Results.Ok(diag.PowerCalibrationSnapshot());
@@ -2448,6 +2465,11 @@ public static class ZeusEndpoints
 
         // ── ZeusChat — operator-to-operator chat over the Cloudflare relay ──
         app.MapGet("/api/chat/status", (ChatService chat) => chat.GetStatus());
+
+        // Web-client heartbeat: presence is published only while the operator is
+        // showing the Chat panel (so closing/hiding it drops them off the roster).
+        app.MapPost("/api/chat/visible", (ChatVisibleRequest req, ChatService chat) =>
+            Results.Ok(chat.ReportPanelVisible(req.Visible)));
 
         app.MapPost("/api/chat/enable", (ChatEnableRequest req, ChatService chat) =>
         {

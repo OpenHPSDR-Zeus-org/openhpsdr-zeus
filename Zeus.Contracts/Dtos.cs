@@ -599,7 +599,19 @@ public sealed record ExternalPttStatusDto(
     bool CwMode,
     bool SidetoneAvailable,
     string DiagnosticRecommendation,
-    DateTimeOffset GeneratedUtc);
+    DateTimeOffset GeneratedUtc,
+    // Hardware-PTT-IN → MOX enable gate (per-install, default OFF). Nullable so
+    // the read-only diagnostic snapshot (/api/tx/diag, /api/cw/hardware-keying)
+    // can omit it (null) while the dedicated /api/radio/ptt-status endpoint
+    // populates it from PttSettingsStore. When the gate is OFF the PTT-IN lamp
+    // still tracks the footswitch, but no MOX is promoted.
+    bool? Enabled = null);
+
+// Request body for PUT /api/radio/ptt-status — flips the per-install
+// hardware-PTT-IN → MOX enable gate. Persisted in PttSettingsStore; a
+// persisted ON flag only ARMS the gate, it never auto-keys MOX (MOX still
+// requires a physical footswitch edge).
+public sealed record PttEnableSetRequest(bool Enabled);
 
 public sealed record HardwareKeyingStatusDto(
     int SchemaVersion,
