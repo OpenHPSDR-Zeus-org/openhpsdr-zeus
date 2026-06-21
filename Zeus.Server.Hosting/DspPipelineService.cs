@@ -3144,6 +3144,23 @@ public class DspPipelineService : BackgroundService,
         UpdateRxLo(1, s);
         p2?.SetVfoBHz(_secondaryRx[1].LoHz);
 
+        // Dual-RX split TX: when VFO B is the TX VFO and RX2 is on, drive the TX
+        // DUC to VFO B's effective LO (the same centre RX2 sits on) INDEPENDENTLY
+        // so a TUNE/MOX carrier lands on VFO B while RX1 keeps receiving VFO A.
+        // Clearing (0) returns the DUC to following RX0 — the non-split single-
+        // VFO model, byte-identical to before. Pairs with RadioService.
+        // AlignLoForTx skipping the shared-LO drag for this P2 split case
+        // (dragging the LO is what pulled RX1 to VFO B and showed the carrier on
+        // both receivers — the two-carrier bug).
+        // Use the canonical TX effective LO — identical to what AlignLoForTx used
+        // to drag the shared LO to — so the carrier lands on exactly the same
+        // VFO-B frequency it did before, just via the independent DUC. Both the
+        // DUC NCO (byte 329) and the alex TX low-pass derive from this, so they
+        // always agree.
+        bool splitTxToVfoB = s.TxVfo == TxVfo.B && s.Rx2Enabled;
+        p2?.SetTxDucFrequency(
+            splitTxToVfoB ? CwOffset.EffectiveLoHz(s.Mode, RadioService.TxFrequencyHz(s)) : 0);
+
         // Issue #597 Phase 0: arm the RX display fast-attack when the LO
         // moves. First callback after construction only records the LO
         // (sentinel) so connect itself doesn't trigger a pointless arm.

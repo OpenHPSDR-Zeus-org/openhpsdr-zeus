@@ -158,6 +158,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // accessed ints/uints. _rx2Enabled: 0 = off, 1 = on.
     private int _rx2Enabled;
     private uint _rx2FreqHz = 7_100_000;
+    // TX DUC NCO frequency. Normally tracks _rxFreqHz (the shared RX0/TX LO) so
+    // the TX carrier lands at the RX0 frequency — byte-identical to the historic
+    // single-frequency model. For dual-RX split TX (TX VFO = B with RX2 on) the
+    // hosting layer sets this INDEPENDENTLY to VFO B's effective LO via
+    // SetTxDucFrequency, so the TX carrier goes to VFO B WITHOUT dragging RX0/RX1
+    // off VFO A (the dual-RX TUNE "two carriers, one on each RX" bug).
+    // _txDucIndependent latches that override; it is cleared when split ends so
+    // the DUC follows RX0 again.
+    private uint _txDucFreqHz = 14_200_000;
+    private volatile bool _txDucIndependent;
     // Per-source-port IQ packet rate (packets in the last completed ~1 s
     // window) for UDP ports RxDataPortBase..RxDataPortBase+MaxRxDdc-1 (1035..1042)
     // → index 0..7 → DDC 0..7. Written by the single RX thread on each window
@@ -624,10 +634,41 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // (`rxPhase = _rxFreqHz * HzToPhase`).
         long corrected = (long)Math.Round(hz * factor, MidpointRounding.AwayFromZero);
         _rxFreqHz = (uint)Math.Clamp(corrected, 0L, uint.MaxValue);
+        // The TX DUC follows RX0 unless an independent split-TX freq is latched.
+        if (!_txDucIndependent) _txDucFreqHz = _rxFreqHz;
         var running = _rxTask is not null;
         _log.LogInformation("p2.tune hz={Hz} running={Running} hpSeq={Seq}",
             _rxFreqHz, running, _seqCmdHp);
         if (running) SendCmdHighPriority(run: true);
+    }
+
+    /// <summary>
+    /// Set the TX DUC NCO frequency independently of the shared RX0/TX LO. Used
+    /// for dual-RX split TX (TX VFO = B with RX2 enabled): the TX carrier must
+    /// land on VFO B while RX1 keeps receiving VFO A, so the TX DUC can no longer
+    /// be tied to RX0's frequency. <paramref name="hz"/> &lt;= 0 clears the
+    /// override and the DUC follows RX0 again (the non-split / single-VFO model,
+    /// byte-identical to before). Applies the same host-side frequency correction
+    /// as <see cref="SetVfoAHz"/>. Re-sends the high-priority packet when live.
+    /// </summary>
+    public void SetTxDucFrequency(long hz)
+    {
+        if (hz <= 0)
+        {
+            if (!_txDucIndependent && _txDucFreqHz == _rxFreqHz) return;
+            _txDucIndependent = false;
+            _txDucFreqHz = _rxFreqHz;
+        }
+        else
+        {
+            double factor = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _freqCorrectionBits));
+            long corrected = (long)Math.Round(hz * factor, MidpointRounding.AwayFromZero);
+            uint next = (uint)Math.Clamp(corrected, 0L, uint.MaxValue);
+            if (_txDucIndependent && _txDucFreqHz == next) return;
+            _txDucFreqHz = next;
+            _txDucIndependent = true;
+        }
+        if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
     /// <summary>
@@ -716,6 +757,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// <see cref="FrequencyCorrectionFactor"/>.
     /// </summary>
     internal uint CorrectedRxFreqHzForTesting => _rxFreqHz;
+
+    /// <summary>Test accessor: the (correction-applied) TX DUC NCO frequency.</summary>
+    internal uint TxDucFreqHzForTesting => _txDucFreqHz;
+
+    /// <summary>Test accessor: whether the TX DUC is on the independent split-TX override.</summary>
+    internal bool TxDucIndependentForTesting => _txDucIndependent;
 
     public void SetSampleRateKhz(int rateKhz)
     {
@@ -1811,7 +1858,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         uint rxPhase = (uint)(_rxFreqHz * HzToPhase);
         int rxDdc = RxBaseDdc(_boardKind);
         WriteBeU32(p, 9 + rxDdc * 4, rxPhase);
-        WriteBeU32(p, 329, rxPhase);
+        // TX DUC NCO phase. Normally _txDucFreqHz == _rxFreqHz, so this is
+        // identical to rxPhase (DUC follows RX0). For dual-RX split TX it is set
+        // independently to VFO B (SetTxDucFrequency), so the carrier lands on B
+        // while the RX0 DDC above stays on VFO A — fixing the two-carrier bug.
+        WriteBeU32(p, 329, (uint)(_txDucFreqHz * HzToPhase));
 
         // Second receiver (RX2): tune its own DDC's NCO to _rx2FreqHz so it
         // demodulates an independent band. Each DDC's phase word lives at
@@ -1914,7 +1965,17 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         int alex0AntWire = (xmit || _rxAuxInput != 0)
             ? txAntWire
             : ((_rxAntenna is 1 or 2 or 3) ? _rxAntenna : 1);
-        uint alex0Common = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: txAntWire, board: _boardKind);
+        // TX low-pass filter source. The alex LPF on BOTH words is a TX-path
+        // filter and MUST follow the TX frequency, not RX1. _txDucFreqHz is the
+        // TX-freq source of truth (== _rxFreqHz when not split, == VFO B for
+        // dual-RX split TX). During RX the LPF is inert (TX relay open), so leave
+        // it on _rxFreqHz to keep the non-TX wire byte-identical. WITHOUT this,
+        // dual-RX split TX — where _rxFreqHz stays on VFO A while the DUC moves to
+        // VFO B — left the TX LPF on the RX1 band and the filter board rejected
+        // the VFO-B carrier, so there was NO RF output on a different band.
+        uint txLpfFreqHz = xmit ? _txDucFreqHz : _rxFreqHz;
+        // alex0 BPF follows RX1 (_rxFreqHz); LPF follows the TX freq.
+        uint alex0Common = ComputeAlexWord(_rxFreqHz, txLpfFreqHz, txAnt: txAntWire, board: _boardKind);
         // alex1 keeps the TX antenna from txAntWire; alex0 swaps in the
         // state-correct antenna (clear [26:24], re-OR via the shared encoder).
         uint alex0 = (alex0Common & ~ALEX_TX_ANTENNA_MASK) | EncodeTxAntennaBits(alex0AntWire)
@@ -1922,6 +1983,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         uint alex1 = ComposeAlex1Word(
             _rxFreqHz,
             _rx2FreqHz,
+            txLpfFreqHz,
             rx2Enabled,
             xmit,
             _psFeedbackEnabled,
@@ -2075,17 +2137,37 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     internal static uint ComposeAlex1Word(
         uint rxFreqHz,
         uint rx2FreqHz,
+        uint txLpfFreqHz,
         bool rx2Enabled,
         bool moxOn,
         bool psEnabled,
         HpsdrBoardKind board = HpsdrBoardKind.OrionMkII,
         int txAntWire = 1)
     {
-        uint rx2FilterFreqHz = rx2Enabled ? rx2FreqHz : rxFreqHz;
+        // The alex1 word carries TWO independent filter selections that must NOT
+        // share a frequency when RX2 / the TX VFO sit on different bands:
+        //   • BPF (ComputeAlexWord's 1st arg) = the RX2 RECEIVE preselector —
+        //     follows RX2's band when RX2 is enabled, else RX1.
+        //   • LPF (2nd arg) = the TX LOW-PASS filter. Per pihpsdr
+        //     (new_protocol.c) the LPF is a TX-path filter carried on BOTH alex
+        //     words during TX, so it MUST follow the TX frequency, exactly like
+        //     alex0. <paramref name="txLpfFreqHz"/> is the TX-freq source of truth
+        //     (== RX1 when not split, == VFO B for dual-RX split TX).
+        // History: the original code computed BOTH from RX2's frequency, so with
+        // RX2 on a different band the alex1 LPF rejected the TX carrier (no RF).
+        // The first fix used RX1's freq for the LPF, which is correct ONLY while
+        // the TX shares RX1's LO; for dual-RX split TX (where RX1 stays on VFO A
+        // and the TX DUC moves to VFO B independently) the LPF must follow the TX
+        // freq explicitly — hence the dedicated txLpfFreqHz argument.
+        //
+        // During RX the LPF is inert (TX relay open); the caller passes RX1's
+        // freq then so the alex1 word stays byte-identical outside of transmit.
+        uint rx2BpfFreqHz = rx2Enabled ? rx2FreqHz : rxFreqHz;
+        uint lpfFreqHz = moxOn ? txLpfFreqHz : rx2BpfFreqHz;
         // alex1 ALWAYS reflects the TX antenna (external-ports plan — antenna
         // slice, #804) — it never carries the RX antenna, so the TX-antenna
         // selector is threaded straight through here.
-        uint alex1 = ComputeAlexWord(rx2FilterFreqHz, rx2FilterFreqHz, txAnt: txAntWire, board: board);
+        uint alex1 = ComputeAlexWord(rx2BpfFreqHz, lpfFreqHz, txAnt: txAntWire, board: board);
         if (moxOn) alex1 |= ALEX_TX_RELAY | ALEX1_ANAN7000_RX_GNDonTX;
         if (psEnabled) alex1 |= AlexPsBit;
         return alex1;

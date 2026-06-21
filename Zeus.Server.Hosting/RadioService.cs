@@ -1201,6 +1201,16 @@ public sealed class RadioService : IDisposable
         long currentLo;
         lock (_sync)
         {
+            // Dual-RX split TX on Protocol 2: the TX carrier is placed by the
+            // INDEPENDENT TX DUC (DspPipelineService.OnRadioStateChanged →
+            // Protocol2Client.SetTxDucFrequency), not by dragging the shared
+            // RX0/TX LO. Dragging the LO here pulled RX1 off VFO A onto VFO B, so
+            // the tune carrier showed on BOTH receivers (the two-carrier bug).
+            // Skip the drag for this case; CTUN and P1 split still drag (P1 has
+            // no independent DUC, and CTUN must move the shared LO).
+            if (_state.TxVfo == TxVfo.B && _state.Rx2Enabled
+                && ConnectedBoardKind == HpsdrBoardKind.OrionMkII)
+                return false;
             if (!_state.CtunEnabled && _state.TxVfo != TxVfo.B) return false;
             vfo = TxFrequencyHz(_state);
             mode = _state.Mode;
