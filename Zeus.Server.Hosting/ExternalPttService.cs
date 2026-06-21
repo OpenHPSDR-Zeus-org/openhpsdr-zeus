@@ -162,13 +162,16 @@ public sealed class ExternalPttService : IHostedService, IDisposable
         bool tunOn = _tx.IsTunOn;
         bool twoToneOn = _tx.IsTwoToneOn;
         string? owner = _tx.MoxOwner?.ToString();
+        bool enabled = _settings.Get();
         string recommendation = !available
             ? "No hardware PTT client is attached; external PTT takeover is idle."
             : owned
                 ? "External PTT owns MOX through the hardware source path; falling edges release only hardware-owned transmissions after hang time."
-                : hardwarePtt == true && !moxOn
-                    ? "Hardware PTT is asserted but MOX is not active; check connection state, band guard, and TX interlocks."
-                    : "External PTT takeover is armed and read-only diagnostics are live.";
+                : !enabled
+                    ? "Hardware PTT-IN is read-only: the lamp tracks the footswitch, but PTT-IN will not key MOX until enabled in Radio Settings."
+                    : hardwarePtt == true && !moxOn
+                        ? "Hardware PTT is asserted but MOX is not active; check connection state, band guard, and TX interlocks."
+                        : "External PTT takeover is armed and read-only diagnostics are live.";
 
         return new(
             SchemaVersion: 1,
@@ -186,7 +189,7 @@ public sealed class ExternalPttService : IHostedService, IDisposable
             SidetoneAvailable: _sidetone is not null,
             DiagnosticRecommendation: recommendation,
             GeneratedUtc: DateTimeOffset.UtcNow,
-            Enabled: _settings.Get());
+            Enabled: enabled);
     }
 
     private void OnConnected(IProtocol1Client client)
@@ -363,6 +366,11 @@ public sealed class ExternalPttService : IHostedService, IDisposable
     /// full shared engine (lamp + gated MOX promotion). Mirrors what
     /// <see cref="OnHardwarePttChanged"/> does for a live P1 client.</summary>
     internal void TestRawPttP1(bool on) => OnHardwarePttChanged(on);
+
+    /// <summary>Test seam: simulate a P2 client connect, exactly as the
+    /// RadioService.P2Connected event would (so Snapshot reports the P2
+    /// client + protocol). Mirrors <see cref="OnP2Connected"/>.</summary>
+    internal void TestP2Connect(Zeus.Protocol2.Protocol2Client client) => OnP2Connected(client);
 
     /// <summary>Test seam: feed a P2 hi-priority telemetry sample through the
     /// level→edge derivation and the shared engine, exactly as a live
