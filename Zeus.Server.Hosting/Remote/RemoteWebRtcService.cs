@@ -14,12 +14,16 @@ public sealed class RemoteWebRtcService
 {
     private readonly RemotePasswordStore _passwords;
     private readonly ILogger<RemoteWebRtcService> _log;
+    private readonly Zeus.Server.StreamingHub? _hub;
     private readonly ConcurrentDictionary<Guid, RemoteWebRtcSession> _sessions = new();
 
-    public RemoteWebRtcService(RemotePasswordStore passwords, ILogger<RemoteWebRtcService> log)
+    public RemoteWebRtcService(
+        RemotePasswordStore passwords, ILogger<RemoteWebRtcService> log,
+        Zeus.Server.StreamingHub? hub = null)
     {
         _passwords = passwords;
         _log = log;
+        _hub = hub;
     }
 
     /// <summary>Whether remote access can be offered at all (a password is set).</summary>
@@ -37,7 +41,7 @@ public sealed class RemoteWebRtcService
             ?? throw new RemoteAccessDisabledException();
 
         var id = Guid.NewGuid();
-        var session = new RemoteWebRtcSession(verifier, _log, IceServers());
+        var session = new RemoteWebRtcSession(verifier, _log, IceServers(), _hub);
         _sessions[id] = session;
         session.Closed += () =>
         {
