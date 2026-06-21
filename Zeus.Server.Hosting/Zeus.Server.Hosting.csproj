@@ -47,6 +47,7 @@
 
   <ItemGroup>
     <PackageReference Include="LiteDB" Version="5.0.20" />
+    <PackageReference Include="SIPSorcery" Version="10.0.10" />
   </ItemGroup>
 
   <!-- WDSP NR2 EMNR fopen()s these by bare relative name (native/wdsp/emnr.c:215,397).

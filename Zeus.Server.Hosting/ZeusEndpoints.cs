@@ -2735,6 +2735,26 @@ public static class ZeusEndpoints
             await hub.AttachClientAsync(ws, ctx.RequestAborted);
         });
 
+        // -- WebRTC data-plane spike (Phase 0) --------------------------------
+        // Dev-only: inert unless ZEUS_RTC_SPIKE=1. Answers a browser SDP offer
+        // and echoes binary DataChannel messages so we can measure real
+        // browser↔Zeus.Server round-trip latency. See zeus-web/public/rtc-spike.html
+        // and docs/designs/remote-access-webrtc.md. NOT the production transport.
+        if (Environment.GetEnvironmentVariable("ZEUS_RTC_SPIKE") == "1")
+        {
+            log.LogWarning("rtc.spike endpoint ENABLED (/api/rtc/spike/offer) — dev only");
+            app.MapPost("/api/rtc/spike/offer",
+                async (Zeus.Server.Hosting.Remote.RtcSpikeOffer req,
+                       Zeus.Server.Hosting.Remote.WebRtcSpikeService rtc,
+                       CancellationToken ct) =>
+                {
+                    if (string.IsNullOrWhiteSpace(req?.Sdp))
+                        return Results.BadRequest(new { error = "sdp required" });
+                    var answerSdp = await rtc.CreateEchoAnswerAsync(req.Sdp, ct);
+                    return Results.Ok(new { sdp = answerSdp, type = "answer" });
+                });
+        }
+
         // -- HamClock embed (optional Node sidecar; see HamClockService) -----
         // Inert until the operator installs it from Settings → HamClock. The
         // <iframe> in HamClockWindow points at the sidecar's own port (status
