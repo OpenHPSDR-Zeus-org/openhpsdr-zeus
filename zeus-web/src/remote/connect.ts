@@ -26,6 +26,12 @@ const DEFAULT_STUN: RTCIceServer[] = [{ urls: 'stun:stun.cloudflare.com:3478' }]
 export interface RemoteConnection {
   pc: RTCPeerConnection;
   frames: RTCDataChannel;
+  /**
+   * The reliable, ordered control channel. After unlock it also carries the
+   * 2-byte stream-request control frames (0x21 audio / 0x22 display) the client
+   * sends to enable RX egress — see setRemoteControlSender in ws-client.ts.
+   */
+  control: RTCDataChannel;
   close(): void;
 }
 
@@ -147,7 +153,7 @@ async function establish(
   await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
 
   await unlocked;
-  return { pc, frames, close: () => pc.close() };
+  return { pc, frames, control, close: () => pc.close() };
 }
 
 // --- signalling transports -------------------------------------------------

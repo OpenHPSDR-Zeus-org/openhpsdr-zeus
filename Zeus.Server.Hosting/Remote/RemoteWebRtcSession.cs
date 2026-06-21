@@ -33,6 +33,15 @@ public sealed class RemoteWebRtcSession
     private RTCDataChannel? _frames;
     private RemoteFrameSink? _sink;
 
+    // Post-unlock binary stream-request control frames (RX monitoring, Phase A):
+    //   first byte 0x22 = display request, 0x21 = audio request; byte[1] 1/0 = enable/disable.
+    // We track the session's current wanted-state so a duplicate enable can't
+    // double-count the hub's global gate and a disconnect always unwinds it.
+    private const byte MsgTypeAudioStreamRequest = 0x21;
+    private const byte MsgTypeDisplayStreamRequest = 0x22;
+    private bool _wantsDisplay;
+    private bool _wantsAudio;
+
     public RemoteWebRtcSession(
         RemoteVerifierMaterial verifier, ILogger log,
         IReadOnlyList<RTCIceServer>? iceServers = null, Zeus.Server.StreamingHub? hub = null)
@@ -101,7 +110,15 @@ public sealed class RemoteWebRtcSession
     {
         if (Interlocked.Exchange(ref _closed, 1) != 0) return;
         _session.Close();
-        if (_hub is not null) _hub.DetachSink(_sinkId);
+        if (_hub is not null)
+        {
+            // Release any RX display/audio request still held so a remote
+            // disconnect can't pin the global gates on (mirrors the /ws
+            // ClientSession cleanup in StreamingHub.AttachClientAsync).
+            if (_wantsDisplay) { _wantsDisplay = false; _hub.AdjustDisplayRequests(-1); }
+            if (_wantsAudio) { _wantsAudio = false; _hub.AdjustAudioRequests(-1); }
+            _hub.DetachSink(_sinkId);
+        }
         _sink?.Dispose();
         try { _pc.close(); } catch { /* already torn down */ }
         Closed?.Invoke();
@@ -116,7 +133,7 @@ public sealed class RemoteWebRtcSession
                 // Client-initiated: it sends {t:"hello"} once its channel opens
                 // and we reply with auth-params. Avoids depending on the
                 // answerer-side onopen firing.
-                dc.onmessage += (_, _, data) => _ = HandleControlAsync(data);
+                dc.onmessage += (_, _, data) => OnControlMessage(data);
                 break;
             case "frames":
                 _frames = dc;
@@ -137,6 +154,53 @@ public sealed class RemoteWebRtcSession
             memoryKib = _verifier.MemoryKib,
             parallelism = _verifier.Parallelism,
         }));
+    }
+
+    /// <summary>
+    /// Split control-channel input: pre-unlock and JSON auth messages go to the
+    /// SPAKE2+ gate; post-unlock binary stream-request frames (0x21/0x22) drive
+    /// the RX display/audio gates. The two are unambiguous on the wire — auth is
+    /// always JSON (first byte '{' = 0x7B), stream-requests lead with 0x21/0x22,
+    /// so a 0x21/0x22 first byte is treated as binary control, never JSON.
+    /// Deny-by-default: binary control is honoured ONLY after unlock; anything
+    /// non-auth while LOCKED still fails the session closed via HandleControlAsync.
+    /// </summary>
+    private void OnControlMessage(byte[] data)
+    {
+        if (_session.IsUnlocked
+            && data.Length >= 1
+            && data[0] is MsgTypeDisplayStreamRequest or MsgTypeAudioStreamRequest)
+        {
+            HandleStreamRequest(data);
+            return;
+        }
+
+        _ = HandleControlAsync(data);
+    }
+
+    /// <summary>
+    /// Apply a post-unlock binary stream-request frame: [type][enable:u8].
+    /// 0x22 toggles the display gate, 0x21 the audio gate. Tracks the session's
+    /// current wanted-state so the hub's global counter moves at most once per
+    /// transition (and Close can unwind it exactly).
+    /// </summary>
+    private void HandleStreamRequest(byte[] data)
+    {
+        if (_hub is null) return;
+        bool enable = data.Length > 1 && data[1] != 0;
+        switch (data[0])
+        {
+            case MsgTypeDisplayStreamRequest:
+                if (enable == _wantsDisplay) return;
+                _wantsDisplay = enable;
+                _hub.AdjustDisplayRequests(enable ? 1 : -1);
+                break;
+            case MsgTypeAudioStreamRequest:
+                if (enable == _wantsAudio) return;
+                _wantsAudio = enable;
+                _hub.AdjustAudioRequests(enable ? 1 : -1);
+                break;
+        }
     }
 
     private async Task HandleControlAsync(byte[] data)

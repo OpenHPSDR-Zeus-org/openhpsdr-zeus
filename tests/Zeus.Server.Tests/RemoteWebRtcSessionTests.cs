@@ -84,11 +84,90 @@ public sealed class RemoteWebRtcSessionTests
 
         // A normal hub broadcast (always-on RX meter, 5 bytes) reaches the remote
         // client through the StreamingHub fan-out → RemoteFrameSink → frames channel.
-        hub.Broadcast(new Zeus.Contracts.RxMeterFrame(-73.0f));
-        var received = await client.NextFrame().WaitAsync(TimeSpan.FromSeconds(5));
+        // Re-broadcast on a loop (mirroring the real 5–60 Hz frame flow) so the
+        // RemoteFrameSink attach-race + async hop can't time the single send out
+        // on a slow/loaded CI runner — TrySetResult is a no-op once resolved.
+        var received = await BroadcastUntilReceived(
+            client, () => hub.Broadcast(new Zeus.Contracts.RxMeterFrame(-73.0f)));
 
         Assert.Equal(5, received.Length);
         server.Close();
+    }
+
+    [Fact]
+    public async Task DisplayRequest_OpensGate_AndDisplayFrameReachesRemotePeer()
+    {
+        var hub = new Zeus.Server.StreamingHub(NullLogger<Zeus.Server.StreamingHub>.Instance);
+        var server = new RemoteWebRtcSession(RegisterVerifier(Password), NullLogger.Instance, hub: hub);
+        await using var client = new ProverClient(Password);
+
+        var answer = await server.CreateAnswerAsync(await client.CreateOfferAsync());
+        await client.AcceptAnswerAsync(answer);
+        await client.Unlocked.WaitAsync(TimeSpan.FromSeconds(20));
+        Assert.True(server.IsUnlocked);
+
+        // The display gate starts closed, so a DisplayFrame broadcast is dropped.
+        Assert.False(hub.DisplayStreamRequested);
+
+        // Client asks for the RX display stream over the control channel (0x22 01).
+        client.SendControlBinary(new byte[] { 0x22, 0x01 });
+
+        // The hub's global display gate must open (the remote session bumped it).
+        await WaitForAsync(() => hub.DisplayStreamRequested, TimeSpan.FromSeconds(5));
+        Assert.True(hub.DisplayStreamRequested);
+
+        // A DisplayFrame broadcast now fans out through RemoteFrameSink → frames
+        // channel and reaches the remote peer. Re-broadcast on a loop so the
+        // sink attach-race + async hop can't time out on a slow CI runner.
+        const ushort width = 4;
+        var pan = new float[width] { -100f, -90f, -80f, -70f };
+        var wf = new float[width] { -100f, -90f, -80f, -70f };
+        var frame = new Zeus.Contracts.DisplayFrame(
+            Seq: 1,
+            TsUnixMs: 0,
+            RxId: 0,
+            BodyFlags: Zeus.Contracts.DisplayBodyFlags.PanValid | Zeus.Contracts.DisplayBodyFlags.WfValid,
+            Width: width,
+            CenterHz: 14_200_000,
+            HzPerPixel: 1f,
+            PanDb: pan,
+            WfDb: wf);
+        var received = await BroadcastUntilReceived(client, () => hub.Broadcast(frame));
+        Assert.NotEmpty(received);
+
+        // Closing the session unwinds the gate it opened — no pinned display.
+        server.Close();
+        await WaitForAsync(() => !hub.DisplayStreamRequested, TimeSpan.FromSeconds(5));
+        Assert.False(hub.DisplayStreamRequested);
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition()) return;
+            await Task.Delay(20);
+        }
+    }
+
+    /// <summary>
+    /// Drive <paramref name="broadcast"/> repeatedly (≈10 Hz, ≤15 s) until the
+    /// client's next-frame task completes, then return the received bytes. This
+    /// mirrors the real radio's continuous frame flow and removes both the
+    /// RemoteFrameSink attach-race and the single-shot latency-timeout fragility
+    /// that flakes on slow/loaded CI runners. Re-firing is safe — the prover's
+    /// frame TCS uses TrySetResult, so a late frame still resolves the await.
+    /// </summary>
+    private static async Task<byte[]> BroadcastUntilReceived(ProverClient client, Action broadcast)
+    {
+        var next = client.NextFrame();
+        for (int i = 0; i < 150 && !next.IsCompleted; i++)
+        {
+            broadcast();
+            await Task.WhenAny(next, Task.Delay(100));
+        }
+        return await next.WaitAsync(TimeSpan.FromSeconds(1));
     }
 
     /// <summary>Minimal in-process SPAKE2+ prover over WebRTC — what the browser will do.</summary>
@@ -119,6 +198,9 @@ public sealed class RemoteWebRtcSessionTests
 
         public Task Unlocked => _unlocked.Task;
         public Task<byte[]> NextFrame() => _frame.Task;
+
+        /// <summary>Send a raw binary control frame (post-unlock stream-request, e.g. 0x22 01).</summary>
+        public void SendControlBinary(byte[] frame) => _control.send(frame);
 
         public async Task<string> CreateOfferAsync()
         {
