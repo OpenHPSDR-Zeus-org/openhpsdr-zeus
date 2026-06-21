@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -141,6 +142,137 @@ public sealed class RemoteWebRtcSessionTests
         Assert.False(hub.DisplayStreamRequested);
     }
 
+    // -- Read-only API tunnel ------------------------------------------------
+
+    private const string LoopbackBase = "http://127.0.0.1:6060";
+
+    private static RemoteWebRtcSession ApiSession(
+        StubHttpClientFactory factory, out RemoteWebRtcSession session)
+    {
+        session = new RemoteWebRtcSession(
+            RegisterVerifier(Password), NullLogger.Instance,
+            iceServers: null, hub: null, httpFactory: factory, loopbackBaseUrl: LoopbackBase);
+        return session;
+    }
+
+    private static async Task UnlockAsync(RemoteWebRtcSession server, ProverClient client)
+    {
+        var answer = await server.CreateAnswerAsync(await client.CreateOfferAsync());
+        await client.AcceptAnswerAsync(answer);
+        await client.Unlocked.WaitAsync(TimeSpan.FromSeconds(20));
+        Assert.True(server.IsUnlocked);
+    }
+
+    [Fact]
+    public async Task PostUnlock_TunneledGet_ReachesLoopback_AndResponseReturns()
+    {
+        var factory = new StubHttpClientFactory((req) =>
+        {
+            // Proves the request hit loopback at the right URL with GET.
+            Assert.Equal(HttpMethod.Get, req.Method);
+            Assert.Equal($"{LoopbackBase}/api/state", req.RequestUri!.ToString());
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"vfoA\":14200000}", Encoding.UTF8, "application/json"),
+            };
+        });
+        ApiSession(factory, out var server);
+        await using var client = new ProverClient(Password);
+        await UnlockAsync(server, client);
+
+        var replyJson = await SendApiUntilReply(client, 7, "GET", "/api/state");
+        using var doc = JsonDocument.Parse(replyJson);
+        Assert.Equal(7, doc.RootElement.GetProperty("id").GetInt32());
+        Assert.Equal(200, doc.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal("{\"vfoA\":14200000}", doc.RootElement.GetProperty("body").GetString());
+        Assert.Equal(1, factory.CallCount);
+
+        server.Close();
+    }
+
+    [Fact]
+    public async Task PostUnlock_NonGet_Refused405_WithoutTouchingLoopback()
+    {
+        var factory = new StubHttpClientFactory(_ =>
+            throw new InvalidOperationException("loopback must NOT be called for a non-GET"));
+        ApiSession(factory, out var server);
+        await using var client = new ProverClient(Password);
+        await UnlockAsync(server, client);
+
+        var replyJson = await SendApiUntilReply(client, 3, "POST", "/api/state");
+        using var doc = JsonDocument.Parse(replyJson);
+        Assert.Equal(405, doc.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal(0, factory.CallCount); // read-only: never reached the radio
+
+        server.Close();
+    }
+
+    [Fact]
+    public async Task PostUnlock_DenylistedPath_Refused403_WithoutTouchingLoopback()
+    {
+        var factory = new StubHttpClientFactory(_ =>
+            throw new InvalidOperationException("loopback must NOT be called for a denied path"));
+        ApiSession(factory, out var server);
+        await using var client = new ProverClient(Password);
+        await UnlockAsync(server, client);
+
+        // Prefs DB export is a denylisted secret-exfiltration path.
+        var replyJson = await SendApiUntilReply(
+            client, 9, "GET", "/api/prefs/databases/export?relativePath=zeus-prefs.db");
+        using var doc = JsonDocument.Parse(replyJson);
+        Assert.Equal(403, doc.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal(0, factory.CallCount);
+
+        server.Close();
+    }
+
+    [Fact]
+    public async Task PreUnlock_ApiInput_DoesNothing()
+    {
+        var factory = new StubHttpClientFactory(_ =>
+            throw new InvalidOperationException("loopback must NOT be called before unlock"));
+        ApiSession(factory, out var server);
+        // LockedClient never runs the SPAKE2+ handshake, so the session stays
+        // LOCKED — exactly the deny-by-default condition under test.
+        await using var client = new LockedApiClient();
+
+        var answer = await server.CreateAnswerAsync(await client.CreateOfferAsync());
+        await client.AcceptAnswerAsync(answer);
+        await WaitForAsync(() => client.ApiChannelOpen, TimeSpan.FromSeconds(10));
+        Assert.False(server.IsUnlocked);
+
+        // Fire an API request while still LOCKED — it must be ignored entirely:
+        // no loopback call, and no reply ever arrives.
+        var reply = client.NextApiReply();
+        client.SendApiRaw(JsonSerializer.Serialize(new { id = 1, method = "GET", path = "/api/state" }));
+
+        var completed = await Task.WhenAny(reply, Task.Delay(TimeSpan.FromSeconds(2)));
+        Assert.NotSame(reply, completed); // timed out → no reply (fail-closed)
+        Assert.False(server.IsUnlocked);
+        Assert.Equal(0, factory.CallCount);
+
+        server.Close();
+    }
+
+    /// <summary>
+    /// Send a tunnelled API request, re-firing until a reply lands (≤15 s),
+    /// mirroring BroadcastUntilReceived's hardening against the data-channel
+    /// attach-race + async hop on slow CI runners. The server replies per id, so
+    /// a duplicate send is harmless (the prover keeps the latest reply slot).
+    /// </summary>
+    private static async Task<string> SendApiUntilReply(
+        ProverClient client, int id, string method, string path)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (true)
+        {
+            var reply = client.SendApiRequest(id, method, path);
+            var done = await Task.WhenAny(reply, Task.Delay(250));
+            if (done == reply) return await reply;
+            if (DateTime.UtcNow > deadline) return await reply.WaitAsync(TimeSpan.FromSeconds(1));
+        }
+    }
+
     private static async Task WaitForAsync(Func<bool> condition, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -177,6 +309,7 @@ public sealed class RemoteWebRtcSessionTests
         private readonly RTCPeerConnection _pc;
         private readonly RTCDataChannel _control;
         private readonly RTCDataChannel _frames;
+        private readonly RTCDataChannel _api;
         private readonly Spake2Plus _prover = new(
             Spake2Role.Prover, RemoteAuthConstants.Context,
             RemoteAuthConstants.IdProver, RemoteAuthConstants.IdVerifier);
@@ -184,6 +317,7 @@ public sealed class RemoteWebRtcSessionTests
 
         private readonly TaskCompletionSource _unlocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private TaskCompletionSource<byte[]> _frame = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource<string> _apiReply = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public ProverClient(string password)
         {
@@ -191,16 +325,37 @@ public sealed class RemoteWebRtcSessionTests
             _pc = new RTCPeerConnection(new RTCConfiguration { iceServers = new List<RTCIceServer>() });
             _control = _pc.createDataChannel("control").Result;
             _frames = _pc.createDataChannel("frames").Result; // reliable for test determinism
+            _api = _pc.createDataChannel("api").Result;        // read-only REST tunnel
             _control.onopen += () => _control.send("{\"t\":\"hello\"}");
             _control.onmessage += (_, _, data) => _ = HandleControlAsync(data);
             _frames.onmessage += (_, _, data) => _frame.TrySetResult(data);
+            _api.onmessage += (_, _, data) => _apiReply.TrySetResult(Encoding.UTF8.GetString(data));
         }
 
         public Task Unlocked => _unlocked.Task;
         public Task<byte[]> NextFrame() => _frame.Task;
+        public bool ApiChannelOpen => _api.readyState == RTCDataChannelState.open;
 
         /// <summary>Send a raw binary control frame (post-unlock stream-request, e.g. 0x22 01).</summary>
         public void SendControlBinary(byte[] frame) => _control.send(frame);
+
+        /// <summary>Send a read-only API tunnel request {id, method, path} and await the next reply JSON.</summary>
+        public Task<string> SendApiRequest(int id, string method, string path)
+        {
+            _apiReply = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _api.send(JsonSerializer.Serialize(new { id, method, path }));
+            return _apiReply.Task;
+        }
+
+        /// <summary>Send a raw API message without resetting the reply slot (for pre-unlock no-op checks).</summary>
+        public void SendApiRaw(string json) => _api.send(json);
+
+        /// <summary>The next API reply that arrives (resets the slot), without sending anything.</summary>
+        public Task<string> NextApiReply()
+        {
+            _apiReply = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            return _apiReply.Task;
+        }
 
         public async Task<string> CreateOfferAsync()
         {
@@ -286,6 +441,101 @@ public sealed class RemoteWebRtcSessionTests
                     await tcs.Task.ConfigureAwait(false);
             }
             finally { _pc.onicegatheringstatechange -= OnChange; }
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            try { _pc.close(); } catch { /* ignore */ }
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// In-test <see cref="IHttpClientFactory"/> whose clients run a stub handler —
+    /// the loopback seam required by the task (no real radio / Kestrel). The
+    /// handler delegate decides each response and CallCount lets a test assert
+    /// loopback was (or, for 405/403, was NOT) reached.
+    /// </summary>
+    private sealed class StubHttpClientFactory : IHttpClientFactory
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _respond;
+        public int CallCount { get; private set; }
+
+        public StubHttpClientFactory(Func<HttpRequestMessage, HttpResponseMessage> respond)
+            => _respond = respond;
+
+        public HttpClient CreateClient(string name) => new(new StubHandler(this));
+
+        private sealed class StubHandler(StubHttpClientFactory owner) : HttpMessageHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                owner.CallCount++;
+                return Task.FromResult(owner._respond(request));
+            }
+        }
+    }
+
+    /// <summary>
+    /// A peer that opens the control + api channels but deliberately NEVER runs
+    /// the SPAKE2+ handshake, so the server session stays LOCKED. Used to prove
+    /// pre-unlock API input is ignored (deny-by-default).
+    /// </summary>
+    private sealed class LockedApiClient : IAsyncDisposable
+    {
+        private readonly RTCPeerConnection _pc;
+        private readonly RTCDataChannel _control;
+        private readonly RTCDataChannel _api;
+        private TaskCompletionSource<string> _apiReply = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public LockedApiClient()
+        {
+            _pc = new RTCPeerConnection(new RTCConfiguration { iceServers = new List<RTCIceServer>() });
+            _control = _pc.createDataChannel("control").Result; // opened, but no hello/auth ever sent
+            _ = _pc.createDataChannel("frames").Result;
+            _api = _pc.createDataChannel("api").Result;
+            _api.onmessage += (_, _, data) => _apiReply.TrySetResult(Encoding.UTF8.GetString(data));
+        }
+
+        public bool ApiChannelOpen => _api.readyState == RTCDataChannelState.open;
+        public void SendApiRaw(string json) => _api.send(json);
+
+        public Task<string> NextApiReply()
+        {
+            _apiReply = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            return _apiReply.Task;
+        }
+
+        public async Task<string> CreateOfferAsync()
+        {
+            var offer = _pc.createOffer(null);
+            await _pc.setLocalDescription(offer);
+            if (_pc.iceGatheringState != RTCIceGatheringState.complete)
+            {
+                var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                void OnChange(RTCIceGatheringState s) { if (s == RTCIceGatheringState.complete) tcs.TrySetResult(); }
+                _pc.onicegatheringstatechange += OnChange;
+                try
+                {
+                    if (_pc.iceGatheringState != RTCIceGatheringState.complete)
+                    {
+                        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(750));
+                        await using (cts.Token.Register(() => tcs.TrySetResult()))
+                            await tcs.Task.ConfigureAwait(false);
+                    }
+                }
+                finally { _pc.onicegatheringstatechange -= OnChange; }
+            }
+            return _pc.localDescription.sdp.ToString();
+        }
+
+        public Task AcceptAnswerAsync(string answerSdp)
+        {
+            var r = _pc.setRemoteDescription(
+                new RTCSessionDescriptionInit { type = RTCSdpType.answer, sdp = answerSdp });
+            Assert.Equal(SetDescriptionResultEnum.OK, r);
+            return Task.CompletedTask;
         }
 
         public ValueTask DisposeAsync()

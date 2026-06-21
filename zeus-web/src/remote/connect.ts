@@ -32,6 +32,13 @@ export interface RemoteConnection {
    * sends to enable RX egress — see setRemoteControlSender in ws-client.ts.
    */
   control: RTCDataChannel;
+  /**
+   * The reliable, ordered API tunnel channel. After unlock it carries
+   * read-only (GET/HEAD) `/api/*` request/response pairs correlated by integer
+   * `id`, so the SPA's REST chrome (VFO/mode/band/capabilities/…) populates
+   * over WebRTC when there is no same-origin backend — see api-tunnel.ts.
+   */
+  api: RTCDataChannel;
   close(): void;
 }
 
@@ -103,6 +110,7 @@ async function establish(
   const pc = new RTCPeerConnection({ iceServers: opts.iceServers });
   const control = pc.createDataChannel('control'); // reliable, ordered
   const frames = pc.createDataChannel('frames', { ordered: false, maxRetransmits: 0 });
+  const api = pc.createDataChannel('api'); // reliable, ordered — read-only REST tunnel
   if (opts.onFrame) frames.onmessage = (e: MessageEvent) => opts.onFrame!(e.data as ArrayBuffer);
 
   const prover = new Spake2Plus('prover', CONTEXT, ID_PROVER, ID_VERIFIER);
@@ -153,7 +161,7 @@ async function establish(
   await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
 
   await unlocked;
-  return { pc, frames, control, close: () => pc.close() };
+  return { pc, frames, control, api, close: () => pc.close() };
 }
 
 // --- signalling transports -------------------------------------------------

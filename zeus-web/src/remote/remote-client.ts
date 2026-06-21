@@ -17,6 +17,7 @@
 // flows until connectViaBroker's SPAKE2+ password handshake unlocks.
 
 import { connectViaBroker, type RemoteConnection } from './connect';
+import { installApiTunnel, setApiChannel } from './api-tunnel';
 import {
   dispatchServerFrame,
   sendAudioStreamRequest,
@@ -40,6 +41,15 @@ export function isRemoteMode(): boolean {
   return getRemoteCallsign() !== null;
 }
 
+// Install the read-only /api/* fetch shim at module load — BEFORE the app's
+// mount effects fire their `/api/state` etc. requests. In remote mode there is
+// no same-origin backend, so those GETs must tunnel; the shim queues them until
+// the session unlocks and setApiChannel() flushes the queue. No-op outside
+// remote mode (the local /ws client uses the real same-origin backend).
+if (isRemoteMode()) {
+  installApiTunnel();
+}
+
 /**
  * Connect to the operator's radio via the broker, unlock with the supplied
  * password, then route the unlocked frame stream into the stores and request
@@ -59,6 +69,11 @@ export async function startRemoteClient(
     onFrame: (data) => dispatchServerFrame(data),
   });
 
+  // Hand the read-only API tunnel its live "api" channel so queued + future
+  // same-origin `/api/*` GETs flow to the radio's loopback Kestrel. The session
+  // is unlocked by the time connectViaBroker resolves (deny-by-default holds).
+  setApiChannel(conn.api);
+
   // Route the 2-byte stream-request control frames (0x21/0x22) over the WebRTC
   // control channel instead of the (absent) local websocket. Drop the override
   // and tear the session down if the peer connection dies.
@@ -74,6 +89,9 @@ export async function startRemoteClient(
     const s = conn.pc.connectionState;
     if (s === 'closed' || s === 'failed' || s === 'disconnected') {
       setRemoteControlSender(null);
+      // Clear the tunnel channel and fail pending API requests so the UI gets a
+      // network-style rejection rather than hanging on a dead session.
+      setApiChannel(null);
     }
   });
 
