@@ -4390,12 +4390,22 @@ public class DspPipelineService : BackgroundService,
             };
         }
 
+        // Pipeline's raw per-receiver WDSP channel ids (not gated on health
+        // emission like `channels` above). -1 = receiver not open. Lets the
+        // diagnostics distinguish "DDC streaming but no channel" (a wiring bug)
+        // from "channel open but starved".
+        var secondaryIds = new object[MaxReceivers - 1];
+        for (int i = 1; i < MaxReceivers; i++)
+            secondaryIds[i - 1] = new { receiverIndex = i, channelId = Volatile.Read(ref _secondaryRx[i].ChannelId) };
+
         return new
         {
             schemaVersion = 1,
             maxRxDdc = Zeus.Protocol2.Protocol2Client.MaxRxDdc,
             activeChannels = channels.Count,
             rxPortPacketRates = portRates,
+            primaryChannelId = Volatile.Read(ref _channelId),
+            secondaryRxChannelIds = secondaryIds,
             channels = channelDtos,
         };
     }
