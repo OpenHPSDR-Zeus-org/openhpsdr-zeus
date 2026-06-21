@@ -253,9 +253,8 @@ function WorkspaceCanvas({
   // otherwise return undefined and never re-resolve).
   const pluginPanels = usePluginPanels();
   const pluginPanelKey = pluginPanels.map((panel) => panel.panelId).join('\0');
-  // Track container height so rowHeight can shrink when the workspace is
-  // tight. Rows do not grow past the authored design density; extra viewport
-  // height stays on the workspace ground instead of stretching every panel.
+  // Track container height so the grid can be sized on first paint. Once the
+  // grid metrics are frozen (below) this only feeds the initial capture.
   const [containerHeight, setContainerHeight] = useState(0);
   const [gridInteraction, setGridInteraction] =
     useState<GridInteraction>(null);
@@ -272,6 +271,26 @@ function WorkspaceCanvas({
     ro.observe(el);
     return () => ro.disconnect();
   }, [containerRef]);
+
+  // Static-size workspace. Capture the grid's pixel metrics ONCE — at the first
+  // valid measurement — and hold them across every later window resize. The
+  // workspace then behaves like a fixed-size page: panels and grid rows keep the
+  // size they had when the page was laid out instead of scaling with the window.
+  // Subsequent container-size changes are intentionally ignored; if the window
+  // later shrinks below the frozen page, the canvas scrolls (see all-panels.css)
+  // rather than rescaling every panel. (A future enhancement spills overflow
+  // onto a new workspace instead of scrolling.)
+  const [frozen, setFrozen] = useState<{ width: number; height: number } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (frozen) return;
+    if (mounted && width > 0 && containerHeight > 0) {
+      setFrozen({ width, height: containerHeight });
+    }
+  }, [frozen, mounted, width, containerHeight]);
+  const gridWidth = frozen?.width ?? width;
+  const gridHeight = frozen?.height ?? containerHeight;
   // The workspace must NEVER show a scrollbar — it fits the viewport like a
   // hardware front panel. So the grid is fit-to-viewport: the cell size is
   // sized so the whole layout fits the container height.
@@ -310,14 +329,14 @@ function WorkspaceCanvas({
   const derived = useMemo(
     () =>
       deriveWorkspaceLayout(deriveTiles, {
-        containerHeight,
+        containerHeight: gridHeight,
         authoredRowHeightPx: WORKSPACE_ROW_HEIGHT_PX,
         gridMarginPx: WORKSPACE_GRID_MARGIN_PX,
         rowGapShare: WORKSPACE_ROW_GAP_SHARE,
         targetRows: WORKSPACE_TARGET_ROWS,
         minRowHeightPx: 0.1,
       }),
-    [deriveTiles, containerHeight],
+    [deriveTiles, gridHeight],
   );
   const { rowHeight, rowMargin } = derived;
 
@@ -545,7 +564,7 @@ function WorkspaceCanvas({
           className={`all-panels-grid${
             gridInteraction ? ' all-panels-grid--interacting' : ''
           }`}
-          width={width}
+          width={gridWidth}
           breakpoints={{ lg: 0 }}
           cols={{ lg: WORKSPACE_GRID_COLS }}
           rowHeight={rowHeight}
