@@ -46,6 +46,19 @@ export interface BoardCapabilities {
    *  PA Settings panel's DX OUT subsection renders unconditionally but
    *  disables itself when this flag is false. */
   supportsAnvelinaDxOc: boolean;
+  // ---- TX audio front-end (external-audio-jacks re-port) ----
+  /** Board decodes the host→radio audio STREAM (TLV320 codec). Gates the
+   *  Radio Mic source. False on Hermes-Lite 2 (no stream codec). */
+  hasOnboardCodec: boolean;
+  /** Hermes-Lite 2 0x14-frame mic front-end (inert plumbing in v1). */
+  hermesLite2MicFrontEnd: boolean;
+  /** Board has a switchable analog line-in jack (gates RadioLineIn). */
+  hasRadioLineIn: boolean;
+  /** Board has a switchable balanced XLR mic input (G2 / G2-1K only). */
+  hasBalancedXlr: boolean;
+  /** Board can enable the Orion electret mic-bias supply (gates the bias
+   *  toggle). Defaults OFF; the UI confirms before enabling. */
+  hasMicBias: boolean;
 }
 
 // Safe defaults matching Zeus.Contracts.BoardCapabilities.UnknownDefaults —
@@ -67,6 +80,11 @@ export const UNKNOWN_BOARD_CAPABILITIES: BoardCapabilities = {
   maxPowerWatts: 100,
   maxRxSampleRateHz: 384_000,
   supportsAnvelinaDxOc: false,
+  hasOnboardCodec: false,
+  hermesLite2MicFrontEnd: false,
+  hasRadioLineIn: false,
+  hasBalancedXlr: false,
+  hasMicBias: false,
 };
 
 function parseSampleRateCeiling(raw: unknown): number {
@@ -118,6 +136,26 @@ export function parseBoardCapabilities(raw: unknown): BoardCapabilities {
       typeof r.supportsAnvelinaDxOc === 'boolean'
         ? r.supportsAnvelinaDxOc
         : UNKNOWN_BOARD_CAPABILITIES.supportsAnvelinaDxOc,
+    hasOnboardCodec:
+      typeof r.hasOnboardCodec === 'boolean'
+        ? r.hasOnboardCodec
+        : UNKNOWN_BOARD_CAPABILITIES.hasOnboardCodec,
+    hermesLite2MicFrontEnd:
+      typeof r.hermesLite2MicFrontEnd === 'boolean'
+        ? r.hermesLite2MicFrontEnd
+        : UNKNOWN_BOARD_CAPABILITIES.hermesLite2MicFrontEnd,
+    hasRadioLineIn:
+      typeof r.hasRadioLineIn === 'boolean'
+        ? r.hasRadioLineIn
+        : UNKNOWN_BOARD_CAPABILITIES.hasRadioLineIn,
+    hasBalancedXlr:
+      typeof r.hasBalancedXlr === 'boolean'
+        ? r.hasBalancedXlr
+        : UNKNOWN_BOARD_CAPABILITIES.hasBalancedXlr,
+    hasMicBias:
+      typeof r.hasMicBias === 'boolean'
+        ? r.hasMicBias
+        : UNKNOWN_BOARD_CAPABILITIES.hasMicBias,
   };
 }
 

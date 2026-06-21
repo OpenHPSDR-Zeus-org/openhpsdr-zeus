@@ -1078,7 +1078,14 @@ public sealed record StateDto(
     // RX preamp toggle. Persisted with the rest of the radio-state controls so
     // PRE comes back exactly as the operator left it after a backend restart.
     // Hidden on HL2 in the frontend because that board has no hardware preamp.
-    bool PreampOn = false);
+    bool PreampOn = false,
+
+    // ---- TX-audio source (external-audio-jacks re-port) ----
+    // The RESOLVED (board-clamped) TX-audio source the server is currently
+    // pushing. The frontend hydrates the audio picker from this and never
+    // clobbers the server on connect (PR #359/#360 anti-clobber pattern).
+    // Default Host is byte-identical to today on every board.
+    TxAudioSource TxAudioSource = TxAudioSource.Host);
 
 /// <summary>Canonical CW constants shared between backend and wire DTOs.
 /// Single source of truth — CwOffset (server-side) and StateDto both
@@ -1632,6 +1639,36 @@ public sealed record RadioSelectionSetRequest(
 // (issue #218). String-typed for forward compatibility — server parses
 // against the OrionMkIIVariant enum. Empty / unknown rejected with 400.
 public sealed record RadioVariantSetRequest(string Variant);
+
+// Global (per-radio, NOT per-band) TX-audio SOURCE selection
+// (external-audio-jacks re-port). GET carries the per-board source-availability
+// gates so the single-select picker renders only the sources the connected
+// board offers: HasOnboardCodec gates RadioMic; HasRadioLineIn gates
+// RadioLineIn; HasBalancedXlr gates RadioBalancedXlr; HasMicBias gates the bias
+// toggle; HermesLite2MicFrontEnd flags the (inert v1) HL2 mic front-end.
+// `Source` is the RESOLVED (board-clamped) source the server is pushing — the
+// frontend hydrates from it and never clobbers the server on connect. MicBoost /
+// MicBias / LineInGain are the parameters OF the selected source.
+public sealed record AudioFrontEndDto(
+    bool HasOnboardCodec,
+    bool HermesLite2MicFrontEnd,
+    bool HasRadioLineIn,
+    bool HasBalancedXlr,
+    bool HasMicBias,
+    TxAudioSource Source,
+    bool MicBoost,
+    bool MicBias,
+    int LineInGain);
+
+// Mutating version — sets the whole global TX-audio source. LineInGain is
+// clamped to 0..31 server-side. The server clamps Source against the board's
+// capabilities (an unsupported jack → Host) and returns the resolved state plus
+// the live capability gates.
+public sealed record AudioFrontEndSetRequest(
+    TxAudioSource Source,
+    bool MicBoost,
+    bool MicBias,
+    int LineInGain);
 
 // HL2-specific optional toggles surfaced via /api/radio/hl2-options.
 // Shape is an object (not a bare bool) so future mi0bot HL2 toggles can

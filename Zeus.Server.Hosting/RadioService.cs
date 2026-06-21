@@ -67,6 +67,9 @@ public sealed class RadioService : IDisposable
     private readonly PsSettingsStore? _psStore;
     private readonly FilterPresetStore? _filterPresetStore;
     private readonly RadioStateStore? _radioStateStore;
+    // Global (per-radio, NOT per-band) TX-audio source selection. Pushed via
+    // PushAudioFrontEnd on store edit + connect (external-audio-jacks re-port).
+    private readonly AudioSettingsStore? _audioStore;
     // Cached PS board key for the currently-connected radio. Set by
     // ApplyPsHwPeakForConnection (P1 or P2 connect path) and read by
     // PersistPsState to route HW Peak writes to the correct per-board slot.
@@ -246,13 +249,21 @@ public sealed class RadioService : IDisposable
     /// fresh-engine connect to re-apply notches the new WDSP channel lost.</summary>
     public IReadOnlyList<NotchDto> Notches { get { lock (_sync) return _notches.ToArray(); } }
 
+    /// <summary>Fires whenever the global audio front-end state changes (store
+    /// edit or connect). The wire bytes are RESOLVED (board-clamped + source-
+    /// encoded) by PushAudioFrontEnd; this event lets DspPipelineService forward
+    /// the same state into a live Protocol2Client (TxSpecific bytes 50/51) and
+    /// route the radio-mic STREAM gate. Audio is decoupled from PureSignal /
+    /// antenna / K36 — it never touches the alex word or PS bit.</summary>
+    public event Action<AudioFrontEndPush>? AudioFrontEndChanged;
+
     // Shared TX IQ source threaded through Protocol1Client. TxAudioIngest
     // writes into the same instance; this is the seam between "mic arrived
     // over WS" and "EP2 packet got real IQ". When null the client falls back
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AudioSettingsStore? audioStore = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
@@ -262,7 +273,13 @@ public sealed class RadioService : IDisposable
         _psStore = psStore;
         _filterPresetStore = filterPresetStore;
         _radioStateStore = radioStateStore;
+        _audioStore = audioStore;
         _paStore.Changed += RecomputePaAndPush;
+        // Audio front-end is global per-radio (not per-band), so it has its own
+        // store + push rather than riding the PA snapshot. A store edit re-pushes
+        // the resolved wire bytes + StateDto (PR #359/#360 anti-clobber pattern).
+        if (_audioStore is not null)
+            _audioStore.Changed += PushAudioFrontEnd;
         if (_preferredRadioStore is not null)
             _preferredRadioStore.Changed += RecomputePaAndPush;
         _txIqSource = txIqSource;
@@ -817,6 +834,12 @@ public sealed class RadioService : IDisposable
             // at the protocol defaults (drive=0, OC=0) until something else
             // moves.
             RecomputePaAndPush();
+            // Replay the global audio front-end (external-audio-jacks re-port)
+            // so the operator's source/boost/bias/gain selection is on the first
+            // outgoing frame, not deferred until they touch the panel. Per-board
+            // clamp + the OFF defaults make this a no-op (byte-identical) on
+            // boards without an audio front-end.
+            PushAudioFrontEnd();
             return Snapshot();
         }
         catch
@@ -2047,6 +2070,115 @@ public sealed class RadioService : IDisposable
     // next state change.
     public void ReplayPaSnapshot() => RecomputePaAndPush();
 
+    // Global audio front-end push (external-audio-jacks re-port). Server-
+    // authoritative: read AudioSettingsStore, clamp per-board, push to the P1
+    // client directly and fire AudioFrontEndChanged for the P2 forwarder + the
+    // radio-mic STREAM gate. Called on store edit and on connect (P1 + P2).
+    // Mirrors the PA RecomputePaAndPush discipline but for the GLOBAL (not
+    // per-band) audio state. Defaults (Host, no boost/bias, gain 0) reproduce
+    // today's wire output bit-for-bit on every board.
+    private void PushAudioFrontEnd()
+    {
+        var sel = _audioStore?.Get() ?? AudioSourceSelection.Default;
+        var board = EffectiveBoardKind;
+        var variant = EffectiveOrionMkIIVariant;
+        var caps = BoardCapabilitiesTable.For(board, variant);
+
+        // CLAMP the persisted source against the connected board's capabilities
+        // (external-audio-jacks re-port, safety invariant 5). Any source the
+        // board can't honour falls back to Host so the wire is never handed a
+        // jack the hardware lacks:
+        //   - HL2 (no onboard codec) is Host-only — any radio source → Host.
+        //   - RadioLineIn requires HasRadioLineIn (10E + 100D/200D + 0x0A).
+        //   - RadioBalancedXlr requires HasBalancedXlr (G2 / G2-1K only).
+        //   - RadioMic requires the stream codec.
+        // The mic-bias param is additionally suppressed on boards without
+        // HasMicBias, so a stale bias bit can never reach a non-bias board.
+        var resolved = ClampAudioSource(sel, caps);
+
+        // Encode the wire bytes as PURE FUNCTIONS of the resolved source. Host →
+        // literal zero on every surface, byte-identical to today; no param
+        // fallthrough.
+        var encoder = ExternalPortEncoders.For(board, variant);
+        var portState = new ExternalPortState(
+            Source: resolved.Source,
+            MicBoost: resolved.MicBoost,
+            MicBias: resolved.MicBias,
+            LineInGain: resolved.LineInGain);
+
+        // P1 codec boards (Hermes-class): mic_boost / mic_linein on the 0x12
+        // frame. HL2 is Host-only in v1 — the encoder returns all-clear, and
+        // ControlFrame's read-modify-write keeps the PS bit + C4 PGA intact.
+        // mic_trs / mic_bias / line_in_gain (HL2 0x14) stay clear in v1 (the HL2
+        // mic front-end is inert plumbing), so the host pipeline is unchanged.
+        var (p1Boost, p1LineIn) = encoder.EncodeP1CodecAudioBits(in portState);
+        ActiveClient?.SetAudioFrontEnd(
+            micBoost: p1Boost,
+            micLineIn: p1LineIn,
+            micTrs: false,
+            micBias: false,
+            lineInGain: 0);
+
+        // P2 (0x0A Saturn family): forward the resolved literal byte-50
+        // mic_control + byte-51 line_in_gain to the live Protocol2Client via
+        // DspPipelineService. The forwarder does no source interpretation. The
+        // same event drives the radio-mic STREAM (1026) single-select gate.
+        byte micControl = encoder.EncodeP2MicControlByte(in portState);
+        byte lineInGain = encoder.EncodeP2LineInGainByte(in portState);
+        AudioFrontEndChanged?.Invoke(new AudioFrontEndPush(
+            Source: resolved.Source,
+            MicControlByte: micControl,
+            LineInGain: lineInGain));
+
+        // Mirror the RESOLVED source into StateDto so the frontend hydrates from
+        // the server and never clobbers it on connect (PR #359/#360 pattern).
+        Mutate(s => s.TxAudioSource == resolved.Source ? s : s with { TxAudioSource = resolved.Source });
+    }
+
+    /// <summary>
+    /// Clamp a persisted <see cref="AudioSourceSelection"/> against a board's
+    /// capabilities (external-audio-jacks re-port). Returns Host (with no params)
+    /// whenever the board cannot honour the requested jack, and drops the
+    /// mic-bias param on boards without <c>HasMicBias</c>. Pure — no side
+    /// effects — so the endpoint and the push share one definition.
+    /// </summary>
+    internal static AudioSourceSelection ClampAudioSource(AudioSourceSelection sel, BoardCapabilities caps)
+    {
+        // A board with neither the stream codec nor the HL2 mic front-end has no
+        // audio jacks at all → Host.
+        bool audioCapable = caps.HasOnboardCodec || caps.HermesLite2MicFrontEnd;
+        if (!audioCapable) return AudioSourceSelection.Default;
+
+        switch (sel.Source)
+        {
+            case TxAudioSource.RadioMic:
+                // RadioMic needs the stream codec (HL2's mic front-end is inert
+                // plumbing in v1). Drop bias on non-bias boards.
+                if (!caps.HasOnboardCodec) return AudioSourceSelection.Default;
+                return sel with { MicBias = sel.MicBias && caps.HasMicBias };
+
+            case TxAudioSource.RadioLineIn:
+                if (!caps.HasOnboardCodec || !caps.HasRadioLineIn)
+                    return AudioSourceSelection.Default;
+                // Line-in carries gain, not mic params.
+                return new AudioSourceSelection(TxAudioSource.RadioLineIn, MicBoost: false, MicBias: false, LineInGain: sel.LineInGain);
+
+            case TxAudioSource.RadioBalancedXlr:
+                if (!caps.HasOnboardCodec || !caps.HasBalancedXlr)
+                    return AudioSourceSelection.Default;
+                return sel with { MicBias = sel.MicBias && caps.HasMicBias, LineInGain = 0 };
+
+            case TxAudioSource.Host:
+            default:
+                return AudioSourceSelection.Default;
+        }
+    }
+
+    // DspPipelineService calls this right after a P2 client is created so the
+    // fresh connection picks up the persisted audio front-end without waiting
+    // for a store edit. Public so the P2-connect hook can drive it.
+    public void ReplayAudioFrontEnd() => PushAudioFrontEnd();
+
     /// <summary>
     /// HL2 Band Volts PWM enable (issue #279). Updates the persisted
     /// per-radio preference AND any live Protocol-1 client so the next
@@ -2752,6 +2884,8 @@ public sealed class RadioService : IDisposable
     public void Dispose()
     {
         _paStore.Changed -= RecomputePaAndPush;
+        if (_audioStore is not null)
+            _audioStore.Changed -= PushAudioFrontEnd;
         try { DisconnectAsync(CancellationToken.None).GetAwaiter().GetResult(); }
         catch { /* best-effort */ }
         _stateFlushTimer?.Dispose();

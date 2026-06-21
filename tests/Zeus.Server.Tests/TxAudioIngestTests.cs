@@ -206,6 +206,56 @@ public class TxAudioIngestTests
         Assert.Equal(0, engine.ProcessedBlocks);
     }
 
+    // ---- HOST↔RADIO single-select gate (external-audio-jacks re-port) ----
+
+    [Fact]
+    public void HostArmed_RadioMicBlock_IsDropped()
+    {
+        // Default armed source is Host. A RadioMic-tagged block must be dropped
+        // by the in-lock single-select gate — it can NEVER leak onto the air
+        // while Host is selected.
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>());
+
+        Assert.Equal(MicBlockSource.Host, ingest.ActiveSource);
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytes(payload, MicBlockSource.RadioMic);
+        ingest.OnMicPcmBytes(payload, MicBlockSource.RadioMic);
+        Assert.Equal(0, engine.ProcessedBlocks);   // never reached WDSP
+        Assert.Equal(0, ring.Count);
+        Assert.True(ingest.DroppedFrames >= 2);
+    }
+
+    [Fact]
+    public void RadioArmed_HostBlock_IsDropped_RadioMicBlock_Flows()
+    {
+        // After arming RadioMic, the host mic is dropped and the radio jack
+        // feeds WDSP — exactly one contributor at a time, no double-feed.
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>());
+
+        ingest.SetActiveSource(TxAudioSource.RadioMic);
+        Assert.Equal(MicBlockSource.RadioMic, ingest.ActiveSource);
+
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        // Host blocks are dropped while the radio jack is armed.
+        ingest.OnMicPcmBytes(payload, MicBlockSource.Host);
+        ingest.OnMicPcmBytes(payload, MicBlockSource.Host);
+        Assert.Equal(0, engine.ProcessedBlocks);
+
+        // Radio-mic blocks flow through to WDSP.
+        ingest.OnMicPcmBytes(payload, MicBlockSource.RadioMic);
+        ingest.OnMicPcmBytes(payload, MicBlockSource.RadioMic);
+        Assert.Equal(1, engine.ProcessedBlocks);   // 1920 ≥ 1024 → one block
+        Assert.True(ring.Count > 0);
+    }
+
     [Fact]
     public void MicPayload_SanitizesNonFiniteAndOverrangeSamplesBeforeWdsp()
     {

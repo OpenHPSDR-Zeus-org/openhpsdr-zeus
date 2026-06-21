@@ -224,6 +224,25 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // out as the reserved-bit safe default for non-Anvelina firmware.
     private byte _ocDxTxMask;
     private byte _ocDxRxMask;
+    // TX audio front-end (external-audio-jacks re-port). Wire-encoded into the
+    // TxSpecific (CmdTx, port 1026) packet byte 50 (mic_control flags) + byte
+    // 51 (line_in_gain) — Thetis network.c:1234,1236. Both default 0, which is
+    // byte-identical to today's all-zero CmdTx tail. The byte-50 / byte-51
+    // values are resolved as pure functions of the selected TxAudioSource
+    // upstream (RadioService / ExternalPortEncoder); this client just latches
+    // them and re-pushes CmdTx via SetAudioFrontEndBytes.
+    private byte _micControl;
+    private byte _lineInGain;
+
+    // TxSpecific byte-50 mic_control bit layout (Thetis network.c:1226-1233).
+    // Public so the wire-format golden tests can assert against the canonical
+    // bit positions. The byte itself is resolved upstream from the selected
+    // TxAudioSource (ExternalPortAudio in Zeus.Server.Hosting).
+    public const byte MicControlLineIn   = 0x01; // bit0 — line-in select
+    public const byte MicControlMicBoost = 0x02; // bit1 — mic 20 dB boost
+    public const byte MicControlMicBias  = 0x10; // bit4 — Orion mic bias enable
+    public const byte MicControlXlr      = 0x20; // bit5 — balanced/XLR input
+
     private bool _moxOn;
     private bool _tuneActive;
     private long _totalFrames;
@@ -350,6 +369,40 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // Mirrors the P1 surface; the IqFrame / PsFeedbackFrame types are
     // per-protocol because the protocol projects do not reference each other.
     private IRxPacketSink? _rxSink;
+
+    // ---- Radio-mic stream (UDP 1026) — external-audio-jacks re-port --------
+    // The radio digitises its analog jack (mic / line-in / balanced-XLR) and
+    // ships it on source port 1026. We DROP it by default (the RX loop just
+    // skips it) — there is ZERO added RX cost unless a radio audio source is
+    // armed and a handler is attached via AttachRadioMicHandler. The handler is
+    // called SYNCHRONOUSLY on the RX loop thread with a span over the receive
+    // buffer; it must copy/consume before returning (RadioMicReceiver does, by
+    // re-blocking into its own accumulator). volatile so the attach/detach on a
+    // source switch is a full fence against the RX thread.
+    private volatile RadioMicPacketHandler? _radioMicHandler;
+
+    /// <summary>
+    /// Synchronous handler for one decoded UDP-1026 radio-mic packet. Invoked on
+    /// the RX loop thread with a span over the live receive buffer — copy before
+    /// returning. The packet is the raw 132-byte 1026 payload (4-byte BE seq +
+    /// 64 × int16 BE @ 48 kHz); decoding/re-blocking is the handler's job.
+    /// </summary>
+    public delegate void RadioMicPacketHandler(ReadOnlySpan<byte> packet);
+
+    /// <summary>
+    /// Attach the radio-mic (UDP 1026) handler. Until this is set the 1026
+    /// stream is dropped with one cheap srcPort comparison — Host-default has no
+    /// added cost. Pass <see cref="DetachRadioMicHandler"/> on a switch back to
+    /// Host.
+    /// </summary>
+    public void AttachRadioMicHandler(RadioMicPacketHandler handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        _radioMicHandler = handler;
+    }
+
+    /// <summary>Detach the radio-mic handler, reverting to drop-on-RX.</summary>
+    public void DetachRadioMicHandler() => _radioMicHandler = null;
 
     /// <summary>
     /// Attach a synchronous RX sink. While non-null, the RX loop calls the
@@ -1410,8 +1463,26 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
     private void SendCmdTx()
     {
-        var p = ComposeCmdTxBuffer(_seqCmdTx++, (ushort)_sampleRateKhz, _txStepAttnDb, _paEnabled, _psFeedbackEnabled);
+        var p = ComposeCmdTxBuffer(_seqCmdTx++, (ushort)_sampleRateKhz, _txStepAttnDb, _paEnabled, _psFeedbackEnabled, _micControl, _lineInGain);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1026));
+    }
+
+    /// <summary>
+    /// Set the audio front-end from already-composed wire bytes
+    /// (external-audio-jacks re-port). The TX-audio source model resolves
+    /// byte-50 mic_control and byte-51 line_in_gain as pure functions of the
+    /// selected <c>TxAudioSource</c> upstream (RadioService / ExternalPortEncoder),
+    /// so the client just latches them and re-pushes CmdTx on the next TX cycle.
+    /// With <c>micControl == 0 &amp;&amp; lineInGain == 0</c> (the Host source) the
+    /// CmdTx tail is byte-identical to today. Re-pushing CmdTx on every change is
+    /// load-bearing — the radio keeps its last-remembered input otherwise
+    /// (pihpsdr transmit_specific risk).
+    /// </summary>
+    public void SetAudioFrontEndBytes(byte micControl, byte lineInGain)
+    {
+        _micControl = micControl;
+        _lineInGain = lineInGain;
+        if (_rxTask is not null) SendCmdTx();
     }
 
     // Test-seamed Compose for the CmdTx (TxSpecific) packet. Layout per
@@ -1438,12 +1509,19 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // 57/58/59) — operator's normal voice TX has been validated working
     // with that wire form on G2 MkII, so we don't ship a wire change
     // beyond the PS-armed window in this patch.
-    internal static byte[] ComposeCmdTxBuffer(uint seq, ushort sampleRateKhz, byte txStepAttnDb, bool paEnabled, bool psEnabled)
+    internal static byte[] ComposeCmdTxBuffer(uint seq, ushort sampleRateKhz, byte txStepAttnDb, bool paEnabled, bool psEnabled, byte micControl = 0, byte lineInGain = 0)
     {
         var p = new byte[60];
         WriteBeU32(p, 0, seq);
         p[4] = 1;                 // num_dac
         WriteBeU16(p, 14, sampleRateKhz);
+
+        // Audio front-end (external-audio-jacks re-port). Byte 50 = mic_control
+        // flags, byte 51 = line_in_gain — Thetis network.c:1234,1236. Both
+        // default 0, so an untouched audio front-end is byte-identical to the
+        // historical all-zero tail.
+        p[50] = micControl;
+        p[51] = lineInGain;
 
         if (psEnabled)
         {
@@ -1921,8 +1999,22 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                     // because TxMetersService had no telemetry feed.
                     HandleHiPriStatusPacket(buf, n);
                 }
-                // mic samples (1026), wideband ADC0..7 (1027..1034)
-                // intentionally ignored for now — separate features.
+                else if (srcPort == 1026)
+                {
+                    // Radio-mic stream (external-audio-jacks re-port): the
+                    // radio's digitised analog jack (mic / line-in /
+                    // balanced-XLR), 4-byte BE seq + 64 × int16 BE @ 48 kHz =
+                    // 132 bytes (pihpsdr new_protocol.c process_mic_data).
+                    // Dropped unless a radio audio source is armed AND a handler
+                    // is attached — the volatile read is the only added cost
+                    // under Host. The handler decodes + re-blocks synchronously
+                    // on this thread.
+                    var radioMic = _radioMicHandler;
+                    if (radioMic is not null && n >= 132)
+                        radioMic(new ReadOnlySpan<byte>(buf, 0, n));
+                }
+                // wideband ADC0..7 (1027..1034) intentionally ignored — a
+                // separate feature.
             }
         }
         finally
