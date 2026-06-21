@@ -230,6 +230,8 @@ public static class ZeusHost
         // Phase-0 spike service; the dev-only /api/rtc/spike/offer endpoint that
         // uses it is gated behind ZEUS_RTC_SPIKE=1 in ZeusEndpoints.
         builder.Services.AddSingleton<Zeus.Server.Hosting.Remote.WebRtcSpikeService>();
+        // Remote-access session password verifier (SPAKE2+, ADR-0008).
+        builder.Services.AddSingleton<Zeus.Server.Hosting.Remote.RemotePasswordStore>();
         // RX audio publish seam (Phase 1). DspPipelineService.PublishAudio
         // fans each AudioFrame across every registered IRxAudioSink.
         //

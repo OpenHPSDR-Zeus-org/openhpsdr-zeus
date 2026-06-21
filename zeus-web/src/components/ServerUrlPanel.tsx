@@ -252,9 +252,185 @@ export function ServerUrlPanel() {
         </div>
       )}
 
+      <RemotePasswordSection />
+
       <RemoteQrSection />
 
       <TunnelSection />
+    </div>
+  );
+}
+
+// Remote-access session password (ADR-0008). Mandatory: remote access does
+// nothing until the right password is entered. Set/change/clear hit the
+// SPAKE2+ verifier endpoints — the password is never stored, only its verifier.
+function RemotePasswordSection() {
+  const [hasPassword, setHasPassword] = useState<boolean | null>(null);
+  const [pw, setPw] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const refresh = async () => {
+    try {
+      const r = await fetch('/api/remote/password/status');
+      const j = await r.json();
+      setHasPassword(!!j.hasPassword);
+    } catch {
+      setHasPassword(null);
+    }
+  };
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  const save = async () => {
+    if (pw.length < 8) {
+      setNotice('Password must be at least 8 characters.');
+      return;
+    }
+    setBusy(true);
+    setNotice(null);
+    try {
+      const r = await fetch('/api/remote/password', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password: pw }),
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.error ?? 'Failed to save');
+      setPw('');
+      setNotice('Password saved.');
+      await refresh();
+    } catch (e) {
+      setNotice((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clear = async () => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      await fetch('/api/remote/password', { method: 'DELETE' });
+      setNotice('Password cleared — remote access is disabled.');
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 28 }}>
+      <h3
+        style={{
+          margin: '0 0 14px',
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+          color: 'var(--fg-2)',
+        }}
+      >
+        REMOTE ACCESS PASSWORD
+      </h3>
+
+      <p style={{ fontSize: 12, color: 'var(--fg-2)', lineHeight: 1.5, marginTop: 0 }}>
+        Required for remote access. Nothing — no audio, no control, not even a
+        connection — happens until this password is entered correctly. It is
+        verified end-to-end at your radio (SPAKE2+); the server stores only a
+        verifier, never the password itself.
+      </p>
+
+      <div
+        style={{
+          marginTop: 12,
+          fontSize: 12,
+          fontWeight: 700,
+          color: hasPassword ? 'var(--accent)' : 'var(--tx)',
+        }}
+      >
+        {hasPassword === null
+          ? '…'
+          : hasPassword
+            ? '● Password set — remote access can be enabled.'
+            : '○ No password — remote access is disabled.'}
+      </div>
+
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 14 }}>
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
+            color: 'var(--fg-2)',
+          }}
+        >
+          {hasPassword ? 'Change password' : 'Set password'}
+        </span>
+        <input
+          type="password"
+          autoComplete="new-password"
+          placeholder="at least 8 characters"
+          value={pw}
+          onChange={(e) => setPw(e.target.value)}
+          style={{
+            padding: '8px 10px',
+            fontFamily: 'monospace',
+            fontSize: 13,
+            color: 'var(--fg-0)',
+            background: 'var(--bg-2)',
+            border: '1px solid var(--panel-border)',
+            borderRadius: 'var(--r-sm)',
+            outline: 'none',
+          }}
+        />
+      </label>
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center' }}>
+        <button
+          type="button"
+          onClick={save}
+          disabled={busy || pw.length < 8}
+          style={{
+            padding: '8px 16px',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
+            color: !busy && pw.length >= 8 ? 'var(--fg-0)' : 'var(--fg-2)',
+            background: !busy && pw.length >= 8 ? 'var(--accent)' : 'var(--bg-2)',
+            border: '1px solid var(--panel-border)',
+            borderRadius: 'var(--r-sm)',
+            cursor: !busy && pw.length >= 8 ? 'pointer' : 'not-allowed',
+            opacity: !busy && pw.length >= 8 ? 1 : 0.6,
+          }}
+        >
+          {hasPassword ? 'Change' : 'Set password'}
+        </button>
+        <button
+          type="button"
+          onClick={clear}
+          disabled={busy || !hasPassword}
+          style={{
+            padding: '8px 16px',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
+            color: 'var(--fg-2)',
+            background: 'var(--bg-2)',
+            border: '1px solid var(--panel-border)',
+            borderRadius: 'var(--r-sm)',
+            cursor: !busy && hasPassword ? 'pointer' : 'not-allowed',
+            opacity: !busy && hasPassword ? 1 : 0.5,
+          }}
+        >
+          Clear
+        </button>
+        {notice && <span style={{ fontSize: 11, color: 'var(--fg-2)' }}>{notice}</span>}
+      </div>
     </div>
   );
 }

@@ -2747,6 +2747,33 @@ public static class ZeusEndpoints
                 Zeus.Server.Hosting.Remote.RemoteQr.Svg(data), "image/svg+xml");
         });
 
+        // -- Remote-access session password (ADR-0008) ------------------------
+        // The operator sets a password here; remote access cannot be enabled
+        // without one. Verified end-to-end via SPAKE2+ — the server stores only
+        // the verifier, never the password.
+        app.MapGet("/api/remote/password/status",
+            (Zeus.Server.Hosting.Remote.RemotePasswordStore store) =>
+                Results.Ok(new { hasPassword = store.HasPassword() }));
+
+        app.MapPost("/api/remote/password",
+            (Zeus.Server.Hosting.Remote.RemotePasswordRequest req,
+             Zeus.Server.Hosting.Remote.RemotePasswordStore store) =>
+            {
+                if (string.IsNullOrWhiteSpace(req?.Password) || req.Password.Length < 8)
+                    return Results.BadRequest(new { error = "password must be at least 8 characters" });
+                store.Set(req.Password);
+                log.LogInformation("api.remote.password set");
+                return Results.Ok(new { hasPassword = true });
+            });
+
+        app.MapDelete("/api/remote/password",
+            (Zeus.Server.Hosting.Remote.RemotePasswordStore store) =>
+            {
+                store.Clear();
+                log.LogInformation("api.remote.password cleared");
+                return Results.Ok(new { hasPassword = false });
+            });
+
         // -- WebRTC data-plane spike (Phase 0) --------------------------------
         // Dev-only: inert unless ZEUS_RTC_SPIKE=1. Answers a browser SDP offer
         // and echoes binary DataChannel messages so we can measure real

@@ -260,4 +260,20 @@ public sealed class Spake2Plus
 
     /// <summary>Parse a hex scalar (test/registration helper).</summary>
     public static BigInteger ScalarFromHex(string hex) => new(hex, 16);
+
+    // --- Registration helpers (SPAKE2+ verifier derivation) -----------------
+
+    /// <summary>Reduce a wide (bias-avoiding) byte string to a scalar mod n.</summary>
+    public static BigInteger ReduceToScalar(ReadOnlySpan<byte> wide)
+        => new BigInteger(1, wide.ToArray()).Mod(Order);
+
+    /// <summary>Reconstruct a stored scalar (e.g. w0) from its 32-byte encoding.</summary>
+    public static BigInteger ScalarFromBytes(ReadOnlySpan<byte> bytes)
+        => new BigInteger(1, bytes.ToArray()).Mod(Order);
+
+    /// <summary>32-byte big-endian encoding of a scalar (storage helper).</summary>
+    public static byte[] EncodeScalar(BigInteger w) => FixedScalar(w);
+
+    /// <summary>The SPAKE2+ registration record L = w1·P, uncompressed-SEC1 encoded.</summary>
+    public static byte[] EncodeL(BigInteger w1) => G.Multiply(w1).Normalize().GetEncoded(false);
 }
