@@ -82,6 +82,22 @@ public sealed class HamClockServiceTests
         Assert.Equal(HamClockService.DefaultStablePort, port);
     }
 
+    [Theory]
+    [InlineData("v22.12.0", true)]   // exact minimum — HamClock deps' require(esm) threshold
+    [InlineData("v22.23.0", true)]   // the bundled version
+    [InlineData("v24.0.0", true)]
+    [InlineData("22.12.0", true)]    // tolerant of a missing 'v' prefix
+    [InlineData("v22.12.0-nightly", true)] // suffix stripped before compare
+    [InlineData("v22.11.0", false)]  // the version that throws ERR_REQUIRE_ESM
+    [InlineData("v20.18.0", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    [InlineData("not-a-version", false)]
+    public void NodeMeetsMinimum_GatesOnRequireEsmThreshold(string? version, bool expected)
+    {
+        Assert.Equal(expected, HamClockService.NodeMeetsMinimum(version));
+    }
+
     [Fact]
     public void InjectZeusCatBridgeTag_AddsBridgeOnceBeforeHeadClose()
     {
