@@ -202,7 +202,11 @@ public class NoiseReductionSyntheticFixtureTests
         if (fixture.Path != DspBenchmarkPath.RxIq || fixture.IqInterleaved is null)
             throw new ArgumentException("WDSP fixture runner requires RX IQ fixtures.", nameof(fixture));
 
-        using var engine = new WdspDspEngine();
+        // Bulk fixture feed is faster than realtime, so use lossless blocking
+        // back-pressure — otherwise the default drop-oldest RX policy discards
+        // frames under a busy/slow runner (e.g. macos-arm64 CI), starving EMNR
+        // adaptation and collapsing its output level. Production RX never sets this.
+        using var engine = new WdspDspEngine { BlockingIqFeed = true };
         int channel = engine.OpenChannel(fixture.SampleRateHz, PixelWidth);
         try
         {

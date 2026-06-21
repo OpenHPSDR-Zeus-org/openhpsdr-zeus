@@ -675,6 +675,21 @@ public static class ZeusEndpoints
             _                            => Results.StatusCode(500),
         };
 
+        // When the operator has selected the out-of-process VST route but the
+        // engine isn't routing, an editor open would otherwise fall through to
+        // the in-process bridge and surface the in-process "set
+        // ZEUS_ENABLE_VST_LOAD=1" hint — which is irrelevant to VST mode and
+        // sends a new operator down the wrong path. Point them at the actual
+        // fix instead: install the engine (the "Download VST Engine" affordance)
+        // or wait for it to come up. Returns null in every other case so Native
+        // mode keeps the existing in-process editor behaviour unchanged.
+        static IResult? VstEngineEditorGuard(AudioProcessingModeService mode)
+        {
+            var error = VstEditorHint.EngineUnavailableMessage(
+                mode.Mode, mode.EngineActive, AudioProcessingModeService.FindEngineExe() is not null);
+            return error is null ? null : Results.Json(new { error }, statusCode: 409);
+        }
+
         // Editor routing is mode-aware (host consolidation): when the
         // out-of-process engine is active (VST processing mode) the editor is
         // hosted crash-isolated in the engine process — the same instance that
@@ -693,11 +708,15 @@ public static class ZeusEndpoints
         app.MapPost("/api/audio-suite/plugins/{id}/editor",
             (string id, AudioPluginBridge bridge, AudioProcessingModeService mode, RxVstEngineService rxVst) =>
             {
-                var result = rxVst.HasEngineSlot(id)
-                    ? rxVst.OpenEditor(id)
-                    : mode.EngineActive && mode.HasEngineSlot(id)
-                        ? mode.OpenEditor(id)
-                        : bridge.OpenEditor(id);
+                // RX engine slots route to the RX engine regardless of the TX
+                // processing mode; only the TX path is gated on the VST engine.
+                if (rxVst.HasEngineSlot(id))
+                    return MapEditorResult(rxVst.OpenEditor(id), open: true);
+                if (VstEngineEditorGuard(mode) is { } guard)
+                    return guard;
+                var result = mode.EngineActive && mode.HasEngineSlot(id)
+                    ? mode.OpenEditor(id)
+                    : bridge.OpenEditor(id);
                 return MapEditorResult(result, open: true);
             });
 
@@ -723,6 +742,8 @@ public static class ZeusEndpoints
         app.MapPost("/api/tx-audio-suite/plugins/{id}/editor",
             (string id, AudioPluginBridge bridge, AudioProcessingModeService mode) =>
             {
+                if (VstEngineEditorGuard(mode) is { } guard)
+                    return guard;
                 var result = mode.EngineActive && mode.HasEngineSlot(id)
                     ? mode.OpenEditor(id)
                     : bridge.OpenEditor(id);
@@ -2564,6 +2585,28 @@ public static class ZeusEndpoints
             }
         }).DisableAntiforgery();
 
+        // Download an existing profile's .db so the operator can back it up or
+        // move it to another machine. Opens the file shared so the active
+        // database can be exported while it's in use.
+        app.MapGet("/api/prefs/databases/export", (string? relativePath) =>
+        {
+            if (string.IsNullOrWhiteSpace(relativePath))
+                return Results.BadRequest(new { error = "relativePath required" });
+            try
+            {
+                var bytes = PrefsDbPath.ReadProfileBytes(relativePath, out var fileName);
+                return Results.File(bytes, "application/octet-stream", fileName);
+            }
+            catch (FileNotFoundException)
+            {
+                return Results.NotFound(new { error = "Database not found." });
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
         app.MapPost("/api/app/restart", (AppRestartService restart) =>
         {
             restart.RequestRestart();
@@ -2893,6 +2936,85 @@ public static class ZeusEndpoints
             using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
             await hub.AttachClientAsync(ws, ctx.RequestAborted);
         });
+
+        // -- Remote-access QR (Server menu: scan → open remote client) --------
+        // Renders any URL to an SVG QR. The Server menu requests it for the
+        // operator's /go/<callsign> address (RemoteQr.AddressFor). See
+        // docs/designs/remote-access-webrtc.md.
+        app.MapGet("/api/remote/qr.svg", (string? data) =>
+        {
+            if (string.IsNullOrWhiteSpace(data) || data.Length > 1024)
+                return Results.BadRequest(new { error = "data required (max 1024 chars)" });
+            return Results.Content(
+                Zeus.Server.Hosting.Remote.RemoteQr.Svg(data), "image/svg+xml");
+        });
+
+        // -- Remote-access session password (ADR-0008) ------------------------
+        // The operator sets a password here; remote access cannot be enabled
+        // without one. Verified end-to-end via SPAKE2+ — the server stores only
+        // the verifier, never the password.
+        app.MapGet("/api/remote/password/status",
+            (Zeus.Server.Hosting.Remote.RemotePasswordStore store) =>
+                Results.Ok(new { hasPassword = store.HasPassword() }));
+
+        app.MapPost("/api/remote/password",
+            (Zeus.Server.Hosting.Remote.RemotePasswordRequest req,
+             Zeus.Server.Hosting.Remote.RemotePasswordStore store) =>
+            {
+                if (string.IsNullOrWhiteSpace(req?.Password) || req.Password.Length < 8)
+                    return Results.BadRequest(new { error = "password must be at least 8 characters" });
+                store.Set(req.Password);
+                log.LogInformation("api.remote.password set");
+                return Results.Ok(new { hasPassword = true });
+            });
+
+        app.MapDelete("/api/remote/password",
+            (Zeus.Server.Hosting.Remote.RemotePasswordStore store) =>
+            {
+                store.Clear();
+                log.LogInformation("api.remote.password cleared");
+                return Results.Ok(new { hasPassword = false });
+            });
+
+        // WebRTC signaling: answer the browser's offer with a password-gated session
+        // (Phase 1). 403 when no password is set — there is no unauthenticated path.
+        app.MapPost("/api/remote/connect",
+            async (Zeus.Server.Hosting.Remote.RemoteConnectRequest req,
+                   Zeus.Server.Hosting.Remote.RemoteWebRtcService rtc,
+                   CancellationToken ct) =>
+            {
+                if (string.IsNullOrWhiteSpace(req?.Sdp))
+                    return Results.BadRequest(new { error = "sdp required" });
+                try
+                {
+                    var answer = await rtc.ConnectAsync(req.Sdp, ct);
+                    return Results.Ok(new { sdp = answer, type = "answer" });
+                }
+                catch (Zeus.Server.Hosting.Remote.RemoteAccessDisabledException)
+                {
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                }
+            });
+
+        // -- WebRTC data-plane spike (Phase 0) --------------------------------
+        // Dev-only: inert unless ZEUS_RTC_SPIKE=1. Answers a browser SDP offer
+        // and echoes binary DataChannel messages so we can measure real
+        // browser↔Zeus.Server round-trip latency. See zeus-web/public/rtc-spike.html
+        // and docs/designs/remote-access-webrtc.md. NOT the production transport.
+        if (Environment.GetEnvironmentVariable("ZEUS_RTC_SPIKE") == "1")
+        {
+            log.LogWarning("rtc.spike endpoint ENABLED (/api/rtc/spike/offer) — dev only");
+            app.MapPost("/api/rtc/spike/offer",
+                async (Zeus.Server.Hosting.Remote.RtcSpikeOffer req,
+                       Zeus.Server.Hosting.Remote.WebRtcSpikeService rtc,
+                       CancellationToken ct) =>
+                {
+                    if (string.IsNullOrWhiteSpace(req?.Sdp))
+                        return Results.BadRequest(new { error = "sdp required" });
+                    var answerSdp = await rtc.CreateEchoAnswerAsync(req.Sdp, ct);
+                    return Results.Ok(new { sdp = answerSdp, type = "answer" });
+                });
+        }
 
         // -- HamClock embed (optional Node sidecar; see HamClockService) -----
         // Inert until the operator installs it from Settings → HamClock. The

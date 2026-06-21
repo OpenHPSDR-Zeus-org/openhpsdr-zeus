@@ -231,6 +231,18 @@ public static class ZeusHost
         builder.Services.AddSingleton<AudioSettingsStore>();
         builder.Services.AddSingleton<RadioService>();
         builder.Services.AddSingleton<StreamingHub>();
+        // WebRTC remote-access data plane (docs/designs/remote-access-webrtc.md).
+        // Phase-0 spike service; the dev-only /api/rtc/spike/offer endpoint that
+        // uses it is gated behind ZEUS_RTC_SPIKE=1 in ZeusEndpoints.
+        builder.Services.AddSingleton<Zeus.Server.Hosting.Remote.WebRtcSpikeService>();
+        // Remote-access session password verifier (SPAKE2+, ADR-0008).
+        builder.Services.AddSingleton<Zeus.Server.Hosting.Remote.RemotePasswordStore>();
+        // Remote-access WebRTC signaling (Phase 1). Answers offers with a session
+        // gated behind the SPAKE2+ password handshake.
+        builder.Services.AddSingleton<Zeus.Server.Hosting.Remote.RemoteWebRtcService>();
+        // Radio-side broker glue (Phase 3). Inert until a remote-access password
+        // is set; then it keeps a "host" socket on the broker and answers offers.
+        builder.Services.AddHostedService<Zeus.Server.Hosting.Remote.RemoteBrokerClient>();
         // RX audio publish seam (Phase 1). DspPipelineService.PublishAudio
         // fans each AudioFrame across every registered IRxAudioSink.
         //
@@ -477,6 +489,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.ExternalPttProvider>();
         builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.Protocol2TxIqProvider>();
         builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.DspPipelineProvider>();
+        builder.Services.AddSingleton<Diagnostics.IDiagnosticsProvider, Diagnostics.RxIngestDiagnosticsProvider>();
         builder.Services.AddSingleton<Diagnostics.DiagnosticsProviderRegistry>();
         builder.Services.AddSingleton<Diagnostics.DiagnosticsSelfCheckCache>();
         builder.Services.AddSingleton<Diagnostics.DiagnosticsFramePublisher>();
