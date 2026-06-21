@@ -206,6 +206,16 @@ public sealed class RadioService : IDisposable
     private readonly double[] _noiseFloorWindow = new double[AgcNoiseFloorWindowSamples];
     private int _noiseFloorWindowIdx;
     private int _noiseFloorWindowFill;
+    // Which source is currently filling the floor window (0 none / 1 spectrum /
+    // 2 S-meter fallback) and the last time a real spectrum floor arrived
+    // (Environment.TickCount64 ms). Together these (a) keep the two differently-
+    // calibrated sources from being mixed in one percentile window, and (b) make
+    // the loop fall back to the S-meter ONLY after the spectrum has been absent
+    // long enough to be a true outage, not a single dropped frame — without this,
+    // a sustained stale-spectrum period under steady RX would freeze tracking.
+    private int _autoAgcWindowSource;
+    private long _lastSpectrumFloorMs = long.MinValue;
+    private const long AgcSpectrumStaleMs = 1500;  // 3 ticks; > normal frame gaps
 
     // 100 ms between 1-dB steps. Events arrive at ~1.2 kHz (192 kSps), so
     // without throttling the offset would saturate at 31 dB in ~30 ms. At 10 Hz
@@ -1595,6 +1605,10 @@ public sealed class RadioService : IDisposable
         Mutate(s =>
         {
             _preampOn = on;
+            // Fast-attack (#806): a preamp/LNA change steps the noise floor, so
+            // drop the auto-AGC floor window to re-seed on the new level (Thetis
+            // display.cs:893-906). No-op when Auto-AGC is off. Mutate holds _sync.
+            ResetAutoAgcNoiseFloorWindow();
             return s with { PreampOn = on };
         });
         // P1 path: Protocol1Client owns the bit; SetPreamp pushes the
@@ -1619,6 +1633,12 @@ public sealed class RadioService : IDisposable
         {
             effective = Math.Clamp(_atten.ClampedDb + _attOffsetDb, HpsdrAtten.MinDb, HpsdrAtten.MaxDb);
             _lastAppliedEffectiveDb = effective;
+            // Fast-attack (#806): an operator attenuator step shifts the noise
+            // floor by that many dB, so re-seed the auto-AGC floor window. (The
+            // gradual auto-ATT ramp pushes effective attenuation through
+            // ActiveClient directly, NOT this setter, so it does not re-seed and
+            // the floor follows it smoothly.)
+            ResetAutoAgcNoiseFloorWindow();
         }
         ActiveClient?.SetAttenuator(new HpsdrAtten(effective));
         return Snapshot();
@@ -1784,16 +1804,14 @@ public sealed class RadioService : IDisposable
                 // to the user's baseline immediately.
                 _agcOffsetDb = 0.0;
                 _lastAgcTickMs = long.MinValue;
-                _noiseFloorWindowFill = 0;
-                _noiseFloorWindowIdx = 0;
+                ResetAutoAgcNoiseFloorWindow();
                 _state = _state with { AgcOffsetDb = 0.0 };
             }
             else
             {
                 // Turning auto on: reset timer + window so we recalibrate.
                 _lastAgcTickMs = long.MinValue;
-                _noiseFloorWindowFill = 0;
-                _noiseFloorWindowIdx = 0;
+                ResetAutoAgcNoiseFloorWindow();
             }
         }
         var snap = Snapshot();
@@ -1806,6 +1824,20 @@ public sealed class RadioService : IDisposable
         return snap;
     }
 
+    // Drops the auto-AGC noise-floor window so the next samples re-seed the floor
+    // estimate from scratch. This is Thetis's "fast-attack": a band change,
+    // attenuator step, preamp/LNA toggle, power-on, or a TX pause all invalidate
+    // the old floor (Thetis display.cs:893-919). Also clears the window-source tag
+    // so the next seed re-establishes which source is live. (_lastSpectrumFloorMs
+    // is intentionally NOT cleared — it is a rolling availability timestamp.)
+    // Caller MUST hold _sync.
+    private void ResetAutoAgcNoiseFloorWindow()
+    {
+        _noiseFloorWindowFill = 0;
+        _noiseFloorWindowIdx = 0;
+        _autoAgcWindowSource = 0;
+    }
+
     /// <summary>
     /// Auto-AGC control loop. Estimates the band noise floor from a sliding
     /// window of S-meter samples and chooses an absolute effective AGC-T that
@@ -1815,9 +1847,21 @@ public sealed class RadioService : IDisposable
     /// slider baseline. Slew-limited so adjustments are inaudibly gradual.
     /// </summary>
     internal void HandleRxMeterForAutoAgc(double signalDbm, long nowMs) =>
-        HandleRxMetersForAutoAgc(signalDbm, double.NaN, double.NaN, nowMs);
+        HandleRxMetersForAutoAgc(signalDbm, double.NaN, double.NaN, double.NaN, nowMs);
 
-    internal void HandleRxMetersForAutoAgc(double signalDbm, double adcPkDbfs, double agcGainDb, long nowMs)
+    // Back-compat overload (no spectrum floor): callers/tests that only have the
+    // S-meter delegate here. spectrumFloorDbm = NaN makes the loop fall back to
+    // signalDbm exactly as before.
+    internal void HandleRxMetersForAutoAgc(double signalDbm, double adcPkDbfs, double agcGainDb, long nowMs) =>
+        HandleRxMetersForAutoAgc(signalDbm, double.NaN, adcPkDbfs, agcGainDb, nowMs);
+
+    // Primary overload (issue #806). spectrumFloorDbm is a real per-band noise
+    // floor measured from the panadapter FFT — the same physical quantity Thetis
+    // tracks. When finite it REPLACES signalDbm as the floor source. signalDbm,
+    // which in this integration is the post-AGC audio-RMS fallback (it moves with
+    // the signal, not the floor), is kept only as the degraded fallback for when
+    // no fresh spectrum is available (stale analyzer frame / near-dead span).
+    internal void HandleRxMetersForAutoAgc(double signalDbm, double spectrumFloorDbm, double adcPkDbfs, double agcGainDb, long nowMs)
     {
         bool changedOffset = false;
         double newOffset = 0.0;
@@ -1827,19 +1871,19 @@ public sealed class RadioService : IDisposable
         {
             if (!_state.AutoAgcEnabled) return;
             if (_mox) return;   // Pause during TX
+            bool hasSpectrumFloor = double.IsFinite(spectrumFloorDbm) && spectrumFloorDbm > -250.0;
             bool hasSignalMeter = double.IsFinite(signalDbm) && signalDbm > -250.0;
             bool hasAgcGain = double.IsFinite(agcGainDb) && agcGainDb > -199.5;
             bool hasAdcPeak = double.IsFinite(adcPkDbfs) && adcPkDbfs > -199.5;
             bool adcUnderPressure = hasAdcPeak && adcPkDbfs > AgcAdcPressureThresholdDbfs;
-            if (!hasSignalMeter && !hasAgcGain) return;
+            if (!hasSpectrumFloor && !hasSignalMeter && !hasAgcGain) return;
 
             // If we paused for longer than the analysis window (TX,
             // just-toggled-on, RX dropout) the
             // window may hold stale samples — clear before re-accumulating.
             if (_lastAgcTickMs != long.MinValue && nowMs - _lastAgcTickMs > AgcNoiseFloorWindowSamples * 500)
             {
-                _noiseFloorWindowFill = 0;
-                _noiseFloorWindowIdx = 0;
+                ResetAutoAgcNoiseFloorWindow();
             }
 
             // Fast-attack: a band-scale VFO move makes the old band's samples
@@ -1849,8 +1893,7 @@ public sealed class RadioService : IDisposable
             if (_lastAutoAgcVfoHz != long.MinValue &&
                 Math.Abs(_state.VfoHz - _lastAutoAgcVfoHz) > AgcFastAttackVfoDeltaHz)
             {
-                _noiseFloorWindowFill = 0;
-                _noiseFloorWindowIdx = 0;
+                ResetAutoAgcNoiseFloorWindow();
             }
             _lastAutoAgcVfoHz = _state.VfoHz;
 
@@ -1858,9 +1901,30 @@ public sealed class RadioService : IDisposable
                 return;
             _lastAgcTickMs = nowMs;
 
-            if (hasSignalMeter)
+            // Choose the floor source for this tick. A real spectrum floor (#806)
+            // always wins. A BRIEF spectrum dropout (< AgcSpectrumStaleMs) is
+            // treated as transient — hold the window rather than inject the
+            // S-meter proxy, which sits on a different scale and moves with the
+            // signal. Only a SUSTAINED outage (stale frame / <64 valid bins for
+            // longer than that, e.g. an engine that genuinely never produces a
+            // spectrum) falls back to signalDbm, so the loop keeps tracking
+            // instead of freezing. The two sources are never mixed in one
+            // percentile window: switching source re-seeds the window.
+            if (hasSpectrumFloor) _lastSpectrumFloorMs = nowMs;
+            bool spectrumRecent = _lastSpectrumFloorMs != long.MinValue &&
+                                  nowMs - _lastSpectrumFloorMs < AgcSpectrumStaleMs;
+            int floorSource;        // 0 hold, 1 spectrum, 2 S-meter fallback
+            double floorSample;
+            if (hasSpectrumFloor) { floorSource = 1; floorSample = spectrumFloorDbm; }
+            else if (spectrumRecent) { floorSource = 0; floorSample = 0.0; }   // transient: hold
+            else if (hasSignalMeter) { floorSource = 2; floorSample = signalDbm; }
+            else { floorSource = 0; floorSample = 0.0; }
+            if (floorSource != 0)
             {
-                _noiseFloorWindow[_noiseFloorWindowIdx] = signalDbm;
+                if (_autoAgcWindowSource != 0 && _autoAgcWindowSource != floorSource)
+                    ResetAutoAgcNoiseFloorWindow();
+                _autoAgcWindowSource = floorSource;
+                _noiseFloorWindow[_noiseFloorWindowIdx] = floorSample;
                 _noiseFloorWindowIdx = (_noiseFloorWindowIdx + 1) % _noiseFloorWindow.Length;
                 if (_noiseFloorWindowFill < _noiseFloorWindow.Length) _noiseFloorWindowFill++;
             }
@@ -1892,14 +1956,28 @@ public sealed class RadioService : IDisposable
                 const double TargetAudioDb = -40.0;     // desired audio-output noise level
                 double targetEffective = Math.Clamp(
                     TargetAudioDb - noiseFloor, AgcMinEffectiveAgcT, AgcMaxEffectiveAgcT);
-                // Preserve weak/quiet-band behavior: noise-floor tracking can
-                // add live gain, but it does not lower the user's baseline.
-                // Normal WDSP AGC reduction is the loudness normalizer; only
-                // ADC pressure below is allowed to pull AGC-T down.
-                desiredOffset = Math.Max(0.0, targetEffective - _state.AgcTopDb);
+                // SYMMETRIC noise-floor tracking (Thetis parity, #806). Effective
+                // AGC-T follows the floor in BOTH directions: a quiet band raises
+                // gain, a noisy band lowers it. The old Math.Max(0, …) clamp let
+                // the loop only ADD gain above the slider baseline, so with the
+                // default 80 dB baseline the offset stayed pinned at 0 on any
+                // normal band (floor > −120 dBm) — the operator "barely heard a
+                // change". The [20,100] clamp on targetEffective above is the
+                // safety rail (Thetis's threshold clamp equivalent); ADC-pressure
+                // protection below can still pull further. Manual AGC-T is
+                // untouched: SetAgcTop zeroes the offset and disables auto, so
+                // this line never runs in manual mode.
+                desiredOffset = targetEffective - _state.AgcTopDb;
             }
             else if (_agcOffsetDb < 0.0 && (!hasAgcGain || agcGainDb >= AgcCutStressThresholdDb || !adcUnderPressure))
             {
+                // Warm-up release: the window isn't ready yet (just re-seeded / too
+                // few samples) but a leftover negative offset from an earlier
+                // ADC-pressure cut is still applied. If the stress has cleared,
+                // release it to 0 until the noise-floor path can take over once the
+                // window fills. (With symmetric tracking, a steady-state negative
+                // offset is normal and is owned by the windowReady branch above —
+                // this branch only governs the not-ready transient.)
                 desiredOffset = 0.0;
             }
 
@@ -2335,8 +2413,7 @@ public sealed class RadioService : IDisposable
         {
             _agcOffsetDb = 0.0;
             _lastAgcTickMs = long.MinValue;
-            _noiseFloorWindowFill = 0;
-            _noiseFloorWindowIdx = 0;
+            ResetAutoAgcNoiseFloorWindow();
             return s with { AgcTopDb = clamped, AgcOffsetDb = 0.0, AutoAgcEnabled = false };
         });
         // Persist only the user-baseline (AgcTopDb); the offset is live-recomputed.

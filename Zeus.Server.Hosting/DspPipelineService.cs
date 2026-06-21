@@ -951,6 +951,17 @@ public class DspPipelineService : BackgroundService,
     private long _calPanCenterHz;
     private long _calPanSnapshotMs;
     private readonly object _calPanLock = new();
+
+    // Scratch buffer for the auto-AGC noise-floor estimate (issue #806). Filled
+    // and sorted in-place by TryComputeAutoAgcNoiseFloorDbm on the single meter
+    // thread; never read concurrently, so it needs no lock.
+    private readonly float[] _autoAgcFloorBuf = new float[Width];
+    // Low percentile of the valid panadapter bins ⇒ the band noise floor. 0.20
+    // rejects up to ~80% spectrum occupancy (signals are the high bins).
+    private const double AutoAgcFloorPercentile = 0.20;
+    // Reject the estimate unless this many bins are real (not the -200 invalid
+    // sentinel); a near-dead span gives a meaningless floor.
+    private const int AutoAgcFloorMinValidBins = 64;
     private readonly float[] _diagWfSnapshot = new float[Width];
     private long _diagWfSnapshotMs;
     private long _diagDisplayFrameMs;
@@ -4192,6 +4203,53 @@ public class DspPipelineService : BackgroundService,
         return true;
     }
 
+    /// <summary>
+    /// Estimates the band noise floor (raw display dB) for Auto-AGC from the
+    /// panadapter FFT — the same pre-AGC, per-bin spectrum Thetis tracks
+    /// (display.cs:5240-5264), not the post-AGC S-meter. Reads the cached
+    /// snapshot and delegates the percentile to <see cref="TryNoiseFloorFromDisplayBins"/>.
+    /// Returns false (caller passes NaN; the loop falls back to the S-meter) when
+    /// no fresh spectrum is available — a stale frame, a near-dead span, or any
+    /// engine/display state that did not produce a fresh analyzer frame within
+    /// the freshness window. The caller adds the board RX cal offset. Issue #806.
+    /// </summary>
+    private bool TryComputeAutoAgcNoiseFloorDbm(out double floorDbm)
+    {
+        floorDbm = double.NaN;
+        if (!TryCapturePanadapterSnapshot(_autoAgcFloorBuf, out _, out _, maxAgeMs: 300))
+            return false;
+        return TryNoiseFloorFromDisplayBins(
+            _autoAgcFloorBuf, AutoAgcFloorPercentile, AutoAgcFloorMinValidBins, out floorDbm);
+    }
+
+    /// <summary>
+    /// Pure noise-floor percentile over a panadapter display-dB buffer. Compacts
+    /// the valid bins to the front (SanitizeDisplayBuffer pins invalid bins to
+    /// DisplayInvalidBinDb = -200; excluding those and any absurdly low value
+    /// keeps the estimate on real noise, not dead band edges), then returns the
+    /// requested low percentile of the survivors. Returns false when fewer than
+    /// <paramref name="minValidBins"/> bins are real. NOTE: mutates
+    /// <paramref name="bins"/> in place (compacts + sorts); pass a scratch buffer.
+    /// </summary>
+    internal static bool TryNoiseFloorFromDisplayBins(
+        Span<float> bins, double percentile, int minValidBins, out double floorDbm)
+    {
+        floorDbm = double.NaN;
+        int n = 0;
+        for (int i = 0; i < bins.Length; i++)
+        {
+            float v = bins[i];
+            if (float.IsFinite(v) && v > -190f)
+                bins[n++] = v;
+        }
+        if (n < minValidBins) return false;
+
+        bins.Slice(0, n).Sort();
+        int idx = Math.Clamp((int)Math.Round((n - 1) * percentile), 0, n - 1);
+        floorDbm = bins[idx];
+        return true;
+    }
+
     internal static void FeedProtocol1Iq(
         IDspEngine engine,
         int channel,
@@ -5016,7 +5074,22 @@ public class DspPipelineService : BackgroundService,
             //
             var rx = engine.GetRxStageMeters(channel);
             var v2 = BuildRxMetersV2(rx, rxCalOffsetDb);
-            _radio.HandleRxMetersForAutoAgc(dbm, v2.AdcPk, v2.AgcGain, Environment.TickCount64);
+            // Feed Auto-AGC a real spectrum-derived noise floor when one is
+            // available (#806); NaN falls the loop back to the S-meter `dbm`.
+            // Only pay for the snapshot copy + percentile sort when Auto-AGC is
+            // actually engaged — the loop early-returns otherwise anyway.
+            double spectrumFloorDbm = double.NaN;
+            if (state.AutoAgcEnabled &&
+                TryComputeAutoAgcNoiseFloorDbm(out double floorDbm))
+            {
+                // Put the display-pixel floor on the same calibrated dBm scale as
+                // the S-meter path (RX pixels carry no cal offset of their own),
+                // so the loop's TargetAudioDb / [20,100] constants — tuned against
+                // S-meter dBm — apply. Any residual WDSP-display-vs-S-meter delta
+                // beyond this board offset is a bench-tune item (#806).
+                spectrumFloorDbm = floorDbm + rxCalOffsetDb;
+            }
+            _radio.HandleRxMetersForAutoAgc(dbm, spectrumFloorDbm, v2.AdcPk, v2.AgcGain, Environment.TickCount64);
             lock (_rxMeterDiagLock)
             {
                 _diagRxMetersValid = true;
