@@ -38,7 +38,7 @@ class FakeChannel {
 }
 
 function lastRequest(ch: FakeChannel): { id: number; method: string; path: string } {
-  return JSON.parse(ch.sent[ch.sent.length - 1]);
+  return JSON.parse(ch.sent[ch.sent.length - 1]!);
 }
 
 describe('api-tunnel fetch shim', () => {
