@@ -953,7 +953,7 @@ public static class ZeusEndpoints
             // Plumb the discovered board byte through so RadioService can
             // set the real board kind on the Protocol1Client rather than
             // defaulting to HermesLite2 for every P1 connection — issue #294.
-            var p1BoardKind = req.BoardId is byte bid ? MapBoardByte(bid) : HpsdrBoardKind.Unknown;
+            var p1BoardKind = req.BoardId is byte bid ? MapBoardByteP1(bid) : HpsdrBoardKind.Unknown;
 
             try
             {
@@ -996,7 +996,7 @@ public static class ZeusEndpoints
             // Plumb the discovered board byte through so RadioService can
             // surface the real board kind instead of defaulting to OrionMkII
             // for every P2 connection (issue #171 — Brick2 is Hermes/0x01 on P2).
-            var boardKind = req.BoardId is byte b ? MapBoardByte(b) : HpsdrBoardKind.Unknown;
+            var boardKind = req.BoardId is byte b ? MapBoardByteP2(b) : HpsdrBoardKind.Unknown;
 
             try
             {
@@ -2866,20 +2866,37 @@ public static class ZeusEndpoints
         return true;
     }
 
-    // Mirrors the byte→enum maps in Zeus.Protocol1.Discovery.ReplyParser and
-    // Zeus.Protocol2.Discovery.ReplyParser. Kept inline (not factored to a
-    // shared helper) because those parsers are deliberately self-contained
-    // per protocol; this is the connect-time projection of the same table.
-    static HpsdrBoardKind MapBoardByte(byte raw) => raw switch
+    // Connect-time projection of the discovered board byte → kind. Protocol 1
+    // and Protocol 2 use DIFFERENT wire numbering for the dual-ADC family
+    // (Angelia/Orion/OrionMkII), so they MUST use separate maps that mirror
+    // Zeus.Protocol1/Protocol2 Discovery.ReplyParser respectively. Reusing one
+    // table for both was the connect-time half of issue #780 (a P2 ANAN-200D,
+    // byte 0x04, was projected through the P1 table as Angelia/100D).
+    // Do NOT merge these two.
+    static HpsdrBoardKind MapBoardByteP1(byte raw) => raw switch
     {
         0x00 => HpsdrBoardKind.Metis,
         0x01 => HpsdrBoardKind.Hermes,
         0x02 => HpsdrBoardKind.HermesII,
-        0x04 => HpsdrBoardKind.Angelia,
-        0x05 => HpsdrBoardKind.Orion,
+        0x04 => HpsdrBoardKind.Angelia,      // ANAN-100D (P1 wire)
+        0x05 => HpsdrBoardKind.Orion,        // ANAN-200D (P1 wire)
         0x06 => HpsdrBoardKind.HermesLite2,
         0x0A => HpsdrBoardKind.OrionMkII,
         0x14 => HpsdrBoardKind.HermesC10,
+        _    => HpsdrBoardKind.Unknown,
+    };
+
+    static HpsdrBoardKind MapBoardByteP2(byte raw) => raw switch
+    {
+        0x00 => HpsdrBoardKind.Metis,        // Atlas
+        0x01 => HpsdrBoardKind.Hermes,
+        0x02 => HpsdrBoardKind.HermesII,
+        0x03 => HpsdrBoardKind.Angelia,      // ANAN-100D (P2 wire)
+        0x04 => HpsdrBoardKind.Orion,        // ANAN-200D (P2 wire — issue #780)
+        0x05 => HpsdrBoardKind.OrionMkII,    // ANAN-7000DLE / 8000DLE (P2 wire)
+        0x06 => HpsdrBoardKind.HermesLite2,
+        0x0A => HpsdrBoardKind.OrionMkII,    // Saturn / ANAN-G2
+        0x14 => HpsdrBoardKind.HermesC10,    // ANAN-G2E
         _    => HpsdrBoardKind.Unknown,
     };
 
