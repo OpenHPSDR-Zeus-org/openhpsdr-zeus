@@ -254,7 +254,7 @@ public sealed class TciServer : IHostedService, IDisposable
         // Use rate limiting for VFO (can fire rapidly during tuning)
         BroadcastRateLimited("vfo:0,0", TciProtocol.Command("vfo", 0, 0, state.VfoHz));
         BroadcastRateLimited("vfo:0,1", TciProtocol.Command("vfo", 0, 1, state.VfoHz));
-        BroadcastRateLimited("dds:0", TciProtocol.Command("dds", 0, state.VfoHz));
+        BroadcastRateLimited("dds:0", TciProtocol.Command("dds", 0, CwOffset.EffectiveLoHz(state)));
 
         // Mode and filter are less frequent — send immediately
         string tciMode = TciProtocol.ModeToTci(state.Mode);
