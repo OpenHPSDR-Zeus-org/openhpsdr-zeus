@@ -1,1 +1,7 @@
 .githooks/* text eol=lf
+
+# Shell scripts must stay LF in the repo and on checkout. The installer
+# launchers source zeus-preflight.sh at runtime on Linux; a CRLF sneaking in
+# from a Windows checkout would break `source` with `$'\r'` errors. CI builds
+# on Linux already get LF, but pin it so a Windows-side edit can't regress it.
+*.sh text eol=lf
