@@ -257,6 +257,37 @@ function fmtDb(v: number | null): string {
   return v === null ? '--' : `${v.toFixed(1)} dB`;
 }
 
+// A compact clause of the RESULTING (post-tune) values for every setting Auto
+// Tune actually moved. The `actions` list carries the per-step DELTAS (e.g.
+// "mic -1.5 dB"), which read byte-for-byte identical on every run even while
+// the chain is genuinely walking down — so the headline summary looked frozen.
+// Reporting where each value LANDED makes consecutive runs visibly differ and
+// tells the operator the absolute state, not just the nudge.
+function resultClause(current: TxAutoTuneSettings, next: TxAutoTuneSettings): string {
+  const parts: string[] = [];
+  if (next.micGainDb !== current.micGainDb) parts.push(`mic ${next.micGainDb} dB`);
+  if (next.levelerMaxGainDb !== current.levelerMaxGainDb) {
+    parts.push(`leveler ${next.levelerMaxGainDb} dB`);
+  }
+  if (next.drivePercent !== current.drivePercent) parts.push(`drive ${next.drivePercent}%`);
+  if (next.cfcConfig.preCompDb !== current.cfcConfig.preCompDb) {
+    parts.push(`CFC pre-comp ${next.cfcConfig.preCompDb} dB`);
+  }
+  if (next.cfcConfig.prePeqDb !== current.cfcConfig.prePeqDb) {
+    parts.push(`CFC pre-PEQ ${next.cfcConfig.prePeqDb} dB`);
+  }
+  if (next.txLeveling.alcMaxGainDb !== current.txLeveling.alcMaxGainDb) {
+    parts.push(`ALC max ${next.txLeveling.alcMaxGainDb} dB`);
+  }
+  if (next.txLeveling.compressorGainDb !== current.txLeveling.compressorGainDb) {
+    parts.push(`comp ${next.txLeveling.compressorGainDb} dB`);
+  }
+  if (next.txLeveling.levelerDecayMs !== current.txLeveling.levelerDecayMs) {
+    parts.push(`leveler decay ${next.txLeveling.levelerDecayMs} ms`);
+  }
+  return parts.join(', ');
+}
+
 function fmtDbfs(v: number | null): string {
   return v === null ? '--' : `${v.toFixed(1)} dBFS`;
 }
@@ -599,7 +630,8 @@ export function recommendTxAutoTune(
   if (stats.voicedSampleCount < MIN_VOICED_SAMPLES) {
     summary = 'Auto tune needs a stronger speech sample';
   } else if (actions.length > 0) {
-    summary = `Auto tune applied ${actions.length} bounded change${actions.length === 1 ? '' : 's'}`;
+    const landed = resultClause(current, next);
+    summary = `Auto tune applied ${actions.length} bounded change${actions.length === 1 ? '' : 's'}${landed ? ` → ${landed}` : ''}`;
   } else if (blockers.length > 0) {
     summary = `Auto tune held settings: ${blockers[0]}`;
   } else {

@@ -225,6 +225,36 @@ describe('recommendTxAutoTune', () => {
     expect(plan.actions.join(' ')).toContain('compressor on');
   });
 
+  it('reports the resulting values so consecutive runs are distinguishable', () => {
+    const hot = samples({ micPkDbfs: -8, audioSuiteOutputDbfs: -0.4, outPkDbfs: -6 });
+    const first = recommendTxAutoTune(settings({ micGainDb: -4 }), hot);
+
+    // The headline now leads with where each moved setting LANDED, not just the
+    // delta — so it carries the absolute mic value and differs run-to-run.
+    expect(first.summary).toContain('→');
+    expect(first.summary).toContain(`mic ${first.settings.micGainDb} dB`);
+
+    // Re-run from the just-applied mic gain against the same hot sample: the
+    // chain backs off again, lands on a different value, and the summary text
+    // is no longer identical to the previous run.
+    const second = recommendTxAutoTune(settings({ micGainDb: first.settings.micGainDb }), hot);
+    expect(second.settings.micGainDb).toBeLessThan(first.settings.micGainDb);
+    expect(second.summary).not.toBe(first.summary);
+  });
+
+  it('only names settings that actually moved in the result clause', () => {
+    const plan = recommendTxAutoTune(
+      settings({ micGainDb: -4, audioSuiteActive: true }),
+      samples({ micPkDbfs: -8, audioSuiteOutputDbfs: -0.4, outPkDbfs: -6 }),
+    );
+
+    // VST chain hot -> only mic gain is cut; the clause must not invent a
+    // leveler/drive change the run never made.
+    expect(plan.summary).toContain('mic');
+    expect(plan.summary).not.toContain('leveler');
+    expect(plan.summary).not.toContain('drive');
+  });
+
   it('slows a pumping leveler instead of leaving it chasing syllables', () => {
     const pumping = Array.from({ length: 40 }, (_, i) =>
       sample({ lvlrGrDb: i < 30 ? 2 : 12 }),
