@@ -5,8 +5,14 @@ compatibility_date = "2025-01-01"
 # Branded custom domain (Cloudflare auto-creates the DNS record on deploy).
 # Requires the openhpsdrzeus.com zone on this Cloudflare account.
 # remote.openhpsdrzeus.com is the canonical broker endpoint.
+#
+# The /go/* path route on the apex lets the QR's vanity address
+# (openhpsdrzeus.com/go/<callsign>) resolve to this worker's /go handler,
+# which 302-redirects to the web client. It is a narrow path match — the rest
+# of openhpsdrzeus.com stays served by the marketing Pages project.
 routes = [
   { pattern = "remote.openhpsdrzeus.com", custom_domain = true },
+  { pattern = "openhpsdrzeus.com/go/*", zone_name = "openhpsdrzeus.com" },
 ]
 
 workers_dev = true
@@ -17,7 +23,9 @@ workers_dev = true
 #   wrangler dev --var QRZ_VERIFY:off
 QRZ_VERIFY = "on"
 # Where /go/<callsign> sends the browser (the web client on Cloudflare Pages).
-WEB_APP_ORIGIN = "https://openhpsdrzeus.com"
+# app.openhpsdrzeus.com is the zeus-web-app Pages project (the SPA); the apex
+# openhpsdrzeus.com stays the marketing site and must NOT be used here.
+WEB_APP_ORIGIN = "https://app.openhpsdrzeus.com"
 
 # Per-callsign WebRTC signaling room (WebSocket Hibernation).
 [[durable_objects.bindings]]
