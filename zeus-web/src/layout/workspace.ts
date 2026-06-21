@@ -68,11 +68,12 @@ export interface WorkspaceTile {
   instanceConfig?: unknown;
   /** When true, the tile is pinned to its current grid space. */
   locked?: boolean;
-  /** On-screen pixel height captured at the moment the tile was locked. While
-   *  locked, the tile is held at exactly this height regardless of how the
-   *  workspace rows shrink (see deriveWorkspaceLayout). A raw pixel value — NOT
-   *  a grid coordinate, so it is not scaled by the v7→v8 GRID_SCALE migration.
-   *  Only meaningful when `locked` is true; cleared on unlock. */
+  /** Legacy: on-screen pixel height captured when a tile was locked under the
+   *  old shrink-to-fit workspace, where a uniform rowHeight rescaled every tile.
+   *  The workspace is now a fixed-cell grid (a constant rowHeight), so a locked
+   *  tile holds its size automatically and this is no longer read or written.
+   *  Preserved verbatim on parse so older saved layouts round-trip unchanged.
+   *  A raw pixel value — never scaled by the v7→v8 GRID_SCALE migration. */
   lockedHeightPx?: number;
 }
 
