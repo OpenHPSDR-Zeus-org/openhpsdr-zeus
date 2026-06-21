@@ -70,6 +70,27 @@ public sealed class RemoteWebRtcSessionTests
         server.Close();
     }
 
+    [Fact]
+    public async Task UnlockedSession_ReceivesHubBroadcastFrame()
+    {
+        var hub = new Zeus.Server.StreamingHub(NullLogger<Zeus.Server.StreamingHub>.Instance);
+        var server = new RemoteWebRtcSession(RegisterVerifier(Password), NullLogger.Instance, hub: hub);
+        await using var client = new ProverClient(Password);
+
+        var answer = await server.CreateAnswerAsync(await client.CreateOfferAsync());
+        await client.AcceptAnswerAsync(answer);
+        await client.Unlocked.WaitAsync(TimeSpan.FromSeconds(20));
+        Assert.True(server.IsUnlocked);
+
+        // A normal hub broadcast (always-on RX meter, 5 bytes) reaches the remote
+        // client through the StreamingHub fan-out → RemoteFrameSink → frames channel.
+        hub.Broadcast(new Zeus.Contracts.RxMeterFrame(-73.0f));
+        var received = await client.NextFrame().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(5, received.Length);
+        server.Close();
+    }
+
     /// <summary>Minimal in-process SPAKE2+ prover over WebRTC — what the browser will do.</summary>
     private sealed class ProverClient : IAsyncDisposable
     {
