@@ -746,7 +746,17 @@ public sealed class Protocol1Client : IProtocol1Client
                 {
                     if (++consecutiveTimeouts >= ConsecutiveTimeoutsBeforeGiveUp)
                     {
-                        _log.LogWarning("RX: {N} consecutive socket timeouts — radio gone", consecutiveTimeouts);
+                        if (OperatingSystem.IsWindows())
+                            _log.LogWarning(
+                                "p1.rx.timeout count={N} — no RX packets from radio. " +
+                                "If TX works but RX is silent, Windows Firewall may be blocking " +
+                                "inbound UDP. This is common when Tailscale or another VPN is " +
+                                "installed (it reclassifies the LAN adapter as Public network). " +
+                                "Temporarily disable Windows Firewall to confirm, then add a " +
+                                "permanent inbound rule for OpenhpsdrZeus.exe.",
+                                consecutiveTimeouts);
+                        else
+                            _log.LogWarning("p1.rx.timeout count={N} — no RX packets from radio", consecutiveTimeouts);
                         return;
                     }
                     continue;
