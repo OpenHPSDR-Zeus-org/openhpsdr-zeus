@@ -8,8 +8,9 @@ speaks the **ANDROMEDA CAT dialect** over a UART. Zeus bridges it in
 on-screen click are indistinguishable downstream, and the UI reflects panel
 actions automatically via the normal state broadcasts.
 
-Source of truth for the protocol and the type-5 button/encoder map is
-DeskHPSDR's `rigctl.c` (`andromeda_type == 5`) — see ATTRIBUTIONS.md.
+The authoritative default map is Thetis's `MakeNewG2PanelDataset`
+(`Andromeda.cs`, MW0LGE/G8NJJ); the ANDROMEDA wire framing and the type-5 button
+numbering are cross-checked against DeskHPSDR's `rigctl.c` — see ATTRIBUTIONS.md.
 
 ## Wire protocol (ANDROMEDA)
 
@@ -50,13 +51,18 @@ The G2-Ultra panel has **no PS push-button** (only a status LED), so the router
 has *no* code path that arms PureSignal. The KB2UKA no-auto-arm invariant is
 preserved structurally — `SetPs` is never reachable from panel input.
 
-## Mapped controls
+## Mapped controls (full G2-Ultra parity)
 
-Buttons: all HF band buttons, MOX, TUNE, two-tone, CTUN, A/B swap, A>B / B>A,
-mode/filter/band stepping, NB/SNB/NR, **per-RX mute (MUTE_RX1/RX2)**,
-**VFO LOCK**, **RIT/XIT select + clear**.
+Default assignments follow Thetis's `MakeNewG2PanelDataset`.
+
+Buttons: all HF band buttons, **LF/MF (btn 38 → 2200 m / 630 m toggle)**, MOX,
+TUNE, two-tone, CTUN, A/B swap, A>B / B>A, SPLIT, mode/filter/band stepping,
+filter reset, NB/SNB/NR (F1–F3), **per-RX mute (MUTE_RX1/RX2)**, **VFO LOCK**,
+**RIT/XIT select + clear**, **ATU tune (btn 4)**, **diversity on/off (btn 41)**,
+**MULTI select (btn 3)**.
 Encoders: AF gain (RX1/RX2), AGC top (RX1), TX drive, RX attenuation,
-filter cut high/low, and the **RIT/XIT offset** knob.
+filter cut high/low, **RIT/XIT offset**, **diversity gain / phase**, and the
+**MULTI** encoder (enc 5).
 LEDs driven: **1 = MOX, 2 = TUNE, 3 = PS, 6 = RIT, 7 = XIT, 9 = LOCK**.
 
 RIT/XIT behaviour: `RITSELECT` (btn 11) cycles none → RIT → XIT → none; the
@@ -64,17 +70,25 @@ clear button (btn 12) zeroes both offsets; the `RIT/ATTN` encoder (enc 7) nudges
 whichever offset is active (RIT wins when both are on) in 10 Hz steps, clamped to
 ±99999 Hz (Thetis udRIT/udXIT range).
 
+MULTI encoder: the MULTI push-button (btn 3) cycles the MULTI encoder (enc 5)
+through the Zeus-backed subset of Thetis's multi-function list — RX1/RX2 AF gain,
+RX1 AGC, attenuation, filter high/low cut, RIT, XIT, TX drive, diversity
+gain/phase. The selected function is logged (`g2panel.multi.select`).
+
+ATU: btn 4 fires a `RequestAtuTune` pulse (Protocol-1 auto-tune-start bit).
+Thetis leaves this button unassigned by default and reaches ATU from a softkey
+menu; Zeus binds the silk-labelled button directly. The tune-request bit is
+spec-correct but bench-verification against a radio with an ATU is still pending.
+
 ## Panel functions still without a Zeus mapping (log `g2panel.unmapped`)
 
 | Panel control | Status |
 |---|---|
-| Diversity enable / gain / phase (btn 41, enc 11/12) | **Backend exists** (`SetDiversity`) — not yet wired to the panel; trivial follow-up |
-| ATU (btn 4, LED 4) | no ATU action wired |
-| MULTI knob / button (enc 5, btn 3) | no assignable "multi" parameter |
-| AGC top on RX2 (enc 2) | `SetAgcTop` is global, not per-RX |
-| Long-press menus (MODE/FILTER/BAND/NOISE) | would need a UI-panel-open message |
-| 2200 m / band 136 (btn 38) | outside Zeus's HF band plan |
+| AGC top on RX2 (enc 2) | `SetAgcTop` is global, not per-RX — no per-RX AGC backend |
+| Long-press softkey menus (MODE/FILTER/BAND/NOISE) | **Intentional no-op** — Thetis pops an on-panel menu; Zeus uses its web UI instead |
+| ATU-ready / active-VFO LEDs (4/5, 8) | no Zeus state to drive them |
 
 Approximations worth noting: `FILTER+/-` widens/narrows the passband around its
-centre (no preset table in the backend), `SPLIT` toggles the TX VFO A↔B, and the
+centre (no preset table in the backend), `SPLIT` toggles the TX VFO A↔B, the A/B
+button (btn 10) swaps VFO frequencies (Zeus has no active-VFO focus), and the
 main VFO knob tunes RX1 at `VfoStepHz` (10 Hz) per accelerated step.
