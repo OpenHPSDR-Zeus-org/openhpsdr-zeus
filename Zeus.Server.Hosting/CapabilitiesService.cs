@@ -46,7 +46,7 @@ public sealed class CapabilitiesService
             Architecture: architecture,
             Version: version,
             LanHttpsUrls: lanHttpsUrls,
-            Features: new FeatureMatrix());
+            Features: new FeatureMatrix(Vst: VstSupported(), VstEditor: VstEditorSupported()));
 
         _shareOverLan = options.HostMode == ZeusHostMode.Desktop && options.ShareOverLan;
     }
@@ -79,6 +79,28 @@ public sealed class CapabilitiesService
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return "windows";
         return "unknown";
     }
+
+    // In-process VST3 hosting (libzeus-vst-bridge) ships for Windows, Linux and
+    // macOS — the realtime chain is platform-agnostic, so VST audio is available
+    // wherever the native bridge loads. The frontend uses this to expose the
+    // Audio Suite VST affordances instead of treating VST as Windows-only.
+    private static bool VstSupported()
+        => RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+        || RuntimeInformation.IsOSPlatform(OSPlatform.Linux)
+        || RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+
+    // Plugin editors are native GUI windows: always available on Windows/macOS;
+    // on Linux only when a display server is reachable (the bridge opens an X11
+    // window — headless has nowhere to show it).
+    private static bool VstEditorSupported()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return true;
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return true;
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            return !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DISPLAY"))
+                || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"));
+        return false;
+    }
 }
 
 // JSON shape returned by /api/capabilities. Property names land lower-case
@@ -93,4 +115,4 @@ public sealed record CapabilitiesSnapshot(
     IReadOnlyList<string> LanHttpsUrls,
     FeatureMatrix Features);
 
-public sealed record FeatureMatrix();
+public sealed record FeatureMatrix(bool Vst = false, bool VstEditor = false);

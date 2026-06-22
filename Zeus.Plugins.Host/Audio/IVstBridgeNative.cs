@@ -50,7 +50,30 @@ public interface IVstBridgeNative
 
     /// <summary>True if the plugin's editor window is currently open.</summary>
     bool EditorIsOpen(nint handle);
+
+    /// <summary>
+    /// Enumerate the audio-effect classes in a VST3 file/bundle WITHOUT
+    /// activating them — the in-process plugin scanner. On <see cref="VstBridgeStatus.Ok"/>,
+    /// <paramref name="json"/> is a UTF-8 JSON array of
+    /// <c>{uid,name,category,vendor}</c> objects (empty array when the file
+    /// has no audio-effect class). Other status codes match <c>zvst_status_t</c>.
+    /// Defaulted so existing test fakes need no change; the production bridge
+    /// overrides it via <c>zvst_describe</c>.
+    /// </summary>
+    int Describe(string path, out string json)
+    {
+        json = "[]";
+        return VstBridgeStatus.NotImplemented;
+    }
 }
+
+/// <summary>
+/// One audio-effect class enumerated from a VST3 file by
+/// <see cref="IVstBridgeNative.Describe"/>. <see cref="Uid"/> is the class
+/// TUID string — the identifier that selects this exact sub-plugin when a
+/// single file (a "shell") hosts several.
+/// </summary>
+public sealed record VstPluginDescriptor(string Uid, string Name, string Category, string Vendor);
 
 /// <summary>
 /// Status codes returned by <see cref="IVstBridgeNative"/>. Mirror
