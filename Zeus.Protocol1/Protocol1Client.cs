@@ -46,6 +46,7 @@
 using System.Buffers;
 using System.Diagnostics;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
@@ -171,6 +172,7 @@ public sealed class Protocol1Client : IProtocol1Client
     public long DroppedFrames => Interlocked.Read(ref _droppedFrames);
     public long TotalFrames => Interlocked.Read(ref _totalFrames);
 
+    public event Action? Disconnected;
     public event Action<TelemetryReading>? TelemetryReceived;
     public event Action<AdcOverloadStatus>? AdcOverloadObserved;
     public event Action<bool>? HardwarePttChanged;
@@ -478,12 +480,51 @@ public sealed class Protocol1Client : IProtocol1Client
             SendBufferSize = 64 * 1024,
             ReceiveTimeout = RxSocketTimeoutMs,
         };
-        sock.Bind(new IPEndPoint(IPAddress.Any, 0));
+        sock.Bind(new IPEndPoint(LocalAddressForRemote(radioEndpoint.Address), 0));
 
         _socket = sock;
         _remote = radioEndpoint;
         _log.LogInformation("Protocol1 bound local={Local} remote={Remote}", sock.LocalEndPoint, radioEndpoint);
         return Task.CompletedTask;
+    }
+
+    // When the radio is on a link-local address (169.254.0.0/16, direct-connect
+    // without a router), IPAddress.Any lets the OS pick the bind address — which
+    // on macOS is the default-route interface (Wi-Fi), a different subnet from the
+    // direct Ethernet link. The radio then streams IQ back to that unreachable
+    // address and Zeus gets nothing. Find the local link-local unicast on the same
+    // /16 and bind there instead so the Metis start command carries a reachable
+    // return address.
+    private static IPAddress LocalAddressForRemote(IPAddress remote)
+    {
+        if (!IsLinkLocal(remote)) return IPAddress.Any;
+        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (nic.OperationalStatus != OperationalStatus.Up) continue;
+            foreach (var uni in nic.GetIPProperties().UnicastAddresses)
+            {
+                if (uni.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                if (!IsLinkLocal(uni.Address)) continue;
+                if (SameSubnet(remote, uni.Address, uni.IPv4Mask)) return uni.Address;
+            }
+        }
+        return IPAddress.Any;
+    }
+
+    private static bool IsLinkLocal(IPAddress a)
+    {
+        var b = a.GetAddressBytes();
+        return b[0] == 169 && b[1] == 254;
+    }
+
+    private static bool SameSubnet(IPAddress a, IPAddress b, IPAddress mask)
+    {
+        var ab = a.GetAddressBytes();
+        var bb = b.GetAddressBytes();
+        var mb = mask.GetAddressBytes();
+        for (int i = 0; i < 4; i++)
+            if ((ab[i] & mb[i]) != (bb[i] & mb[i])) return false;
+        return true;
     }
 
     public Task StartAsync(StreamConfig config, CancellationToken ct)
@@ -827,6 +868,8 @@ public sealed class Protocol1Client : IProtocol1Client
                                 consecutiveTimeouts);
                         else
                             _log.LogWarning("p1.rx.timeout count={N} — no RX packets from radio", consecutiveTimeouts);
+                        try { Disconnected?.Invoke(); }
+                        catch (Exception handlerEx) { _log.LogWarning(handlerEx, "p1.rx Disconnected handler threw"); }
                         return;
                     }
                     continue;

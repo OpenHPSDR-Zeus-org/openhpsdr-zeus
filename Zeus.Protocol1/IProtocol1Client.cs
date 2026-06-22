@@ -113,6 +113,16 @@ public interface IProtocol1Client : IDisposable
     void SetOcMasks(byte txMask, byte rxMask);
 
     /// <summary>
+    /// Raised once from the RX loop when consecutive receive timeouts exhaust the
+    /// <c>ConsecutiveTimeoutsBeforeGiveUp</c> threshold — the radio has stopped
+    /// sending. Fires at most once per <see cref="StartAsync"/> / <see cref="StopAsync"/>
+    /// cycle and is NOT raised on a clean <see cref="StopAsync"/> call. Handlers run
+    /// synchronously on the RX thread; use <c>Task.Run</c> for any async work to
+    /// avoid blocking the thread or deadlocking on <see cref="StopAsync"/>.
+    /// </summary>
+    event Action? Disconnected;
+
+    /// <summary>
     /// Raised from the RX loop whenever a successfully parsed EP6 packet carried
     /// a C&amp;C echo on an AIN-bearing address (addresses 1/2/3 → C0 bytes
     /// 0x08/0x10/0x18). Fire-and-forget — handlers run synchronously on the RX
