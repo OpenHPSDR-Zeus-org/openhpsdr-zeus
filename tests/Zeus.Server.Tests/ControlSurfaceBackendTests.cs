@@ -179,4 +179,56 @@ public sealed class ControlSurfaceBackendTests : IDisposable
         using var radio = NewRadio();
         Assert.Null(radio.Snapshot().Diversity);
     }
+
+    // ---- Diversity combine math (DspPipelineService.DiversityCombine) ----
+
+    [Fact]
+    public void DiversityCombine_UnityWeight_AddsSourceToReference()
+    {
+        // rx0 = (1, 2), src = (3, 4); weight = 1 + 0j → dest = (1+3, 2+4).
+        double[] rx0 = [1, 2];
+        double[] src = [3, 4];
+        double[] dest = new double[2];
+        DspPipelineService.DiversityCombine(rx0, src, wI: 1.0, wQ: 0.0, dest);
+        Assert.Equal(4.0, dest[0], 9);
+        Assert.Equal(6.0, dest[1], 9);
+    }
+
+    [Fact]
+    public void DiversityCombine_NinetyDegreePhase_RotatesSource()
+    {
+        // weight = 0 + 1j (90°). source (si, sq) rotates to (-sq, si).
+        // src = (3, 4) → rotated (-4, 3); rx0 = (0,0) → dest = (-4, 3).
+        double[] rx0 = [0, 0];
+        double[] src = [3, 4];
+        double[] dest = new double[2];
+        DspPipelineService.DiversityCombine(rx0, src, wI: 0.0, wQ: 1.0, dest);
+        Assert.Equal(-4.0, dest[0], 9);
+        Assert.Equal(3.0, dest[1], 9);
+    }
+
+    [Fact]
+    public void DiversityCombine_ZeroGain_PassesReferenceThrough()
+    {
+        // gain 0 → weight (0,0) → dest == rx0 (source contributes nothing).
+        double[] rx0 = [5, -7, 2, 9];
+        double[] src = [100, 100, 100, 100];
+        double[] dest = new double[4];
+        DspPipelineService.DiversityCombine(rx0, src, wI: 0.0, wQ: 0.0, dest);
+        Assert.Equal(rx0, dest);
+    }
+
+    [Fact]
+    public void DiversityCombine_ShorterSource_TailPassesThrough()
+    {
+        // src covers only the first IQ pair; the rest of rx0 is copied verbatim.
+        double[] rx0 = [1, 1, 2, 2];
+        double[] src = [10, 0];
+        double[] dest = new double[4];
+        DspPipelineService.DiversityCombine(rx0, src, wI: 1.0, wQ: 0.0, dest);
+        Assert.Equal(11.0, dest[0], 9); // 1 + 10
+        Assert.Equal(1.0, dest[1], 9);  // 1 + 0
+        Assert.Equal(2.0, dest[2], 9);  // untouched
+        Assert.Equal(2.0, dest[3], 9);  // untouched
+    }
 }

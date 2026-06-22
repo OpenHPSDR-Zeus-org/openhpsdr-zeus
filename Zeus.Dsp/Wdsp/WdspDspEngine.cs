@@ -1024,52 +1024,6 @@ public sealed class WdspDspEngine : IDspEngine
             cfg.NbMode, scaledThreshold);
     }
 
-    // Single global diversity combiner instance (WDSP EXTDIV id space is
-    // independent of the RXA channel ids). 0 matches Thetis DiversityForm.
-    private const int DivId = 0;
-    private bool _divCreated;
-
-    /// <summary>Configure the WDSP diversity combiner. Computes the per-source
-    /// complex rotation from gain + phase (Thetis DiversityForm: Irotate=r·cosθ,
-    /// Qrotate=r·sinθ; the reference source RX0/ADC0 stays unrotated at unity)
-    /// and pushes it to EXTDIV. The combiner is created lazily on first use and
-    /// stays dormant until <c>xdivEXT</c> is fed in the IQ worker.
-    /// <para><b>Bench-verification pending:</b> the control plane (create / nr /
-    /// output / rotate / run) is wired here, but the dual-ADC <c>xdivEXT</c> feed
-    /// into the worker is intentionally not yet wired — it needs validation
-    /// against real phase-synchronous hardware. With the feed absent the
-    /// combiner has no audible effect, so this is safe to ship default-off.</para>
-    /// </summary>
-    public void SetDiversity(DiversityConfig cfg)
-    {
-        ArgumentNullException.ThrowIfNull(cfg);
-        double theta = cfg.PhaseDeg * Math.PI / 180.0;
-        double r = cfg.Gain;
-        // Index 0 = reference (RX0/ADC0): unity, no rotation. Index 1 = the
-        // second ADC source, scaled+rotated.
-        double[] iRot = [1.0, r * Math.Cos(theta)];
-        double[] qRot = [0.0, r * Math.Sin(theta)];
-        try
-        {
-            if (!_divCreated)
-            {
-                NativeMethods.CreateDivEXT(DivId, 0, 2, InSize);
-                _divCreated = true;
-            }
-            NativeMethods.SetEXTDIVNr(DivId, 2);
-            NativeMethods.SetEXTDIVOutput(DivId, 0);
-            NativeMethods.SetEXTDIVRotate(DivId, 2, iRot, qRot);
-            NativeMethods.SetEXTDIVRun(DivId, cfg.Enabled ? 1 : 0);
-        }
-        catch (EntryPointNotFoundException)
-        {
-            // libwdsp build without the EXTDIV exports — diversity is a no-op.
-        }
-        _log.LogInformation(
-            "wdsp.setDiversity enabled={En} gain={G:F3} phaseDeg={P:F1} source={Src} " +
-            "iRot=[{I0:F3},{I1:F3}] qRot=[{Q0:F3},{Q1:F3}] (xdivEXT IQ feed not yet wired — bench-verification pending)",
-            cfg.Enabled, cfg.Gain, cfg.PhaseDeg, cfg.SourceRx, iRot[0], iRot[1], qRot[0], qRot[1]);
-    }
 
     public void SetNotches(IReadOnlyList<NotchDto> notches)
     {
@@ -3260,12 +3214,6 @@ public sealed class WdspDspEngine : IDspEngine
         {
             if (_channels.TryRemove(key, out var state))
                 StopChannel(state);
-        }
-        if (_divCreated)
-        {
-            try { NativeMethods.DestroyDivEXT(DivId); }
-            catch (EntryPointNotFoundException) { /* no EXTDIV exports */ }
-            _divCreated = false;
         }
         lock (_psLock)
         {

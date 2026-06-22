@@ -151,13 +151,6 @@ public interface IDspEngine : IDisposable
 
     void SetNoiseReduction(int channelId, NrConfig cfg);
 
-    /// <summary>Configure the diversity combiner (WDSP EXTDIV): two
-    /// phase-synchronous ADC IQ streams combined with a per-source complex
-    /// rotation (gain magnitude + phase). Default no-op so the synthetic engine
-    /// and test fakes need no change; the WDSP engine overrides it. Default-off
-    /// (cfg.Enabled=false) leaves the single-ADC RX path unchanged.</summary>
-    void SetDiversity(DiversityConfig cfg) { }
-
     /// <summary>
     /// Replace the full manual-notch (MNF) set applied to the RX audio. Notch
     /// centre/width are absolute RF Hz; the engine rewrites the WDSP notch

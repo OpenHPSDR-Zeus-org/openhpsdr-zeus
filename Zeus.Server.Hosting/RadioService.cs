@@ -1457,12 +1457,14 @@ public sealed class RadioService : IDisposable
     }
 
     /// <summary>Configure the diversity combiner. Only the supplied fields
-    /// change. Applied to WDSP on the next StateChanged (DspPipelineService →
-    /// engine.SetDiversity). Default-off leaves the single-ADC RX path
-    /// byte-identical to today. Mirrors Thetis DiversityForm.
-    /// <para><b>Bench-verification pending:</b> the WDSP control plane (run /
-    /// rotate / output) is wired, but the dual-ADC IQ feed into the combiner
-    /// has not been validated against real phase-synchronous hardware.</para>
+    /// change. Applied on the next StateChanged: DspPipelineService combines RX0
+    /// (ADC0) with the source receiver's IQ (default RX2/ADC1) using a complex
+    /// weight (gain·e^{jθ}) in the Protocol-2 ingest. Default-off leaves the
+    /// single-ADC RX path byte-identical. Mirrors Thetis DiversityForm.
+    /// <para>Protocol-2 / ANAN-class only (needs two phase-synchronous ADCs); a
+    /// single-ADC board has no source stream so the combine no-ops. The
+    /// gain/phase null point is best dialed in on a live signal — see the
+    /// DiversityForm calibration flow.</para>
     /// </summary>
     public StateDto SetDiversity(bool? enabled, double? gain, double? phaseDeg, int? sourceRx)
     {

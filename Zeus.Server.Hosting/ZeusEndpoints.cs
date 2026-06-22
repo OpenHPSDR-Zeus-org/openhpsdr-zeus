@@ -1120,7 +1120,7 @@ public static class ZeusEndpoints
         });
 
         // Diversity combiner (Thetis DiversityForm). Every field optional.
-        // Bench-verification pending — see RadioService.SetDiversity.
+        // P2/ANAN-class only (needs two phase-synchronous ADCs).
         app.MapPost("/api/rx/diversity", (DiversitySetRequest req, RadioService r) =>
         {
             log.LogInformation(
