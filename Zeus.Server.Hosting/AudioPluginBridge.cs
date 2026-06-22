@@ -68,6 +68,15 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     private readonly AudioChain _chain = new();
     private readonly Dictionary<string, int> _idToSlot = new();
     private readonly Dictionary<string, IAudioPlugin> _idToPlugin = new();
+    // TX plugins whose native resources have actually been loaded
+    // (InitializeAudioAsync ran). A PARKED plugin is registered in
+    // _idToPlugin but stays out of this set until the operator un-parks it
+    // into the live chain — native instantiation is DEFERRED, exactly like
+    // the receive path's _rxInitializedIds. This is what stops a scan from
+    // launching every scanned plugin (the whole macOS AU registry, in the AU
+    // scanner's case) the moment it registers them.
+    private readonly HashSet<string> _txInitializedIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _txIdToSlotName = new();
     // RX audio insert chain — plugins whose manifest slot is rx.* (e.g.
     // rx.post-demod, a CW SCAF audio filter). Kept ENTIRELY separate from the
     // TX _chain: separate plugin instances, separate IIR state, and a separate
@@ -848,30 +857,29 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
             }
         }
 
-        // Realtime-safe init off-thread before the chain dispatches. The
-        // chain itself doesn't call Initialize; we do it here so plugins
-        // get a chance to allocate / open resources before their first
-        // Process() call.
-        try
+        // Realtime-safe native init off-thread before the chain dispatches —
+        // but ONLY for a plugin that is actually in the live chain (slot >= 0).
+        // A PARKED plugin (slot < 0) is registered and left UNINITIALIZED so a
+        // scan never instantiates / launches it; its native resources load
+        // lazily the moment the operator un-parks it (ApplyChainOrder →
+        // EnsureTxPluginInitialized), mirroring the receive path's
+        // EnsureRxPluginInitialized deferral. The chain itself doesn't call
+        // Initialize; we do it here so a plugin can allocate / open resources
+        // before its first Process() call.
+        var slotName = p.Loaded.Manifest.Audio?.Slot ?? "tx.post-leveler";
+        lock (_lock) _txIdToSlotName[p.Loaded.Manifest.Id] = slotName;
+
+        if (slot >= 0 &&
+            !EnsureTxPluginInitialized(p.Loaded.Manifest.Id, audioPlugin, slotName))
         {
-            audioPlugin.InitializeAudioAsync(
-                new AudioHost(
-                    slotName: p.Loaded.Manifest.Audio?.Slot ?? "tx.post-leveler",
-                    blockSize: TxAudioHostBlockSize),
-                CancellationToken.None)
-                .GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            _log.LogError(ex,
-                "Audio plugin {Id} InitializeAudioAsync threw; clearing slot {Slot}",
-                p.Loaded.Manifest.Id, slot);
             lock (_lock)
             {
-                if (slot >= 0) _chain.ClearSlot(slot);
+                _chain.ClearSlot(slot);
                 _idToSlot.Remove(p.Loaded.Manifest.Id);
                 _idToPlugin.Remove(p.Loaded.Manifest.Id);
+                _txIdToSlotName.Remove(p.Loaded.Manifest.Id);
             }
+            _chainOrder?.OnPluginDetached(p.Loaded.Manifest.Id);
             return;
         }
 
@@ -882,7 +890,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         RefreshPreviewEnabled();
         if (parked)
             _log.LogInformation(
-                "Audio plugin {Id} attached (parked — initialized, not in the live chain)",
+                "Audio plugin {Id} attached (parked — registered, native load deferred until added to the chain)",
                 p.Loaded.Manifest.Id);
         else
             _log.LogInformation(
@@ -896,15 +904,20 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         // the TX _idToSlot map.
         if (DetachRxPlugin(p)) return;
 
-        IAudioPlugin? attached = null;
-        int slot;
+        var id = p.Loaded.Manifest.Id;
+        IAudioPlugin? attached;
+        bool wasInitialized;
         lock (_lock)
         {
-            if (!_idToSlot.TryGetValue(p.Loaded.Manifest.Id, out slot)) return;
-            _idToSlot.Remove(p.Loaded.Manifest.Id);
-            _idToPlugin.Remove(p.Loaded.Manifest.Id);
-            attached = _chain.GetSlot(slot);
-            _chain.ClearSlot(slot);
+            // A parked plugin lives in _idToPlugin but not _idToSlot — handle
+            // both so deactivating a never-un-parked (and therefore
+            // never-initialized) scanned plugin cleans up fully instead of
+            // leaking its registration.
+            if (!_idToPlugin.Remove(id, out attached)) return;
+            if (_idToSlot.Remove(id, out var slot))
+                _chain.ClearSlot(slot);
+            _txIdToSlotName.Remove(id);
+            wasInitialized = _txInitializedIds.Remove(id);
             // Re-slot remaining plugins so the chain compacts when
             // ChainOrderService is active — gaps from a removed plugin
             // close instead of leaving a hole in the middle of the
@@ -915,18 +928,23 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
             // The chain Process loop already no-ops cleanly on an empty
             // slot table (all slots null → all iterations skipped).
         }
-        _chainOrder?.OnPluginDetached(p.Loaded.Manifest.Id);
+        _chainOrder?.OnPluginDetached(id);
         RefreshPreviewEnabled();
 
         if (attached is null) return;
-        try
+        // Only tear down native resources we actually brought up. A parked
+        // plugin was never initialized, so there is nothing to shut down.
+        if (wasInitialized)
         {
-            attached.ShutdownAudioAsync(CancellationToken.None).GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex,
-                "Audio plugin {Id} ShutdownAudioAsync threw", p.Loaded.Manifest.Id);
+            try
+            {
+                attached.ShutdownAudioAsync(CancellationToken.None).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex,
+                    "Audio plugin {Id} ShutdownAudioAsync threw", id);
+            }
         }
         if (attached is IAsyncDisposable ad)
         {
@@ -1243,8 +1261,74 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         // service inside the lock — same semantics, but it picks up
         // the latest snapshot in the rare case the order changes again
         // between the OrderChanged fire and our lock acquisition.
+        //
+        // Native load is DEFERRED until a plugin is un-parked into the live
+        // chain, so this OrderChanged fire — the operator adding a plugin to
+        // the chain — is the first point a newly-active plugin must load.
+        // Initialize the now-active set BEFORE slotting it (outside _lock;
+        // native load can block), mirroring ApplyRxChainOrder.
+        EnsureActiveTxPluginsInitialized();
         lock (_lock) ReapplySlotsUnderLock();
         _log.LogInformation("Audio plugin chain re-slotted to operator order");
+    }
+
+    /// <summary>
+    /// Lazily load the native resources of any TX plugin that is currently
+    /// ACTIVE (un-parked) in the operator's order but not yet initialized.
+    /// Native instantiation is deferred until a plugin enters the live chain
+    /// (parity with the receive path's <see cref="EnsureRxPluginInitialized"/>),
+    /// so this runs on un-park / reorder. Outside <c>_lock</c> —
+    /// <c>InitializeAudioAsync</c> can block on native load.
+    /// </summary>
+    private void EnsureActiveTxPluginsInitialized()
+    {
+        if (_chainOrder is null) return;
+        foreach (var id in _chainOrder.CurrentOrder)
+        {
+            IAudioPlugin? plugin;
+            string slotName;
+            lock (_lock)
+            {
+                if (!_idToPlugin.TryGetValue(id, out plugin)) continue;
+                slotName = _txIdToSlotName.TryGetValue(id, out var s) ? s : "tx.post-leveler";
+            }
+            EnsureTxPluginInitialized(id, plugin, slotName);
+        }
+    }
+
+    /// <summary>
+    /// Initialize one TX plugin's native resources exactly once. Returns true
+    /// if the plugin is initialized (now or already); false if
+    /// <c>InitializeAudioAsync</c> threw — the caller leaves it out of the live
+    /// chain (it passes audio through until a later successful load). Mirrors
+    /// <see cref="EnsureRxPluginInitialized"/>.
+    /// </summary>
+    private bool EnsureTxPluginInitialized(string id, IAudioPlugin audioPlugin, string slotName)
+    {
+        lock (_lock)
+        {
+            if (_txInitializedIds.Contains(id)) return true;
+        }
+
+        try
+        {
+            audioPlugin.InitializeAudioAsync(
+                    new AudioHost(slotName, blockSize: TxAudioHostBlockSize),
+                    CancellationToken.None)
+                .GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex,
+                "Audio plugin {Id} InitializeAudioAsync threw; leaving it inactive", id);
+            return false;
+        }
+
+        lock (_lock)
+        {
+            _txInitializedIds.Add(id);
+        }
+        return true;
     }
 
     /// <summary>
