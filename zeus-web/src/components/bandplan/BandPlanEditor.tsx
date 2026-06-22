@@ -7,6 +7,7 @@
 
 import { useEffect, useState, type CSSProperties } from 'react';
 import { useBandPlanStore } from '../../state/bandPlan';
+import { useDisplaySettingsStore } from '../../state/display-settings-store';
 import type { BandSegment, BandAllocation, ModeRestriction } from '../../api/bands';
 import { ConfirmDialog } from '../../layout/ConfirmDialog';
 
@@ -44,6 +45,10 @@ const selectStyle: CSSProperties = { ...inputStyle, cursor: 'pointer' };
 
 export function BandPlanEditor() {
   const store = useBandPlanStore();
+  const showBandOverlay = useDisplaySettingsStore((s) => s.showBandOverlay);
+  const setShowBandOverlay = useDisplaySettingsStore((s) => s.setShowBandOverlay);
+  const bandEdgeAlertEnabled = useDisplaySettingsStore((s) => s.bandEdgeAlertEnabled);
+  const setBandEdgeAlertEnabled = useDisplaySettingsStore((s) => s.setBandEdgeAlertEnabled);
   const [rows, setRows] = useState<EditRow[]>([]);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -159,6 +164,34 @@ export function BandPlanEditor() {
               ⚠ MOX will fire regardless of band legality
             </span>
           )}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 11 }}>
+            <input
+              type="checkbox"
+              checked={showBandOverlay}
+              onChange={(e) => setShowBandOverlay(e.target.checked)}
+              style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+            />
+            <span style={{ color: 'var(--fg-2)', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 }}>
+              Panadapter overlay
+            </span>
+          </label>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 11 }}>
+            <input
+              type="checkbox"
+              checked={bandEdgeAlertEnabled}
+              onChange={(e) => setBandEdgeAlertEnabled(e.target.checked)}
+              style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+            />
+            <span style={{ color: 'var(--fg-2)', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 }}>
+              Tone at band edge
+            </span>
+          </label>
         </div>
       </div>
 

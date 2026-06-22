@@ -97,6 +97,8 @@ const TX_STORAGE_KEY = 'zeus.display.txDbRange';
 const WF_STORAGE_KEY = 'zeus.display.wfDbRange';
 const WF_TX_STORAGE_KEY = 'zeus.display.wfTxDbRange';
 const WF_SCROLL_SPEED_STORAGE_KEY = 'zeus.display.wfScrollSpeed';
+const BAND_OVERLAY_STORAGE_KEY = 'zeus.display.bandOverlay';
+const BAND_EDGE_ALERT_STORAGE_KEY = 'zeus.display.bandEdgeAlert';
 
 // Legacy localStorage keys — pre-server-side storage. Read once on first
 // load to migrate the operator's existing image / colour up to the backend,
@@ -152,6 +154,26 @@ function writeSavedWaterfallScrollSpeed(value: number): void {
   try {
     if (typeof localStorage === 'undefined') return;
     localStorage.setItem(WF_SCROLL_SPEED_STORAGE_KEY, String(value));
+  } catch {
+    // quota exceeded / private mode — accept silently.
+  }
+}
+
+function readBoolFlag(key: string, defaultValue: boolean): boolean {
+  try {
+    if (typeof localStorage === 'undefined') return defaultValue;
+    const raw = localStorage.getItem(key);
+    if (raw === null) return defaultValue;
+    return raw === '1' || raw === 'true';
+  } catch {
+    return defaultValue;
+  }
+}
+
+function writeBoolFlag(key: string, value: boolean): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(key, value ? '1' : '0');
   } catch {
     // quota exceeded / private mode — accept silently.
   }
@@ -411,6 +433,15 @@ export type DisplaySettingsState = {
   // Photino-desktop port shuffle (per-launch random loopback port = fresh
   // localStorage origin = orphaned setting).
   rxTraceColor: string;
+  // Issue #846: licence-class band overlay on the panadapter — shading per
+  // band-plan segment, with sub-band labels. Local-only (no server round-trip);
+  // the active plan itself is fetched separately via the bandPlan store.
+  showBandOverlay: boolean;
+  // Issue #846: short audible tone when the VFO crosses from in-licence into
+  // out-of-licence (or into a band gap). Mirrors the alarm Icoms ship with.
+  bandEdgeAlertEnabled: boolean;
+  setShowBandOverlay: (v: boolean) => void;
+  setBandEdgeAlertEnabled: (v: boolean) => void;
   setPanBackground: (v: PanBackgroundMode) => Promise<void>;
   setBackgroundImage: (dataUrl: string | null) => Promise<boolean>;
   setBackgroundImageFit: (v: BackgroundImageFit) => Promise<void>;
@@ -490,6 +521,8 @@ const initialTxRange = readSavedTxRange();
 const initialWfRange = readSavedWfRange();
 const initialWfTxRange = readSavedWfTxRange();
 const initialWaterfallScrollSpeed = readSavedWaterfallScrollSpeed();
+const initialShowBandOverlay = readBoolFlag(BAND_OVERLAY_STORAGE_KEY, true);
+const initialBandEdgeAlertEnabled = readBoolFlag(BAND_EDGE_ALERT_STORAGE_KEY, true);
 
 export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) => ({
   autoRange: false,
@@ -519,6 +552,16 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   // that resolves the operator briefly sees the default amber trace — same
   // first-paint trade-off as panBackground / backgroundImage.
   rxTraceColor: DEFAULT_RX_TRACE_COLOR,
+  showBandOverlay: initialShowBandOverlay,
+  bandEdgeAlertEnabled: initialBandEdgeAlertEnabled,
+  setShowBandOverlay: (v) => {
+    set({ showBandOverlay: v });
+    writeBoolFlag(BAND_OVERLAY_STORAGE_KEY, v);
+  },
+  setBandEdgeAlertEnabled: (v) => {
+    set({ bandEdgeAlertEnabled: v });
+    writeBoolFlag(BAND_EDGE_ALERT_STORAGE_KEY, v);
+  },
   setPanBackground: async (panBackground) => {
     const prev = get().panBackground;
     set({ panBackground });

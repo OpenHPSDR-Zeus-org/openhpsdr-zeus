@@ -61,6 +61,7 @@ import * as viewCenter from '../state/view-center';
 import * as viewZoom from '../state/view-zoom';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture, type PanTuneGestureOptions } from '../util/use-pan-tune-gesture';
+import { BandOverlay } from './BandOverlay';
 import { FilterCursorOverlay } from './FilterCursorOverlay';
 import { FreqAxis } from './FreqAxis';
 import { PassbandOverlay } from './PassbandOverlay';
@@ -459,6 +460,7 @@ export function Panadapter({
       } as CSSProperties}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
+      {receiver === 'A' && (!stitched || foreground) && <BandOverlay receiver={receiver} />}
       <div
         className="pointer-events-none absolute z-[25] rounded-sm px-2 py-0.5 font-mono text-[10px]"
         style={{
