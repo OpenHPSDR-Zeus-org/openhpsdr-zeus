@@ -50,6 +50,20 @@ public static class PrefsDbPath
         Environment.GetEnvironmentVariable("ZEUS_PREFS_PATH")
         ?? Path.Combine(DataDir, ActiveRelativePath());
 
+    // The QSO logbook lives in its own plaintext DB (zeus-logbook.db), separate
+    // from the prefs profiles. It sits in the SAME directory as the active prefs
+    // file, so a ZEUS_PREFS_PATH override (dev `/run fresh`, CI, tests) isolates
+    // the logbook alongside the throwaway prefs. Unlike the prefs DB it does NOT
+    // fork per profile — there is exactly one logbook per data directory.
+    public static string LogbookPath()
+    {
+        var env = Environment.GetEnvironmentVariable("ZEUS_PREFS_PATH");
+        var dir = string.IsNullOrEmpty(env)
+            ? DataDir
+            : (Path.GetDirectoryName(Path.GetFullPath(env)) ?? DataDir);
+        return Path.Combine(dir, "zeus-logbook.db");
+    }
+
     // Relative path (under DataDir) of the active profile. Reads the pointer
     // file; falls back to the legacy zeus-prefs.db when the pointer is absent,
     // unreadable, or names a file that no longer exists.

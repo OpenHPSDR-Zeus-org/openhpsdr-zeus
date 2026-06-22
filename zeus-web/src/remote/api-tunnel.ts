@@ -5,25 +5,25 @@
 //                         Douglas J. Cerrato (KB2UKA),
 //                         Christian Suarez (N9WAR), and contributors.
 //
-// Read-only REST tunnel for remote (WebRTC) RX monitoring. On the static Pages
-// host the SPA has no same-origin `/api/*` backend, so its REST chrome (VFO,
-// mode, band, capabilities, AGC, …) renders empty. This module monkeypatches
-// `window.fetch` so that same-origin `/api/*` GET/HEAD requests are tunnelled
-// over the WebRTC "api" DataChannel to the operator's radio, which loopback-
-// proxies them to its own local Kestrel and returns the response.
+// Read-write REST tunnel for remote (WebRTC) operating. On the static Pages
+// host the SPA has no same-origin `/api/*` backend, so its REST chrome and
+// controls (VFO, mode, band, filter, AGC, drive, MOX/TUN, …) cannot reach the
+// radio. This module monkeypatches `window.fetch` so that same-origin `/api/*`
+// requests — reads AND writes — are tunnelled over the WebRTC "api" DataChannel
+// to the operator's radio, which loopback-proxies them to its own local Kestrel
+// and returns the response. This is what makes a remote session control the
+// radio natively, as if sitting at the desktop app.
 //
-// SAFETY POSTURE (matches the server-side gate):
-//   - READ-ONLY: only GET/HEAD tunnel. Any non-GET (POST/PUT/DELETE/PATCH) is
-//     refused locally with a synthetic 405 and NEVER reaches the radio — this
-//     preserves "RX monitoring only", no remote TX/tuning/control.
-//   - DENY-BY-DEFAULT: tunnelled GETs QUEUE until the channel is open AND the
-//     session is unlocked, then flush. Nothing is sent before unlock.
+// SAFETY POSTURE (the SERVER is the authority — this side mirrors it):
+//   - DENY-BY-DEFAULT: tunnelled requests QUEUE until the channel is open AND
+//     the session is unlocked, then flush. Nothing is sent before unlock.
+//   - The server enforces the real guards: an always-denied list (secrets /
+//     identity / exports), a write-denied list (PureSignal burn-zone + prefs
+//     DB), path-traversal/loopback/size caps, and a dead-man TX un-key if the
+//     link drops while keyed. See RemoteWebRtcSession.
 //   - Every tunnelled request has a timeout so a never-connecting session
 //     rejects rather than hanging the UI forever.
 //   - Non-`/api` requests delegate to the original fetch untouched.
-//
-// The complementary sensitive-endpoint denylist lives on the SERVER
-// (RemoteWebRtcSession) so the radio is the authority on what it will read.
 
 const API_PREFIX = '/api/';
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -45,6 +45,8 @@ interface QueuedRequest {
   id: number;
   path: string;
   method: string;
+  body?: string;
+  contentType?: string;
 }
 
 let installed = false;
@@ -86,14 +88,24 @@ function methodOf(input: RequestInfo | URL, init?: RequestInit): string {
 
 /** Send the request over the channel now (channel is open + unlocked). */
 function dispatch(req: QueuedRequest): void {
-  channel!.send(JSON.stringify({ id: req.id, method: req.method, path: req.path }));
+  const msg: Record<string, unknown> = { id: req.id, method: req.method, path: req.path };
+  if (req.body !== undefined) msg.body = req.body;
+  if (req.contentType !== undefined) msg.contentType = req.contentType;
+  channel!.send(JSON.stringify(msg));
 }
 
 /**
- * Enqueue (or immediately dispatch) a tunnelled GET/HEAD and return a Promise
+ * Enqueue (or immediately dispatch) a tunnelled request and return a Promise
  * that resolves with the radio's response or rejects on timeout/disconnect.
+ * GET/HEAD carry no body; mutating methods carry the serialized request body
+ * and its content-type.
  */
-function tunnel(path: string, method: string): Promise<TunnelResponse> {
+function tunnel(
+  path: string,
+  method: string,
+  body?: string,
+  contentType?: string,
+): Promise<TunnelResponse> {
   const id = nextId++;
   return new Promise<TunnelResponse>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -105,10 +117,42 @@ function tunnel(path: string, method: string): Promise<TunnelResponse> {
     }, REQUEST_TIMEOUT_MS);
 
     pending.set(id, { resolve, reject, timer });
-    const req: QueuedRequest = { id, path, method };
+    const req: QueuedRequest = { id, path, method, body, contentType };
     if (channel && channel.readyState === 'open') dispatch(req);
     else queue.push(req);
   });
+}
+
+/**
+ * Extract a request's body (as text) and content-type from the fetch arguments,
+ * handling the shapes the SPA actually uses: an `init.body` string (the common
+ * `JSON.stringify(...)` case), a body carried on a `Request` object, and the
+ * other BodyInit kinds (Blob/ArrayBuffer/URLSearchParams) via a throwaway
+ * Response. GET/HEAD never call this.
+ */
+async function extractBody(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<{ body?: string; contentType?: string }> {
+  const initHeaders = init?.headers ? new Headers(init.headers) : null;
+  let contentType = initHeaders?.get('content-type') ?? undefined;
+
+  const raw = init?.body;
+  if (raw == null) {
+    if (input instanceof Request) {
+      if (!contentType) contentType = input.headers.get('content-type') ?? undefined;
+      const text = await input.clone().text();
+      return { body: text || undefined, contentType };
+    }
+    return { contentType };
+  }
+  if (typeof raw === 'string') return { body: raw, contentType };
+  try {
+    const text = await new Response(raw as BodyInit).text();
+    return { body: text || undefined, contentType };
+  } catch {
+    return { contentType };
+  }
 }
 
 /** Build a synthetic browser Response from the radio's tunnelled reply. */
@@ -117,13 +161,6 @@ function toResponse(r: TunnelResponse): Response {
   // HEAD/204/304 cannot carry a body per the Fetch spec — pass null.
   const bodyless = r.status === 204 || r.status === 304;
   return new Response(bodyless ? null : (r.body ?? ''), { status: r.status, headers });
-}
-
-function readOnlyRefusal(): Response {
-  return new Response(JSON.stringify({ error: 'Remote session is read-only' }), {
-    status: 405,
-    headers: { 'content-type': 'application/json' },
-  });
 }
 
 function onChannelMessage(ev: MessageEvent): void {
@@ -174,7 +211,7 @@ export function setApiChannel(ch: RTCDataChannel | null): void {
 }
 
 /**
- * Install the read-only `/api/*` fetch shim. Idempotent. Call once at remote-
+ * Install the read-write `/api/*` fetch shim. Idempotent. Call once at remote-
  * client module load (when isRemoteMode()) so the shim is live BEFORE the
  * app's mount effects fire their `/api/state` etc. requests — those queue
  * until setApiChannel() flushes them post-unlock.
@@ -189,11 +226,14 @@ export function installApiTunnel(): void {
     if (path === null) return originalFetch!(input, init);
 
     const method = methodOf(input, init);
-    if (method !== 'GET' && method !== 'HEAD') {
-      // Read-only: refuse locally, never touch the radio.
-      return Promise.resolve(readOnlyRefusal());
+    if (method === 'GET' || method === 'HEAD') {
+      return tunnel(path, method).then(toResponse);
     }
-    return tunnel(path, method).then(toResponse);
+    // Mutating request: extract its body, then tunnel to the radio, which
+    // loopback-proxies it (the server enforces the write denylist + caps).
+    return extractBody(input, init)
+      .then(({ body, contentType }) => tunnel(path, method, body, contentType))
+      .then(toResponse);
   };
 }
 
