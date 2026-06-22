@@ -95,8 +95,11 @@ export type Contact = {
   cq: string;
   itu: string;
   latlon: string;
-  lat: number;
-  lon: number;
+  // QRZ returns records without map coordinates for callsigns that haven't
+  // verified an address or chosen to publish a pin; render the rest of the
+  // card anyway and just skip the lat/lon-dependent fields.
+  lat: number | null;
+  lon: number | null;
   local: string;
   qsl: string;
   licensed: string;

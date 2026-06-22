@@ -426,7 +426,7 @@ export function HeroPanel({
                 imageUrl: effectiveHome.imageUrl,
               }}
               target={
-                contact
+                contact && contact.lat != null && contact.lon != null
                   ? {
                       call: contact.callsign,
                       lat: contact.lat,
