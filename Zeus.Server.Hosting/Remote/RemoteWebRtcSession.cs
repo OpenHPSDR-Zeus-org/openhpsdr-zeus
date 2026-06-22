@@ -1,4 +1,5 @@
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
@@ -31,11 +32,19 @@ public sealed class RemoteWebRtcSession
     private readonly Zeus.Server.StreamingHub? _hub;
     private readonly Guid _sinkId = Guid.NewGuid();
 
-    // Loopback REST tunnel (read-only). When supplied, post-unlock GET/HEAD
-    // requests on the "api" channel are proxied to the radio's own local
-    // Kestrel and the response returned. Null → the api channel is inert.
+    // Loopback REST tunnel (read-write). When supplied, post-unlock requests on
+    // the "api" channel are proxied to the radio's own local Kestrel and the
+    // response returned. GET/HEAD read the radio's chrome; POST/PUT/DELETE/PATCH
+    // drive it (VFO/mode/band/filter/AGC/drive/MOX/TUN/…). Null → channel inert.
     private readonly IHttpClientFactory? _httpFactory;
     private readonly string? _loopbackBaseUrl;
+
+    // Dead-man TX safety: set once this session proxies a TX-keying request
+    // (MOX/TUN on). If the WebRTC session then drops while still keyed, Close()
+    // best-effort un-keys the radio so a lost link can never leave a remote
+    // station transmitting into its antenna/amp. Volatile: written on the
+    // data-channel callback thread, read on the teardown thread.
+    private volatile bool _remoteTxArmed;
 
     private RTCDataChannel? _control;
     private RTCDataChannel? _frames;
@@ -54,20 +63,24 @@ public sealed class RemoteWebRtcSession
     // Named HttpClient used for the loopback REST tunnel (see ZeusHost.cs).
     internal const string LoopbackHttpClientName = "RemoteApiLoopback";
 
-    // Cap on a tunnelled response body (1 MiB). Larger replies are refused with
-    // 502 — the read-only chrome endpoints are all small JSON; a giant body
-    // would be an export/dump path we don't want to relay anyway.
+    // Cap on a tunnelled request/response body (1 MiB). Larger replies are
+    // refused with 502 and larger requests with 413 — the chrome/control
+    // endpoints are all small JSON; a giant body would be an export/dump or
+    // bulk-import path we don't want to relay either direction.
     private const int MaxResponseBytes = 1 * 1024 * 1024;
+    private const int MaxRequestBytes = 1 * 1024 * 1024;
 
     /// <summary>
-    /// Sensitive-endpoint denylist for the read-only API tunnel. Even a GET to
-    /// one of these paths is refused (403, no loopback) so a remote monitor
-    /// cannot exfiltrate credentials, secrets, or the prefs database. Matching
-    /// is case-insensitive prefix on the URL path (query string ignored).
+    /// Always-denied endpoints (BOTH read and write). A request to one of these
+    /// is refused (403, no loopback) so a remote operator cannot exfiltrate or
+    /// overwrite credentials, secrets, or identity. Matching is case-insensitive
+    /// prefix on the canonical URL path (query string ignored).
     ///
-    /// Derived by scanning ZeusEndpoints.cs for GET endpoints that touch
+    /// Derived by scanning ZeusEndpoints.cs for endpoints that touch
     /// credentials/identity/secrets or that export the prefs DB:
     ///   /api/remote/password   — remote-access session password store/status
+    ///                            (a write here would let a remote change the
+    ///                            very password gating it)
     ///   /api/qrz               — QRZ status carries the signed-in operator's
     ///                            callsign/identity; login/credentials live here
     ///   /api/chat              — chat identity/roster/friends derive from the
@@ -84,6 +97,22 @@ public sealed class RemoteWebRtcSession
         "/api/chat",
         "/api/prefs/databases/export",
         "/api/log/export",
+    };
+
+    /// <summary>
+    /// Write-denied endpoints (mutating methods only — GET still allowed). Reads
+    /// of these are safe chrome, but a remote MUST NOT change them:
+    ///   /api/tx/ps             — PureSignal. KB2UKA hard-stop: no remote arm,
+    ///                            disarm, calibration, or persistence change. An
+    ///                            inadvertently armed PS on an external-tap
+    ///                            feedback chain can saturate the feedback ADC.
+    ///   /api/prefs/databases   — switching/importing/deleting the active prefs
+    ///                            LiteDB out from under the running radio.
+    /// </summary>
+    private static readonly string[] WriteDeniedPrefixes =
+    {
+        "/api/tx/ps",
+        "/api/prefs/databases",
     };
 
     public RemoteWebRtcSession(
@@ -156,6 +185,16 @@ public sealed class RemoteWebRtcSession
     public void Close()
     {
         if (Interlocked.Exchange(ref _closed, 1) != 0) return;
+
+        // Dead-man TX safety: if this session left the radio keyed, drop the
+        // carrier before tearing anything else down. A remote link that fails
+        // mid-transmit must never strand the station on-air.
+        if (_remoteTxArmed)
+        {
+            _remoteTxArmed = false;
+            _ = BestEffortUnkeyAsync();
+        }
+
         _session.Close();
         if (_hub is not null)
         {
@@ -186,9 +225,10 @@ public sealed class RemoteWebRtcSession
                 _frames = dc;
                 break;
             case "api":
-                // Read-only REST tunnel. Deny-by-default: each message is
-                // ignored until the session is UNLOCKED (checked in the handler),
-                // and only GET/HEAD to non-denylisted paths ever reach loopback.
+                // Read-write REST tunnel. Deny-by-default: each message is
+                // ignored until the session is UNLOCKED (checked in the handler);
+                // only non-denylisted paths reach loopback, and writes are
+                // additionally barred from the burn-zone (PureSignal) + prefs DB.
                 _api = dc;
                 dc.onmessage += (_, _, data) => OnApiMessage(data);
                 break;
@@ -257,15 +297,19 @@ public sealed class RemoteWebRtcSession
         }
     }
 
-    // -- Read-only REST tunnel ----------------------------------------------
+    // -- Read-write REST tunnel ---------------------------------------------
     //
-    // Post-unlock only. Each "api" message is {id, method, path}. The radio
-    // loopback-proxies GET/HEAD to its own local Kestrel and replies with
-    // {id, status, contentType, body}. Safety gates, in order:
-    //   1. LOCKED            → ignore entirely (deny-by-default, fail-closed).
-    //   2. method != GET/HEAD→ 405 (read-only; never touches the radio).
-    //   3. denylisted path   → 403 (no loopback; can't exfiltrate secrets).
-    //   4. otherwise         → loopback GET; 502 on >1 MiB body or any error.
+    // Post-unlock only. Each "api" message is {id, method, path, body?,
+    // contentType?}. The radio loopback-proxies the request to its own local
+    // Kestrel and replies with {id, status, contentType, body}. Safety gates,
+    // in order:
+    //   1. LOCKED               → ignore entirely (deny-by-default, fail-closed).
+    //   2. unsupported method   → 405 (only GET/HEAD/POST/PUT/DELETE/PATCH).
+    //   3. request body >1 MiB  → 413 (no bulk import through the tunnel).
+    //   4. path traversal       → 403 (can't collapse "../" onto a denied path).
+    //   5. always-denied path   → 403 (secrets/identity/exports, any method).
+    //   6. write to write-denied→ 403 (PureSignal burn-zone, prefs DB).
+    //   7. otherwise            → loopback proxy; 502 on >1 MiB reply or error.
     // Fire-and-forget like the control handling — never block the data-channel
     // callback thread, and never throw out of the handler.
 
@@ -282,6 +326,8 @@ public sealed class RemoteWebRtcSession
         {
             string method;
             string path;
+            string? body;
+            string? contentType;
             using (var doc = JsonDocument.Parse(data))
             {
                 var root = doc.RootElement;
@@ -289,12 +335,23 @@ public sealed class RemoteWebRtcSession
                 method = (root.TryGetProperty("method", out var mEl) ? mEl.GetString() : null)
                     ?? "GET";
                 path = (root.TryGetProperty("path", out var pEl) ? pEl.GetString() : null) ?? "";
+                body = root.TryGetProperty("body", out var bEl) ? bEl.GetString() : null;
+                contentType = root.TryGetProperty("contentType", out var cEl) ? cEl.GetString() : null;
             }
 
-            // Read-only: only GET/HEAD ever leave this server toward the radio.
-            if (!IsReadOnlyMethod(method))
+            if (!IsAllowedMethod(method))
             {
                 SendApiReply(id, 405);
+                return;
+            }
+
+            bool mutating = IsMutatingMethod(method);
+
+            // Cap the request body so the tunnel can't be used as a bulk-import
+            // channel. UTF-16 length is a safe over-estimate of UTF-8 bytes.
+            if (body is not null && body.Length > MaxRequestBytes)
+            {
+                SendApiReply(id, 413);
                 return;
             }
 
@@ -307,9 +364,9 @@ public sealed class RemoteWebRtcSession
             // Reject path traversal outright. Without this, a path like
             // "/api/state/../prefs/databases/export" slips past the denylist
             // (it prefix-matches nothing) yet Uri canonicalisation collapses the
-            // "../" so the loopback GET lands on a denied endpoint — a bypass that
-            // would exfiltrate the prefs DB. Legit SPA /api paths never contain
-            // dot-segments or percent-encoded ones.
+            // "../" so the loopback request lands on a denied endpoint — a bypass
+            // that would exfiltrate the prefs DB. Legit SPA /api paths never
+            // contain dot-segments or percent-encoded ones.
             if (path.Contains("..", StringComparison.Ordinal)
                 || path.Contains("%2e", StringComparison.OrdinalIgnoreCase))
             {
@@ -320,8 +377,8 @@ public sealed class RemoteWebRtcSession
 
             // Build the loopback target once and denylist-check the CANONICAL
             // path that will actually be requested — never the raw input. Verify
-            // it stays on loopback so a crafted authority can't redirect the GET
-            // off-box (SSRF).
+            // it stays on loopback so a crafted authority can't redirect the
+            // request off-box (SSRF).
             if (!Uri.TryCreate(_loopbackBaseUrl + path, UriKind.Absolute, out var target)
                 || !target.IsLoopback)
             {
@@ -330,18 +387,35 @@ public sealed class RemoteWebRtcSession
             }
 
             // Sensitive-endpoint denylist — refuse before any loopback call.
-            if (IsDenied(target.AbsolutePath))
+            if (IsDenied(target.AbsolutePath, mutating))
             {
-                _log.LogWarning("rtc.remote api DENY {Path}", target.AbsolutePath);
+                _log.LogWarning("rtc.remote api DENY {Method} {Path}", method, target.AbsolutePath);
                 SendApiReply(id, 403);
                 return;
             }
 
+            // HEAD is proxied as GET and the body discarded; all other methods
+            // pass through verbatim with their request body (when present).
+            var httpMethod = string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase)
+                ? HttpMethod.Get
+                : new HttpMethod(method.ToUpperInvariant());
+
             var client = _httpFactory.CreateClient(LoopbackHttpClientName);
-            using var req = new HttpRequestMessage(
-                HttpMethod.Get, target); // HEAD proxied as GET; body discarded below
+            using var req = new HttpRequestMessage(httpMethod, target);
+            if (mutating && !string.IsNullOrEmpty(body))
+            {
+                req.Content = new StringContent(body, Encoding.UTF8);
+                var ct = string.IsNullOrEmpty(contentType) ? "application/json" : contentType;
+                if (MediaTypeHeaderValue.TryParse(ct, out var parsed))
+                    req.Content.Headers.ContentType = parsed;
+            }
+
             using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead)
                 .ConfigureAwait(false);
+
+            // Track TX keying so a dropped link un-keys the radio (see Close()).
+            if (mutating && (int)resp.StatusCode is >= 200 and < 300)
+                TrackTxKeying(target.AbsolutePath, body);
 
             // Cap the body so the tunnel can't be used as a bulk-export channel.
             if (resp.Content.Headers.ContentLength is long len && len > MaxResponseBytes)
@@ -356,11 +430,11 @@ public sealed class RemoteWebRtcSession
                 return;
             }
 
-            var contentType = resp.Content.Headers.ContentType?.ToString();
-            var body = string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase)
+            var respContentType = resp.Content.Headers.ContentType?.ToString();
+            var respBody = string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase)
                 ? ""
                 : Encoding.UTF8.GetString(bytes);
-            SendApiReply(id, (int)resp.StatusCode, contentType, body);
+            SendApiReply(id, (int)resp.StatusCode, respContentType, respBody);
         }
         catch (Exception ex)
         {
@@ -369,11 +443,13 @@ public sealed class RemoteWebRtcSession
         }
     }
 
-    private static bool IsReadOnlyMethod(string method)
-        => string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase);
+    private static bool IsAllowedMethod(string method)
+        => method.ToUpperInvariant() is "GET" or "HEAD" or "POST" or "PUT" or "DELETE" or "PATCH";
 
-    private static bool IsDenied(string path)
+    private static bool IsMutatingMethod(string method)
+        => method.ToUpperInvariant() is "POST" or "PUT" or "DELETE" or "PATCH";
+
+    private static bool IsDenied(string path, bool mutating)
     {
         // Compare on the path only (strip any query string) so a denied prefix
         // can't be smuggled past with a "?..." suffix.
@@ -382,7 +458,59 @@ public sealed class RemoteWebRtcSession
         foreach (var prefix in DeniedPathPrefixes)
             if (p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 return true;
+        if (mutating)
+            foreach (var prefix in WriteDeniedPrefixes)
+                if (p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    return true;
         return false;
+    }
+
+    /// <summary>
+    /// Note a successful MOX/TUN keying request so the dead-man in Close() can
+    /// un-key a dropped session. Arms on {"on":true} to /api/tx/{mox,tun},
+    /// disarms on {"on":false}.
+    /// </summary>
+    private void TrackTxKeying(string path, string? body)
+    {
+        if (!path.Equals("/api/tx/mox", StringComparison.OrdinalIgnoreCase)
+            && !path.Equals("/api/tx/tun", StringComparison.OrdinalIgnoreCase))
+            return;
+        try
+        {
+            using var doc = JsonDocument.Parse(body ?? "");
+            if (doc.RootElement.TryGetProperty("on", out var onEl)
+                && onEl.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                _remoteTxArmed = onEl.GetBoolean();
+        }
+        catch { /* unparseable body — leave the arm state unchanged */ }
+    }
+
+    /// <summary>
+    /// Best-effort un-key (MOX off + TUN off) over loopback when a keyed session
+    /// drops. Fire-and-forget; never throws. Short per-request timeout so a
+    /// wedged Kestrel can't hang teardown.
+    /// </summary>
+    private async Task BestEffortUnkeyAsync()
+    {
+        if (_httpFactory is null || string.IsNullOrEmpty(_loopbackBaseUrl)) return;
+        try
+        {
+            var client = _httpFactory.CreateClient(LoopbackHttpClientName);
+            foreach (var p in new[] { "/api/tx/mox", "/api/tx/tun" })
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Post, _loopbackBaseUrl + p)
+                {
+                    Content = new StringContent("{\"on\":false}", Encoding.UTF8, "application/json"),
+                };
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                using var _ = await client.SendAsync(req, cts.Token).ConfigureAwait(false);
+            }
+            _log.LogWarning("rtc.remote session dropped while keyed — sent dead-man un-key (MOX/TUN off)");
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "rtc.remote dead-man un-key failed");
+        }
     }
 
     private void SendApiReply(int id, int status, string? contentType = null, string? body = null)
