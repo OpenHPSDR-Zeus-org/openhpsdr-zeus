@@ -48,6 +48,7 @@ import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent }
 import { GripVertical, X } from 'lucide-react';
 import { Panadapter } from '../../components/Panadapter';
 import { WaterfallSurface } from '../../components/WaterfallSurface';
+import { MultiRxMonitorStrip } from '../../components/MultiRxMonitorStrip';
 import { ZoomControl } from '../../components/ZoomControl';
 import { WaterfallSpeedControl } from '../../components/WaterfallSpeedControl';
 import { SpectrumControls } from '../../components/SpectrumControls';
@@ -126,6 +127,11 @@ export function HeroPanel({
   const connected = useConnectionStore((s) => s.status === 'Connected');
   const applyState = useConnectionStore((s) => s.applyState);
   const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
+  // Multi-DDC RX3+ (receiver index >= 2). When any are exposed, a strip of
+  // read-only monitor panes renders below the RX1/RX2 panadapter/waterfall.
+  const hasExtraRx = useConnectionStore((s) =>
+    s.receivers.some((r) => r.index >= 2 && r.enabled),
+  );
   const rx2AudioMode = useConnectionStore((s) => s.rx2AudioMode);
   const rxFocus = useConnectionStore((s) => s.rxFocus);
   const setRxFocus = useConnectionStore((s) => s.setRxFocus);
@@ -445,7 +451,9 @@ export function HeroPanel({
             position: 'absolute',
             inset: 0,
             display: 'grid',
-            gridTemplateRows: `${split}fr 8px ${1 - split}fr`,
+            gridTemplateRows: hasExtraRx
+              ? `${split}fr 8px ${1 - split}fr minmax(96px, 26%)`
+              : `${split}fr 8px ${1 - split}fr`,
             zIndex: 1,
           }}
         >
@@ -518,6 +526,11 @@ export function HeroPanel({
             ) : (
               <WaterfallSurface transparent={bgActive} />
             )
+          )}
+          {connected && hasExtraRx && (
+            <div style={{ minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
+              <MultiRxMonitorStrip />
+            </div>
           )}
         </div>
       </div>
