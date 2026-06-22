@@ -87,8 +87,9 @@ describe('ReceiversPanel', () => {
     // One ADC select per active receiver (RX1, RX2).
     expect(adcSelects.length).toBe(2);
 
+    const sel = adcSelects[1];
+    if (!sel) throw new Error('expected an ADC select for RX2');
     await act(async () => {
-      const sel = adcSelects[1];
       sel.value = '1';
       sel.dispatchEvent(new Event('change', { bubbles: true }));
       await Promise.resolve();
