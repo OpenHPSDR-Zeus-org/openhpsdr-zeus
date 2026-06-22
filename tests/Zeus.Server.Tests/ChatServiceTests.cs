@@ -336,7 +336,7 @@ public class ChatServiceTests : IDisposable
 
     private QrzService NewLoggedOutQrz() =>
         new(new SingleClientFactory(), NullLogger<QrzService>.Instance,
-            new CredentialStore(NullLogger<CredentialStore>.Instance, _root));
+            new CredentialStore(NullLogger<CredentialStore>.Instance, Path.Combine(_root, "creds.db")));
 
     private RadioService NewRadio() =>
         new(NullLoggerFactory.Instance,

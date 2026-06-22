@@ -118,6 +118,93 @@ public class DspPipelineRx2RoutingTests
         Assert.Equal([0.40f, -0.50f], rx1[..count]);
     }
 
+    [Fact]
+    public void MixRxAudioN_SingleSlice_MatchesLegacyHalfMix()
+    {
+        // One non-empty slice (RX2) must reproduce the old 0.5*(rx1+rx2) mix,
+        // including the diluted tail where only RX1 is present.
+        float[] rx1 = [0.10f, -0.20f, 0.30f, 0.40f];
+        float[] rx2 = [0.40f, -0.50f];
+
+        int count = DspPipelineService.MixRxAudioN(
+            rx1,
+            rx1Count: 4,
+            new[] { new DspPipelineService.RxAudioSlice(rx2, rx2.Length) });
+
+        Assert.Equal(4, count);
+        Assert.Equal(0.25f, rx1[0], 5);   // (0.10 + 0.40)/2
+        Assert.Equal(-0.35f, rx1[1], 5);  // (-0.20 - 0.50)/2
+        Assert.Equal(0.15f, rx1[2], 5);   // (0.30 + 0)/2  — tail still halved
+        Assert.Equal(0.20f, rx1[3], 5);   // (0.40 + 0)/2
+    }
+
+    [Fact]
+    public void MixRxAudioN_ThreeReceivers_AveragesAllPresent()
+    {
+        // RX1 + RX2 + RX3 all full-length → divide by 3.
+        float[] rx1 = [0.30f, 0.60f];
+        float[] rx2 = [0.30f, 0.00f];
+        float[] rx3 = [0.30f, 0.30f];
+
+        int count = DspPipelineService.MixRxAudioN(
+            rx1,
+            rx1Count: 2,
+            new[]
+            {
+                new DspPipelineService.RxAudioSlice(rx2, rx2.Length),
+                new DspPipelineService.RxAudioSlice(rx3, rx3.Length),
+            });
+
+        Assert.Equal(2, count);
+        Assert.Equal(0.30f, rx1[0], 5);   // (0.30+0.30+0.30)/3
+        Assert.Equal(0.30f, rx1[1], 5);   // (0.60+0.00+0.30)/3
+    }
+
+    [Fact]
+    public void MixRxAudioN_EmptySlicesExcludedFromDivisor()
+    {
+        // A secondary that produced no samples this tick must not dilute RX1:
+        // contributor count is 1, so RX1 passes through untouched.
+        float[] rx1 = [0.50f, -0.50f];
+
+        int count = DspPipelineService.MixRxAudioN(
+            rx1,
+            rx1Count: 2,
+            new[]
+            {
+                new DspPipelineService.RxAudioSlice(System.Array.Empty<float>(), 0),
+                new DspPipelineService.RxAudioSlice([0.10f, 0.10f], 0),
+            });
+
+        Assert.Equal(2, count);
+        Assert.Equal(0.50f, rx1[0], 5);
+        Assert.Equal(-0.50f, rx1[1], 5);
+    }
+
+    [Fact]
+    public void MixRxAudioN_Rx1Silent_PassesSecondariesThrough()
+    {
+        // RX1 produced nothing this tick (rx1Count==0); the two secondaries are
+        // averaged and passed through at the longer block length.
+        float[] rx1 = new float[3];
+        float[] rx2 = [0.40f, 0.40f, 0.40f];
+        float[] rx3 = [0.20f, 0.20f];
+
+        int count = DspPipelineService.MixRxAudioN(
+            rx1,
+            rx1Count: 0,
+            new[]
+            {
+                new DspPipelineService.RxAudioSlice(rx2, rx2.Length),
+                new DspPipelineService.RxAudioSlice(rx3, rx3.Length),
+            });
+
+        Assert.Equal(3, count);
+        Assert.Equal(0.30f, rx1[0], 5);   // (0.40+0.20)/2
+        Assert.Equal(0.30f, rx1[1], 5);   // (0.40+0.20)/2
+        Assert.Equal(0.20f, rx1[2], 5);   // (0.40 only)/2 — divisor is contributor count (2)
+    }
+
     private sealed class RecordingEngine : IDspEngine
     {
         public List<int> FeedChannels { get; } = [];

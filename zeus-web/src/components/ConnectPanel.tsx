@@ -49,6 +49,7 @@ import {
   connectP2 as apiConnectP2,
   disconnect as apiDisconnect,
   disconnectP2 as apiDisconnectP2,
+  reclaimRadio,
   fetchRadios,
   fetchState,
   listPrefsDatabases,
@@ -71,6 +72,7 @@ import { useRadioStore } from '../state/radio-store';
 import { useTxAudioProfileStore } from '../state/tx-audio-profile-store';
 import { useTxStore } from '../state/tx-store';
 import { TxAudioProfileSavePrompt } from './TxAudioProfileSavePrompt';
+import { ConfirmDialog } from '../layout/ConfirmDialog';
 import {
   useConnectStore,
   type ProtocolChoice,
@@ -436,6 +438,9 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
   // Disconnect when the loaded profile has unsaved live edits.
   const [savePrompt, setSavePrompt] = useState<{ name: string } | null>(null);
   const [savePromptBusy, setSavePromptBusy] = useState(false);
+  // Pending "take over a Busy radio" confirmation. Holds the discovered radio
+  // the operator asked to force-connect to; the dialog kicks the current owner.
+  const [pendingTakeover, setPendingTakeover] = useState<RadioInfoDto | null>(null);
 
   const [manualIp, setManualIp] = useState(manualFormDefaults.ip);
   const [manualPort, setManualPort] = useState(manualFormDefaults.port);
@@ -507,7 +512,67 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
     };
   }, [status, retryNonce]);
 
+  // Core connect sequence shared by the normal Connect button and the
+  // Busy-radio takeover flow. Caller owns the inflight/error state so both
+  // entry points can wrap it (the takeover sends a reclaim first).
+  const performConnect = useCallback(
+    async (r: RadioInfoDto) => {
+      const ep = endpointFor(r);
+      const isP2 = (r.details?.protocol ?? 'P1') === 'P2';
+      if (isP2) {
+        // Pass the discovered board byte (e.g. 0x01 = Hermes for Brick2).
+        // Without this the server falls back to OrionMkII for every P2
+        // connection — issue #171.
+        const rawBoardId = parseRawBoardId(r.details?.rawBoardId);
+        await apiConnectP2({
+          endpoint: ep,
+          sampleRate: DEFAULT_SAMPLE_RATE,
+          boardId: rawBoardId ?? undefined,
+        });
+        const fresh = await fetchState();
+        applyState(fresh);
+        hydrateTxFromState(fresh);
+      } else {
+        // Pass the discovered board byte so the server sets the correct
+        // board kind on the Protocol1Client (default is HermesLite2 —
+        // without this an ANAN-10E appears as HL2 post-connect, issue #294).
+        const rawBoardId = parseRawBoardId(r.details?.rawBoardId);
+        const next = await apiConnect({
+          endpoint: ep,
+          sampleRate: DEFAULT_SAMPLE_RATE,
+          boardId: rawBoardId ?? undefined,
+        });
+        applyState(next);
+        hydrateTxFromState(next);
+      }
+      setBoardId(r.boardId || null);
+      setConnectedProtocol(isP2 ? 'P2' : 'P1');
+      setLastConnectedEndpoint(ep || null);
+      applyPostConnectEffects();
+    },
+    [applyState, hydrateTxFromState, setBoardId, setConnectedProtocol, setLastConnectedEndpoint],
+  );
+
   const handleConnect = useCallback(
+    async (r: RadioInfoDto) => {
+      if (inflightRef.current) return;
+      setInflight(true);
+      setError(null);
+      try {
+        await performConnect(r);
+      } catch (err) {
+        setError(errorMessage(err));
+      } finally {
+        setInflight(false);
+      }
+    },
+    [performConnect, setInflight],
+  );
+
+  // Take over a Busy radio: ask the server to send a protocol stop (kicking
+  // the current owner) and then connect. Invoked from the takeover confirm
+  // dialog, never directly from the row button.
+  const handleForceConnect = useCallback(
     async (r: RadioInfoDto) => {
       if (inflightRef.current) return;
       const ep = endpointFor(r);
@@ -515,43 +580,15 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
       setInflight(true);
       setError(null);
       try {
-        if (isP2) {
-          // Pass the discovered board byte (e.g. 0x01 = Hermes for Brick2).
-          // Without this the server falls back to OrionMkII for every P2
-          // connection — issue #171.
-          const rawBoardId = parseRawBoardId(r.details?.rawBoardId);
-          await apiConnectP2({
-            endpoint: ep,
-            sampleRate: DEFAULT_SAMPLE_RATE,
-            boardId: rawBoardId ?? undefined,
-          });
-          const fresh = await fetchState();
-          applyState(fresh);
-          hydrateTxFromState(fresh);
-        } else {
-          // Pass the discovered board byte so the server sets the correct
-          // board kind on the Protocol1Client (default is HermesLite2 —
-          // without this an ANAN-10E appears as HL2 post-connect, issue #294).
-          const rawBoardId = parseRawBoardId(r.details?.rawBoardId);
-          const next = await apiConnect({
-            endpoint: ep,
-            sampleRate: DEFAULT_SAMPLE_RATE,
-            boardId: rawBoardId ?? undefined,
-          });
-          applyState(next);
-          hydrateTxFromState(next);
-        }
-        setBoardId(r.boardId || null);
-        setConnectedProtocol(isP2 ? 'P2' : 'P1');
-        setLastConnectedEndpoint(ep || null);
-        applyPostConnectEffects();
+        await reclaimRadio(ep, isP2 ? 'P2' : 'P1');
+        await performConnect(r);
       } catch (err) {
         setError(errorMessage(err));
       } finally {
         setInflight(false);
       }
     },
-    [applyState, hydrateTxFromState, setBoardId, setConnectedProtocol, setInflight, setLastConnectedEndpoint],
+    [performConnect, setInflight],
   );
 
   const handleManualConnect = useCallback(
@@ -962,25 +999,36 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                           {ep || '—'} · {r.macAddress || '—'}
                         </span>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleConnect(r)}
-                        disabled={r.busy || inflight}
-                        title={
-                          r.busy
-                            ? 'Radio is busy (in use by another client)'
-                            : isP2
-                              ? 'Protocol 2 path — experimental, RX only'
-                              : undefined
-                        }
-                        className={`btn sm ${r.busy ? '' : 'active'}`}
-                      >
-                        {r.busy
-                          ? 'Busy'
-                          : inflight
-                            ? 'Connecting…'
-                            : 'Connect'}
-                      </button>
+                      {r.busy ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span
+                            className="label-xs"
+                            style={{ color: 'var(--tx)' }}
+                            title="In use by another client"
+                          >
+                            Busy
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setPendingTakeover(r)}
+                            disabled={inflight}
+                            title="Take over this radio — disconnects the client currently using it"
+                            className="btn sm"
+                          >
+                            Take over
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleConnect(r)}
+                          disabled={inflight}
+                          title={isP2 ? 'Protocol 2 path — experimental, RX only' : undefined}
+                          className="btn sm active"
+                        >
+                          {inflight ? 'Connecting…' : 'Connect'}
+                        </button>
+                      )}
                     </li>
                   );
                 })}
@@ -1023,6 +1071,28 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
         )}
       </div>
       </div>
+      {pendingTakeover && (
+        <ConfirmDialog
+          title="Take over this radio?"
+          confirmLabel="Take over"
+          cancelLabel="Cancel"
+          intent="danger"
+          onConfirm={() => {
+            const target = pendingTakeover;
+            setPendingTakeover(null);
+            void handleForceConnect(target);
+          }}
+          onCancel={() => setPendingTakeover(null)}
+        >
+          <p style={{ margin: 0 }}>
+            <strong>{pendingTakeover.boardId || 'This radio'}</strong>
+            {' '}({endpointFor(pendingTakeover) || pendingTakeover.ipAddress}) is
+            in use by another client. Taking it over sends a stop command that
+            disconnects whoever is currently using it — including an active
+            transmission — and then connects Zeus.
+          </p>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }
