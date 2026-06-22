@@ -51,6 +51,41 @@ The G2-Ultra panel has **no PS push-button** (only a status LED), so the router
 has *no* code path that arms PureSignal. The KB2UKA no-auto-arm invariant is
 preserved structurally — `SetPs` is never reachable from panel input.
 
+## Hardware PTT / footswitch & rear-panel I/O (NOT the front panel)
+
+A footswitch, mic PTT, or grounded rear KEY jack is **not** an ANDROMEDA panel
+event — it is wired into the *radio*, which echoes the level back to the host.
+This path is independent of `G2FrontPanelService` and already complete:
+
+- **Protocol 1** — `Protocol1Client` reads the EP6 `C0[0]` bit-0 echo
+  (`PacketParser.ExtractHardwarePtt`) and raises `HardwarePttChanged`. The shaped
+  CW keyer output (`C0[2]`) is read separately (`ExtractCwKeyDown`) to drive the
+  local sidetone per dit/dah.
+- **Protocol 2** (G2 / G2-Ultra / OrionMkII family) — `Protocol2Client` decodes
+  the UDP-1025 hi-priority status byte 0 (bit 0 PTT-IN, bit 1 Dot, bit 2 Dash;
+  offsets mirror Thetis `network.c:689-716`) and raises `TelemetryReceived`.
+- **`ExternalPttService`** promotes either edge to MOX as `MoxSource.Hardware`
+  with a 250 ms CW hang, and drives the PTT-IN status lamp regardless of the
+  enable gate. `RadioSettingsPanel` exposes the live KEYED lamp, the
+  **Hardware PTT → MOX** opt-in toggle (`PttSettingsStore`, persisted), and the
+  hang readout.
+
+The enable gate **defaults OFF** (opt-in) — unlike Thetis, where the footswitch
+always keys. This is the deliberate floating-connector PTT-hang guard: a fresh
+install leaves the footswitch inert until the operator enables it in Radio
+Settings. A persisted ON flag only *arms* the gate across restarts; it never
+auto-keys (promotion is edge-triggered, never on connect).
+
+**User I/O (J16 / accessory lines)** is decoded read-only: the P2 hi-priority
+user ADCs (`UserAdc0..3`) and digital input byte are surfaced at
+`/api/radio/user-io/labels` and `/api/radio/dig-in` (G2 TX-disable = IO5,
+active-low). The **output / automation** side — driving open-collector outputs to
+key an external amp/sequencer on TX, or actually *blocking* TX on the Dig-In
+line — is intentionally **unarmed** (`ActionBindingsConfigured: false`,
+`TxInhibitBehaviorArmed: false`). That surface touches real PA-keying and TX
+interlocks, so it stays read-only until an explicit hardware-inhibit policy is
+enabled. See the follow-up issue rather than arming it from here.
+
 ## Mapped controls (full G2-Ultra parity)
 
 Default assignments follow Thetis's `MakeNewG2PanelDataset`.
