@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -142,7 +143,7 @@ public sealed class RemoteWebRtcSessionTests
         Assert.False(hub.DisplayStreamRequested);
     }
 
-    // -- Read-only API tunnel ------------------------------------------------
+    // -- Read-write API tunnel -----------------------------------------------
 
     private const string LoopbackBase = "http://127.0.0.1:6060";
 
@@ -191,20 +192,95 @@ public sealed class RemoteWebRtcSessionTests
     }
 
     [Fact]
-    public async Task PostUnlock_NonGet_Refused405_WithoutTouchingLoopback()
+    public async Task PostUnlock_TunneledPost_ReachesLoopback_WithMethodAndBody()
     {
-        var factory = new StubHttpClientFactory(_ =>
-            throw new InvalidOperationException("loopback must NOT be called for a non-GET"));
+        HttpMethod? seenMethod = null;
+        string? seenUri = null, seenBody = null, seenContentType = null;
+        var factory = new StubHttpClientFactory((req) =>
+        {
+            seenMethod = req.Method;
+            seenUri = req.RequestUri!.ToString();
+            seenBody = req.Content?.ReadAsStringAsync().Result;
+            seenContentType = req.Content?.Headers.ContentType?.MediaType;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"moxOn\":true}", Encoding.UTF8, "application/json"),
+            };
+        });
         ApiSession(factory, out var server);
         await using var client = new ProverClient(Password);
         await UnlockAsync(server, client);
 
-        var replyJson = await SendApiUntilReply(client, 3, "POST", "/api/state");
+        // A control write (key MOX) must pass through verbatim — method + body +
+        // content-type — and return the radio's reply. This is the core of native
+        // remote control: the SPA's POST drives the radio's own loopback Kestrel.
+        var replyJson = await SendApiUntilReply(
+            client, 5, "POST", "/api/tx/mox", "{\"on\":true}", "application/json");
         using var doc = JsonDocument.Parse(replyJson);
-        Assert.Equal(405, doc.RootElement.GetProperty("status").GetInt32());
-        Assert.Equal(0, factory.CallCount); // read-only: never reached the radio
+        Assert.Equal(200, doc.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal("{\"moxOn\":true}", doc.RootElement.GetProperty("body").GetString());
+        Assert.Equal(HttpMethod.Post, seenMethod);
+        Assert.Equal($"{LoopbackBase}/api/tx/mox", seenUri);
+        Assert.Equal("{\"on\":true}", seenBody);
+        Assert.Equal("application/json", seenContentType);
 
         server.Close();
+    }
+
+    [Fact]
+    public async Task PostUnlock_WriteToPureSignal_Refused403_WithoutTouchingLoopback()
+    {
+        var factory = new StubHttpClientFactory(_ =>
+            throw new InvalidOperationException("loopback must NOT be called for a PureSignal write"));
+        ApiSession(factory, out var server);
+        await using var client = new ProverClient(Password);
+        await UnlockAsync(server, client);
+
+        // PureSignal arm is a KB2UKA hard-stop: a remote POST to /api/tx/ps must
+        // be refused (403) and never reach the radio's burn-zone subsystem.
+        var replyJson = await SendApiUntilReply(
+            client, 13, "POST", "/api/tx/ps", "{\"enabled\":true}", "application/json");
+        using var doc = JsonDocument.Parse(replyJson);
+        Assert.Equal(403, doc.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal(0, factory.CallCount);
+
+        server.Close();
+    }
+
+    [Fact]
+    public async Task DroppedSessionWhileKeyed_SendsDeadManUnkey()
+    {
+        var calls = new List<(string Uri, string Body)>();
+        var gate = new object();
+        var factory = new StubHttpClientFactory((req) =>
+        {
+            lock (gate) calls.Add((req.RequestUri!.ToString(), req.Content?.ReadAsStringAsync().Result ?? ""));
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"moxOn\":true}", Encoding.UTF8, "application/json"),
+            };
+        });
+        ApiSession(factory, out var server);
+        await using var client = new ProverClient(Password);
+        await UnlockAsync(server, client);
+
+        // Key the radio over the tunnel, then drop the session — the dead-man must
+        // un-key BOTH MOX and TUN so a lost link never strands the station on-air.
+        await SendApiUntilReply(client, 21, "POST", "/api/tx/mox", "{\"on\":true}", "application/json");
+        server.Close();
+
+        await WaitForAsync(() =>
+        {
+            lock (gate)
+                return calls.Any(c => c.Uri.EndsWith("/api/tx/mox") && c.Body.Contains("\"on\":false"))
+                    && calls.Any(c => c.Uri.EndsWith("/api/tx/tun") && c.Body.Contains("\"on\":false"));
+        }, TimeSpan.FromSeconds(5));
+
+        lock (gate)
+        {
+            Assert.Contains(calls, c => c.Uri.EndsWith("/api/tx/mox") && c.Body.Contains("\"on\":false"));
+            Assert.Contains(calls, c => c.Uri.EndsWith("/api/tx/tun") && c.Body.Contains("\"on\":false"));
+        }
     }
 
     [Fact]
@@ -284,12 +360,13 @@ public sealed class RemoteWebRtcSessionTests
     /// a duplicate send is harmless (the prover keeps the latest reply slot).
     /// </summary>
     private static async Task<string> SendApiUntilReply(
-        ProverClient client, int id, string method, string path)
+        ProverClient client, int id, string method, string path,
+        string? body = null, string? contentType = null)
     {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
         while (true)
         {
-            var reply = client.SendApiRequest(id, method, path);
+            var reply = client.SendApiRequest(id, method, path, body, contentType);
             var done = await Task.WhenAny(reply, Task.Delay(250));
             if (done == reply) return await reply;
             if (DateTime.UtcNow > deadline) return await reply.WaitAsync(TimeSpan.FromSeconds(1));
@@ -360,7 +437,7 @@ public sealed class RemoteWebRtcSessionTests
             _pc = new RTCPeerConnection(new RTCConfiguration { iceServers = new List<RTCIceServer>() });
             _control = _pc.createDataChannel("control").Result;
             _frames = _pc.createDataChannel("frames").Result; // reliable for test determinism
-            _api = _pc.createDataChannel("api").Result;        // read-only REST tunnel
+            _api = _pc.createDataChannel("api").Result;        // read-write REST tunnel
             _control.onopen += () => _control.send("{\"t\":\"hello\"}");
             _control.onmessage += (_, _, data) => _ = HandleControlAsync(data);
             _frames.onmessage += (_, _, data) => _frame.TrySetResult(data);
@@ -374,11 +451,14 @@ public sealed class RemoteWebRtcSessionTests
         /// <summary>Send a raw binary control frame (post-unlock stream-request, e.g. 0x22 01).</summary>
         public void SendControlBinary(byte[] frame) => _control.send(frame);
 
-        /// <summary>Send a read-only API tunnel request {id, method, path} and await the next reply JSON.</summary>
-        public Task<string> SendApiRequest(int id, string method, string path)
+        /// <summary>Send an API tunnel request {id, method, path, body?, contentType?} and await the next reply JSON.</summary>
+        public Task<string> SendApiRequest(int id, string method, string path, string? body = null, string? contentType = null)
         {
             _apiReply = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _api.send(JsonSerializer.Serialize(new { id, method, path }));
+            var msg = new Dictionary<string, object?> { ["id"] = id, ["method"] = method, ["path"] = path };
+            if (body is not null) msg["body"] = body;
+            if (contentType is not null) msg["contentType"] = contentType;
+            _api.send(JsonSerializer.Serialize(msg));
             return _apiReply.Task;
         }
 
