@@ -38,6 +38,7 @@
 #include <vector>
 #include <cstring>
 #include <cstdio>
+#include <algorithm>
 
 // Editor (IPlugView) hosting is Windows-only for now — the plug-in GUI
 // is a native window we create + message-pump on a dedicated thread.
@@ -231,6 +232,29 @@ static void zvst_push_param_edit(LoadedPlugin* p, uint32_t param_id, double norm
     std::lock_guard<std::mutex> lk(p->param_mtx);
     if (p->param_count < LoadedPlugin::kParamCap)
         p->param_buf[p->param_count++] = { param_id, normalized };
+}
+
+// Append `s` to `out` as a JSON string body (no surrounding quotes),
+// escaping the characters JSON requires. Used by zvst_describe to emit a
+// plugin-metadata array the .NET scanner parses.
+static void json_escape(const std::string& s, std::string& out) {
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char b[8];
+                    std::snprintf(b, sizeof b, "\\u%04x", static_cast<unsigned>(static_cast<unsigned char>(c)));
+                    out += b;
+                } else {
+                    out += c;
+                }
+        }
+    }
 }
 
 // Look up the first kVstAudioEffectClass in the factory.
@@ -843,6 +867,42 @@ int32_t zvst_unload(zvst_handle_t handle) {
 
 int32_t zvst_shutdown(void) {
     if (g_init_count.load() > 0) g_init_count.fetch_sub(1);
+    return ZVST_OK;
+}
+
+int32_t zvst_describe(const char* path, char* out_json, int32_t out_cap, int32_t* out_len) {
+    if (out_len) *out_len = 0;
+    if (!path || !out_json || out_cap < 1) return ZVST_INVALID_ARGUMENTS;
+
+    std::string err;
+    auto module = VST3::Hosting::Module::create(path, err);
+    if (!module) {
+        // Mirror do_load's distinction: a readable file that isn't a valid
+        // VST3 is NOT_A_VST3; an unreadable path is FILE_NOT_FOUND.
+        FILE* probe = std::fopen(path, "rb");
+        if (probe) { std::fclose(probe); return ZVST_NOT_A_VST3; }
+        return ZVST_FILE_NOT_FOUND;
+    }
+
+    std::string json = "[";
+    bool first = true;
+    for (const auto& ci : module->getFactory().classInfos()) {
+        if (ci.category() != kVstAudioEffectClass) continue; // hosts effects only
+        if (!first) json += ",";
+        first = false;
+        std::string esc;
+        json += "{\"uid\":\"";      esc.clear(); json_escape(ci.ID().toString(), esc);    json += esc;
+        json += "\",\"name\":\"";   esc.clear(); json_escape(ci.name(), esc);             json += esc;
+        json += "\",\"category\":\""; esc.clear(); json_escape(ci.subCategoriesString(), esc); json += esc;
+        json += "\",\"vendor\":\"";  esc.clear(); json_escape(ci.vendor(), esc);           json += esc;
+        json += "\"}";
+    }
+    json += "]";
+
+    if (out_len) *out_len = static_cast<int32_t>(json.size());
+    int32_t n = static_cast<int32_t>(std::min<size_t>(json.size(), static_cast<size_t>(out_cap) - 1));
+    std::memcpy(out_json, json.data(), static_cast<size_t>(n));
+    out_json[n] = '\0';
     return ZVST_OK;
 }
 

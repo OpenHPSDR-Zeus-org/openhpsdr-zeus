@@ -117,6 +117,27 @@ ZVST_EXPORT int32_t zvst_unload(zvst_handle_t handle);
  */
 ZVST_EXPORT int32_t zvst_shutdown(void);
 
+/*
+ * Enumerate the audio-effect classes inside a VST3 file/bundle WITHOUT
+ * activating them — the in-process engine's plugin scanner. `path` is a
+ * UTF-8 absolute path to a .vst3 bundle or flat file. On success writes a
+ * UTF-8 JSON array into `out_json` (always NUL-terminated, truncated to
+ * `out_cap - 1` bytes), and sets *out_len (if non-NULL) to the FULL length
+ * the JSON needed — so a caller that got truncated can re-call with a
+ * bigger buffer. Each element is an object:
+ *   {"uid":"...","name":"...","category":"...","vendor":"..."}
+ * where `uid` is the class TUID string (the identifier to pass back to
+ * load that exact sub-plugin from a shell file). Returns ZVST_OK even when
+ * the file has zero audio-effect classes (empty array), or a load error
+ * (ZVST_FILE_NOT_FOUND / ZVST_NOT_A_VST3). Forward-compatible addition
+ * under ABI v2 — a new entry point only; no existing signature changed.
+ */
+ZVST_EXPORT int32_t zvst_describe(
+    const char* path,
+    char* out_json,
+    int32_t out_cap,
+    int32_t* out_len);
+
 /* --- Editor (plug-in GUI) — ABI v2 -----------------------------------
  *
  * Open the plug-in's native editor (IPlugView) in a dedicated UI thread
