@@ -298,37 +298,49 @@ public sealed class VstDirectoryScanService
     }
 
     /// <summary>
-    /// Hostable plugin candidates for one <c>.vst3</c> entry. With the in-process
-    /// bridge available (the normal runtime case) this asks the bridge to describe
-    /// the file — accepting it cross-platform and reading the real plugin name; an
-    /// empty result means the file can't be hosted HERE (wrong arch / not a VST3)
-    /// and is recorded as a skip. Without the bridge it falls back to the static
-    /// Windows-PE heuristic + filename. The in-process loader instantiates the
-    /// first audio-effect class, so a file yields one candidate (uid left null =
-    /// "load the first class"; shell sub-plugin selection awaits a load-by-uid ABI).
+    /// Hostable plugin candidates for one <c>.vst3</c> entry. Two layered checks:
+    /// the cheap static Windows-PE heuristic accepts a 64-bit Windows VST3 without
+    /// loading anything (and gives the skip reason for incompatible Windows files);
+    /// when it rejects a binary — which it always does for a Linux ELF / macOS
+    /// dylib VST3 — the in-process bridge (the actual host) is asked to describe
+    /// the file, and a non-empty result both confirms it is hostable on THIS
+    /// platform/arch and yields the real plugin name. The bridge also enriches the
+    /// display name on the Windows path when it can introspect the file. The
+    /// in-process loader instantiates the first audio-effect class, so a file
+    /// yields one candidate (uid null = "load the first class"; shell sub-plugin
+    /// selection awaits a load-by-uid ABI).
     /// </summary>
     private IReadOnlyList<VstCandidate> EnumerateVstCandidates(
         string entry, IVstBridgeNative? bridge, List<ScanError> errors, string fileName)
     {
         var vst3Abs = Path.GetFullPath(entry);
+
+        if (IsLoadableVst3(entry, out var reason))
+        {
+            var name = fileName;
+            if (bridge is not null)
+            {
+                var d = VstBridgeNative.Scan(bridge, vst3Abs);
+                if (d.Count > 0 && !string.IsNullOrWhiteSpace(d[0].Name)) name = d[0].Name;
+            }
+            return [new VstCandidate(vst3Abs, name, null)];
+        }
+
+        // PE heuristic rejected it — but it may be a Linux/macOS VST3 the bridge
+        // can host. The bridge IS what loads it in Native mode, so its verdict is
+        // authoritative for non-Windows binaries.
         if (bridge is not null)
         {
             var descs = VstBridgeNative.Scan(bridge, vst3Abs);
-            if (descs.Count == 0)
+            if (descs.Count > 0)
             {
-                errors.Add(new ScanError(entry, "skipped (not a hostable VST3 on this platform)"));
-                return [];
+                var name = string.IsNullOrWhiteSpace(descs[0].Name) ? fileName : descs[0].Name;
+                return [new VstCandidate(vst3Abs, name, null)];
             }
-            var d = descs[0];
-            var name = string.IsNullOrWhiteSpace(d.Name) ? fileName : d.Name;
-            return [new VstCandidate(vst3Abs, name, null)];
         }
-        if (!IsLoadableVst3(entry, out var reason))
-        {
-            errors.Add(new ScanError(entry, $"skipped (incompatible): {reason}"));
-            return [];
-        }
-        return [new VstCandidate(vst3Abs, fileName, null)];
+
+        errors.Add(new ScanError(entry, $"skipped (incompatible): {reason}"));
+        return [];
     }
 
     /// <summary>
