@@ -147,6 +147,10 @@ export default defineConfig({
     proxy: {
       '/api': `http://${backendHost}:${backendPort}`,
       '/ws': { target: `ws://${backendHost}:${backendPort}`, ws: true },
+      // Operator manual PDF (About panel → /manual). Same-origin in the real
+      // app/desktop builds; proxied here so the link also works under the Vite
+      // dev server.
+      '/manual': `http://${backendHost}:${backendPort}`,
     },
   },
   build: {

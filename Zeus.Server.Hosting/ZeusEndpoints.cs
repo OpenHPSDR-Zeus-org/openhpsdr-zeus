@@ -42,6 +42,21 @@ public static class ZeusEndpoints
             return Results.Ok(new { version });
         });
 
+        // Operator manual. The PDF is built fresh from docs/manual each release
+        // and bundled next to the host binary (release.yml `build-manual` job),
+        // so it resolves under AppContext.BaseDirectory on every platform —
+        // including inside the macOS .app bundle and the Linux AppImage, where
+        // it is otherwise unreachable. Served inline (no download disposition)
+        // so the About-panel link opens it in a new tab. Dev builds don't carry
+        // the PDF, so this 404s locally — the link simply does nothing then.
+        app.MapGet("/manual", () =>
+        {
+            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "Zeus-Operator-Manual.pdf");
+            return System.IO.File.Exists(path)
+                ? Results.File(path, "application/pdf", enableRangeProcessing: true)
+                : Results.NotFound("Operator manual is not bundled in this build.");
+        });
+
         // Self-diagnostic "Report a problem" feature. The picker fetches the
         // symptom list; submitting a symptom + free text returns a redacted,
         // paste-ready report (Markdown + last-100 log lines) plus a prefilled

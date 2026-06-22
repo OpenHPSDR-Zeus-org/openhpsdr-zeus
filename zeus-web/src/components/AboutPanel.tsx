@@ -203,6 +203,20 @@ export function AboutPanel() {
 
       <div style={{ marginBottom: 20, paddingTop: 20, borderTop: '1px solid var(--panel-border)' }}>
         <p style={{ margin: '0 0 12px 0', lineHeight: 1.6, color: 'var(--fg-1)' }}>
+          📖{' '}
+          {/* The manual PDF ships inside every installer; the backend serves it
+              at /manual (see ZeusEndpoints). Opens in a new tab — and is a no-op
+              in dev builds that don't bundle the PDF. */}
+          <a
+            href="/manual"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: 'var(--accent)', textDecoration: 'underline', fontWeight: 600 }}
+          >
+            Open the User Manual (PDF)
+          </a>
+        </p>
+        <p style={{ margin: '0 0 12px 0', lineHeight: 1.6, color: 'var(--fg-1)' }}>
           OpenHPSDR Zeus is a cross-platform SDR client for OpenHPSDR Protocol-1 and Protocol-2 radios.
         </p>
         <p style={{ margin: '0 0 12px 0', lineHeight: 1.6, color: 'var(--fg-2)' }}>
