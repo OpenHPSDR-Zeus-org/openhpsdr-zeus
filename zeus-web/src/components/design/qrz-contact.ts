@@ -48,12 +48,22 @@ function qslSummary(s: QrzStation): string {
 }
 
 export function qrzStationToContact(s: QrzStation | null, home: QrzStation | null): Contact | null {
-  if (!s || s.lat == null || s.lon == null) return null;
-  const bearing = home?.lat != null && home?.lon != null
-    ? bearingDeg(home.lat, home.lon, s.lat, s.lon)
+  if (!s) return null;
+  // QRZ records frequently lack lat/lon (no verified address, no map pin
+  // chosen). Earlier the card refused to render in that case, so the operator
+  // saw nothing happen on lookup. Render the text fields regardless and only
+  // skip map/beam/distance/propagation when coords aren't present.
+  const sLat = s.lat;
+  const sLon = s.lon;
+  const homeLat = home?.lat ?? null;
+  const homeLon = home?.lon ?? null;
+  const hasCoords = sLat != null && sLon != null;
+  const hasHomeCoords = homeLat != null && homeLon != null;
+  const bearing = hasCoords && hasHomeCoords
+    ? bearingDeg(homeLat, homeLon, sLat, sLon)
     : 0;
-  const distance = home?.lat != null && home?.lon != null
-    ? distanceKm(home.lat, home.lon, s.lat, s.lon)
+  const distance = hasCoords && hasHomeCoords
+    ? distanceKm(homeLat, homeLon, sLat, sLon)
     : 0;
   const first = (s.firstName || s.name || '').trim().charAt(0).toUpperCase();
   const last = (s.name || '').trim().split(/\s+/).pop()?.charAt(0).toUpperCase() ?? '';
@@ -67,6 +77,9 @@ export function qrzStationToContact(s: QrzStation | null, home: QrzStation | nul
   const distanceLabel = distance > 0
     ? `${Math.round(distance).toLocaleString()} km · ${Math.round(distanceMi).toLocaleString()} mi`
     : null;
+  const latlon = hasCoords
+    ? `${Math.abs(sLat).toFixed(2)}°${sLat >= 0 ? 'N' : 'S'} / ${Math.abs(sLon).toFixed(2)}°${sLon >= 0 ? 'E' : 'W'}`
+    : '—';
 
   return {
     callsign: s.callsign,
@@ -75,9 +88,9 @@ export function qrzStationToContact(s: QrzStation | null, home: QrzStation | nul
     grid: s.grid ?? '—',
     cq: s.cqZone != null ? String(s.cqZone).padStart(2, '0') : '—',
     itu: s.ituZone != null ? String(s.ituZone).padStart(2, '0') : '—',
-    latlon: `${Math.abs(s.lat).toFixed(2)}°${s.lat >= 0 ? 'N' : 'S'} / ${Math.abs(s.lon).toFixed(2)}°${s.lon >= 0 ? 'E' : 'W'}`,
-    lat: s.lat,
-    lon: s.lon,
+    latlon,
+    lat: sLat,
+    lon: sLon,
     local: localTimeFromOffset(s.gmtOffset, s.timeZone),
     qsl: qslSummary(s),
     licensed: licYear != null ? String(licYear) : '—',
@@ -101,7 +114,7 @@ export function qrzStationToContact(s: QrzStation | null, home: QrzStation | nul
     qslEqsl: s.acceptsEqsl,
     qslMail: s.acceptsMailQsl,
     qslManager: s.qslManager,
-    dayNight: dayNightAt(s.lat, s.lon),
+    dayNight: hasCoords ? dayNightAt(sLat, sLon) : null,
     distanceLabel,
   };
 }

@@ -721,9 +721,13 @@ export default function App() {
       : null
   ), [qrzHome]);
 
-  const sp = contact && effectiveHome ? bearingDeg(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon) : 0;
+  const sp = contact && effectiveHome && contact.lat != null && contact.lon != null
+    ? bearingDeg(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon)
+    : 0;
   const lp = (sp + 180) % 360;
-  const dist = contact && effectiveHome ? distanceKm(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon) : 0;
+  const dist = contact && effectiveHome && contact.lat != null && contact.lon != null
+    ? distanceKm(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon)
+    : 0;
 
   const rotateToBearing = useCallback((brg: number) => {
     const normalized = ((brg % 360) + 360) % 360;
@@ -750,11 +754,18 @@ export default function App() {
   // --- Hero title
   const heroTitle = useMemo(() => (
     terminatorActive && contact ? (
-      <>
-        Panadapter · World Map ·{' '}
-        <span style={{ color: 'var(--accent)' }}>{contact.callsign}</span> ·{' '}
-        {Math.round(dist).toLocaleString()} km · brg {sp.toFixed(0)}°
-      </>
+      contact.lat != null && contact.lon != null ? (
+        <>
+          Panadapter · World Map ·{' '}
+          <span style={{ color: 'var(--accent)' }}>{contact.callsign}</span> ·{' '}
+          {Math.round(dist).toLocaleString()} km · brg {sp.toFixed(0)}°
+        </>
+      ) : (
+        <>
+          Panadapter · World Map ·{' '}
+          <span style={{ color: 'var(--accent)' }}>{contact.callsign}</span>
+        </>
+      )
     ) : (
       <>Panadapter · {(vfoHz / 1e6).toFixed(3)} MHz · {bandLabel}</>
     )
