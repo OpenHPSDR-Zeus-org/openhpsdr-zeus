@@ -5356,6 +5356,27 @@ export function connectP2(
   );
 }
 
+// Take over a Busy radio: ask the server to send a protocol stop so the radio
+// drops its current owner, freeing it for an immediate connect. `endpoint` is
+// the discovered "ip:port"; `protocol` is 'P1' or 'P2'. Resolves once the
+// server has sent the stop and waited for the radio to settle.
+export function reclaimRadio(
+  endpoint: string,
+  protocol: 'P1' | 'P2',
+  signal?: AbortSignal,
+): Promise<unknown> {
+  return jsonFetch(
+    '/api/radios/reclaim',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ endpoint, protocol }),
+      signal,
+    },
+    (raw) => raw,
+  );
+}
+
 export function disconnect(signal?: AbortSignal): Promise<RadioStateDto> {
   return jsonFetch(
     '/api/disconnect',

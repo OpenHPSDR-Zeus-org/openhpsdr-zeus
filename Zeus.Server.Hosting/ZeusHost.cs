@@ -230,6 +230,9 @@ public static class ZeusHost
         // PushAudioFrontEnd push. Shares zeus-prefs.db (single global row).
         builder.Services.AddSingleton<AudioSettingsStore>();
         builder.Services.AddSingleton<RadioService>();
+        // Frees a Busy radio (drops its current owner) so the operator can take
+        // it over from the Connect panel. Stateless — opens its own socket.
+        builder.Services.AddSingleton<RadioReclaimService>();
         builder.Services.AddSingleton<StreamingHub>();
         // WebRTC remote-access data plane (docs/designs/remote-access-webrtc.md).
         // Phase-0 spike service; the dev-only /api/rtc/spike/offer endpoint that
