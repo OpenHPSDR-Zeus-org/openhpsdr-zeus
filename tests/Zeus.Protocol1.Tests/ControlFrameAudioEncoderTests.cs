@@ -182,6 +182,45 @@ public class ControlFrameAudioEncoderTests
         Assert.Equal(0x00, cc[2] & (1 << 6));
     }
 
+    // ---- (c) ANAN-10E (HermesII) line-in — issue #667 ----------------------
+
+    private static ControlFrame.CcState Hermes2() =>
+        Hermes() with { Board = HpsdrBoardKind.HermesII };
+
+    [Fact]
+    public void DriveFilter_Anan10E_LineInSelect_LandsInC2Bit1()
+    {
+        // 10E RadioLineIn → mic_linein select on the 0x12 frame C2[1].
+        var cc = Frame(ControlFrame.CcRegister.DriveFilter, Hermes2() with { MicLineIn = true });
+        Assert.Equal(0x12, cc[0]);
+        Assert.Equal(0x02, cc[2] & 0x02);
+    }
+
+    [Theory]
+    [InlineData(0, 0x00)]
+    [InlineData(17, 0x11)]
+    [InlineData(31, 0x1F)]
+    [InlineData(63, 0x1F)] // clamps to the 5-bit field
+    public void Attenuator_Anan10E_LineInGain_LandsInC2LowFiveBits(int gain, byte expectedLow)
+    {
+        // 10E line-in gain rides the 0x14 frame C2[4:0], same layout as HL2.
+        var cc = Frame(ControlFrame.CcRegister.Attenuator, Hermes2() with { LineInGain = (byte)gain });
+        Assert.Equal(0x14, cc[0]);
+        Assert.Equal(expectedLow, (byte)(cc[2] & 0x1F));
+        // The 10E does NOT carry puresignal_run here — C2[6] stays clear.
+        Assert.Equal(0x00, cc[2] & (1 << 6));
+    }
+
+    [Fact]
+    public void Attenuator_NonAnan10E_LineInGain_IsNotEmitted()
+    {
+        // Board-gating: a pure Hermes (non-HL2, non-10E) with a stale LineInGain
+        // must NOT emit it — C2 stays zero, byte-identical to today. Proves the
+        // 0x14 gain change is confined to the 10E and never moves another board.
+        var cc = Frame(ControlFrame.CcRegister.Attenuator, Hermes() with { LineInGain = 0x1F });
+        Assert.Equal(0x00, cc[2]);
+    }
+
     // ---- CRUX: audio writes must NOT disturb PureSignal or step-atten ------
 
     [Fact]

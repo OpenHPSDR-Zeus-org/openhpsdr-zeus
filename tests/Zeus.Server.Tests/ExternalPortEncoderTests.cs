@@ -212,6 +212,30 @@ public class ExternalPortEncoderTests
     }
 
     [Fact]
+    public void P1Encoder_Anan10E_RadioLineIn_AssertsMicLineInSelect()
+    {
+        // ANAN-10E (HermesII, issue #667): RadioLineIn selects the TLV320 line-in
+        // via mic_linein (0x12 frame C2[1]); the 0..31 gain rides the 0x14 frame.
+        var encoder = ExternalPortEncoders.For(HpsdrBoardKind.HermesII);
+        var state = new ExternalPortState(Source: TxAudioSource.RadioLineIn, LineInGain: 17);
+        var (boost, lineIn) = encoder.EncodeP1CodecAudioBits(in state);
+        Assert.False(boost);
+        Assert.True(lineIn);
+    }
+
+    [Fact]
+    public void P1Encoder_RadioLineIn_IsBoardGatedToAnan10E()
+    {
+        // The line-in select is 10E-ONLY: the SAME Protocol1PortEncoder on a pure
+        // Hermes board must NOT assert mic_linein, so no other P1 codec board's
+        // wire output changes.
+        var encoder = ExternalPortEncoders.For(HpsdrBoardKind.Hermes);
+        var state = new ExternalPortState(Source: TxAudioSource.RadioLineIn, LineInGain: 17);
+        var (_, lineIn) = encoder.EncodeP1CodecAudioBits(in state);
+        Assert.False(lineIn);
+    }
+
+    [Fact]
     public void Hl2Encoder_AllAudioSurfaces_AreZero_HostOnly()
     {
         // HL2 is Host-only — no codec audio bits, no P2 bytes, ever.
@@ -246,6 +270,20 @@ public class ExternalPortEncoderTests
         var got = RadioService.ClampAudioSource(
             new AudioSourceSelection(TxAudioSource.RadioLineIn, false, false, 12), caps);
         Assert.Equal(TxAudioSource.Host, got.Source);
+    }
+
+    [Fact]
+    public void Clamp_LineIn_OnAnan10E_SurvivesWithGain()
+    {
+        // ANAN-10E (HermesII, issue #667) now exposes line-in: the persisted
+        // selection survives the clamp and keeps its 0..31 gain; mic params drop.
+        var caps = BoardCapabilitiesTable.For(HpsdrBoardKind.HermesII);
+        var got = RadioService.ClampAudioSource(
+            new AudioSourceSelection(TxAudioSource.RadioLineIn, MicBoost: true, MicBias: true, LineInGain: 21), caps);
+        Assert.Equal(TxAudioSource.RadioLineIn, got.Source);
+        Assert.Equal((byte)21, got.LineInGain);
+        Assert.False(got.MicBoost);
+        Assert.False(got.MicBias);
     }
 
     [Fact]

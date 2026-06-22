@@ -52,7 +52,10 @@ export interface BoardCapabilities {
   hasOnboardCodec: boolean;
   /** Hermes-Lite 2 0x14-frame mic front-end (inert plumbing in v1). */
   hermesLite2MicFrontEnd: boolean;
-  /** Board has a switchable analog line-in jack (gates RadioLineIn). */
+  /** Board has a switchable analog line-in jack (gates RadioLineIn). True for
+   *  ANAN-200D, the 0x0A Saturn family, and the ANAN-10E (HermesII, issue #667);
+   *  false for the remaining Hermes-class P1, ANAN-G2E, Metis, HL2. Gates the
+   *  Line-In source option + its gain slider. */
   hasRadioLineIn: boolean;
   /** Board has a switchable balanced XLR mic input (G2 / G2-1K only). */
   hasBalancedXlr: boolean;

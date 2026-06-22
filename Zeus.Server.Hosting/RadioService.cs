@@ -2455,12 +2455,16 @@ public sealed class RadioService : IDisposable
         // mic_trs / mic_bias / line_in_gain (HL2 0x14) stay clear in v1 (the HL2
         // mic front-end is inert plumbing), so the host pipeline is unchanged.
         var (p1Boost, p1LineIn) = encoder.EncodeP1CodecAudioBits(in portState);
+        // ANAN-10E line-in (issue #667): when the encoder selected line-in
+        // (HermesII only — p1LineIn is false on every other P1 board), forward
+        // the 0..31 gain so ControlFrame can place it on the 0x14 frame. The gain
+        // stays 0 for all other sources/boards → byte-identical to today.
         ActiveClient?.SetAudioFrontEnd(
             micBoost: p1Boost,
             micLineIn: p1LineIn,
             micTrs: false,
             micBias: false,
-            lineInGain: 0);
+            lineInGain: p1LineIn ? resolved.LineInGain : 0);
 
         // P2 (0x0A Saturn family): forward the resolved literal byte-50
         // mic_control + byte-51 line_in_gain to the live Protocol2Client via
