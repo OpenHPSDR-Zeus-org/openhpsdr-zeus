@@ -5,9 +5,9 @@
 //                         Douglas J. Cerrato (KB2UKA),
 //                         Christian Suarez (N9WAR), and contributors.
 //
-// Unit tests for the read-only /api/* fetch shim (api-tunnel.ts):
+// Unit tests for the read-write /api/* fetch shim (api-tunnel.ts):
 //   - GET /api/x tunnels over the data channel and resolves the radio's reply
-//   - non-GET (POST/…) resolves a synthetic 405 WITHOUT touching the channel
+//   - POST/PUT/… tunnel with their body + content-type over the channel
 //   - non-/api requests delegate to the original fetch untouched
 //   - requests issued BEFORE connect queue and flush once setApiChannel() lands
 
@@ -37,7 +37,13 @@ class FakeChannel {
   }
 }
 
-function lastRequest(ch: FakeChannel): { id: number; method: string; path: string } {
+function lastRequest(ch: FakeChannel): {
+  id: number;
+  method: string;
+  path: string;
+  body?: string;
+  contentType?: string;
+} {
   return JSON.parse(ch.sent[ch.sent.length - 1]!);
 }
 
@@ -89,14 +95,50 @@ describe('api-tunnel fetch shim', () => {
     await p;
   });
 
-  it('refuses a non-GET with a synthetic 405 and never touches the channel', async () => {
+  it('tunnels a POST with its body + content-type and resolves the reply', async () => {
     const ch = new FakeChannel();
     setApiChannel(ch as unknown as RTCDataChannel);
 
-    const resp = await window.fetch('/api/state', { method: 'POST', body: '{}' });
-    expect(resp.status).toBe(405);
-    expect(await resp.json()).toEqual({ error: 'Remote session is read-only' });
-    expect(ch.sent.length).toBe(0); // nothing reached the radio
+    const respPromise = window.fetch('/api/tx/mox', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ on: true }),
+    });
+    // extractBody awaits before the send (async body read); wait for the send.
+    await vi.waitFor(() => expect(ch.sent.length).toBe(1));
+    const req = lastRequest(ch);
+    expect(req.method).toBe('POST');
+    expect(req.path).toBe('/api/tx/mox');
+    expect(req.body).toBe('{"on":true}');
+    expect(req.contentType).toBe('application/json');
+    expect(originalFetch).not.toHaveBeenCalled();
+
+    ch.reply({ id: req.id, status: 200, body: '{"moxOn":true}' });
+    const resp = await respPromise;
+    expect(resp.status).toBe(200);
+    expect(await resp.json()).toEqual({ moxOn: true });
+  });
+
+  it('tunnels a body carried on a Request object', async () => {
+    const ch = new FakeChannel();
+    setApiChannel(ch as unknown as RTCDataChannel);
+
+    // Absolute same-origin URL: the test env's Request can't parse a relative
+    // path (no document base), but the shim still resolves it to /api/radio/lo.
+    const request = new Request(`${window.location.origin}/api/radio/lo`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hz: 14200000 }),
+    });
+    const respPromise = window.fetch(request);
+    await vi.waitFor(() => expect(ch.sent.length).toBe(1));
+    const req = lastRequest(ch);
+    expect(req.method).toBe('POST');
+    expect(req.path).toBe('/api/radio/lo');
+    expect(req.body).toBe('{"hz":14200000}');
+
+    ch.reply({ id: req.id, status: 200, body: 'null' });
+    await respPromise;
   });
 
   it('delegates non-/api requests to the original fetch', async () => {
