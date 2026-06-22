@@ -56,21 +56,26 @@ public sealed class LogService : IDisposable
     private readonly ILiteCollection<LogEntryDocument> _logs;
     private readonly ILogger<LogService> _log;
 
-    public LogService(ILogger<LogService> log, CredentialStore credStore)
+    public LogService(ILogger<LogService> log, string? dbPathOverride = null)
     {
         _log = log;
-        // Use the same database as CredentialStore for consistency
-        var dbPath = GetDatabasePath();
-        var dbPassword = GetDatabasePassword();
+        // The QSO logbook lives in its own plaintext DB (zeus-logbook.db),
+        // separate from both the prefs profiles and the retired encrypted
+        // zeus.db. Legacy rows are folded in once at startup by
+        // LegacyZeusDbMigration.
+        var dbPath = dbPathOverride ?? PrefsDbPath.LogbookPath();
 
-        var connectionString = $"Filename={dbPath};Password={dbPassword};Connection=shared";
-        _db = new LiteDatabase(connectionString);
+        var dir = Path.GetDirectoryName(dbPath);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            Directory.CreateDirectory(dir);
+
+        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
         _logs = _db.GetCollection<LogEntryDocument>("logs");
         _logs.EnsureIndex(x => x.Id, unique: true);
         _logs.EnsureIndex(x => x.QsoDateTimeUtc);
         _logs.EnsureIndex(x => x.Callsign);
 
-        _log.LogInformation("LogService initialized");
+        _log.LogInformation("LogService initialized at {Path}", dbPath);
     }
 
     public async Task<LogEntry> CreateLogEntryAsync(CreateLogEntryRequest request, CancellationToken ct = default)
@@ -609,33 +614,6 @@ public sealed class LogService : IDisposable
             .ToList();
     }
 
-    private static string GetDatabasePath()
-    {
-        var appDataDir = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData,
-            Environment.SpecialFolderOption.Create);
-
-        var zeusDir = Path.Combine(appDataDir, "Zeus");
-        return Path.Combine(zeusDir, "zeus.db");
-    }
-
-    private static string GetDatabasePassword()
-    {
-        // Read the same password that CredentialStore uses
-        var appDataDir = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData,
-            Environment.SpecialFolderOption.Create);
-
-        var zeusDir = Path.Combine(appDataDir, "Zeus");
-        var keyPath = Path.Combine(zeusDir, ".dbkey");
-
-        if (File.Exists(keyPath))
-        {
-            return File.ReadAllText(keyPath);
-        }
-
-        throw new InvalidOperationException("Database key not found. CredentialStore must be initialized first.");
-    }
 }
 
 internal sealed class LogEntryDocument

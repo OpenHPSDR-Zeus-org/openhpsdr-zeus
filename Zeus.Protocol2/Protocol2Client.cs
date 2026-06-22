@@ -168,6 +168,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // the DUC follows RX0 again.
     private uint _txDucFreqHz = 14_200_000;
     private volatile bool _txDucIndependent;
+    // Extra user receivers (RX3+) for full multi-DDC. Contiguous after RX2:
+    // receiver index i (>= 2) sits on DDC RxBaseDdc(board)+i (so RX3 = DDC
+    // base+2). _extraReceiverCount counts RX3.. ; total user receivers =
+    // 2 + _extraReceiverCount and RX2 MUST be enabled (no DDC gaps). Indexed by
+    // receiver index: _extraRxFreqHz[2] = RX3 NCO, _extraRxAdc[2] = RX3 ADC
+    // source, etc. When _extraReceiverCount == 0 the RX1/RX2 path below is
+    // entirely unchanged and SendCmdRx keeps using the byte-pinned legacy
+    // composer — extras are purely additive and never touch the PureSignal
+    // DDC0/1 branch. Read on the RX thread + command threads (volatile-accessed).
+    private int _extraReceiverCount;
+    private readonly uint[] _extraRxFreqHz = new uint[MaxRxDdc];
+    private readonly byte[] _extraRxAdc = new byte[MaxRxDdc];
     // Per-source-port IQ packet rate (packets in the last completed ~1 s
     // window) for UDP ports RxDataPortBase..RxDataPortBase+MaxRxDdc-1 (1035..1042)
     // → index 0..7 → DDC 0..7. Written by the single RX thread on each window
@@ -691,6 +703,32 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
+    /// N-receiver overload: maps an incoming RX IQ stream (UDP source port
+    /// 1035+streamIndex) to its logical receiver index for the full multi-DDC
+    /// case. <paramref name="extraReceiverCount"/> is the number of receivers
+    /// beyond RX2 (RX3..). With no extras this delegates to the RX1/RX2 mapping.
+    /// Receivers are contiguous DDCs base+0..base+(1+extra); G2/Orion firmware
+    /// tags streams by DDC slot (preferred), other builds by logical stream
+    /// index (fallback).
+    /// </summary>
+    internal static int ReceiverIndexForRxStream(
+        int streamIndex,
+        HpsdrBoardKind board,
+        bool rx2Enabled,
+        int extraReceiverCount)
+    {
+        if (extraReceiverCount <= 0)
+            return ReceiverIndexForRxStream(streamIndex, board, rx2Enabled);
+        int baseDdc = RxBaseDdc(board);
+        int top = 1 + extraReceiverCount;          // highest active receiver index
+        if (streamIndex >= baseDdc && streamIndex - baseDdc <= top)
+            return streamIndex - baseDdc;          // DDC-slot firmware (G2/Orion)
+        if (streamIndex >= 0 && streamIndex <= top)
+            return streamIndex;                    // logical-stream firmware
+        return 0;
+    }
+
+    /// <summary>
     /// IQ packet rate (packets in the last completed ~1 s window) per UDP
     /// source port 1035..1042 → index 0..7 → DDC 0..7. The RX2 DDC is
     /// <see cref="Rx2Ddc"/>. A zero at an enabled DDC's index means the radio
@@ -735,6 +773,50 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _rx2FreqHz = (uint)Math.Clamp(corrected, 0L, uint.MaxValue);
         if (_rxTask is not null && Volatile.Read(ref _rx2Enabled) != 0)
             SendCmdHighPriority(run: true);
+    }
+
+    /// <summary>
+    /// Configure the extra user receivers beyond RX2 (RX3..) for full multi-DDC.
+    /// <paramref name="count"/> is the number of receivers past RX2 (0 = RX1/RX2
+    /// only, the legacy path). Extras are contiguous — receiver index 2+i sits on
+    /// DDC <see cref="RxBaseDdc"/>+2+i — so RX2 must be enabled when count &gt; 0.
+    /// <paramref name="adcSources"/> gives the per-extra ADC source (index 0 =
+    /// RX3); null/short entries default to ADC0. Re-sends the RX command (DDC
+    /// enable mask) and high-priority packet (NCO phase words). The RX1/RX2 path
+    /// and the PureSignal DDC0/1 branch are untouched.
+    /// </summary>
+    public void SetExtraReceivers(int count, IReadOnlyList<byte>? adcSources = null)
+    {
+        int maxExtras = MaxRxDdc - RxBaseDdc(_boardKind) - 2;
+        int clamped = Math.Clamp(count, 0, Math.Max(0, maxExtras));
+        for (int k = 0; k < clamped; k++)
+        {
+            int rcvr = 2 + k;
+            _extraRxAdc[rcvr] = adcSources is not null && k < adcSources.Count ? adcSources[k] : (byte)0;
+        }
+        if (Interlocked.Exchange(ref _extraReceiverCount, clamped) == clamped) return;
+        if (_rxTask is not null)
+        {
+            SendCmdRx();
+            SendCmdHighPriority(run: true);
+        }
+    }
+
+    /// <summary>
+    /// Tune an extra receiver's DDC NCO. <paramref name="receiverIndex"/> is the
+    /// logical receiver index (2 = RX3, 3 = RX4, ...). Applies the host-side
+    /// frequency-correction factor like <see cref="SetVfoAHz"/> /
+    /// <see cref="SetVfoBHz"/>. No-op for indices outside the configured extra
+    /// range.
+    /// </summary>
+    public void SetExtraReceiverFreqHz(int receiverIndex, long hz)
+    {
+        if (receiverIndex < 2 || receiverIndex >= 2 + Volatile.Read(ref _extraReceiverCount))
+            return;
+        double factor = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _freqCorrectionBits));
+        long corrected = (long)Math.Round(hz * factor, MidpointRounding.AwayFromZero);
+        _extraRxFreqHz[receiverIndex] = (uint)Math.Clamp(corrected, 0L, uint.MaxValue);
+        if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
     /// <summary>
@@ -1719,15 +1801,45 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         //   ComposeCmdRxBuffer also enables DDC0, configures DDC0/1 at
         //   192 kHz / 24-bit, and sets byte 1363 = 0x02 to sync DDC1→DDC0
         //   (pihpsdr new_protocol.c:1611-1630).
-        var p = ComposeCmdRxBuffer(
-            _seqCmdRx++,
-            _numAdc,
-            (ushort)_sampleRateKhz,
-            _psFeedbackEnabled,
-            _boardKind,
-            _adcDitherEnabled,
-            _adcRandomEnabled,
-            Volatile.Read(ref _rx2Enabled) != 0);
+        int extras = Volatile.Read(ref _extraReceiverCount);
+        byte[] p;
+        if (extras > 0)
+        {
+            // Full multi-DDC: RX1 + RX2 + RX3.. as a contiguous DDC run via the
+            // N-receiver composer. For the RX1(+RX2)(+PS) subset this is
+            // byte-identical to the legacy composer (ComposeCmdRxBufferForReceivers
+            // tests), so existing behaviour is preserved; extras add DDC config
+            // blocks for RxBaseDdc+2.. only. PS DDC0/1 handling is inside the
+            // composer and untouched.
+            byte rxAdc = Rx2AdcSource(_numAdc, _boardKind); // ADC0 (same antenna)
+            var specs = new List<DdcReceiverSpec>(2 + extras)
+            {
+                new DdcReceiverSpec(rxAdc, (ushort)_sampleRateKhz),  // RX1
+                new DdcReceiverSpec(rxAdc, (ushort)_sampleRateKhz),  // RX2
+            };
+            for (int k = 0; k < extras; k++)
+                specs.Add(new DdcReceiverSpec(_extraRxAdc[2 + k], (ushort)_sampleRateKhz));
+            p = ComposeCmdRxBufferForReceivers(
+                _seqCmdRx++,
+                _numAdc,
+                specs,
+                _psFeedbackEnabled,
+                _boardKind,
+                _adcDitherEnabled,
+                _adcRandomEnabled);
+        }
+        else
+        {
+            p = ComposeCmdRxBuffer(
+                _seqCmdRx++,
+                _numAdc,
+                (ushort)_sampleRateKhz,
+                _psFeedbackEnabled,
+                _boardKind,
+                _adcDitherEnabled,
+                _adcRandomEnabled,
+                Volatile.Read(ref _rx2Enabled) != 0);
+        }
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1025));
     }
 
@@ -1874,6 +1986,22 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             int rx2Ddc = Rx2Ddc(_boardKind);
             uint rx2Phase = (uint)(_rx2FreqHz * HzToPhase);
             WriteBeU32(p, 9 + rx2Ddc * 4, rx2Phase);
+        }
+
+        // Extra receivers (RX3+): tune each contiguous DDC's NCO. Receiver index
+        // 2+k maps to DDC RxBaseDdc+2+k, phase word at 9 + ddc*4. Additive — only
+        // the configured extras are written; unused DDC slots stay zero. RX1/RX2
+        // and the PureSignal DDC0/1 phase writes above are untouched.
+        int extraN = Volatile.Read(ref _extraReceiverCount);
+        if (extraN > 0)
+        {
+            int baseDdc = RxBaseDdc(_boardKind);
+            for (int k = 0; k < extraN; k++)
+            {
+                int rcvr = 2 + k;
+                uint phase = (uint)(_extraRxFreqHz[rcvr] * HzToPhase);
+                WriteBeU32(p, 9 + (baseDdc + rcvr) * 4, phase);
+            }
         }
 
         // PureSignal — when armed, DDC0 + DDC1 phase words also need to
@@ -2504,7 +2632,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         int receiverIndex = ReceiverIndexForRxStream(
             ddcIndex,
             _boardKind,
-            Volatile.Read(ref _rx2Enabled) != 0);
+            Volatile.Read(ref _rx2Enabled) != 0,
+            Volatile.Read(ref _extraReceiverCount));
 
         var frame = new IqFrame(
             InterleavedSamples: new ReadOnlyMemory<double>(samples, 0, samplesPerPacket * 2),

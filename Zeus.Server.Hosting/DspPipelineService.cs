@@ -712,9 +712,20 @@ public class DspPipelineService : BackgroundService,
         public int PanCnt;  // 1 Hz panadapter freshness tally (display probe)
         public int WfCnt;   // 1 Hz waterfall freshness tally
         public long IqRmsLogMs; // 1 Hz IQ RMS/peak probe gate
+        public long RoutedFrames; // diag: IQ frames routed to this receiver index
+        public long FedFrames;    // diag: IQ frames actually FeedIq'd (channel open)
     }
     private readonly SecondaryRx[] _secondaryRx;
     private int _sampleRateHz;
+
+    // One secondary-receiver audio block read during a Tick, paired with its
+    // sample count. Used to feed the N-receiver "Both" mixer without per-tick
+    // allocation (the scratch span below is reused every tick).
+    internal readonly record struct RxAudioSlice(float[] Buffer, int Count);
+    // Reused each tick to collect the enabled secondary RX audio blocks for the
+    // mixer. Sized for every secondary slot (1..N-1); only the populated prefix
+    // is passed to MixRxAudioN.
+    private readonly RxAudioSlice[] _mixSlices = new RxAudioSlice[MaxReceivers];
 
     // Protocol 2 path (parallel to the RadioService-owned P1 path). Held
     // directly here because RadioService is Protocol1Client-shaped and
@@ -3188,6 +3199,37 @@ public class DspPipelineService : BackgroundService,
         if (engine is null) return;
         int rx2Channel = EnsureSecondaryRxChannel(engine, 1, s);
 
+        // RX3+ (full multi-DDC): count the contiguous enabled receivers beyond
+        // RX2 from the canonical Receivers[] array, push their DDC enable + NCO
+        // tunes to the radio (P2 only), then ensure each WDSP channel. The
+        // RX1/RX2 wire path above is unchanged; extras never touch the PureSignal
+        // DDC0/1 pair (SetExtraReceivers uses the N-receiver composer which keeps
+        // the PS branch intact).
+        int extraCount = 0;
+        if (s.Receivers is { } rcvrs)
+            for (int ri = 2; ri < rcvrs.Count && ri < MaxReceivers && rcvrs[ri].Enabled; ri++)
+                extraCount++;
+        if (p2 is not null)
+        {
+            if (extraCount > 0)
+            {
+                var adc = new byte[extraCount];
+                for (int k = 0; k < extraCount; k++) adc[k] = s.Receivers![2 + k].AdcSource;
+                p2.SetExtraReceivers(extraCount, adc);
+                for (int ri = 2; ri <= 1 + extraCount; ri++)
+                {
+                    UpdateRxLo(ri, s);
+                    p2.SetExtraReceiverFreqHz(ri, _secondaryRx[ri].LoHz);
+                }
+            }
+            else
+            {
+                p2.SetExtraReceivers(0);
+            }
+        }
+        for (int ri = 2; ri < MaxReceivers; ri++)
+            _ = EnsureSecondaryRxChannel(engine, ri, s);
+
         if (s.Mode != _appliedMode)
         {
             engine.SetMode(channel, s.Mode);
@@ -3644,8 +3686,27 @@ public class DspPipelineService : BackgroundService,
     // enabled for the current state. Today only slot 1 (the historical RX2) has
     // wire/UI state, so it's the only one that can be active; B3 replaces this with
     // s.Receivers[rxIndex].Enabled once StateDto carries the receiver array.
+    // RX2 (index 1) keeps reading the flat Rx2Enabled flag so its behaviour is
+    // byte-exact; RX3+ (index >= 2) read the canonical StateDto.Receivers[]
+    // (B3 projection / per-receiver store) so full multi-DDC lights up without
+    // touching the proven RX1/RX2 path.
     private static bool SecondaryReceiverEnabled(int rxIndex, StateDto s) =>
-        rxIndex == 1 && s.Rx2Enabled;
+        rxIndex == 1
+            ? s.Rx2Enabled
+            : rxIndex >= 2 && s.Receivers is { } rs && rxIndex < rs.Count && rs[rxIndex].Enabled;
+
+    // Per-secondary-receiver tuning params. RX2 reads the flat RX2/VFO-B fields
+    // (byte-exact); RX3+ read the per-receiver StateDto.Receivers[] entry.
+    private static (RxMode mode, long vfoHz, int filterLow, int filterHigh, double afGainDb)
+        SecondaryRxParams(StateDto s, int rxIndex)
+    {
+        if (rxIndex == 1)
+            return (s.ModeB, s.VfoBHz, s.FilterLowHzB, s.FilterHighHzB, s.Rx2AfGainDb);
+        var r = s.Receivers is { } rs && rxIndex >= 0 && rxIndex < rs.Count ? rs[rxIndex] : null;
+        return r is null
+            ? (RxMode.USB, 0L, 100, 2850, 0.0)
+            : (r.Mode, r.VfoHz, r.FilterLowHz, r.FilterHighHz, r.AfGainDb);
+    }
 
     // Convenience helper: open/sync/close the WDSP channel for one secondary
     // receiver, mirroring RX1's lifecycle. Returns the channel id (or -1 when the
@@ -3725,7 +3786,8 @@ public class DspPipelineService : BackgroundService,
             rx.LoInit = false; // re-enabling recentres from scratch
             return;
         }
-        long effB = CwOffset.EffectiveLoHz(s.ModeB, s.VfoBHz);
+        var (mode, vfoHz, _, _, _) = SecondaryRxParams(s, rxIndex);
+        long effB = CwOffset.EffectiveLoHz(mode, vfoHz);
         long span = Volatile.Read(ref _sampleRateHz);
         if (span <= 0) span = s.SampleRate > 0 ? s.SampleRate : SyntheticSampleRateHz;
         long edge = (long)(span * 0.45); // recentre before the dial hits the DDC edge
@@ -3747,28 +3809,41 @@ public class DspPipelineService : BackgroundService,
             : (int)(effectiveVfoBHz - s.RadioLoHz);
     }
 
+    // N-receiver generalization of ComputeRx2CtunShiftHz: the WDSP shift for any
+    // secondary, from its own mode/VFO. For RX2 (mode=ModeB, vfo=VfoBHz) this
+    // returns the same value as ComputeRx2CtunShiftHz, keeping RX2 byte-exact.
+    private static int ComputeSecondaryCtunShiftHz(
+        StateDto s, RxMode mode, long vfoHz, long rxLoHz, bool protocol2)
+    {
+        long eff = CwOffset.EffectiveLoHz(mode, vfoHz);
+        return protocol2 ? (int)(eff - rxLoHz) : (int)(eff - s.RadioLoHz);
+    }
+
     private void ApplyStateToSecondaryRxChannel(IDspEngine engine, int rxIndex, int channelId, StateDto s)
     {
         var rx = _secondaryRx[rxIndex];
         var nr = NormalizeNrConfig(s.Nr ?? new NrConfig());
         var agc = s.Agc ?? new AgcConfig(AgcMode.Med);
         var squelch = s.Squelch ?? new SquelchConfig();
-        engine.SetMode(channelId, s.ModeB);
-        engine.SetFilter(channelId, s.FilterLowHzB, s.FilterHighHzB);
-        engine.SetVfoHz(channelId, s.VfoBHz);
+        var (mode, vfoHz, filterLow, filterHigh, afGainDb) = SecondaryRxParams(s, rxIndex);
+        engine.SetMode(channelId, mode);
+        engine.SetFilter(channelId, filterLow, filterHigh);
+        engine.SetVfoHz(channelId, vfoHz);
         UpdateRxLo(rxIndex, s);
         // P2 true-DDC: the secondary's hardware DDC sits at rx.LoHz, so the WDSP
-        // shift roams the dial within that window — EffectiveLoHz(VfoB) − rx.LoHz.
-        // Under CTUN off, rx.LoHz == EffectiveLoHz(VfoB) so the shift is 0 and the
+        // shift roams the dial within that window — EffectiveLoHz(vfo) − rx.LoHz.
+        // Under CTUN off, rx.LoHz == EffectiveLoHz(vfo) so the shift is 0 and the
         // panel recentres on the dial. P1 / synthetic secondaries are sub-receivers
         // of RX1's window, so they still shift against RadioLoHz.
-        int shiftHz = ComputeRx2CtunShiftHz(
+        int shiftHz = ComputeSecondaryCtunShiftHz(
             s,
+            mode,
+            vfoHz,
             rx.LoHz,
             protocol2: _p2Client is not null);
         engine.SetCtunShift(channelId, shiftHz);
         engine.SetAgcTop(channelId, s.AgcTopDb + s.AgcOffsetDb);
-        engine.SetRxAfGainDb(channelId, s.Rx2AfGainDb);
+        engine.SetRxAfGainDb(channelId, afGainDb);
         engine.SetNoiseReduction(channelId, nr);
         engine.SetAgc(channelId, agc);
         engine.SetSquelch(channelId, squelch);
@@ -4326,12 +4401,28 @@ public class DspPipelineService : BackgroundService,
             };
         }
 
+        // Pipeline's raw per-receiver WDSP channel ids (not gated on health
+        // emission like `channels` above). -1 = receiver not open. Lets the
+        // diagnostics distinguish "DDC streaming but no channel" (a wiring bug)
+        // from "channel open but starved".
+        var secondaryIds = new object[MaxReceivers - 1];
+        for (int i = 1; i < MaxReceivers; i++)
+            secondaryIds[i - 1] = new
+            {
+                receiverIndex = i,
+                channelId = Volatile.Read(ref _secondaryRx[i].ChannelId),
+                routedFrames = _secondaryRx[i].RoutedFrames,
+                fedFrames = _secondaryRx[i].FedFrames,
+            };
+
         return new
         {
             schemaVersion = 1,
             maxRxDdc = Zeus.Protocol2.Protocol2Client.MaxRxDdc,
             activeChannels = channels.Count,
             rxPortPacketRates = portRates,
+            primaryChannelId = Volatile.Read(ref _channelId),
+            secondaryRxChannelIds = secondaryIds,
             channels = channelDtos,
         };
     }
@@ -4533,9 +4624,13 @@ public class DspPipelineService : BackgroundService,
                 {
                     var rx = _secondaryRx[ri];
                     int secChan = Volatile.Read(ref rx.ChannelId);
+                    rx.RoutedFrames++;
                     LogRxIqRms(ri, frame.InterleavedSamples.Span, ref rx.IqRmsLogMs);
                     if (secChan >= 0)
+                    {
                         engine.FeedIq(secChan, frame.InterleavedSamples.Span);
+                        rx.FedFrames++;
+                    }
                 }
                 return;
             }
@@ -4699,7 +4794,10 @@ public class DspPipelineService : BackgroundService,
         return mode switch
         {
             Rx2AudioMode.Rx2 => rx2Count > 0 ? CopyRx2Audio(rx1, rx2, rx2Count) : rx1Count,
-            Rx2AudioMode.Both => MixRxAudio(rx1, rx1Count, rx2, rx2Count),
+            Rx2AudioMode.Both => MixRxAudioN(rx1, rx1Count, new[]
+            {
+                new RxAudioSlice(rx2.Length == 0 ? Array.Empty<float>() : rx2.ToArray(), rx2Count),
+            }),
             _ => rx1Count,
         };
     }
@@ -4711,21 +4809,44 @@ public class DspPipelineService : BackgroundService,
         return count;
     }
 
-    private static int MixRxAudio(
-        Span<float> output,
+    // N-receiver generalisation of the old 2-RX 0.5*(rx1+rx2) mix. The output
+    // block runs at the longest contributor; each output sample is the average
+    // of the contributors PRESENT at that index (a contributor "present" means
+    // its index is within its own sample count). The divisor is the number of
+    // streams that produced any samples — RX1 (when rx1Count>0) plus every slice
+    // with Count>0 — so a stalled stream never dilutes the others, and a single
+    // contributor passes through at full amplitude. With exactly one non-empty
+    // slice this is byte-identical to the original MixRxAudio (RX1+RX2 → /2; RX2
+    // only when rx1Count==0 → passthrough; no RX2 → rx1 untouched).
+    internal static int MixRxAudioN(
+        Span<float> rx1,
         int rx1Count,
-        ReadOnlySpan<float> rx2,
-        int rx2Count)
+        ReadOnlySpan<RxAudioSlice> slices)
     {
-        if (rx2Count <= 0) return rx1Count;
-        if (rx1Count <= 0) return CopyRx2Audio(output, rx2, rx2Count);
+        rx1Count = Math.Clamp(rx1Count, 0, rx1.Length);
 
-        int count = Math.Min(output.Length, Math.Max(rx1Count, rx2Count));
+        int contributors = rx1Count > 0 ? 1 : 0;
+        int count = rx1Count;
+        foreach (var s in slices)
+        {
+            int sc = Math.Clamp(s.Count, 0, s.Buffer.Length);
+            if (sc <= 0) continue;
+            contributors++;
+            if (sc > count) count = sc;
+        }
+        count = Math.Min(count, rx1.Length);
+        if (count == 0 || contributors == 0) return 0;
+
         for (int i = 0; i < count; i++)
         {
-            float a = i < rx1Count ? output[i] : 0f;
-            float b = i < rx2Count ? rx2[i] : 0f;
-            output[i] = 0.5f * (a + b);
+            float sum = i < rx1Count ? rx1[i] : 0f;
+            foreach (var s in slices)
+            {
+                int sc = Math.Clamp(s.Count, 0, s.Buffer.Length);
+                if (sc <= 0 || i >= sc) continue;
+                sum += s.Buffer[i];
+            }
+            rx1[i] = sum / contributors;
         }
         return count;
     }
@@ -5068,29 +5189,65 @@ public class DspPipelineService : BackgroundService,
         // so RX-side plugins keep running even while monitor is on.
         bool txMonitorOn = engine.IsTxMonitorOn;
         int audioSampleCount = engine.ReadAudio(channel, audioBuf);
-        int rx2AudioSampleCount = 0;
-        if (state.Rx2Enabled && rx2Channel >= 0)
+
+        // Secondary-receiver audio. Drain EVERY enabled secondary RX ring this
+        // tick so none can back up: RX3+ used to be computed-and-discarded, so
+        // their WDSP audio rings overran and tripped the rx-ingest "audio
+        // consumer behind" selfcheck warn (IQ ingest itself stays lossless).
+        // What we do with the drained audio follows Rx2AudioMode, generalised
+        // across N receivers:
+        //   Rx1  → secondaries drained & discarded (RX1 only).
+        //   Rx2  → RX2 drained fully and output; RX3+ drained & discarded.
+        //   Both → RX1 + every enabled secondary mixed (each clocked to RX1).
+        var rxAudioMode = state.Rx2AudioMode;
+        int mixSliceCount = 0;
+        int rx2OnlyCount = 0;
+        for (int ri = 1; ri < MaxReceivers; ri++)
         {
-            // RX1 is the audio clock-master when both receivers are mixed: read
-            // at most rx1Count samples from RX2 so the mixed stream is fed at
-            // exactly the RX sample rate. Draining RX2's ring fully and mixing
-            // max(rx1,rx2) over-feeds the sink — the two channels' per-tick
-            // counts jitter independently, so E[max] exceeds the true rate
-            // (~5% measured on a G2), saturating the output ring → overrun →
-            // dual-RX clicking (#787). The unread RX2 remainder stays buffered
-            // for the next tick, so no RX2 audio is dropped. RX2-only mode still
-            // drains RX2 fully (RX2 is the master there).
-            Span<float> rx2Span = state.Rx2AudioMode == Rx2AudioMode.Both
-                ? _secondaryRx[1].AudioBuf.AsSpan(0, Math.Min(audioSampleCount, _secondaryRx[1].AudioBuf.Length))
-                : _secondaryRx[1].AudioBuf.AsSpan();
-            rx2AudioSampleCount = engine.ReadAudio(rx2Channel, rx2Span);
+            if (!SecondaryReceiverEnabled(ri, state)) continue;
+            var sec = _secondaryRx[ri];
+            int secChan = Volatile.Read(ref sec.ChannelId);
+            if (secChan < 0) continue;
+
+            if (rxAudioMode == Rx2AudioMode.Both)
+            {
+                // RX1 is the audio clock-master when receivers are mixed: read at
+                // most rx1Count samples from each secondary so the mixed stream
+                // is fed at exactly the RX sample rate. Draining fully and mixing
+                // max() over-feeds the sink — per-tick counts jitter
+                // independently, so E[max] exceeds the true rate (~5% on a G2),
+                // saturating the output ring → overrun → dual-RX clicking (#787).
+                // The unread remainder stays buffered for the next tick, so no
+                // secondary audio is dropped. With RX1 silent (rx1Count==0) read
+                // nothing this tick, matching the original RX2 Both behaviour.
+                int want = Math.Min(audioSampleCount, sec.AudioBuf.Length);
+                int n = want > 0 ? engine.ReadAudio(secChan, sec.AudioBuf.AsSpan(0, want)) : 0;
+                _mixSlices[mixSliceCount++] = new RxAudioSlice(sec.AudioBuf, n);
+            }
+            else if (rxAudioMode == Rx2AudioMode.Rx2 && ri == 1)
+            {
+                // RX2 is the audio master in RX2-only mode: drain its ring fully.
+                rx2OnlyCount = engine.ReadAudio(secChan, sec.AudioBuf.AsSpan());
+            }
+            else
+            {
+                // Not contributing to the output — drain fully and discard so the
+                // ring can't back up.
+                engine.ReadAudio(secChan, sec.AudioBuf.AsSpan());
+            }
         }
-        audioSampleCount = SelectRxAudio(
-            state.Rx2AudioMode,
-            audioBuf,
-            audioSampleCount,
-            _secondaryRx[1].AudioBuf,
-            rx2AudioSampleCount);
+
+        if (rxAudioMode == Rx2AudioMode.Both)
+        {
+            audioSampleCount = MixRxAudioN(audioBuf, audioSampleCount, _mixSlices.AsSpan(0, mixSliceCount));
+        }
+        else if (rxAudioMode == Rx2AudioMode.Rx2 && rx2OnlyCount > 0)
+        {
+            int n = Math.Min(audioBuf.Length, rx2OnlyCount);
+            _secondaryRx[1].AudioBuf.AsSpan(0, n).CopyTo(audioBuf);
+            audioSampleCount = n;
+        }
+        // Rx1 (default): audioSampleCount unchanged — RX1 only.
         if (audioSampleCount > 0)
         {
             SanitizeAudioBuffer(audioBuf.AsSpan(0, audioSampleCount));

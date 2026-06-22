@@ -60,6 +60,7 @@ import {
   type TxVfo,
   type TxLevelingConfigDto,
   type ZoomLevel,
+  type ReceiverDto,
 } from '../api/client';
 
 // WDSP wisdom bootstrap phase, mirroring the server's WisdomPhase enum.
@@ -102,6 +103,13 @@ export type ConnectionState = {
   autoAttEnabled: boolean;
   attOffsetDb: number;
   adcOverloadWarning: boolean;
+  // Multi-DDC receivers (wire v2). Server-projected per-receiver list: index
+  // 0 = RX1, 1 = RX2, >= 2 = extra hardware DDCs. Empty until the first state
+  // frame. The RECEIVERS settings panel reads this to render per-DDC controls.
+  receivers: ReceiverDto[];
+  // DDC / receiver ceiling for this build (WireContract.MaxReceivers); the
+  // RECEIVERS panel caps the exposed-count control against it.
+  maxReceivers: number;
   // Board kind only known from the discovery list at connect time — StateDto
   // doesn't echo it. Null after a page reload while already connected; the
   // preamp guard treats null as "show", which is the safe default (an HL2
@@ -165,6 +173,8 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   rx2Enabled: false,
   rx2AudioMode: 'both',
   rx2AfGainDb: 0,
+  receivers: [],
+  maxReceivers: 8,
   txVfo: 'A',
   rxFocus: 'A',
   mode: 'USB',
@@ -221,6 +231,8 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
         rx2Enabled: s.rx2Enabled,
         rx2AudioMode: s.rx2AudioMode,
         rx2AfGainDb: s.rx2AfGainDb,
+        receivers: s.receivers ?? prev.receivers,
+        maxReceivers: s.maxReceivers ?? prev.maxReceivers,
         txVfo: s.txVfo,
         rxFocus: s.rx2Enabled ? prev.rxFocus : 'A',
         mode: s.mode,

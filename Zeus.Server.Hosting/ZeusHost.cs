@@ -134,6 +134,20 @@ public static class ZeusHost
                 $"prefs.guard falling back to temporary prefs DB at {tmpPrefs}; settings will not persist this session.");
         }
 
+        // One-time fold of the legacy encrypted zeus.db (credentials + QSO
+        // logbook) into the plaintext config DB (credentials, via CredentialStore)
+        // and the dedicated logbook DB (via LogService). Runs AFTER the integrity
+        // guard and BEFORE any store opens, disposing its handles before it
+        // renames the legacy file aside. Strictly best-effort: it never throws and
+        // never blocks launch, and it's a no-op on a fresh install or once the
+        // legacy file has already been migrated (renamed aside). Resolve the prefs
+        // path again so a guard fallback to a throwaway DB above is honoured — in
+        // that case legacyDir holds no zeus.db and the migration no-ops.
+        var migratePrefsPath = PrefsDbPath.Get();
+        var logbookPath = PrefsDbPath.LogbookPath();
+        var legacyDir = Path.GetDirectoryName(logbookPath) ?? PrefsDbPath.DataDir;
+        LegacyZeusDbMigration.RunIfNeeded(legacyDir, migratePrefsPath, logbookPath);
+
         // Persisted runtime override (LiteDB). The TCI management API queues changes
         // here because Kestrel's listener can only be wired before host build; we
         // pick those changes up on the next start. Falls back to appsettings when
