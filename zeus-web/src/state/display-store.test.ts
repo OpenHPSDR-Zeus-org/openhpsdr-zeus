@@ -13,6 +13,7 @@ import {
   registerFrameConsumer,
   sanitizeDisplayBins,
   selectDisplaySlice,
+  selectDisplaySliceByRxId,
   subscribeFrameConsumerPresence,
   useDisplayStore,
 } from './display-store';
@@ -33,6 +34,7 @@ afterEach(() => {
     wfFloorDb: null,
     lastSeq: 0,
     rx2: createEmptyDisplaySlice(),
+    extra: [],
   });
 });
 
@@ -190,6 +192,61 @@ describe('display frame bin sanitizer', () => {
       centerHz: 7_200_000n,
       panDb: rx2Pan,
     });
+  });
+
+  it('routes RX3+ frames into the extra array without clobbering RX1 or RX2', () => {
+    const rx1Pan = new Float32Array([-90, -88, -87, -86]);
+    useDisplayStore.getState().pushFrame({
+      msgType: 0x01,
+      headerFlags: 0,
+      seq: 21,
+      tsUnixMs: 1_700_000_000_000,
+      rxId: 0,
+      bodyFlags: 0x03,
+      panValid: true,
+      wfValid: true,
+      width: 4,
+      centerHz: 14_200_000n,
+      hzPerPixel: 93.75,
+      panDb: rx1Pan,
+      wfDb: rx1Pan,
+    });
+
+    // RX3 = rxId 2 → extra[0].
+    const rx3Pan = new Float32Array([-130, -128, -127, -126]);
+    useDisplayStore.getState().pushFrame({
+      msgType: 0x01,
+      headerFlags: 0,
+      seq: 22,
+      tsUnixMs: 1_700_000_000_002,
+      rxId: 2,
+      bodyFlags: 0x03,
+      panValid: true,
+      wfValid: true,
+      width: 4,
+      centerHz: 7_100_000n,
+      hzPerPixel: 93.75,
+      panDb: rx3Pan,
+      wfDb: rx3Pan,
+    });
+
+    const state = useDisplayStore.getState();
+    // RX1 primary slice untouched by the RX3 frame.
+    expect(state.lastSeq).toBe(21);
+    expect(state.centerHz).toBe(14_200_000n);
+    expect(state.panDb).toBe(rx1Pan);
+    // RX2 still empty (never fed).
+    expect(selectDisplaySliceByRxId(state, 1).lastSeq).toBe(0);
+    // RX3 lands in extra[0] and is reachable by rxId.
+    expect(state.extra[0]).toMatchObject({
+      lastSeq: 22,
+      centerHz: 7_100_000n,
+      panDb: rx3Pan,
+    });
+    expect(selectDisplaySliceByRxId(state, 2)).toBe(state.extra[0]);
+    // An unseen RX4 returns the shared empty slice, not undefined.
+    expect(selectDisplaySliceByRxId(state, 3).lastSeq).toBe(0);
+    expect(selectDisplaySliceByRxId(state, 3).panDb).toBeNull();
   });
 
   it('marks a valid-bit payload invalid when its bin count does not match frame width', () => {
