@@ -43,8 +43,6 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-using System.Security.Cryptography;
-using System.Text;
 using LiteDB;
 
 namespace Zeus.Server;
@@ -54,22 +52,25 @@ public sealed class CredentialStore : IDisposable
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<StoredCredential> _credentials;
     private readonly ILogger<CredentialStore> _log;
-    private readonly string? _dataDirectoryOverride;
 
     public CredentialStore(ILogger<CredentialStore> log)
-        : this(log, dataDirectoryOverride: null)
+        : this(log, dbPathOverride: null)
     {
     }
 
-    // Test-friendly ctor: lets callers point the store at an isolated directory
-    // so they don't share %LOCALAPPDATA%\Zeus\zeus.db with other tests on the
-    // same machine. Production DI uses the parameterless overload above.
-    public CredentialStore(ILogger<CredentialStore> log, string? dataDirectoryOverride)
+    // Credentials live in the plaintext config DB (zeus-prefs.db) alongside the
+    // other preference stores — resolved via PrefsDbPath.Get(). The legacy
+    // encrypted zeus.db is folded in once at startup by LegacyZeusDbMigration;
+    // its .dbkey sat in the same directory as the DB, so the old encryption
+    // protected nothing against filesystem access — consolidating to plaintext
+    // removes a fragile key-management path without weakening real protection.
+    //
+    // Test-friendly ctor: points the store at an explicit DB file so tests don't
+    // collide on the shared %LOCALAPPDATA%\Zeus\zeus-prefs.db.
+    public CredentialStore(ILogger<CredentialStore> log, string? dbPathOverride)
     {
         _log = log;
-        _dataDirectoryOverride = dataDirectoryOverride;
-        var dbPath = GetDatabasePath();
-        var dbPassword = GetOrCreateDatabasePassword();
+        var dbPath = dbPathOverride ?? PrefsDbPath.Get();
 
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
@@ -78,8 +79,7 @@ public sealed class CredentialStore : IDisposable
             _log.LogInformation("Created credential store directory: {Dir}", dir);
         }
 
-        var connectionString = $"Filename={dbPath};Password={dbPassword};Connection=shared";
-        _db = new LiteDatabase(connectionString);
+        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
         _credentials = _db.GetCollection<StoredCredential>("credentials");
         _credentials.EnsureIndex(x => x.Service, unique: true);
 
@@ -138,76 +138,6 @@ public sealed class CredentialStore : IDisposable
     public void Dispose()
     {
         _db?.Dispose();
-    }
-
-    private string GetDatabasePath()
-    {
-        return Path.Combine(GetZeusDir(), "zeus.db");
-    }
-
-    private string GetZeusDir()
-    {
-        if (!string.IsNullOrEmpty(_dataDirectoryOverride))
-        {
-            return _dataDirectoryOverride;
-        }
-
-        var appDataDir = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData,
-            Environment.SpecialFolderOption.Create);
-        return Path.Combine(appDataDir, "Zeus");
-    }
-
-    private string GetOrCreateDatabasePassword()
-    {
-        var zeusDir = GetZeusDir();
-        var keyPath = Path.Combine(zeusDir, ".dbkey");
-
-        if (File.Exists(keyPath))
-        {
-            try
-            {
-                return File.ReadAllText(keyPath);
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "Failed to read existing database key; generating new one");
-            }
-        }
-
-        // Generate a new random key
-        var key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-
-        try
-        {
-            if (!Directory.Exists(zeusDir))
-            {
-                Directory.CreateDirectory(zeusDir);
-            }
-
-            File.WriteAllText(keyPath, key);
-
-            // Set file permissions to 0600 on Unix-like systems
-            if (!OperatingSystem.IsWindows())
-            {
-                try
-                {
-                    File.SetUnixFileMode(keyPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                }
-                catch (Exception ex)
-                {
-                    _log.LogWarning(ex, "Failed to set Unix file permissions on database key");
-                }
-            }
-
-            _log.LogInformation("Created new database key at {Path}", keyPath);
-        }
-        catch (Exception ex)
-        {
-            _log.LogError(ex, "Failed to persist database key; using ephemeral key");
-        }
-
-        return key;
     }
 }
 

@@ -5,16 +5,20 @@
 //                         Douglas J. Cerrato (KB2UKA),
 //                         Christian Suarez (N9WAR), and contributors.
 //
-// Remote-access RX-monitoring bootstrap (Phase A). When the SPA is opened at
-// `…/?remote=<CALLSIGN>` it connects to the operator's radio over WebRTC through
-// the Cloudflare broker instead of the local websocket, then feeds the unlocked
-// binary radio frames through the exact same dispatch path the local /ws client
-// uses (dispatchServerFrame) — so panadapter / waterfall / meters / audio render
+// Remote-access bootstrap. When the SPA is opened at `…/?remote=<CALLSIGN>` it
+// connects to the operator's radio over WebRTC through the Cloudflare broker
+// instead of the local websocket, then feeds the unlocked binary radio frames
+// through the exact same dispatch path the local /ws client uses
+// (dispatchServerFrame) — so panadapter / waterfall / meters / audio render
 // identically, just sourced over WebRTC.
 //
-// Scope is RX MONITORING ONLY: display + audio + meters. There is no TX, mic
-// uplink, or tuning/control RPC in this phase. Deny-by-default holds: nothing
-// flows until connectViaBroker's SPAKE2+ password handshake unlocks.
+// Scope: full native control. RX display + audio + meters stream over the frames
+// channel, and the read-write `/api/*` tunnel (api-tunnel.ts) carries the SPA's
+// control REST to the radio's loopback Kestrel — VFO/mode/band/filter/AGC/drive/
+// MOX/TUN, exactly as the desktop app does. The server gates the burn-zone
+// (PureSignal) + secrets and dead-man un-keys a dropped session. Voice-mic uplink
+// is the next phase (mic PCM stays WS-only for now). Deny-by-default holds:
+// nothing flows until connectViaBroker's SPAKE2+ password handshake unlocks.
 
 import { connectViaBroker, type RemoteConnection } from './connect';
 import { installApiTunnel, setApiChannel } from './api-tunnel';
@@ -41,10 +45,10 @@ export function isRemoteMode(): boolean {
   return getRemoteCallsign() !== null;
 }
 
-// Install the read-only /api/* fetch shim at module load — BEFORE the app's
+// Install the read-write /api/* fetch shim at module load — BEFORE the app's
 // mount effects fire their `/api/state` etc. requests. In remote mode there is
-// no same-origin backend, so those GETs must tunnel; the shim queues them until
-// the session unlocks and setApiChannel() flushes the queue. No-op outside
+// no same-origin backend, so those requests must tunnel; the shim queues them
+// until the session unlocks and setApiChannel() flushes the queue. No-op outside
 // remote mode (the local /ws client uses the real same-origin backend).
 if (isRemoteMode()) {
   installApiTunnel();

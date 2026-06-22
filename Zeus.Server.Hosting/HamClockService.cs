@@ -116,7 +116,16 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
     // Pinned portable Node (current LTS). Downloaded into PortableNodeRoot when
     // the system has no Node, so Install works on a machine with none
     // preinstalled. Override the version only by editing this constant.
-    private const string PortableNodeVersion = "v22.11.0";
+    //
+    // MUST be >= MinNodeVersion: HamClock's deps (axios-cookiejar-support,
+    // @electron/rebuild) are ESM-only and are reached via require(), which Node
+    // only permits unflagged from v22.12.0 on. v22.11.0 throws ERR_REQUIRE_ESM
+    // at server startup ("require() of ES Module ... not supported").
+    private const string PortableNodeVersion = "v22.23.0";
+
+    // Minimum Node that can run HamClock without ERR_REQUIRE_ESM (see above).
+    // A resolved Node below this is rejected in favour of the bundled copy.
+    private static readonly Version MinNodeVersion = new(22, 12, 0);
 
     public HamClockService(ILogger<HamClockService> log)
     {
@@ -434,6 +443,18 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
         }
     }
 
+    /// <summary>True if a "vX.Y.Z" Node version string is at least
+    /// <see cref="MinNodeVersion"/>. Tolerant of a missing 'v' prefix and any
+    /// prerelease/build suffix; an unparseable string fails closed (false).</summary>
+    internal static bool NodeMeetsMinimum(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version)) return false;
+        var v = version.Trim().TrimStart('v', 'V');
+        var cut = v.IndexOfAny(['-', '+']);
+        if (cut >= 0) v = v[..cut];
+        return Version.TryParse(v, out var parsed) && parsed >= MinNodeVersion;
+    }
+
     /// <summary>Cached Node availability for Snapshot — probes once, then reuses
     /// the result (refreshed by EnsureNodeAsync). Also adopts a previously
     /// downloaded private Node if the system has none.</summary>
@@ -470,12 +491,14 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
     {
         // (1) Whatever's already resolved (system, or a _nodeDir set earlier).
         var (ok, ver) = DetectNode();
-        if (ok)
+        if (ok && NodeMeetsMinimum(ver))
         {
             Append($"Using {(_nodeBundled ? "bundled" : "system")} Node {ver}.");
             SetNodeInfo((true, ver));
             return true;
         }
+        if (ok)
+            Append($"System Node {ver} is older than the required {MinNodeVersion} — using a private copy for HamClock.");
 
         // (2) A private Node from a previous install.
         var portable = FindPortableNodeBinDir();
@@ -483,7 +506,7 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
         {
             _nodeDir = portable;
             (ok, ver) = DetectNode();
-            if (ok)
+            if (ok && NodeMeetsMinimum(ver))
             {
                 _nodeBundled = true;
                 Append($"Using bundled Node {ver}.");
@@ -513,18 +536,20 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
 
     /// <summary>The PATH-prependable bin dir of a previously downloaded private
     /// Node, or null. Windows: the extracted folder (node.exe + npm.cmd at root);
-    /// Unix: its <c>bin/</c> subdir.</summary>
+    /// Unix: its <c>bin/</c> subdir. Matches only the currently pinned
+    /// <see cref="PortableNodeVersion"/> dir, so bumping that constant makes an
+    /// existing install fall through to a fresh download instead of reusing a
+    /// stale (e.g. ERR_REQUIRE_ESM-prone) Node left on disk.</summary>
     private static string? FindPortableNodeBinDir()
     {
         try
         {
             if (!Directory.Exists(PortableNodeRoot)) return null;
-            foreach (var dir in Directory.GetDirectories(PortableNodeRoot))
-            {
-                var binDir = OperatingSystem.IsWindows() ? dir : Path.Combine(dir, "bin");
-                var exe = Path.Combine(binDir, OperatingSystem.IsWindows() ? "node.exe" : "node");
-                if (File.Exists(exe)) return binDir;
-            }
+            var (_, _, _, dirName) = PortableNodeArtifact();
+            var dir = Path.Combine(PortableNodeRoot, dirName);
+            var binDir = OperatingSystem.IsWindows() ? dir : Path.Combine(dir, "bin");
+            var exe = Path.Combine(binDir, OperatingSystem.IsWindows() ? "node.exe" : "node");
+            if (File.Exists(exe)) return binDir;
         }
         catch { /* best effort */ }
         return null;
