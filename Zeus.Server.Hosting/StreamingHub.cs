@@ -387,6 +387,26 @@ public sealed class StreamingHub
     /// <summary>Remove a previously-attached remote sink.</summary>
     internal void DetachSink(Guid id) => _clients.TryRemove(id, out _);
 
+    /// <summary>
+    /// Inject a mic-PCM block (f32le samples, NO type prefix) from a non-WebSocket
+    /// source — the remote-access WebRTC audio track, after it has been Opus-
+    /// decoded and re-blocked to the front-end's 960-sample/20 ms cadence upstream
+    /// (<see cref="Remote.RemoteMicAudioPipeline"/>). Raises <see cref="MicPcmReceived"/>
+    /// exactly as a <c>/ws</c> 0x20 frame would, so a remote operator's voice
+    /// reaches <see cref="TxAudioIngest"/> through the identical path local mic
+    /// audio takes. MOX-gating + source arbitration happen downstream in the
+    /// ingest; this only delivers the samples.
+    /// </summary>
+    internal void InjectMicPcm(ReadOnlyMemory<byte> f32lePayload)
+    {
+        RecordMicInbound(f32lePayload);
+        if (RecordMicUplinkFrame(f32lePayload.Length) && MicPcmReceived is { } handler)
+        {
+            try { handler(f32lePayload); }
+            catch (Exception ex) { _log.LogWarning(ex, "MicPcmReceived (remote inject) handler threw"); }
+        }
+    }
+
     internal void DispatchInbound(ReadOnlyMemory<byte> frame)
     {
         if (frame.Length == 0)

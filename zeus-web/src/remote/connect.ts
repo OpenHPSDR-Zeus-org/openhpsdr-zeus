@@ -39,6 +39,14 @@ export interface RemoteConnection {
    * over WebRTC when there is no same-origin backend — see api-tunnel.ts.
    */
   api: RTCDataChannel;
+  /**
+   * Enable/disable the voice-mic uplink (remote SSB/AM/FM TX). The first
+   * `true` lazily prompts for mic permission and swaps the live track into the
+   * pre-negotiated sendonly audio m-line (no renegotiation); subsequent calls
+   * just toggle it. Driven by MOX in remote-client.ts. Rejects if the mic is
+   * denied/unavailable — TX keying still works, just without voice audio.
+   */
+  setMicEnabled(on: boolean): Promise<void>;
   close(): void;
 }
 
@@ -110,8 +118,43 @@ async function establish(
   const pc = new RTCPeerConnection({ iceServers: opts.iceServers });
   const control = pc.createDataChannel('control'); // reliable, ordered
   const frames = pc.createDataChannel('frames', { ordered: false, maxRetransmits: 0 });
-  const api = pc.createDataChannel('api'); // reliable, ordered — read-only REST tunnel
+  const api = pc.createDataChannel('api'); // reliable, ordered — read-write REST tunnel
   if (opts.onFrame) frames.onmessage = (e: MessageEvent) => opts.onFrame!(e.data as ArrayBuffer);
+
+  // Sendonly Opus audio m-line for remote voice TX. Added up front so the offer
+  // carries m=audio (the radio answers recvonly), but getUserMedia is deferred
+  // until the operator actually keys: replaceTrack swaps the live mic into this
+  // sender with NO renegotiation, so an RX-only session never prompts for the
+  // mic. The browser encodes Opus natively — low latency, in-band FEC + PLC.
+  const audioSender = pc.addTransceiver('audio', { direction: 'sendonly' }).sender;
+  let micStream: MediaStream | null = null;
+  let micTrack: MediaStreamTrack | null = null;
+
+  const setMicEnabled = async (on: boolean): Promise<void> => {
+    if (on) {
+      if (!micTrack) {
+        // Raw mic — no browser AGC/echo-cancel/noise-suppression. The radio's TX
+        // chain (mic gain, leveler, CFC, VST, WDSP TXA) shapes the audio exactly
+        // as it does for a local operator; double-processing would muddy it.
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        });
+        micTrack = micStream.getAudioTracks()[0] ?? null;
+        if (micTrack) await audioSender.replaceTrack(micTrack);
+      }
+      if (micTrack) micTrack.enabled = true;
+    } else if (micTrack) {
+      micTrack.enabled = false;
+    }
+  };
+
+  const stopMic = (): void => {
+    micTrack = null;
+    if (micStream) {
+      for (const t of micStream.getTracks()) t.stop();
+      micStream = null;
+    }
+  };
 
   const prover = new Spake2Plus('prover', CONTEXT, ID_PROVER, ID_VERIFIER);
   let outcome: Spake2Outcome | undefined;
@@ -161,7 +204,17 @@ async function establish(
   await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
 
   await unlocked;
-  return { pc, frames, control, api, close: () => pc.close() };
+  return {
+    pc,
+    frames,
+    control,
+    api,
+    setMicEnabled,
+    close: () => {
+      stopMic();
+      pc.close();
+    },
+  };
 }
 
 // --- signalling transports -------------------------------------------------

@@ -12,16 +12,18 @@
 // (dispatchServerFrame) — so panadapter / waterfall / meters / audio render
 // identically, just sourced over WebRTC.
 //
-// Scope: full native control. RX display + audio + meters stream over the frames
-// channel, and the read-write `/api/*` tunnel (api-tunnel.ts) carries the SPA's
-// control REST to the radio's loopback Kestrel — VFO/mode/band/filter/AGC/drive/
-// MOX/TUN, exactly as the desktop app does. The server gates the burn-zone
-// (PureSignal) + secrets and dead-man un-keys a dropped session. Voice-mic uplink
-// is the next phase (mic PCM stays WS-only for now). Deny-by-default holds:
-// nothing flows until connectViaBroker's SPAKE2+ password handshake unlocks.
+// Scope: full native control + voice TX. RX display + audio + meters stream over
+// the frames channel; the read-write `/api/*` tunnel (api-tunnel.ts) carries the
+// SPA's control REST to the radio's loopback Kestrel — VFO/mode/band/filter/AGC/
+// drive/MOX/TUN, exactly as the desktop app does; and a MOX-gated sendonly Opus
+// audio track carries the operator's mic for voice TX (see connect.ts /
+// RemoteMicAudioPipeline on the radio). The server gates the burn-zone
+// (PureSignal) + secrets and dead-man un-keys a dropped session. Deny-by-default
+// holds: nothing flows until connectViaBroker's SPAKE2+ password handshake unlocks.
 
 import { connectViaBroker, type RemoteConnection } from './connect';
 import { installApiTunnel, setApiChannel } from './api-tunnel';
+import { useTxStore } from '../state/tx-store';
 import {
   dispatchServerFrame,
   sendAudioStreamRequest,
@@ -73,10 +75,22 @@ export async function startRemoteClient(
     onFrame: (data) => dispatchServerFrame(data),
   });
 
-  // Hand the read-only API tunnel its live "api" channel so queued + future
-  // same-origin `/api/*` GETs flow to the radio's loopback Kestrel. The session
-  // is unlocked by the time connectViaBroker resolves (deny-by-default holds).
+  // Hand the read-write API tunnel its live "api" channel so queued + future
+  // same-origin `/api/*` requests (reads AND control writes) flow to the radio's
+  // loopback Kestrel. The session is unlocked by the time connectViaBroker
+  // resolves (deny-by-default holds).
   setApiChannel(conn.api);
+
+  // Voice-mic uplink: stream the operator's mic to the radio only while keyed
+  // (MOX). The first key lazily prompts for mic permission; thereafter it's an
+  // instant enable/disable. CW/RTTY/digital don't key MOX so the mic stays off.
+  // A denied/absent mic leaves TX keying fully working, just without voice audio.
+  const unsubMic = useTxStore.subscribe((s, prev) => {
+    if (s.moxOn === prev.moxOn) return;
+    void conn.setMicEnabled(s.moxOn).catch((e) => {
+      console.warn('[remote] voice mic uplink unavailable:', e);
+    });
+  });
 
   // Route the 2-byte stream-request control frames (0x21/0x22) over the WebRTC
   // control channel instead of the (absent) local websocket. Drop the override
@@ -96,6 +110,9 @@ export async function startRemoteClient(
       // Clear the tunnel channel and fail pending API requests so the UI gets a
       // network-style rejection rather than hanging on a dead session.
       setApiChannel(null);
+      // Stop driving the mic from MOX and release the capture (conn.close also
+      // stops the tracks; this unhooks the store subscription).
+      unsubMic();
     }
   });
 
