@@ -1,0 +1,32 @@
+# Zeus — ANAN G2 / G2-Ultra front-panel serial device naming.
+#
+# Publishes the G2 control-front serial line as a stable, baud-tagged symlink
+# under /dev/serial/by-id/ so Zeus's G2FrontPanelService can auto-detect it
+# (Zeus.Server.Hosting/FrontPanel/G2PanelOptions.KnownSymlinks). Adapted from
+# DeskHPSDR's 61-g2-serial.rules (https://github.com/dl1bz/deskhpsdr, DL1BZ).
+#
+# Install on the host the panel is wired to (typically the G2's internal Pi):
+#   sudo cp scripts/udev/61-g2-front-panel.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload && sudo udevadm trigger
+# Then confirm: ls -l /dev/serial/by-id/g2-front-*
+
+ACTION=="remove", GOTO="g2_front_end"
+SUBSYSTEM!="tty", GOTO="g2_front_end"
+
+# kernel must have made it a tty
+KERNEL!="ttyUSB[0-9]*|ttyACM[0-9]*|ttyS[0-9]*|ttyAMA[0-9]*", GOTO="g2_front_end"
+
+# G2 with Rpi-CM4 and Mk2 8" control front (UART3 @ 0xfe201600)
+ATTR{iomem_base}=="0xFE201600", SYMLINK+="serial/by-id/g2-front-9600", GOTO="g2_front_other"
+
+# G2 with Rpi-CM5 and Mk2 8" control front (UART2, pins 7/29 @ 0x1F00038000)
+ATTR{iomem_base}=="0x1F00038000", SYMLINK+="serial/by-id/g2-front-9600", GOTO="g2_front_other"
+
+# G2 Front V2 — Radxa CM5 modification with Arduino Nano Every
+ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0058", SYMLINK+="serial/by-id/g2-front-9600", GOTO="g2_front_other"
+
+# G2 Front V1 — Radxa CM5 modification with Waveshare RP2040 Zero
+ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="0003", SYMLINK+="serial/by-id/g2-front-115200"
+
+LABEL="g2_front_other"
+LABEL="g2_front_end"
