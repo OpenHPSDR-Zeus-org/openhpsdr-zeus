@@ -5503,6 +5503,43 @@ export function setRx2(
   );
 }
 
+// Configure any receiver by index for full multi-DDC (RX1=0, RX2=1, RX3+=2..).
+// Mirrors POST /api/receivers/{index}; index 0/1 delegate server-side to the
+// RX1/RX2 setters, index >= 2 drives an extra hardware DDC. Only the supplied
+// fields change. Returns the canonical state for `.then(applyState)`.
+export function setReceiver(
+  index: number,
+  req: {
+    enabled?: boolean;
+    vfoHz?: number;
+    adcSource?: number;
+    mode?: RxMode;
+    filterLowHz?: number;
+    filterHighHz?: number;
+    afGainDb?: number;
+  },
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    `/api/receivers/${index}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabled: req.enabled,
+        vfoHz: req.vfoHz,
+        adcSource: req.adcSource,
+        mode: req.mode,
+        filterLowHz: req.filterLowHz,
+        filterHighHz: req.filterHighHz,
+        afGainDb: req.afGainDb,
+      }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
 export function setTxVfo(
   txVfo: TxVfo,
   signal?: AbortSignal,
