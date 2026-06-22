@@ -251,10 +251,15 @@ export class ChatRoom extends DurableObject<Env> {
 
   override async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     try { ws.close(code, reason); } catch { /* already closing */ }
+    // A close can wake a hibernated DO with an empty in-memory graph; rehydrate
+    // before broadcasting or rosterFor() would strip every friend's freq.
+    await this.ensureLoaded();
     this.broadcastRoster();
   }
 
   override async webSocketError(): Promise<void> {
+    // Same hibernation guard as webSocketClose — never broadcast an unloaded graph.
+    await this.ensureLoaded();
     this.broadcastRoster();
   }
 

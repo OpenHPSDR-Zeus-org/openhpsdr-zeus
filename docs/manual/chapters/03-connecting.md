@@ -26,7 +26,7 @@ Each radio Zeus finds appears as a row showing:
 - A **LAST** badge on the radio you most recently connected to. That radio is also floated to the top of the list for convenience.
 - The radio's network address and MAC address underneath.
 
-Press **Connect** on the row you want. If a radio shows **Busy**, another client already has it — Zeus will not fight for it. (Original-protocol radios serve one client at a time.)
+Press **Connect** on the row you want. If a radio shows **Busy**, another client already has it (HPSDR radios serve one client at a time). Use **Take over** next to the Busy badge to claim it anyway: Zeus asks you to confirm, then sends the radio a stop command that drops the current client and connects you. **This kicks the other operator off — including in the middle of a transmission — so only do it for a radio you own.**
 
 > **Tip:** If the list says "No radios found," check the radio's power and Ethernet cable, and make sure your computer is on the same subnet as the radio. Discovery uses a network broadcast, so a radio on a different VLAN or across a router will not appear — use Manual mode in that case.
 

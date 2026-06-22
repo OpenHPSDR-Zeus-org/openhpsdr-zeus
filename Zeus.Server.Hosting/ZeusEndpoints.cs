@@ -911,6 +911,24 @@ public static class ZeusEndpoints
             }
         });
 
+        // Take over a Busy radio. Discovery reports status 0x03 when another
+        // client owns the radio; the UI normally disables Connect for those.
+        // This sends a protocol stop to the radio so it drops the current owner,
+        // freeing it for an immediate connect. Outward-facing and deliberate —
+        // the Connect panel gates it behind an explicit operator confirmation,
+        // because it can kick another (possibly transmitting) operator off.
+        app.MapPost("/api/radios/reclaim", async (ReclaimRadioRequest req, RadioReclaimService reclaim, HttpContext ctx) =>
+        {
+            if (!TryParseIpEndpoint(req.Endpoint ?? string.Empty, out var ipEndpoint))
+                return Results.BadRequest(new { error = $"Invalid endpoint '{req.Endpoint}'." });
+
+            var isP2 = string.Equals(req.Protocol, "P2", StringComparison.OrdinalIgnoreCase);
+            log.LogInformation("api.radios.reclaim ip={Ip} protocol={Proto}", ipEndpoint.Address, isP2 ? "P2" : "P1");
+
+            await reclaim.ReclaimAsync(ipEndpoint.Address, isP2, ctx.RequestAborted);
+            return Results.Ok(new { freed = true });
+        });
+
         app.MapPost("/api/connect", async (ConnectRequest req, RadioService r, WdspWisdomInitializer wisdom, HttpContext ctx) =>
         {
             log.LogInformation(
@@ -4242,6 +4260,10 @@ internal sealed record TxDutyGuidanceDto(
     double? RecommendedMaxWatts,
     bool LimitExceeded,
     string? ManualReference);
+// Body for POST /api/radios/reclaim. Endpoint is the discovered "ip:port"
+// string (port is ignored — protocol command ports are fixed); Protocol is
+// "P1" or "P2" so the server sends the correct stop frame.
+internal sealed record ReclaimRadioRequest(string? Endpoint, string? Protocol);
 internal sealed record HardwareDiagnosticsMarkerRequest(string? Label, string? Notes);
 internal sealed record WavRecordStartRequest(string? Source);
 internal sealed record WavPlayRequest(string? File);
