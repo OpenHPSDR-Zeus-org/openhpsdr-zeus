@@ -54,6 +54,22 @@
 #  include <ole2.h>    // OleInitialize / OleUninitialize (VSTGUI needs OLE)
 #endif
 
+// Editor (IPlugView) hosting on Linux — the plug-in GUI is embedded into an
+// X11 window we own, driven by a Steinberg Linux::IRunLoop the plug-in uses to
+// register its event-handler fds + timers (the X11 GUI contract). Runs on a
+// dedicated editor thread per plug-in so the window + run loop never touch the
+// realtime audio thread.
+#if defined(__linux__)
+#  include <X11/Xlib.h>
+#  include <X11/Xutil.h>
+#  include <poll.h>
+#  include <unistd.h>
+#  include <condition_variable>
+#  include <chrono>
+#  include <ctime>
+#  include <vector>
+#endif
+
 namespace vst = Steinberg::Vst;
 
 namespace {
@@ -79,12 +95,12 @@ std::atomic<int> g_init_count{0};
 struct LoadedPlugin;
 static void zvst_push_param_edit(LoadedPlugin* p, uint32_t param_id, double normalized);
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
 // ---------------------------------------------------------------------
-// Editor (plug-in GUI) host support — Windows. Both helper objects have
-// *inert* reference counting (addRef/release return a constant): their
-// lifetime is owned by us (value members of LoadedPlugin that outlive the
-// view), not the plug-in.
+// Editor (plug-in GUI) host support — Windows + Linux. The component
+// handler has *inert* reference counting (addRef/release return a
+// constant): its lifetime is owned by us (a member of LoadedPlugin that
+// outlives the view), not the plug-in.
 // ---------------------------------------------------------------------
 
 // Component handler: the plug-in calls performEdit() on the UI thread
@@ -116,7 +132,9 @@ public:
     Steinberg::uint32 PLUGIN_API addRef() SMTG_OVERRIDE { return 1000; }
     Steinberg::uint32 PLUGIN_API release() SMTG_OVERRIDE { return 1000; }
 };
+#endif // _WIN32 || __linux__
 
+#ifdef _WIN32
 // Per-editor plug frame. Lets the plug-in ask the host to resize its
 // window (IPlugFrame::resizeView). Stored by value on LoadedPlugin.
 class ZeusPlugFrame : public Steinberg::IPlugFrame {
@@ -152,6 +170,83 @@ public:
     Steinberg::uint32 PLUGIN_API release() SMTG_OVERRIDE { return 1000; }
 };
 #endif // _WIN32
+
+#ifdef __linux__
+// Combined plug frame + Linux run loop. On Linux the plug-in queries the frame
+// for IRunLoop (the X11 GUI contract) and registers its own event-handler file
+// descriptors + timers here; the editor thread's poll loop services them. All
+// methods run on the editor thread, so the handler/timer vectors need no lock.
+// Inert refcount — owned by LoadedPlugin, outlives the view.
+class ZeusLinuxFrame : public Steinberg::IPlugFrame, public Steinberg::Linux::IRunLoop {
+public:
+    Display* display{nullptr};
+    Window   window{0};
+
+    struct EH { Steinberg::Linux::IEventHandler* h; int fd; };
+    struct TH { Steinberg::Linux::ITimerHandler* h; uint64_t intervalMs; uint64_t nextMs; };
+    std::vector<EH> handlers;
+    std::vector<TH> timers;
+
+    static uint64_t now_ms() {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return static_cast<uint64_t>(ts.tv_sec) * 1000ull + static_cast<uint64_t>(ts.tv_nsec / 1000000ull);
+    }
+
+    // IPlugFrame: the plug-in asks us to resize its embedded window.
+    Steinberg::tresult PLUGIN_API resizeView(Steinberg::IPlugView* view,
+                                             Steinberg::ViewRect* r) SMTG_OVERRIDE {
+        if (!view || !r || !display || !window) return Steinberg::kResultFalse;
+        XResizeWindow(display, window,
+                      static_cast<unsigned>(std::max(1, r->getWidth())),
+                      static_cast<unsigned>(std::max(1, r->getHeight())));
+        XFlush(display);
+        view->onSize(r);
+        return Steinberg::kResultTrue;
+    }
+
+    // IRunLoop: the plug-in registers the fds + timers driving its own GUI.
+    Steinberg::tresult PLUGIN_API registerEventHandler(Steinberg::Linux::IEventHandler* h,
+                                                       Steinberg::Linux::FileDescriptor fd) SMTG_OVERRIDE {
+        if (!h) return Steinberg::kInvalidArgument;
+        handlers.push_back({h, fd});
+        return Steinberg::kResultOk;
+    }
+    Steinberg::tresult PLUGIN_API unregisterEventHandler(Steinberg::Linux::IEventHandler* h) SMTG_OVERRIDE {
+        for (auto it = handlers.begin(); it != handlers.end();)
+            it = (it->h == h) ? handlers.erase(it) : it + 1;
+        return Steinberg::kResultOk;
+    }
+    Steinberg::tresult PLUGIN_API registerTimer(Steinberg::Linux::ITimerHandler* h,
+                                                Steinberg::Linux::TimerInterval ms) SMTG_OVERRIDE {
+        if (!h) return Steinberg::kInvalidArgument;
+        if (ms == 0) ms = 1;
+        timers.push_back({h, ms, now_ms() + ms});
+        return Steinberg::kResultOk;
+    }
+    Steinberg::tresult PLUGIN_API unregisterTimer(Steinberg::Linux::ITimerHandler* h) SMTG_OVERRIDE {
+        for (auto it = timers.begin(); it != timers.end();)
+            it = (it->h == h) ? timers.erase(it) : it + 1;
+        return Steinberg::kResultOk;
+    }
+
+    Steinberg::tresult PLUGIN_API queryInterface(const Steinberg::TUID iid, void** obj) SMTG_OVERRIDE {
+        if (Steinberg::FUnknownPrivate::iidEqual(iid, Steinberg::FUnknown::iid) ||
+            Steinberg::FUnknownPrivate::iidEqual(iid, Steinberg::IPlugFrame::iid)) {
+            *obj = static_cast<Steinberg::IPlugFrame*>(this);
+            return Steinberg::kResultOk;
+        }
+        if (Steinberg::FUnknownPrivate::iidEqual(iid, Steinberg::Linux::IRunLoop::iid)) {
+            *obj = static_cast<Steinberg::Linux::IRunLoop*>(this);
+            return Steinberg::kResultOk;
+        }
+        *obj = nullptr;
+        return Steinberg::kNoInterface;
+    }
+    Steinberg::uint32 PLUGIN_API addRef() SMTG_OVERRIDE { return 1000; }
+    Steinberg::uint32 PLUGIN_API release() SMTG_OVERRIDE { return 1000; }
+};
+#endif // __linux__
 
 // Per-handle state. Owns one IComponent + IAudioProcessor, plus the
 // scratch ProcessData buffers sized at load time so the realtime path
@@ -220,6 +315,27 @@ struct LoadedPlugin {
     Steinberg::IPtr<Steinberg::IPlugView> view;
     ZeusPlugFrame                         plug_frame;
     ZeusComponentHandler                  component_handler;
+#elif defined(__linux__)
+    // The editor runs on a dedicated thread (lazily spawned on first open) so the
+    // X11 window + run loop never touch the realtime audio thread; the audio
+    // component stays loaded on the caller thread and process() is unaffected.
+    std::thread                           editor_thread;
+    std::atomic<bool>                     editor_thread_running{false};
+    std::atomic<bool>                     editor_open_flag{false};
+    std::string                           editor_title;
+    int                                   cmd_pipe[2]{-1, -1}; // wake the editor loop
+    std::mutex                            editor_cmd_mtx;
+    std::condition_variable               editor_cmd_cv;
+    int                                   editor_cmd{0};       // 1 open, 2 close, 3 unload
+    bool                                  editor_cmd_done{false};
+    int                                   editor_cmd_result{0};
+    ZeusComponentHandler                  component_handler;
+    // X11 + view state — touched only on the editor thread.
+    Display*                              x_display{nullptr};
+    Window                                x_window{0};
+    Atom                                  wm_delete{0};
+    Steinberg::IPtr<Steinberg::IPlugView> view;
+    ZeusLinuxFrame                        linux_frame;
 #endif
 };
 
@@ -709,6 +825,240 @@ static void ui_thread_main(LoadedPlugin* p) {
 }
 #endif // _WIN32
 
+#if defined(__linux__)
+// ---------------------------------------------------------------------
+// Editor (plug-in GUI) host support — Linux / X11. The plug-in's editor view
+// embeds in an X11 window we own, driven by ZeusLinuxFrame's IRunLoop. The
+// controller, view, window and run loop all live on a dedicated per-plugin
+// editor thread (lazily spawned on first open), so none of it ever touches the
+// realtime audio thread; audio still calls the processor directly.
+// ---------------------------------------------------------------------
+
+#define ZEDL_LOG(...) do { std::fprintf(stderr, "[zvst-editor:linux] " __VA_ARGS__); std::fprintf(stderr, "\n"); std::fflush(stderr); } while (0)
+
+// Connect component<->controller + push component state into the controller.
+// Parity with the Windows path; many plug-ins need this before createView()
+// succeeds. Only used on the separate-controller (2-object) path.
+static void linux_connect_and_sync(LoadedPlugin& p) {
+    using namespace Steinberg;
+    FUnknownPtr<vst::IConnectionPoint> ccp(p.component);
+    FUnknownPtr<vst::IConnectionPoint> ecp(p.controller);
+    if (ccp && ecp) { ccp->connect(ecp); ecp->connect(ccp); }
+    MemoryStream stream;
+    if (p.component->getState(&stream) == kResultOk) {
+        stream.seek(0, IBStream::kIBSeekSet, nullptr);
+        p.controller->setComponentState(&stream);
+    }
+}
+
+// Lazily create (or adopt) the edit controller — prefer the dedicated
+// controller class, fall back to a single-component effect.
+static bool linux_ensure_controller(LoadedPlugin& p) {
+    using namespace Steinberg;
+    if (p.controller) return true;
+    TUID cid;
+    if (p.component->getControllerClassId(cid) == kResultOk) {
+        auto& factory = p.module->getFactory();
+        auto ctrl = factory.createInstance<vst::IEditController>(VST3::UID::fromTUID(cid));
+        if (ctrl && ctrl->initialize(&GlobalHost::instance()) == kResultOk) {
+            p.controller = ctrl;
+            p.controller_is_separate = true;
+            linux_connect_and_sync(p);
+            return true;
+        }
+    }
+    vst::IEditController* raw = nullptr;
+    if (p.component->queryInterface(vst::IEditController::iid, reinterpret_cast<void**>(&raw)) == kResultOk && raw) {
+        p.controller = owned(raw);
+        p.controller_is_separate = false;
+        return true;
+    }
+    return false;
+}
+
+static void editor_close_on_thread(LoadedPlugin& p) {
+    if (!p.editor_open_flag.load() && !p.x_window && !p.view) return;
+    if (p.view) { p.view->setFrame(nullptr); p.view->removed(); p.view = nullptr; }
+    p.linux_frame.handlers.clear();
+    p.linux_frame.timers.clear();
+    p.linux_frame.window = 0;
+    if (p.x_window && p.x_display) { XDestroyWindow(p.x_display, p.x_window); XFlush(p.x_display); }
+    p.x_window = 0;
+    p.editor_open_flag.store(false);
+    ZEDL_LOG("editor closed");
+}
+
+static int editor_open_on_thread(LoadedPlugin& p) {
+    using namespace Steinberg;
+    if (p.editor_open_flag.load()) return 1;
+    if (!linux_ensure_controller(p)) { ZEDL_LOG("ensure_controller FAILED"); return 0; }
+    p.component_handler.owner = &p;
+    p.controller->setComponentHandler(&p.component_handler);
+
+    IPlugView* raw = p.controller->createView(vst::ViewType::kEditor);
+    if (!raw) { ZEDL_LOG("createView returned null"); return 0; }
+    p.view = owned(raw);
+    if (p.view->isPlatformTypeSupported(kPlatformTypeX11EmbedWindowID) != kResultTrue) {
+        ZEDL_LOG("plug-in does not support X11 embedding");
+        p.view = nullptr;
+        return 0;
+    }
+
+    ViewRect rect{};
+    p.view->getSize(&rect);
+    int w = rect.getWidth()  > 0 ? rect.getWidth()  : 800;
+    int h = rect.getHeight() > 0 ? rect.getHeight() : 600;
+
+    int screen = DefaultScreen(p.x_display);
+    Window root = RootWindow(p.x_display, screen);
+    p.x_window = XCreateSimpleWindow(p.x_display, root, 0, 0,
+                                     static_cast<unsigned>(w), static_cast<unsigned>(h), 0,
+                                     BlackPixel(p.x_display, screen), BlackPixel(p.x_display, screen));
+    if (!p.x_window) { p.view = nullptr; return 0; }
+    if (!p.editor_title.empty()) XStoreName(p.x_display, p.x_window, p.editor_title.c_str());
+    p.wm_delete = XInternAtom(p.x_display, "WM_DELETE_WINDOW", False);
+    XSetWMProtocols(p.x_display, p.x_window, &p.wm_delete, 1);
+    XSelectInput(p.x_display, p.x_window, StructureNotifyMask);
+
+    p.linux_frame.display = p.x_display;
+    p.linux_frame.window  = p.x_window;
+    p.view->setFrame(&p.linux_frame);
+
+    XMapWindow(p.x_display, p.x_window);
+    XFlush(p.x_display);
+
+    tresult att = p.view->attached(reinterpret_cast<void*>(static_cast<uintptr_t>(p.x_window)),
+                                   kPlatformTypeX11EmbedWindowID);
+    ZEDL_LOG("attached res=%d win=%lu %dx%d", static_cast<int>(att), static_cast<unsigned long>(p.x_window), w, h);
+    if (att != kResultOk) {
+        p.view->setFrame(nullptr);
+        XDestroyWindow(p.x_display, p.x_window);
+        p.x_window = 0; p.linux_frame.window = 0;
+        p.view = nullptr;
+        return 0;
+    }
+
+    // The plug-in may have resized itself during attached().
+    ViewRect cur{};
+    if (p.view->getSize(&cur) == kResultOk && cur.getWidth() > 0 && cur.getHeight() > 0)
+        XResizeWindow(p.x_display, p.x_window,
+                      static_cast<unsigned>(cur.getWidth()), static_cast<unsigned>(cur.getHeight()));
+    XFlush(p.x_display);
+    p.editor_open_flag.store(true);
+    ZEDL_LOG("editor shown");
+    return 1;
+}
+
+static void editor_teardown_on_thread(LoadedPlugin& p) {
+    editor_close_on_thread(p);
+    if (p.controller && p.controller_is_separate) {
+        p.controller->setComponentHandler(nullptr);
+        p.controller->terminate();
+    }
+    p.controller = nullptr;
+}
+
+// The persistent per-plugin editor thread: owns the X11 connection, services
+// open/close/unload commands, and pumps X events + the plug-in's registered
+// run-loop fds and timers.
+static void editor_thread_main(LoadedPlugin* p) {
+    p->x_display = XOpenDisplay(nullptr);
+    if (!p->x_display) {
+        ZEDL_LOG("XOpenDisplay failed (no DISPLAY?) — editor unavailable");
+        std::lock_guard<std::mutex> lk(p->editor_cmd_mtx);
+        p->editor_cmd_done = true;
+        p->editor_cmd_result = 0;
+        p->editor_cmd_cv.notify_all();
+        p->editor_thread_running.store(false);
+        return;
+    }
+    int xfd = ConnectionNumber(p->x_display);
+
+    for (;;) {
+        int cmd = 0;
+        { std::lock_guard<std::mutex> lk(p->editor_cmd_mtx); cmd = p->editor_cmd; p->editor_cmd = 0; }
+        if (cmd == 3) break; // unload
+        if (cmd == 1) {
+            int r = editor_open_on_thread(*p);
+            std::lock_guard<std::mutex> lk(p->editor_cmd_mtx);
+            p->editor_cmd_result = r; p->editor_cmd_done = true; p->editor_cmd_cv.notify_all();
+        } else if (cmd == 2) {
+            editor_close_on_thread(*p);
+            std::lock_guard<std::mutex> lk(p->editor_cmd_mtx);
+            p->editor_cmd_result = 1; p->editor_cmd_done = true; p->editor_cmd_cv.notify_all();
+        }
+
+        std::vector<struct pollfd> pfds;
+        pfds.push_back({p->cmd_pipe[0], POLLIN, 0});
+        pfds.push_back({xfd, POLLIN, 0});
+        for (auto& eh : p->linux_frame.handlers) pfds.push_back({eh.fd, POLLIN, 0});
+
+        int timeout = 1000;
+        uint64_t nowms = ZeusLinuxFrame::now_ms();
+        for (auto& t : p->linux_frame.timers) {
+            long d = static_cast<long>(t.nextMs - nowms);
+            if (d < 0) d = 0;
+            if (d < timeout) timeout = static_cast<int>(d);
+        }
+
+        poll(pfds.data(), static_cast<nfds_t>(pfds.size()), timeout);
+
+        if (pfds[0].revents & POLLIN) {
+            char b[64];
+            while (read(p->cmd_pipe[0], b, sizeof b) > 0) { }
+            continue; // re-read the command at the loop top
+        }
+
+        while (XPending(p->x_display)) {
+            XEvent ev; XNextEvent(p->x_display, &ev);
+            if (ev.type == ClientMessage &&
+                static_cast<Atom>(ev.xclient.data.l[0]) == p->wm_delete) {
+                editor_close_on_thread(*p);
+            }
+        }
+        for (size_t i = 2; i < pfds.size(); ++i) {
+            if (pfds[i].revents & POLLIN) {
+                int fd = pfds[i].fd;
+                for (auto& eh : p->linux_frame.handlers)
+                    if (eh.fd == fd) { eh.h->onFDIsSet(fd); break; }
+            }
+        }
+        nowms = ZeusLinuxFrame::now_ms();
+        for (auto& t : p->linux_frame.timers)
+            if (static_cast<long>(t.nextMs - nowms) <= 0) { t.h->onTimer(); t.nextMs = nowms + t.intervalMs; }
+    }
+
+    editor_teardown_on_thread(*p);
+    if (p->x_display) { XCloseDisplay(p->x_display); p->x_display = nullptr; }
+    p->editor_thread_running.store(false);
+}
+
+// Post a command to the editor thread and (except for unload) wait for it. Spawns
+// the thread on the first 'open'. Returns the command result (open: 1 shown / 0
+// failed). Control thread only.
+static int post_editor_cmd(LoadedPlugin& p, int cmd, int timeoutMs) {
+    if (!p.editor_thread_running.load()) {
+        if (cmd != 1) return 0; // only 'open' starts the thread
+        if (pipe(p.cmd_pipe) != 0) return 0;
+        p.editor_thread_running.store(true);
+        try { p.editor_thread = std::thread(editor_thread_main, &p); }
+        catch (...) {
+            p.editor_thread_running.store(false);
+            close(p.cmd_pipe[0]); close(p.cmd_pipe[1]);
+            p.cmd_pipe[0] = p.cmd_pipe[1] = -1;
+            return 0;
+        }
+    }
+    std::unique_lock<std::mutex> lk(p.editor_cmd_mtx);
+    p.editor_cmd = cmd; p.editor_cmd_done = false; p.editor_cmd_result = 0;
+    if (p.cmd_pipe[1] >= 0) { char c = 1; ssize_t n = write(p.cmd_pipe[1], &c, 1); (void)n; }
+    if (cmd == 3) return 1; // unload: the join in zvst_unload waits for exit
+    bool ok = p.editor_cmd_cv.wait_for(lk, std::chrono::milliseconds(timeoutMs),
+                                       [&] { return p.editor_cmd_done; });
+    return ok ? p.editor_cmd_result : 0;
+}
+#endif // __linux__
+
 } // namespace
 
 extern "C" {
@@ -858,6 +1208,18 @@ int32_t zvst_unload(zvst_handle_t handle) {
     if (p->ready_evt) { CloseHandle(p->ready_evt); p->ready_evt = nullptr; }
     delete p; // teardown() already ran on the UI thread
     return ZVST_OK;
+#elif defined(__linux__)
+    // Stop the editor thread first: it owns the controller + X11 window and
+    // terminates the controller itself (editor_teardown_on_thread), so the
+    // component teardown() below sees controller == null and won't double-free.
+    if (p->editor_thread_running.load()) {
+        post_editor_cmd(*p, 3, 0);
+        if (p->editor_thread.joinable()) p->editor_thread.join();
+    }
+    if (p->cmd_pipe[0] >= 0) { close(p->cmd_pipe[0]); close(p->cmd_pipe[1]); }
+    teardown(*p);
+    delete p;
+    return ZVST_OK;
 #else
     teardown(*p);
     delete p;
@@ -920,6 +1282,13 @@ int32_t zvst_editor_open(zvst_handle_t handle, const char* title) {
                                      0, 0, SMTO_NORMAL, 20000, &res);
     if (!ok) return ZVST_OTHER;            // timed out / UI thread hung
     return res ? ZVST_OK : ZVST_OTHER;     // res = editor_open_on_ui() result
+#elif defined(__linux__)
+    if (!handle) return ZVST_INVALID_HANDLE;
+    auto* p = static_cast<LoadedPlugin*>(handle);
+    p->editor_title = title ? title : "";
+    // Open synchronously on the editor thread (spawned on first call). 20 s budget
+    // mirrors the Windows path; a plug-in without a display or X11 support returns 0.
+    return post_editor_cmd(*p, 1, 20000) ? ZVST_OK : ZVST_OTHER;
 #else
     (void)handle; (void)title;
     return ZVST_NOT_IMPLEMENTED;
@@ -936,6 +1305,11 @@ int32_t zvst_editor_close(zvst_handle_t handle) {
                             SMTO_ABORTIFHUNG, 5000, &res);
     }
     return ZVST_OK;
+#elif defined(__linux__)
+    if (!handle) return ZVST_OK;
+    auto* p = static_cast<LoadedPlugin*>(handle);
+    if (p->editor_thread_running.load()) post_editor_cmd(*p, 2, 5000);
+    return ZVST_OK;
 #else
     (void)handle;
     return ZVST_OK;
@@ -947,6 +1321,9 @@ int32_t zvst_editor_is_open(zvst_handle_t handle) {
     if (!handle) return 0;
     auto* p = static_cast<LoadedPlugin*>(handle);
     return p->editor_open_flag.load() ? 1 : 0;
+#elif defined(__linux__)
+    if (!handle) return 0;
+    return static_cast<LoadedPlugin*>(handle)->editor_open_flag.load() ? 1 : 0;
 #else
     (void)handle;
     return 0;
