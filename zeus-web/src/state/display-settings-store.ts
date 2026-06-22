@@ -381,6 +381,23 @@ const TX_AUTO_PEAK_PCT = 0.995;
 // Guard against degenerate ranges (e.g. silent input producing p5==p95).
 const MIN_SPAN_DB = 20;
 
+/**
+ * Whether the TX display auto-fit should engage for the current TX state.
+ *
+ * Auto-range is only meaningful for a wide modulated signal (voice MOX/PTT),
+ * where the high-percentile "peak" lands on real signal. A TUNE carrier (a
+ * few-bin spike) or a two-tone test (twin spikes) defeats the percentile fit —
+ * the "peak" falls in the noise floor and the window collapses onto it,
+ * rendering the clean carrier as "grass". Those transmit types keep the fixed
+ * window. Two-tone arms independently of MOX, so it is excluded explicitly.
+ */
+export function shouldTxAutoRange(
+  tx: { moxOn: boolean; tunOn: boolean; twoToneOn: boolean },
+  txAutoRange: boolean,
+): boolean {
+  return txAutoRange && tx.moxOn && !tx.tunOn && !tx.twoToneOn;
+}
+
 export type DisplaySettingsState = {
   autoRange: boolean;
   // Panadapter dB window. Driven by the DbScale gesture (manual) and/or
@@ -468,6 +485,10 @@ export type DisplaySettingsState = {
   // Fit the TX windows to a frame of live TX pixels (no-op when off / empty).
   // Driven from the waterfall ingest while keyed.
   updateTxAutoRange: (pixels: Float32Array) => void;
+  // Snap the TX windows back to the operator's saved (or fixed -80..+20) range.
+  // Used when auto-range disengages — turned off, or a non-voice TX type (TUNE /
+  // two-tone) where the auto-fit would collapse onto the noise floor.
+  restoreSavedTxWindows: () => void;
   resetDbRanges: () => void;
   updateAutoRange: (wfDb: Float32Array) => void;
   // Shift dbMin and dbMax together by `deltaDb`. Used by the draggable dB
@@ -538,6 +559,12 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   txDisplayFftSize: DEFAULT_TX_DISPLAY_FFT_SIZE,
   txDisplayWindow: DEFAULT_TX_DISPLAY_WINDOW,
   txDisplayAvgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS,
+  // Master enable for the TX display auto-fit. ON by default, but it only
+  // actually engages for voice MOX/PTT — see shouldTxAutoRange(). TUNE and
+  // two-tone are deliberately excluded: their narrow carrier / twin-tone fools
+  // the percentile fit into collapsing the dB window onto the noise floor,
+  // rendering the clean carrier as "grass". Those fall back to the Thetis-parity
+  // fixed TX_FIXED_DB_MIN/MAX (-80..+20) window via restoreSavedTxWindows().
   txAutoRange: true,
   colormap: 'blue',
   waterfallScrollSpeed: initialWaterfallScrollSpeed,
@@ -718,16 +745,29 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
       set({ txAutoRange: true });
     } else {
       // Off restores the operator's saved TX windows (mirrors setAutoRange).
-      const tx = readSavedTxRange();
-      const wf = readSavedWfTxRange();
-      set({
-        txAutoRange: false,
-        txDbMin: tx.txDbMin,
-        txDbMax: tx.txDbMax,
-        wfTxDbMin: wf.wfTxDbMin,
-        wfTxDbMax: wf.wfTxDbMax,
-      });
+      set({ txAutoRange: false });
+      get().restoreSavedTxWindows();
     }
+  },
+  restoreSavedTxWindows: () => {
+    const tx = readSavedTxRange();
+    const wf = readSavedWfTxRange();
+    const { txDbMin, txDbMax, wfTxDbMin, wfTxDbMax } = get();
+    // Avoid a redundant set() (and render) when the windows are already there.
+    if (
+      txDbMin === tx.txDbMin &&
+      txDbMax === tx.txDbMax &&
+      wfTxDbMin === wf.wfTxDbMin &&
+      wfTxDbMax === wf.wfTxDbMax
+    ) {
+      return;
+    }
+    set({
+      txDbMin: tx.txDbMin,
+      txDbMax: tx.txDbMax,
+      wfTxDbMin: wf.wfTxDbMin,
+      wfTxDbMax: wf.wfTxDbMax,
+    });
   },
   updateTxAutoRange: (pixels) => {
     if (!get().txAutoRange || pixels.length === 0) return;
