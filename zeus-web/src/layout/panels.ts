@@ -294,12 +294,12 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'dsp',
     tags: ['dsp', 'noise', 'filter', 'nr', 'anf'],
     component: DspFlexPanel,
-    // The DSP control grid stacks its NB/NR/ANF/SNB/NBP rows on top of each
-    // other when the tile is shorter than the controls need. A definite design
-    // size scales the whole grid uniformly so the rows shrink-to-fit instead of
-    // overlapping when small (and zoom up when large). Bench-tunable.
-    designW: 340,
-    designH: 200,
+    // DSP is a control grid (buttons/sliders), not an instrument readout — it
+    // must stay at a readable native size, NOT zoom (uniform scale just shrinks
+    // the controls). So it renders native and fills its tile. The old
+    // overlap-when-small bug (NB/NR/ANF/SNB/NBP rows stacking on each other) is
+    // fixed in CSS: .dsp-row no longer flex-shrinks, so the panel scrolls
+    // (DspFlexPanel overflow:auto) when the tile is shorter than the controls.
     minW: 4,
     minH: 6,
   },

@@ -3059,7 +3059,10 @@
 
 /* ===== DSP ===== */
 .dsp-grid { padding: 10px; display: flex; flex-direction: column; gap: 10px; background: var(--bg-1); }
-.dsp-row { display: flex; align-items: center; gap: 10px; }
+/* Rows keep their natural height (no flex-shrink) so a short tile scrolls via
+ * DspFlexPanel's overflow:auto instead of squeezing rows until their buttons
+ * overlap the neighbouring row. */
+.dsp-row { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .dsp-row > .btn { flex-shrink: 0; min-width: 56px; }
 .dsp-row > .slider { flex: 1; }
 .dsp-smart-status {
