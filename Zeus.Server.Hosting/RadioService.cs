@@ -154,6 +154,7 @@ public sealed class RadioService : IDisposable
         public string? FilterPresetName = "VAR1";
         public double AfGainDb;
         public byte AdcSource;   // 0 = ADC0 (same antenna as RX1) by default
+        public bool Muted;       // per-RX audio mute (RXOutputGain=0 equivalent)
     }
     private readonly ExtraReceiver[] _extraReceivers = CreateExtraReceivers();
     private static ExtraReceiver[] CreateExtraReceivers()
@@ -949,6 +950,7 @@ public sealed class RadioService : IDisposable
     public StateDto SetVfoB(long hz)
     {
         long clamped = Math.Clamp(hz, 0L, 60_000_000L);
+        lock (_sync) { if (_state.VfoLocked) return Snapshot(); }
         long previousTx;
         lock (_sync) previousTx = TxFrequencyHz(_state);
         Mutate(s => s with { VfoBHz = clamped });
@@ -1077,8 +1079,14 @@ public sealed class RadioService : IDisposable
     public static long TxFrequencyHz(StateDto state) =>
         state.TxVfo == TxVfo.B ? state.VfoBHz : state.VfoHz;
 
+    /// <summary>TX carrier frequency including any active XIT offset. The
+    /// displayed VFO is unchanged; only the transmitted carrier moves (Thetis
+    /// XITOn/XITValue, console.cs:22127).</summary>
+    public static long TxCarrierHz(StateDto state) =>
+        TxFrequencyHz(state) + (state.XitEnabled ? state.XitHz : 0);
+
     public static long TxEffectiveLoHz(StateDto state) =>
-        CwOffset.EffectiveLoHz(state.Mode, TxFrequencyHz(state));
+        CwOffset.EffectiveLoHz(state.Mode, TxCarrierHz(state));
 
     public StateDto SwapVfos()
     {
@@ -1133,6 +1141,14 @@ public sealed class RadioService : IDisposable
     public StateDto SetVfo(long hz, bool fromExternal)
     {
         long clamped = Math.Clamp(hz, 0L, 60_000_000L);
+        // VFO lock guards operator dial tuning only. External sources
+        // (CAT/TCI/calibration) tune intentionally and bypass the lock, matching
+        // Thetis (chkVFOLock blocks the UI/knob, not CAT). No-op return preserves
+        // the current snapshot.
+        if (!fromExternal)
+        {
+            lock (_sync) { if (_state.VfoLocked) return Snapshot(); }
+        }
         long previous;
         RxMode currentMode;
         bool ctun;
@@ -1240,7 +1256,11 @@ public sealed class RadioService : IDisposable
     // Caller must hold _sync.
     private void RememberFrozenLoUnderLock()
     {
-        if ((_state.CtunEnabled || _state.TxVfo == TxVfo.B) && _ctunPreTxLoHz == long.MinValue)
+        // XIT (CTUN off, VFO A) also drags the shared LO to dial+XIT for TX, so
+        // the pre-TX RX centre must be remembered for RestoreLoAfterTx to put
+        // back on un-key — otherwise RX would stay off by the XIT offset.
+        if ((_state.CtunEnabled || _state.TxVfo == TxVfo.B || _state.XitEnabled)
+            && _ctunPreTxLoHz == long.MinValue)
             _ctunPreTxLoHz = _state.RadioLoHz;
     }
 
@@ -1251,7 +1271,7 @@ public sealed class RadioService : IDisposable
         long currentLo;
         lock (_sync)
         {
-            vfo = TxFrequencyHz(_state);
+            vfo = TxCarrierHz(_state);
             mode = _state.Mode;
             currentLo = _state.RadioLoHz;
             RememberFrozenLoUnderLock();
@@ -1293,8 +1313,10 @@ public sealed class RadioService : IDisposable
             if (_state.TxVfo == TxVfo.B && _state.Rx2Enabled
                 && ConnectedBoardKind == HpsdrBoardKind.OrionMkII)
                 return false;
-            if (!_state.CtunEnabled && _state.TxVfo != TxVfo.B) return false;
-            vfo = TxFrequencyHz(_state);
+            // XIT moves the carrier even with CTUN off on VFO A, so align then
+            // too (RememberFrozenLoUnderLock captured the RX centre to restore).
+            if (!_state.CtunEnabled && _state.TxVfo != TxVfo.B && !_state.XitEnabled) return false;
+            vfo = TxCarrierHz(_state);
             mode = _state.Mode;
             currentLo = _state.RadioLoHz;
             RememberFrozenLoUnderLock();
@@ -1356,6 +1378,121 @@ public sealed class RadioService : IDisposable
             // zero and the frontend frames recentre.
             SetRadioLo(CwOffset.EffectiveLoHz(mode, vfo));
         }
+        return Snapshot();
+    }
+
+    /// <summary>Lock or unlock the VFO. When locked, operator dial tuning is
+    /// rejected (see <see cref="SetVfo(long, bool)"/>); CAT/TCI tuning still
+    /// works. Pure software guard — no hardware effect. Persisted via FlushState.
+    /// Mirrors Thetis chkVFOLock.</summary>
+    public StateDto SetVfoLock(bool locked)
+    {
+        Mutate(s => s.VfoLocked == locked ? s : s with { VfoLocked = locked });
+        return Snapshot();
+    }
+
+    // RIT/XIT clamp range — Thetis udRIT/udXIT (±99999 Hz).
+    private const long RitXitMaxHz = 99_999;
+
+    /// <summary>Set RIT (Receiver Incremental Tuning). Only the supplied fields
+    /// change. The offset is folded into the WDSP shift stage on the next
+    /// StateChanged (DspPipelineService), so RX retunes live while the displayed
+    /// VFO stays put. Mirrors Thetis chkRIT/udRIT.</summary>
+    public StateDto SetRit(bool? enabled, long? hz)
+    {
+        Mutate(s => s with
+        {
+            RitEnabled = enabled ?? s.RitEnabled,
+            RitHz = hz is long h ? Math.Clamp(h, -RitXitMaxHz, RitXitMaxHz) : s.RitHz,
+        });
+        return Snapshot();
+    }
+
+    /// <summary>Set XIT (Transmit Incremental Tuning). Only the supplied fields
+    /// change. The offset moves the transmitted carrier (TxCarrierHz) without
+    /// moving the displayed VFO. When already keyed, re-aligns the LO so the
+    /// carrier moves immediately. Mirrors Thetis chkXIT/udXIT.</summary>
+    public StateDto SetXit(bool? enabled, long? hz)
+    {
+        bool keyed;
+        Mutate(s => s with
+        {
+            XitEnabled = enabled ?? s.XitEnabled,
+            XitHz = hz is long h ? Math.Clamp(h, -RitXitMaxHz, RitXitMaxHz) : s.XitHz,
+        });
+        lock (_sync) keyed = _mox;
+        // Live update while transmitting (tune/MOX): re-place the carrier now.
+        if (keyed) AlignLoForTx();
+        return Snapshot();
+    }
+
+    /// <summary>Mute or unmute a receiver's audio by index (RX1=0, RX2=1,
+    /// RX3+=2..). Muting silences only that receiver's contribution to the audio
+    /// mix (DspPipelineService zeroes its drained buffer), leaving the others
+    /// audible — distinct from Rx2AudioMode routing. Mirrors Thetis chkMUT /
+    /// chkRX2Mute (RXOutputGain=0).</summary>
+    public StateDto SetReceiverMuted(int index, bool muted)
+    {
+        if (index == 0)
+        {
+            Mutate(s => s.Rx1Muted == muted ? s : s with { Rx1Muted = muted });
+            return Snapshot();
+        }
+        if (index == 1)
+        {
+            Mutate(s => s.Rx2Muted == muted ? s : s with { Rx2Muted = muted });
+            return Snapshot();
+        }
+        if (index < 2 || index >= _extraReceivers.Length)
+            throw new ArgumentOutOfRangeException(
+                nameof(index), index, $"receiver index out of range (0..{_extraReceivers.Length - 1})");
+        lock (_sync)
+        {
+            var e = _extraReceivers[index] ??= new ExtraReceiver();
+            e.Muted = muted;
+        }
+        // Re-project + broadcast so the DSP audio loop sees the new mute flag.
+        Mutate(s => s);
+        return Snapshot();
+    }
+
+    /// <summary>Configure the diversity combiner. Only the supplied fields
+    /// change. Applied to WDSP on the next StateChanged (DspPipelineService →
+    /// engine.SetDiversity). Default-off leaves the single-ADC RX path
+    /// byte-identical to today. Mirrors Thetis DiversityForm.
+    /// <para><b>Bench-verification pending:</b> the WDSP control plane (run /
+    /// rotate / output) is wired, but the dual-ADC IQ feed into the combiner
+    /// has not been validated against real phase-synchronous hardware.</para>
+    /// </summary>
+    public StateDto SetDiversity(bool? enabled, double? gain, double? phaseDeg, int? sourceRx)
+    {
+        Mutate(s =>
+        {
+            var cur = s.Diversity ?? new DiversityConfig();
+            var next = cur with
+            {
+                Enabled = enabled ?? cur.Enabled,
+                Gain = gain is double g ? Math.Clamp(g, 0.0, 2.0) : cur.Gain,
+                PhaseDeg = phaseDeg is double p ? Math.Clamp(p, -180.0, 180.0) : cur.PhaseDeg,
+                SourceRx = sourceRx is int sr ? Math.Clamp(sr, 1, WireContract.MaxReceivers - 1) : cur.SourceRx,
+            };
+            return s with { Diversity = next };
+        });
+        return Snapshot();
+    }
+
+    /// <summary>Request an antenna-tuner (ATU) tune cycle. Holds the Apollo/Alex
+    /// auto-tune-start bit (Protocol-1 C0=0x12 frame, C2[4] = register 0x09
+    /// bit 20 per the HL2 protocol doc) on the wire for <paramref name="durationMs"/>
+    /// then auto-clears. No-op when no Protocol-1 client is connected. Mirrors
+    /// Thetis ATUTune (NetworkIO ATU_Tune pulse).
+    /// <para><b>Bench-verification pending:</b> the tune-request bit is
+    /// spec-correct but has not been confirmed against a radio with an ATU.</para>
+    /// </summary>
+    public StateDto RequestAtuTune(int durationMs)
+    {
+        int ms = Math.Clamp(durationMs, 100, 30_000);
+        (ActiveClient as Zeus.Protocol1.Protocol1Client)?.RequestAtuTune(ms);
         return Snapshot();
     }
 
@@ -3178,13 +3315,15 @@ public sealed class RadioService : IDisposable
                 VfoHz: s.VfoHz, Mode: s.Mode,
                 FilterLowHz: s.FilterLowHz, FilterHighHz: s.FilterHighHz,
                 FilterPresetName: s.FilterPresetName,
-                AfGainDb: s.RxAfGainDb, SampleRateHz: s.SampleRate),
+                AfGainDb: s.RxAfGainDb, SampleRateHz: s.SampleRate,
+                Muted: s.Rx1Muted),
             new ReceiverDto(
                 Index: 1, Enabled: s.Rx2Enabled, AdcSource: 0,
                 VfoHz: s.VfoBHz, Mode: s.ModeB,
                 FilterLowHz: s.FilterLowHzB, FilterHighHz: s.FilterHighHzB,
                 FilterPresetName: s.FilterPresetNameB,
-                AfGainDb: s.Rx2AfGainDb, SampleRateHz: s.SampleRate),
+                AfGainDb: s.Rx2AfGainDb, SampleRateHz: s.SampleRate,
+                Muted: s.Rx2Muted),
         };
         // Extra DDC receivers (RX3+). Appended contiguously while enabled — the
         // P2 multi-DDC path requires no DDC gaps, so the first disabled slot
@@ -3198,7 +3337,8 @@ public sealed class RadioService : IDisposable
                 VfoHz: e.VfoHz, Mode: e.Mode,
                 FilterLowHz: e.FilterLowHz, FilterHighHz: e.FilterHighHz,
                 FilterPresetName: e.FilterPresetName,
-                AfGainDb: e.AfGainDb, SampleRateHz: s.SampleRate));
+                AfGainDb: e.AfGainDb, SampleRateHz: s.SampleRate,
+                Muted: e.Muted));
         }
         return list;
     }

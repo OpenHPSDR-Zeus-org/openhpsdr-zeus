@@ -275,7 +275,13 @@ internal static class ControlFrame
         bool MicLineIn = false,
         bool MicTrs = false,
         bool MicBias = false,
-        byte LineInGain = 0);
+        byte LineInGain = 0,
+        // ATU (Apollo/Alex) auto-tune-start request. Set on the DriveFilter
+        // (C0=0x12) frame, C2 bit 4 — register 0x09 bit [20] per the HL2
+        // protocol doc ("Tune request: ... initiate an ATU tune"). Held by the
+        // client for the tune duration then auto-cleared. Default false →
+        // byte-identical to today on every board.
+        bool AtuTune = false);
 
     /// <summary>
     /// Write the 5 C&amp;C bytes for <paramref name="register"/> given the current
@@ -336,6 +342,12 @@ internal static class ControlFrame
                     if (state.MicBoost) cc[2] |= 0x01;   // C2[0] mic_boost
                     if (state.MicLineIn) cc[2] |= 0x02;  // C2[1] mic_linein
                 }
+                // ATU auto-tune-start request — C2[4], register 0x09 bit [20]
+                // ("Tune request") per the HL2 protocol doc; the Apollo/Alex
+                // auto-tune bit on Hermes-class boards. Held only while the
+                // operator's tune cycle is active (Protocol1Client clears it
+                // after AtuTuneRequest.DurationMs).
+                if (state.AtuTune) cc[2] |= 0x10;
                 break;
 
             case CcRegister.Attenuator:

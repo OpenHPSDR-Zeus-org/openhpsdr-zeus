@@ -620,6 +620,41 @@ internal static partial class NativeMethods
     internal static partial void SetEXTNOBThreshold(int id, double thresh);
 
     // =================================================================
+    // Diversity (EXTDIV) — front-end combiner that mixes `nr` phase-synchronous
+    // ADC IQ streams with a per-source complex rotation (gain + phase) to null
+    // an interferer or peak a signal. The combiner is a single global instance
+    // (id 0), independent of the RXA channel ids. create_divEXT MUST precede any
+    // SetEXTDIV*/xdivEXT call (the setters dereference pdiv[id]). xdivEXT (the
+    // per-block IQ feed) is intentionally NOT bound yet — wiring the dual-ADC
+    // feed is the bench-verification step (see WdspDspEngine.SetDiversity).
+    // =================================================================
+    [LibraryImport(LibraryName, EntryPoint = "create_divEXT")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void CreateDivEXT(int id, int run, int nr, int size);
+
+    [LibraryImport(LibraryName, EntryPoint = "destroy_divEXT")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void DestroyDivEXT(int id);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTDIVRun(int id, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTDIVNr(int id, int nr);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTDIVOutput(int id, int output);
+
+    // Irotate/Qrotate are nr-length double arrays (blittable → marshalled as
+    // pointers by the source generator). out = Σ rx[i]·(Irotate[i] + j·Qrotate[i]).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTDIVRotate(int id, int nr, [In] double[] Irotate, [In] double[] Qrotate);
+
+    // =================================================================
     // TX bindings — mirror of the RXA subset. TXA is WDSP channel type=1
     // (RXA is type=0) per OpenChannel's `type` param. SetChannelState is
     // channel-generic: state 1=on / 0=off, dmp 1=damp buffers on transition.

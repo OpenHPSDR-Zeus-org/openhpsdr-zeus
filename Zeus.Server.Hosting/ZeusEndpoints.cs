@@ -1085,6 +1085,59 @@ public static class ZeusEndpoints
                 afGainDb: req.AfGainDb));
         });
 
+        // Per-RX audio mute (RX1=0, RX2=1, RX3+=2..). Mirrors Thetis chkMUT /
+        // chkRX2Mute — silences only this receiver's contribution to the mix.
+        app.MapPost("/api/receivers/{index:int}/mute", (int index, MuteSetRequest req, RadioService r) =>
+        {
+            if (index < 0 || index >= Zeus.Contracts.WireContract.MaxReceivers)
+                return Results.BadRequest(new { error = $"receiver index out of range (0..{Zeus.Contracts.WireContract.MaxReceivers - 1})" });
+            log.LogInformation("api.receivers.mute index={Index} muted={Muted}", index, req.Muted);
+            return Results.Ok(r.SetReceiverMuted(index, req.Muted));
+        });
+
+        // VFO lock (Thetis chkVFOLock): blocks operator dial tuning; CAT/TCI
+        // still tune. Pure software guard, no hardware effect.
+        app.MapPost("/api/radio/vfo-lock", (VfoLockSetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.radio.vfo-lock locked={Locked}", req.Locked);
+            return Results.Ok(r.SetVfoLock(req.Locked));
+        });
+
+        // RIT (Receiver Incremental Tuning). Both fields optional; Hz clamped to
+        // ±99999. RX1 only.
+        app.MapPost("/api/rx/rit", (RitSetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.rx.rit enabled={Enabled} hz={Hz}", req.Enabled, req.Hz);
+            return Results.Ok(r.SetRit(req.Enabled, req.Hz));
+        });
+
+        // XIT (Transmit Incremental Tuning). Both fields optional; Hz clamped to
+        // ±99999. Moves only the transmitted carrier.
+        app.MapPost("/api/tx/xit", (XitSetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.tx.xit enabled={Enabled} hz={Hz}", req.Enabled, req.Hz);
+            return Results.Ok(r.SetXit(req.Enabled, req.Hz));
+        });
+
+        // Diversity combiner (Thetis DiversityForm). Every field optional.
+        // Bench-verification pending — see RadioService.SetDiversity.
+        app.MapPost("/api/rx/diversity", (DiversitySetRequest req, RadioService r) =>
+        {
+            log.LogInformation(
+                "api.rx.diversity enabled={Enabled} gain={Gain} phaseDeg={PhaseDeg} sourceRx={SourceRx}",
+                req.Enabled, req.Gain, req.PhaseDeg, req.SourceRx);
+            return Results.Ok(r.SetDiversity(req.Enabled, req.Gain, req.PhaseDeg, req.SourceRx));
+        });
+
+        // ATU tune request (Thetis ATUTune). Holds the Apollo/Alex auto-tune bit
+        // (Protocol-1 C0=0x12 C2[4]) for DurationMs then auto-clears.
+        // Bench-verification pending — see RadioService.RequestAtuTune.
+        app.MapPost("/api/radio/atu/tune", (AtuTuneRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.radio.atu.tune durationMs={DurationMs}", req.DurationMs);
+            return Results.Ok(r.RequestAtuTune(req.DurationMs));
+        });
+
         app.MapPost("/api/tx/vfo", (TxVfoSetRequest req, RadioService r) =>
         {
             if (!Enum.IsDefined(req.TxVfo))

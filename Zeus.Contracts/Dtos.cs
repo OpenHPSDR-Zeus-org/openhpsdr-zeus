@@ -868,7 +868,13 @@ public sealed record ReceiverDto(
     int FilterHighHz,
     string? FilterPresetName,
     double AfGainDb,
-    int SampleRateHz);
+    int SampleRateHz,
+    // Per-receiver audio mute (Thetis chkMUT / chkRX2Mute — RXOutputGain=0).
+    // Distinct from Rx2AudioMode routing: muting silences this receiver's audio
+    // contribution while leaving every other receiver audible. Defaults false so
+    // pre-mute wire frames deserialize unchanged. Mirrors the per-RX MUTE_RX1/
+    // RX2 keypad controls.
+    bool Muted = false);
 
 public sealed record StateDto(
     ConnectionStatus Status,
@@ -1149,7 +1155,44 @@ public sealed record StateDto(
 
     // DDC / receiver ceiling for this build (WireContract.MaxReceivers). The
     // multi-DDC UI gates the "exposed receivers" control against this.
-    int MaxReceivers = WireContract.MaxReceivers);
+    int MaxReceivers = WireContract.MaxReceivers,
+
+    // ---- VFO lock (Thetis chkVFOLock) ----
+    // Pure software guard: when true, operator dial tuning (panadapter click,
+    // wheel, typed entry) is rejected so an accidental knob bump can't move the
+    // VFO. CAT / TCI / calibration (fromExternal) still tune — they are
+    // intentional. No hardware effect. Ephemeral — defaults unlocked each
+    // session (Thetis resets the lock on restart).
+    bool VfoLocked = false,
+
+    // ---- RIT (Receiver Incremental Tuning, Thetis chkRIT/udRIT) ----
+    // Temporary RX-only frequency offset applied without moving the displayed
+    // VFO digits. In Zeus's CTUN model the offset is folded into the WDSP shift
+    // stage (DspPipelineService), so the tuned signal relocates while the dial
+    // reads unchanged. RitHz range ±99999 (Thetis udRIT). RX1 only.
+    bool RitEnabled = false,
+    long RitHz = 0,
+
+    // ---- XIT (Transmit Incremental Tuning, Thetis chkXIT/udXIT) ----
+    // Temporary TX-only carrier offset applied on key-down without moving the
+    // displayed VFO. Folded into the TX effective-LO computation
+    // (RadioService.TxEffectiveLoHz / AlignLoForTx). XitHz range ±99999.
+    bool XitEnabled = false,
+    long XitHz = 0,
+
+    // ---- Per-RX mute (Thetis chkMUT / chkRX2Mute) ----
+    // RX1 / RX2 audio mute (RXOutputGain=0 equivalent). Index ≥ 2 receivers
+    // carry their mute on ReceiverDto.Muted. Distinct from Rx2AudioMode routing.
+    bool Rx1Muted = false,
+    bool Rx2Muted = false,
+
+    // ---- Diversity combiner (Thetis DiversityForm / WDSP xdivEXT) ----
+    // Two phase-synchronous ADC streams combined with a per-source complex
+    // rotation (gain magnitude + phase) to null an interferer or peak a signal.
+    // Null = diversity off (default), byte-identical to today's single-ADC RX
+    // path. See DiversityConfig. Ephemeral — re-armed each session (like PS),
+    // never auto-armed on restart.
+    DiversityConfig? Diversity = null);
 
 /// <summary>Canonical CW constants shared between backend and wire DTOs.
 /// Single source of truth — CwOffset (server-side) and StateDto both
@@ -1180,6 +1223,46 @@ public sealed record ConnectRequest(
     byte? BoardId = null);
 
 public sealed record VfoSetRequest(long Hz, int Receiver = 0);
+
+/// <summary>Body of <c>POST /api/radio/vfo-lock</c>.</summary>
+public sealed record VfoLockSetRequest(bool Locked);
+
+/// <summary>Body of <c>POST /api/rx/rit</c>. Both fields optional; only the
+/// supplied ones change. <c>Hz</c> is clamped to ±99999 (Thetis udRIT range).</summary>
+public sealed record RitSetRequest(bool? Enabled = null, long? Hz = null);
+
+/// <summary>Body of <c>POST /api/tx/xit</c>. Both fields optional; only the
+/// supplied ones change. <c>Hz</c> is clamped to ±99999 (Thetis udXIT range).</summary>
+public sealed record XitSetRequest(bool? Enabled = null, long? Hz = null);
+
+/// <summary>Body of <c>POST /api/receivers/{index}/mute</c>.</summary>
+public sealed record MuteSetRequest(bool Muted);
+
+/// <summary>Body of <c>POST /api/radio/atu/tune</c>. <c>DurationMs</c> is how long
+/// the Apollo/Alex auto-tune request bit (C0=0x12 C2[4]) is held on the wire
+/// before auto-clearing; default 1000 ms matches Thetis's ATUTune sequence.</summary>
+public sealed record AtuTuneRequest(int DurationMs = 1000);
+
+/// <summary>Diversity-combiner configuration. Two phase-synchronous ADC streams
+/// are combined as <c>out = rx[Reference] + r·e^{jθ}·rx[Source]</c>, where
+/// <c>r = Gain</c> (magnitude, 0..2, 1.0 = unity) and <c>θ = PhaseDeg</c> in
+/// degrees (−180..180). The reference receiver (RX1/ADC0) is the phase anchor;
+/// <c>SourceRx</c> selects the second ADC's receiver (default RX2/index 1).
+/// Mirrors Thetis DiversityForm's I/Q rotate (Irotate=r·cosθ, Qrotate=r·sinθ)
+/// fed to WDSP <c>SetEXTDIVRotate</c>.</summary>
+public sealed record DiversityConfig(
+    bool Enabled = false,
+    double Gain = 1.0,
+    double PhaseDeg = 0.0,
+    int SourceRx = 1);
+
+/// <summary>Body of <c>POST /api/rx/diversity</c>. Every field optional; only
+/// the supplied ones change.</summary>
+public sealed record DiversitySetRequest(
+    bool? Enabled = null,
+    double? Gain = null,
+    double? PhaseDeg = null,
+    int? SourceRx = null);
 
 public enum Rx2AudioMode
 {

@@ -61,6 +61,36 @@ public class ControlFrameAudioEncoderTests
         return cc.ToArray();
     }
 
+    // ---- ATU auto-tune-start bit (C2[4]) on the 0x12 DriveFilter frame ------
+    // Register 0x09 bit [20] ("Tune request") per the HL2 protocol doc; the
+    // Apollo/Alex auto-tune bit on Hermes-class boards.
+
+    [Fact]
+    public void DriveFilter_AtuTune_SetsC2Bit4_Hermes()
+    {
+        var cc = Frame(ControlFrame.CcRegister.DriveFilter, Hermes() with { AtuTune = true });
+        Assert.Equal(0x12, cc[0]);
+        Assert.Equal(0x80, cc[1]);          // drive byte unchanged
+        Assert.Equal(0x10, cc[2] & 0x10);   // C2[4] asserted
+    }
+
+    [Fact]
+    public void DriveFilter_AtuTune_SetsC2Bit4_Hl2()
+    {
+        // HL2 carries PA-enable on C2[3] only while MOX; ATU bit is independent.
+        var cc = Frame(ControlFrame.CcRegister.DriveFilter, Hl2() with { AtuTune = true });
+        Assert.Equal(0x10, cc[2] & 0x10);   // C2[4] asserted
+        Assert.Equal(0x00, cc[2] & 0x08);   // PA-enable not set (no MOX)
+    }
+
+    [Fact]
+    public void DriveFilter_AtuTuneOff_IsByteIdentical()
+    {
+        // Default (AtuTune=false) must leave the 0x12 tail untouched.
+        var cc = Frame(ControlFrame.CcRegister.DriveFilter, Hermes());
+        Assert.Equal(0x00, cc[2] & 0x10);
+    }
+
     // ---- (a) Hermes-class codec — 0x12 frame mic_boost / mic_linein --------
 
     [Fact]

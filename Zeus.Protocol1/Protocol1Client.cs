@@ -109,6 +109,10 @@ public sealed class Protocol1Client : IProtocol1Client
     private int _driveByteOverride = -1;
     private int _ocTxMask;      // user OC pin mask for TX (low 7 bits)
     private int _ocRxMask;      // user OC pin mask for RX (low 7 bits)
+    // ATU auto-tune deadline (Environment.TickCount64). While now < this, the
+    // DriveFilter frame asserts the auto-tune-start bit (C2[4]). 0 = idle.
+    // Momentary so the tune request auto-releases without a second API call.
+    private long _atuTuneUntilTicks;
     // PureSignal master arm. When set on HL2 the C0=0x14 (Attenuator) frame
     // also writes puresignal_run into C2 bit 6, the predistortion register
     // is added to the rotation, and (when MOX is on) two receivers are
@@ -670,6 +674,16 @@ public sealed class Protocol1Client : IProtocol1Client
         Interlocked.Exchange(ref _ocRxMask, rxMask & 0x7F);
     }
 
+    /// <summary>Request an ATU tune cycle: assert the Apollo/Alex auto-tune-start
+    /// bit (DriveFilter C2[4]) on every outgoing frame for <paramref name="durationMs"/>
+    /// milliseconds, then auto-release. The C&amp;C round-robin picks the new
+    /// CcState on its next tick, so no explicit re-send is needed.</summary>
+    public void RequestAtuTune(int durationMs)
+    {
+        long until = Environment.TickCount64 + Math.Max(1, durationMs);
+        Interlocked.Exchange(ref _atuTuneUntilTicks, until);
+    }
+
     /// <summary>
     /// Arm or disarm PureSignal on the wire. HL2-only effect: the C0=0x14
     /// (Attenuator) frame OR's puresignal_run into C2 bit 6, and the
@@ -819,7 +833,8 @@ public sealed class Protocol1Client : IProtocol1Client
             MicLineIn: Volatile.Read(ref _micLineIn) != 0,
             MicTrs: Volatile.Read(ref _micTrs) != 0,
             MicBias: Volatile.Read(ref _micBias) != 0,
-            LineInGain: (byte)Volatile.Read(ref _lineInGain));
+            LineInGain: (byte)Volatile.Read(ref _lineInGain),
+            AtuTune: Volatile.Read(ref _atuTuneUntilTicks) > Environment.TickCount64);
     }
 
     private void RxLoop()
