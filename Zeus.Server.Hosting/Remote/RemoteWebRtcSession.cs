@@ -51,6 +51,15 @@ public sealed class RemoteWebRtcSession
     private RTCDataChannel? _api;
     private RemoteFrameSink? _sink;
 
+    // Remote voice TX: the browser's mic arrives as an inbound Opus audio track.
+    // _micPipeline decodes + re-blocks it to the 960-sample f32le cadence the TX
+    // ingest expects; _lastAudioSeq drives single-packet PLC across RTP gaps.
+    // Only wired when the offer carries audio AND a hub is present (the real
+    // radio host) — RX-only clients and transport tests stay audio-free.
+    private RemoteMicAudioPipeline? _micPipeline;
+    private int _lastAudioSeq = -1;
+    private bool _audioWired;
+
     // Post-unlock binary stream-request control frames (RX monitoring, Phase A):
     //   first byte 0x22 = display request, 0x21 = audio request; byte[1] 1/0 = enable/disable.
     // We track the session's current wanted-state so a duplicate enable can't
@@ -159,6 +168,12 @@ public sealed class RemoteWebRtcSession
     /// <summary>Answer the browser's offer with a self-contained (vanilla-ICE) SDP.</summary>
     public async Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct = default)
     {
+        // If the browser offered a voice-mic audio track, attach our recvonly
+        // Opus receiver BEFORE setRemoteDescription so the answer negotiates it.
+        // Gated on the offer actually containing audio so an RX-only client
+        // (whose offer has no m=audio) is answered exactly as before.
+        MaybeWireRemoteVoice(offerSdp);
+
         var setResult = _pc.setRemoteDescription(
             new RTCSessionDescriptionInit { type = RTCSdpType.offer, sdp = offerSdp });
         if (setResult != SetDescriptionResultEnum.OK)
@@ -296,6 +311,61 @@ public sealed class RemoteWebRtcSession
                 break;
         }
     }
+
+    // -- Remote voice TX (inbound Opus audio track) --------------------------
+
+    /// <summary>
+    /// Attach the recvonly Opus audio receiver iff the browser offered a mic
+    /// track. No-op when there is no hub (transport tests), no audio in the offer
+    /// (RX-only client), or it is already wired. Decoded voice is injected into
+    /// the SAME TX-mic ingest local audio uses; MOX + source arbitration
+    /// downstream decide whether it actually reaches the air.
+    /// </summary>
+    private void MaybeWireRemoteVoice(string offerSdp)
+    {
+        if (_audioWired || _hub is null) return;
+        if (string.IsNullOrEmpty(offerSdp)
+            || offerSdp.IndexOf("m=audio", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
+        _micPipeline = new RemoteMicAudioPipeline(OnRemoteMicBlock);
+        var audioTrack = new MediaStreamTrack(
+            SDPMediaTypesEnum.audio, false,
+            new List<SDPAudioVideoMediaFormat> { new(SDPMediaTypesEnum.audio, 111, "OPUS", 48000, 2) },
+            MediaStreamStatusEnum.RecvOnly);
+        _pc.addTrack(audioTrack);
+        _pc.OnRtpPacketReceived += OnAudioRtpReceived;
+        _audioWired = true;
+        _log.LogInformation("rtc.remote voice-mic track negotiated (Opus 48k recvonly)");
+    }
+
+    private void OnAudioRtpReceived(
+        System.Net.IPEndPoint remoteEp, SDPMediaTypesEnum media, RTPPacket pkt)
+    {
+        if (media != SDPMediaTypesEnum.audio || _micPipeline is null) return;
+        if (!_session.IsUnlocked) return; // deny-by-default: no voice before unlock
+        try
+        {
+            int seq = pkt.Header.SequenceNumber;
+            if (_lastAudioSeq >= 0)
+            {
+                // Conceal a small gap with Opus PLC; cap it so a long dropout
+                // can't spin the decoder. A reorder/duplicate (huge wrapped gap)
+                // is simply decoded in place.
+                int gap = (ushort)(seq - _lastAudioSeq - 1);
+                for (int i = 0; i < gap && i < 5; i++) _micPipeline.DecodeLost();
+            }
+            _lastAudioSeq = seq;
+            _micPipeline.Decode(pkt.Payload);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "rtc.remote audio rtp decode failed");
+        }
+    }
+
+    /// <summary>Inject a decoded 960-sample f32le voice block into the TX-mic ingest.</summary>
+    private void OnRemoteMicBlock(ReadOnlyMemory<byte> f32leBlock) => _hub?.InjectMicPcm(f32leBlock);
 
     // -- Read-write REST tunnel ---------------------------------------------
     //
