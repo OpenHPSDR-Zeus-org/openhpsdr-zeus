@@ -6768,3 +6768,47 @@ export function setFreeDvConfig(
     normalizeFreeDvStatus,
   );
 }
+
+// FreeDV codec2-library install (GET status / POST start). Mirrors the server
+// FreeDvInstallDto. codec2 can't be built on an operator's machine, so when the
+// bundled binary is missing the backend downloads the prebuilt one Zeus
+// committed for this platform and reloads the modem live. The panel polls the
+// GET while installing until `phase` is 'done' or 'failed'.
+export type FreeDvInstallPhase = 'idle' | 'downloading' | 'staging' | 'done' | 'failed';
+
+export type FreeDvInstallStatusDto = {
+  phase: FreeDvInstallPhase;
+  percent: number;
+  message: string | null;
+  installed: boolean;
+};
+
+const FREEDV_INSTALL_PHASES: readonly FreeDvInstallPhase[] = [
+  'idle',
+  'downloading',
+  'staging',
+  'done',
+  'failed',
+];
+
+function normalizeFreeDvInstallStatus(raw: unknown): FreeDvInstallStatusDto {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const phase =
+    typeof r.phase === 'string' && (FREEDV_INSTALL_PHASES as readonly string[]).includes(r.phase)
+      ? (r.phase as FreeDvInstallPhase)
+      : 'idle';
+  return {
+    phase,
+    percent: typeof r.percent === 'number' ? r.percent : 0,
+    message: typeof r.message === 'string' ? r.message : null,
+    installed: r.installed === true,
+  };
+}
+
+export function getFreeDvInstallStatus(signal?: AbortSignal): Promise<FreeDvInstallStatusDto> {
+  return jsonFetch('/api/freedv/install', { signal }, normalizeFreeDvInstallStatus);
+}
+
+export function startFreeDvInstall(signal?: AbortSignal): Promise<FreeDvInstallStatusDto> {
+  return jsonFetch('/api/freedv/install', { method: 'POST', signal }, normalizeFreeDvInstallStatus);
+}

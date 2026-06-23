@@ -1257,6 +1257,32 @@ public static class ZeusEndpoints
             return Results.Ok(fd.ApplyConfig(req));
         });
 
+        // FreeDV codec2 library install. codec2 can't be built on an operator's
+        // machine, so when the bundled binary is missing this fetches the prebuilt
+        // lib Zeus committed for the running platform from the repo and stages it,
+        // reloading the modem live (see FreeDvNativeInstaller). GET reports install
+        // progress + whether codec2 is already present; POST starts a background
+        // download (idempotent — no-op if already installed/running). The panel
+        // polls GET until phase is "done" / "failed".
+        static object FreeDvInstallDto(FreeDvNativeInstaller installer)
+        {
+            var s = installer.Current;
+            return new
+            {
+                phase = s.Phase.ToString().ToLowerInvariant(),
+                percent = s.Percent,
+                message = s.Message,
+                installed = installer.Installed,
+            };
+        }
+        app.MapGet("/api/freedv/install", (FreeDvNativeInstaller installer) =>
+            Results.Ok(FreeDvInstallDto(installer)));
+        app.MapPost("/api/freedv/install", (FreeDvNativeInstaller installer) =>
+        {
+            installer.Start();
+            return Results.Ok(FreeDvInstallDto(installer));
+        });
+
         // TX bandpass filter — signed Hz pair (LSB negative, DSB symmetric). Per-mode
         // family memory is managed in RadioService, identical shape to the RX filter.
         // Operator-editable via Settings → TX Filter panel.
