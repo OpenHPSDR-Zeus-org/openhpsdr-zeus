@@ -137,6 +137,7 @@ const PRESET_MAP: Record<RxMode, readonly FilterPresetSlot[]> = {
   DIGL: DIGL,
   DIGU: DIGL, // DIGU uses identical half-widths to DIGL
   FM:   FM,
+  FREEDV: USB, // FreeDV runs USB underneath — reuse the USB preset table.
 };
 
 export function getPresetsForMode(mode: RxMode): readonly FilterPresetSlot[] {
@@ -151,7 +152,7 @@ export function getPresetsForMode(mode: RxMode): readonly FilterPresetSlot[] {
 // passband width).
 export function defaultFavoritesForMode(mode: RxMode): readonly string[] {
   switch (mode) {
-    case 'USB': case 'LSB': case 'DIGL': case 'DIGU': return ['F6', 'F5', 'F4'];
+    case 'USB': case 'LSB': case 'DIGL': case 'DIGU': case 'FREEDV': return ['F6', 'F5', 'F4'];
     case 'CWU': case 'CWL': return ['F4', 'F5', 'F6'];
     case 'AM':  case 'SAM': return ['F7', 'F8', 'F9'];
     case 'DSB': return ['F6', 'F7', 'F8'];
@@ -223,6 +224,7 @@ const RIBBON_WIDTHS_KHZ: Record<RxMode, readonly number[]> = {
   DIGL: [0.25, 0.5, 1.0, 2.0, 2.4, 3.0],
   DIGU: [0.25, 0.5, 1.0, 2.0, 2.4, 3.0],
   FM:   [],
+  FREEDV: [2.4, 2.7, 3.6, 6.0, 9.0, 12.0], // USB-style — modem runs USB.
 };
 
 function ribbonSlotFor(mode: RxMode, widthKHz: number): FilterPresetSlot {
@@ -233,7 +235,7 @@ function ribbonSlotFor(mode: RxMode, widthKHz: number): FilterPresetSlot {
   let lowHz = 0;
   let highHz = 0;
   switch (mode) {
-    case 'USB': case 'DIGU':
+    case 'USB': case 'DIGU': case 'FREEDV':
       lowHz = 100; highHz = 100 + widthHz; break;
     case 'LSB': case 'DIGL':
       lowHz = -(100 + widthHz); highHz = -100; break;

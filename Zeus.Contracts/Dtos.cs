@@ -51,6 +51,12 @@ namespace Zeus.Contracts;
 public enum RxMode : byte
 {
     LSB, USB, CWL, CWU, AM, FM, SAM, DSB, DIGL, DIGU,
+    // FreeDV digital voice (Codec2 / freedv_api). Zeus-level mode only — it
+    // is NOT a WDSP demod mode. At the WDSP layer FreeDV runs as USB; the
+    // FreeDV modem is inserted as a streaming filter in the RX/TX audio path
+    // (see FreeDvService). Append-only: byte value 10 is fixed for prefs
+    // persistence — never reorder this enum.
+    FreeDv,
 }
 
 // PureSignal feedback antenna source. On G2/MkII the wire-format diff

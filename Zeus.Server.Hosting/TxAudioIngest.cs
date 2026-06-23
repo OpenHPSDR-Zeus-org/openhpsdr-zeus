@@ -254,11 +254,13 @@ public sealed class TxAudioIngest : IDisposable
         DspPipelineService pipeline,
         TxService tx,
         StreamingHub hub,
-        ILogger<TxAudioIngest> log)
+        ILogger<TxAudioIngest> log,
+        FreeDvService? freeDv = null)
         : this(ring, () => pipeline.CurrentEngine, () => tx.IsMoxOn, hub, log,
                forwardP2: iq => pipeline.ForwardTxIqToP2(iq.Span),
                txOwnedByTuneDriver: () => tx.IsTunOn || tx.IsTwoToneOn,
-               preKeyOpenAtTicks: () => tx.PreKeyOpenAtTicks)
+               preKeyOpenAtTicks: () => tx.PreKeyOpenAtTicks,
+               freeDv: freeDv)
     {
     }
 
@@ -276,11 +278,13 @@ public sealed class TxAudioIngest : IDisposable
         Action<ReadOnlyMemory<float>>? forwardP2 = null,
         Action<int>? onWdspConsumed = null,
         Func<bool>? txOwnedByTuneDriver = null,
-        Func<long>? preKeyOpenAtTicks = null)
+        Func<long>? preKeyOpenAtTicks = null,
+        FreeDvService? freeDv = null)
     {
         _ring = ring;
         _engineProvider = engineProvider;
         _isMoxOn = isMoxOn;
+        _freeDv = freeDv;
         _forwardP2 = forwardP2;
         _onWdspConsumed = onWdspConsumed;
         _txOwnedByTuneDriver = txOwnedByTuneDriver ?? (static () => false);
@@ -290,6 +294,12 @@ public sealed class TxAudioIngest : IDisposable
         _handler = OnMicPcmBytesFromBrowserMic;
         _hub.MicPcmReceived += _handler;
     }
+
+    // FreeDV digital-voice modem coordinator. When FreeDV is the active mode,
+    // mic speech is replaced (in place, pre-WDSP) with the transmitted modem
+    // signal so WDSP's USB TXA modulates the modem audio onto the carrier.
+    // Null in unit tests.
+    private readonly FreeDvService? _freeDv;
 
     private readonly Action<ReadOnlyMemory<float>>? _forwardP2;
     // True while TUN or the two-tone test is active. TxTuneDriver is the sole TX
@@ -469,6 +479,7 @@ public sealed class TxAudioIngest : IDisposable
                     // MOX fell since our last frame — drain the IQ ring so the
                     // next keyed TX starts clean, without the tail of this one.
                     _ring.Clear();
+                    _freeDv?.FlushTx();
                     _lastSeenMox = false;
                 }
             }
@@ -482,6 +493,7 @@ public sealed class TxAudioIngest : IDisposable
             lock (_sync)
             {
                 _ring.Clear();
+                _freeDv?.FlushTx();
                 _lastSeenMox = false;
             }
         }
@@ -585,6 +597,12 @@ public sealed class TxAudioIngest : IDisposable
             while (_accumulatorFill >= blockSize)
             {
                 Array.Copy(_accumulator, 0, _scratchMic, 0, blockSize);
+                // FreeDV TX insert: replace the mic-speech block with the
+                // FreeDV modem signal (in place, same count, internally
+                // buffered). WDSP's USB TXA then SSB-modulates the modem audio.
+                // No-op unless FreeDV is the active mode.
+                if (_freeDv is not null && _freeDv.Active)
+                    _freeDv.ProcessTx(new Span<float>(_scratchMic, 0, blockSize));
                 int produced = engine.ProcessTxBlock(
                     new ReadOnlySpan<float>(_scratchMic, 0, blockSize),
                     new Span<float>(_scratchIq, 0, 2 * iqOut));

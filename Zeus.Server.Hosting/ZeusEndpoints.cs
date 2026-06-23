@@ -1186,6 +1186,20 @@ public static class ZeusEndpoints
             return r.SetFilter(req.Low, req.High);
         });
 
+        // FreeDV digital-voice telemetry + config. The mode itself is selected
+        // via /api/mode (RxMode.FreeDv); these surface the live modem state
+        // (sync/SNR/submode) polled by the FreeDV panel and apply submode /
+        // squelch / TX-text changes. No-op-safe when the codec2 native library
+        // is missing (NativeAvailable=false).
+        app.MapGet("/api/freedv/status", (FreeDvService fd) => Results.Ok(fd.Status()));
+        app.MapPut("/api/freedv/config", (FreeDvConfigRequest req, FreeDvService fd) =>
+        {
+            log.LogInformation(
+                "api.freedv.config submode={Submode} squelch={Sq} thresh={Th}",
+                req.Submode, req.SquelchEnabled, req.SnrSquelchThreshDb);
+            return Results.Ok(fd.ApplyConfig(req));
+        });
+
         // TX bandpass filter — signed Hz pair (LSB negative, DSB symmetric). Per-mode
         // family memory is managed in RadioService, identical shape to the RX filter.
         // Operator-editable via Settings → TX Filter panel.

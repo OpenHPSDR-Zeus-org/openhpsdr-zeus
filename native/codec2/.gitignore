@@ -1,0 +1,5 @@
+# Local CMake build trees for the codec2 FetchContent build. The shared library
+# output is staged into Zeus.Dsp/runtimes/{rid}/native/ and committed there; the
+# intermediate build trees here are disposable.
+/build/
+/build-*/

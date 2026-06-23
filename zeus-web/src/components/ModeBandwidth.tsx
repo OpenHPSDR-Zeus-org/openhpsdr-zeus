@@ -62,6 +62,7 @@ const MODES: readonly ModeEntry[] = [
   { value: 'FM', label: 'FM' },
   { value: 'DIGL', label: 'DIGL' },
   { value: 'DIGU', label: 'DIGU' },
+  { value: 'FREEDV', label: 'FreeDV' },
 ];
 
 export function ModeBandwidth() {

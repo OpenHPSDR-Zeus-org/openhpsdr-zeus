@@ -1091,6 +1091,10 @@ public class DspPipelineService : BackgroundService,
     // to register a stub. See CwSidetoneSource for the keying contract.
     private readonly CwSidetoneSource? _sidetone;
     private readonly FrontendDspSceneDiagnosticsService? _frontendDspScene;
+    // FreeDV digital-voice modem coordinator. Null in test constructions.
+    // When FreeDV is the active RX0 mode, the post-demod insert below replaces
+    // the received modem audio with decoded speech.
+    private readonly FreeDvService? _freeDv;
 
     public DspPipelineService(
         RadioService radio,
@@ -1100,10 +1104,12 @@ public class DspPipelineService : BackgroundService,
         CwSidetoneSource? sidetone = null,
         FrontendDspSceneDiagnosticsService? frontendDspScene = null,
         DisplaySettingsStore? displaySettings = null,
+        FreeDvService? freeDv = null,
         Func<TxAudioIngest?>? txIngestFactory = null)
     {
         _radio = radio;
         _hub = hub;
+        _freeDv = freeDv;
         // Materialise once at construction so the per-tick fan-out is an
         // array-index loop (no enumerator allocation, no LINQ on the hot path).
         _audioSinks = audioSinks.ToArray();
@@ -5434,6 +5440,19 @@ public class DspPipelineService : BackgroundService,
                 // shapes received audio without distorting the clean local
                 // sidetone. Null handler (no RX plugin attached) is the common
                 // case and a no-op — the RX path stays bit-identical.
+                // FreeDV digital-voice insert (RX0 only). The radio runs USB
+                // underneath, so audioBuf currently holds the received FreeDV
+                // modem signal; when FreeDV is the active mode the modem
+                // demodulates+decodes it back to speech in place (same sample
+                // count, internally buffered, silence until sync). Runs BEFORE
+                // the RX audio plugin + squelch so those shape decoded speech.
+                if (_freeDv is not null)
+                {
+                    _freeDv.SyncMode(state.Mode);
+                    if (_freeDv.Active && audioSampleCount > 0)
+                        _freeDv.ProcessRx(audioBuf.AsSpan(0, audioSampleCount));
+                }
+
                 var rxAudioHandler = _rxAudioPluginHandler;
                 if (rxAudioHandler is not null && audioSampleCount > 0)
                     rxAudioHandler(audioBuf.AsSpan(0, audioSampleCount), audioSampleCount, AudioOutputRateHz);

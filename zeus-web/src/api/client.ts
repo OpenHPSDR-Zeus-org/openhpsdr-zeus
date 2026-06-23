@@ -65,7 +65,8 @@ export type RxMode =
   | 'SAM'
   | 'DSB'
   | 'DIGL'
-  | 'DIGU';
+  | 'DIGU'
+  | 'FREEDV';
 
 export type Rx2AudioMode = 'both' | 'rx1' | 'rx2';
 export type TxVfo = 'A' | 'B';
@@ -2008,6 +2009,7 @@ const MODE_ORDER: readonly RxMode[] = [
   'DSB',
   'DIGL',
   'DIGU',
+  'FREEDV',
 ];
 
 const RX2_AUDIO_MODE_ORDER: readonly Rx2AudioMode[] = ['both', 'rx1', 'rx2'];
@@ -6646,5 +6648,118 @@ export function setMicGain(
       const v = (raw as { micGainDb?: unknown }).micGainDb;
       return { micGainDb: typeof v === 'number' ? v : 0 };
     },
+  );
+}
+
+// ---- FreeDV digital-voice telemetry / config ----
+// FreeDV is a normal selectable RxMode ('FREEDV', byte 10); selecting it goes
+// through setMode like any other mode. The backend forces USB underneath and
+// runs the codec2/FreeDV modem. These endpoints carry the modem telemetry +
+// config that drive the native FreeDV panel — they are NOT part of StateDto.
+
+export type FreeDvSubmode =
+  | 'Mode700D'
+  | 'Mode700E'
+  | 'Mode700C'
+  | 'Mode1600'
+  | 'Mode800XA';
+
+// Panel-facing submode order + short labels (matches freedv-gui's selector).
+export const FREEDV_SUBMODES: ReadonlyArray<{ value: FreeDvSubmode; label: string }> = [
+  { value: 'Mode700D', label: '700D' },
+  { value: 'Mode700E', label: '700E' },
+  { value: 'Mode700C', label: '700C' },
+  { value: 'Mode1600', label: '1600' },
+  { value: 'Mode800XA', label: '800XA' },
+];
+
+// Mirrors the server-side FreeDvStatusDto (GET /api/freedv/status).
+export type FreeDvStatusDto = {
+  nativeAvailable: boolean;
+  active: boolean;
+  submode: FreeDvSubmode;
+  synced: boolean;
+  snrDb: number;
+  squelchEnabled: boolean;
+  snrSquelchThreshDb: number;
+  speechSampleRateHz: number;
+  modemSampleRateHz: number;
+  rxText: string | null;
+  txText: string | null;
+  libraryVersion: string | null;
+};
+
+// PUT /api/freedv/config body — all fields optional, null = leave unchanged.
+export type FreeDvConfigRequest = {
+  submode?: FreeDvSubmode;
+  squelchEnabled?: boolean;
+  snrSquelchThreshDb?: number;
+  txText?: string;
+};
+
+const FREEDV_SUBMODE_ORDER: readonly FreeDvSubmode[] = FREEDV_SUBMODES.map(
+  (s) => s.value,
+);
+
+function normalizeFreeDvSubmode(v: unknown): FreeDvSubmode {
+  if (typeof v === 'string' && (FREEDV_SUBMODE_ORDER as readonly string[]).includes(v)) {
+    return v as FreeDvSubmode;
+  }
+  if (typeof v === 'number' && Number.isInteger(v)) {
+    return FREEDV_SUBMODE_ORDER[v] ?? 'Mode700D';
+  }
+  return 'Mode700D';
+}
+
+// Defensive normalizer: the backend may not be wired yet (404) or may send a
+// partial frame. Coerce every field so the panel never reads undefined.
+function normalizeFreeDvStatus(raw: unknown): FreeDvStatusDto {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const num = (v: unknown, dflt: number): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : dflt;
+  const bool = (v: unknown): boolean => v === true;
+  const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+  return {
+    nativeAvailable: bool(r.nativeAvailable),
+    active: bool(r.active),
+    submode: normalizeFreeDvSubmode(r.submode),
+    synced: bool(r.synced),
+    snrDb: num(r.snrDb, 0),
+    squelchEnabled: bool(r.squelchEnabled),
+    snrSquelchThreshDb: num(r.snrSquelchThreshDb, 0),
+    speechSampleRateHz: num(r.speechSampleRateHz, 8000),
+    modemSampleRateHz: num(r.modemSampleRateHz, 8000),
+    rxText: str(r.rxText),
+    txText: str(r.txText),
+    libraryVersion: str(r.libraryVersion),
+  };
+}
+
+// GET /api/freedv/status. Callers should catch and fall back to an
+// "unavailable" UI state — the backend may 404 transiently while it's wired.
+export function getFreeDvStatus(signal?: AbortSignal): Promise<FreeDvStatusDto> {
+  return jsonFetch('/api/freedv/status', { signal }, normalizeFreeDvStatus);
+}
+
+// PUT /api/freedv/config. Only the supplied fields change; returns the updated
+// status so the panel can reconcile in one round-trip.
+export function setFreeDvConfig(
+  req: FreeDvConfigRequest,
+  signal?: AbortSignal,
+): Promise<FreeDvStatusDto> {
+  return jsonFetch(
+    '/api/freedv/config',
+    {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        submode: req.submode ?? null,
+        squelchEnabled: req.squelchEnabled ?? null,
+        snrSquelchThreshDb: req.snrSquelchThreshDb ?? null,
+        txText: req.txText ?? null,
+      }),
+      signal,
+    },
+    normalizeFreeDvStatus,
   );
 }

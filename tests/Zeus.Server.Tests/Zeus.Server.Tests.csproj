@@ -5,6 +5,14 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- Default a bare `dotnet test` to SKIP the heavy opt-in DSP-modernization
+         evaluation suites (Category=DspModernization, ~20 min) so local runs stay
+         fast. This is the VSTestTestCaseFilter MSBuild property — the `dotnet
+         test` filter argument is the CLI alias for it and REPLACES this value
+         (it does NOT get ANDed, unlike a runsettings TestCaseFilter). So both CI
+         workflows override it cleanly: the PR gate selects "Category!=DspModernization"
+         and the scheduled dsp-modernization-tests.yml selects "Category=DspModernization". -->
+    <VSTestTestCaseFilter>Category!=DspModernization</VSTestTestCaseFilter>
   </PropertyGroup>
 
   <ItemGroup>
