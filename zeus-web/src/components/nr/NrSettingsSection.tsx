@@ -464,7 +464,7 @@ function Nr2Panel() {
       <GaugeRow
         accent="green"
         icon={<Activity size={14} strokeWidth={2.25} />}
-        label="Nlevel"
+        label="Level"
         value={nlevel}
         min={0}
         max={100}
