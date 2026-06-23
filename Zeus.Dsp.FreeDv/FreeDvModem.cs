@@ -26,6 +26,7 @@
 // path via a dirty flag, so they need no handle swap.
 
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using Microsoft.Extensions.Logging;
 using Zeus.Contracts;
@@ -90,12 +91,112 @@ public sealed class FreeDvModem : IDisposable
     private float _snrSquelchThresh = DefaultSquelchThresh(FreeDvSubmode.Mode700D);
     private int _squelchDirty;
 
+    // ---- Text sidechannel (FreeDV low-bit-rate "txt" stream: callsign etc.) ----
+    // The codec2 modem carries a slow varicode text stream alongside voice. The
+    // RX/TX callbacks fire INSIDE freedv_rx / freedv_tx on the hot path, so they
+    // are strictly lock-free and allocation-free. The delegate instances are held
+    // in fields for the modem's lifetime so the GC can never collect them while
+    // native code holds their function pointers.
+    private readonly FreeDvNativeMethods.FreeDvRxTextCallback _rxTextCb;
+    private readonly FreeDvNativeMethods.FreeDvTxTextCallback _txTextCb;
+    private readonly IntPtr _rxTextCbPtr;
+    private readonly IntPtr _txTextCbPtr;
+    // TX text to transmit, ASCII + trailing CR delimiter. Control thread swaps the
+    // reference; the hot-path TX callback Volatile.Reads it and cycles forever.
+    private byte[] _txTextBytes = Array.Empty<byte>();
+    private int _txTextPos;                              // hot-path-owned cursor
+    // RX decoded chars: hot path enqueues, the status thread drains + assembles.
+    private readonly FreeDvByteRing _rxTextRing = new(256);
+    private readonly object _rxTextLock = new();         // status-thread reassembly only
+    private readonly StringBuilder _rxTextWork = new(80);
+    private string? _rxTextLine;
+
     public FreeDvModem(ILogger<FreeDvModem>? log = null)
     {
         _log = log;
         _nativeAvailable = FreeDvNativeLoader.TryProbe();
         if (!_nativeAvailable)
             _log?.LogWarning("FreeDV: codec2 native library not found; FreeDV mode will pass audio through unchanged.");
+        _rxTextCb = OnRxTextChar;
+        _txTextCb = OnTxTextChar;
+        _rxTextCbPtr = Marshal.GetFunctionPointerForDelegate(_rxTextCb);
+        _txTextCbPtr = Marshal.GetFunctionPointerForDelegate(_txTextCb);
+    }
+
+    // Hot path (inside freedv_rx). Single-byte lock-free enqueue; drop on overflow.
+    private void OnRxTextChar(IntPtr state, byte c) => _rxTextRing.WriteByte(c);
+
+    // Hot path (inside freedv_tx). Returns the next char of the repeating TX text,
+    // or 0 when no text is configured (codec2 sends an idle txt stream).
+    private byte OnTxTextChar(IntPtr state)
+    {
+        var bytes = Volatile.Read(ref _txTextBytes);
+        if (bytes.Length == 0) return 0;
+        int pos = _txTextPos;
+        byte c = bytes[pos % bytes.Length];
+        _txTextPos = pos + 1;
+        return c;
+    }
+
+    /// <summary>
+    /// Set the low-bit-rate TX text (callsign / short message). Control-thread
+    /// only. Encoded as 7-bit ASCII with a trailing CR so the receiver gets a
+    /// line delimiter; published atomically to the hot-path TX callback.
+    /// </summary>
+    public void SetTxText(string? text)
+    {
+        byte[] bytes;
+        if (string.IsNullOrEmpty(text))
+        {
+            bytes = Array.Empty<byte>();
+        }
+        else
+        {
+            var t = text.Length > 63 ? text[..63] : text;
+            bytes = new byte[t.Length + 1];
+            for (int i = 0; i < t.Length; i++) bytes[i] = (byte)(t[i] & 0x7f);
+            bytes[t.Length] = (byte)'\r';
+        }
+        Volatile.Write(ref _txTextBytes, bytes);
+    }
+
+    /// <summary>
+    /// Last fully-received line of RX text (callsign etc.), or null if none has
+    /// been decoded yet. Drains the lock-free RX-text ring and reassembles on the
+    /// caller's (status) thread — never touched by the hot path beyond the ring
+    /// enqueue. Guarded so concurrent status polls don't race the reassembly.
+    /// </summary>
+    public string? RxText
+    {
+        get
+        {
+            lock (_rxTextLock)
+            {
+                Span<byte> buf = stackalloc byte[64];
+                int n;
+                while ((n = _rxTextRing.Read(buf)) > 0)
+                {
+                    for (int i = 0; i < n; i++)
+                    {
+                        char c = (char)buf[i];
+                        if (c is '\r' or '\n')
+                        {
+                            if (_rxTextWork.Length > 0)
+                            {
+                                _rxTextLine = _rxTextWork.ToString();
+                                _rxTextWork.Clear();
+                            }
+                        }
+                        else if (c is >= ' ' and < (char)127)
+                        {
+                            if (_rxTextWork.Length >= 64) _rxTextWork.Clear();
+                            _rxTextWork.Append(c);
+                        }
+                    }
+                }
+                return _rxTextLine;
+            }
+        }
     }
 
     public bool NativeAvailable => _nativeAvailable;
@@ -336,6 +437,14 @@ public sealed class FreeDvModem : IDisposable
         _synced = false;
         Volatile.Write(ref _snrDb, 0f);
 
+        // Wire the text sidechannel on the fresh handles BEFORE publishing them to
+        // the hot path: RX handle decodes received chars, TX handle pulls chars to
+        // send. Restart the TX cursor so a reopen (submode change) re-sends from
+        // the start of the message. Both handles are still gated out here.
+        FreeDvNativeMethods.freedv_set_callback_txt(rx, _rxTextCbPtr, IntPtr.Zero, IntPtr.Zero);
+        FreeDvNativeMethods.freedv_set_callback_txt(tx, IntPtr.Zero, _txTextCbPtr, IntPtr.Zero);
+        _txTextPos = 0;
+
         RetireRx(rx);
         RetireTx(tx);
 
@@ -355,6 +464,7 @@ public sealed class FreeDvModem : IDisposable
         if (old != IntPtr.Zero) FreeDvNativeMethods.freedv_close(old);
         _rx8In.Clear(); _rxOut48.Clear();
         _rxDown.Reset(); _rxUp.Reset();
+        _rxTextRing.Clear(); // drop stale decoded chars across a resync/close
         Volatile.Write(ref _rxFreedv, replacement);
     }
 

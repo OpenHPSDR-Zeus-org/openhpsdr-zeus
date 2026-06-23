@@ -93,4 +93,22 @@ internal static partial class FreeDvNativeMethods
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void freedv_set_snr_squelch_thresh(IntPtr freedv, float snr_squelch_thresh);
+
+    // Low-bit-rate text sidechannel (FreeDV "txt" varicode stream — callsign /
+    // short message carried alongside voice). The codec2 API delivers received
+    // chars via rx_func and pulls chars to transmit via tx_func; both fire
+    // synchronously INSIDE freedv_rx / freedv_tx. Passing IntPtr.Zero for either
+    // callback disables that direction (codec2 NULL-checks before calling).
+    // callback_state is opaque; Zeus closes over the modem instance via the
+    // delegate itself, so it passes IntPtr.Zero here.
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void FreeDvRxTextCallback(IntPtr state, byte c);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate byte FreeDvTxTextCallback(IntPtr state);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void freedv_set_callback_txt(
+        IntPtr freedv, IntPtr rx_func, IntPtr tx_func, IntPtr callback_state);
 }

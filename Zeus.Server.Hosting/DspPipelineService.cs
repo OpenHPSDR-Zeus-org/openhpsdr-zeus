@@ -3193,10 +3193,31 @@ public class DspPipelineService : BackgroundService,
         RaiseEngineChanged(synth);
     }
 
+    // FreeDV is a linear digital mode: the OFDM waveform must pass the TX chain
+    // undistorted and the decoder must see un-pumped RX audio. When Mode==FreeDv
+    // the apply-loop substitutes these spec profiles for the operator's stored
+    // values at the ENGINE seam only — the stores/StateDto keep the operator's
+    // real SSB settings, so leaving FreeDV restores the SSB chain automatically
+    // (the latches re-push the stored values once the effective config flips
+    // back). RX AGC goes Fixed so AGC pumping/clipping can't corrupt the modem
+    // audio fed to freedv_rx; Leveler + Compressor off and CFC off keep TX
+    // linear. ALC run-state is never touched (the engine keeps ALC on — the SSB
+    // modulator emits zero IQ with ALC off), so it still acts as a safety limiter.
+    // The Fixed AGC gain is seeded from the operator's own AGC-T baseline (the
+    // band-appropriate level they already receive at) rather than a blind
+    // constant, so the modem audio lands in a healthy range without pumping.
+    // Bench-tunable: if decode level proves off, this is the single knob.
+    private static readonly TxLevelingConfig FreeDvTxLevelingProfile =
+        new(LevelerEnabled: false, CompressorEnabled: false);
+
     private void OnRadioStateChanged(StateDto s)
     {
         lock (_engineLock)
         {
+        // FreeDV spec-profile override (see the AGC/TX-leveling/CFC pushes below):
+        // gates those engine pushes to linear-friendly values while the operator's
+        // stored config stays untouched for automatic restore on exit.
+        bool freeDvMode = s.Mode == RxMode.FreeDv;
         // Forward VFO changes to the P2 client when it's active. RadioService
         // does this for P1 via ActiveClient?.SetVfoAHz() inside SetVfo, but
         // ActiveClient is null for P2 connections, so the radio never learns
@@ -3404,7 +3425,9 @@ public class DspPipelineService : BackgroundService,
             ApplyDiversityConfig(diversity);
             _appliedDiversity = diversity;
         }
-        var agc = s.Agc ?? new AgcConfig(AgcMode.Med);
+        var agc = freeDvMode
+            ? new AgcConfig(AgcMode.Fixed, FixedGainDb: s.AgcTopDb)
+            : (s.Agc ?? new AgcConfig(AgcMode.Med));
         if (!agc.Equals(_appliedAgc))
         {
             engine.SetAgc(channel, agc);
@@ -3418,7 +3441,9 @@ public class DspPipelineService : BackgroundService,
             if (rx2Channel >= 0) engine.SetSquelch(rx2Channel, squelch);
             _appliedSquelch = squelch;
         }
-        var txLeveling = s.TxLeveling ?? new TxLevelingConfig();
+        var txLeveling = freeDvMode
+            ? FreeDvTxLevelingProfile
+            : (s.TxLeveling ?? new TxLevelingConfig());
         if (!txLeveling.Equals(_appliedTxLeveling))
         {
             engine.SetTxLeveling(channel, txLeveling);
@@ -3599,7 +3624,10 @@ public class DspPipelineService : BackgroundService,
         // Equals — but `record` only does reference equality on arrays, so
         // value-compare manually). null on the wire (legacy state frame)
         // falls back to CfcConfig.Default → engine sees a clean OFF profile.
-        var cfc = s.Cfc ?? CfcConfig.Default;
+        // FreeDV: force CFC off (transparent) so the multi-band compressor can't
+        // distort the OFDM. CfcConfig.Default is the all-zero / Enabled=false
+        // profile. Operator's stored CFC is untouched and restored on exit.
+        var cfc = freeDvMode ? CfcConfig.Default : (s.Cfc ?? CfcConfig.Default);
         if (resync || !CfcConfigsEqual(cfc, _appliedCfc))
         {
             engine.SetCfcConfig(cfc);
