@@ -26,12 +26,19 @@ export function MultiRxMonitorStrip() {
 
   if (!connected || !isP2 || extraReceivers.length === 0) return null;
 
+  // Stitch up to 4 receivers across one row; beyond that, stack into additional
+  // rows of 4 (intuitive stacking for the last receivers). Columns are capped at
+  // the row width so each pane keeps a usable size instead of shrinking to slivers.
+  const MAX_PER_ROW = 4;
+  const columns = Math.min(extraReceivers.length, MAX_PER_ROW);
+
   return (
     <div
       data-multi-rx-strip
       style={{
         display: 'grid',
-        gridTemplateColumns: `repeat(${extraReceivers.length}, minmax(0, 1fr))`,
+        gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+        gridAutoRows: '1fr',
         gap: 2,
         width: '100%',
         height: '100%',

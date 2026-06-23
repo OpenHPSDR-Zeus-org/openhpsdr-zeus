@@ -1241,6 +1241,14 @@ public sealed record StateDto(
     bool Rx1Muted = false,
     bool Rx2Muted = false,
 
+    // ---- Multi-DDC TX target ----
+    // Authoritative transmit target as a receiver index (0 = RX1/VFO A, 1 = RX2/
+    // VFO B, >= 2 = an extra DDC). TxVfo stays the legacy A/B projection;
+    // RadioService.TxFrequencyHz resolves the carrier from this index so TX can
+    // key on any receiver's VFO. Ephemeral — resets to RX1 each session (never
+    // auto-transmit on a receiver the operator can't see after a restart).
+    int TxReceiverIndex = 0,
+
     // ---- Diversity combiner (Thetis DiversityForm / WDSP xdivEXT) ----
     // Two phase-synchronous ADC streams combined with a per-source complex
     // rotation (gain magnitude + phase) to null an interferer or peak a signal.
@@ -1563,6 +1571,11 @@ public sealed record AttenuatorSetRequest(int Db);
 public sealed record MoxSetRequest(bool On);
 
 public sealed record TxVfoSetRequest(TxVfo TxVfo);
+
+/// <summary>Body of <c>POST /api/tx/receiver</c> — select the transmit target by
+/// receiver index (0 = RX1, 1 = RX2, >= 2 = an extra DDC). Generalises
+/// <see cref="TxVfoSetRequest"/> beyond the A/B pair.</summary>
+public sealed record TxReceiverSetRequest(int Index);
 
 public sealed record DriveSetRequest(int Percent);
 

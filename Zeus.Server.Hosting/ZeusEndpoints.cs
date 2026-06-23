@@ -1203,6 +1203,17 @@ public static class ZeusEndpoints
             return Results.Ok(r.SetTxVfo(req.TxVfo));
         });
 
+        // Select the transmit target by receiver index (0=RX1, 1=RX2, >=2 extra
+        // DDC). Generalises /api/tx/vfo beyond the A/B pair; an out-of-range or
+        // not-exposed index clamps to RX1 server-side.
+        app.MapPost("/api/tx/receiver", (TxReceiverSetRequest req, RadioService r) =>
+        {
+            if (req.Index < 0 || req.Index >= Zeus.Contracts.WireContract.MaxReceivers)
+                return Results.BadRequest(new { error = $"tx receiver index out of range (0..{Zeus.Contracts.WireContract.MaxReceivers - 1})" });
+            log.LogInformation("api.tx.receiver index={Index}", req.Index);
+            return Results.Ok(r.SetTxReceiver(req.Index));
+        });
+
         // Set the radio's hardware NCO (LO) frequency directly. Does not
         // move VfoHz — used by the panadapter pure-pan gesture when a drag
         // would carry the viewport outside the IQ capture window.

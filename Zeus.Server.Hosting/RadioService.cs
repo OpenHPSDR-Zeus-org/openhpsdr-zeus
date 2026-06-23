@@ -1005,7 +1005,7 @@ public sealed class RadioService : IDisposable
         long clamped = Math.Clamp(hz, 0L, 60_000_000L);
         lock (_sync) { if (_state.VfoLocked) return Snapshot(); }
         long previousTx;
-        lock (_sync) previousTx = TxFrequencyHz(_state);
+        lock (_sync) previousTx = TxFrequencyHzLocked(_state);
         Mutate(s => s with { VfoBHz = clamped });
         if (BandUtils.FreqToBand(previousTx) != BandUtils.FreqToBand(TxFrequencyHz(Snapshot())))
         {
@@ -1077,8 +1077,21 @@ public sealed class RadioService : IDisposable
         }
         // Re-project + broadcast (StateChanged → DspPipelineService opens channels
         // and pushes SetExtraReceivers/SetExtraReceiverFreqHz to the radio).
-        // Enabling an extra DDC requires RX2 (no DDC gap), so turn it on.
-        Mutate(s => enabling && !s.Rx2Enabled ? s with { Rx2Enabled = true } : s);
+        // Enabling an extra DDC requires RX2 (no DDC gap), so turn it on. If the
+        // disable cascade just removed the receiver the operator was transmitting
+        // on, fall the TX target back to RX1 (never key a receiver that stopped
+        // streaming).
+        Mutate(s =>
+        {
+            var next = enabling && !s.Rx2Enabled ? s with { Rx2Enabled = true } : s;
+            if (next.TxReceiverIndex >= 2 &&
+                (next.TxReceiverIndex >= _extraReceivers.Length
+                 || _extraReceivers[next.TxReceiverIndex] is not { Enabled: true }))
+            {
+                next = next with { TxReceiverIndex = 0, TxVfo = TxVfo.A };
+            }
+            return next;
+        });
         return Snapshot();
     }
 
@@ -1086,7 +1099,7 @@ public sealed class RadioService : IDisposable
     {
         ArgumentNullException.ThrowIfNull(req);
         long previousTx;
-        lock (_sync) previousTx = TxFrequencyHz(_state);
+        lock (_sync) previousTx = TxFrequencyHzLocked(_state);
         Mutate(s =>
         {
             long nextVfoB = req.VfoBHz.HasValue
@@ -1118,9 +1131,29 @@ public sealed class RadioService : IDisposable
     {
         if (!Enum.IsDefined(txVfo))
             throw new ArgumentOutOfRangeException(nameof(txVfo), txVfo, "Unknown TX VFO");
+        // Legacy A/B endpoint — funnel through the index-based setter so TxVfo and
+        // TxReceiverIndex never diverge.
+        return SetTxReceiver(txVfo == TxVfo.B ? 1 : 0);
+    }
+
+    /// <summary>Select the transmit target by receiver index (0 = RX1/VFO A,
+    /// 1 = RX2/VFO B, >= 2 = an extra DDC). The independent TX DUC and CW/CTUN LO
+    /// alignment read <see cref="TxFrequencyHz"/>, so the carrier moves to the
+    /// chosen receiver's VFO. An out-of-range or not-exposed index clamps to RX1
+    /// (never transmit on a receiver the operator can't see).</summary>
+    public StateDto SetTxReceiver(int index)
+    {
         long previousTx;
-        lock (_sync) previousTx = TxFrequencyHz(_state);
-        Mutate(s => s.TxVfo == txVfo ? s : s with { TxVfo = txVfo });
+        lock (_sync)
+        {
+            index = ClampTxReceiverIndexUnderLock(index);
+            previousTx = TxFrequencyHzLocked(_state);
+        }
+        // TxVfo stays as the legacy A/B projection (index 1 -> B, else A) so
+        // pre-multi-DDC consumers keep working; TxReceiverIndex is authoritative.
+        Mutate(s => s.TxReceiverIndex == index
+            ? s
+            : s with { TxReceiverIndex = index, TxVfo = index == 1 ? TxVfo.B : TxVfo.A });
         var snap = Snapshot();
         if (BandUtils.FreqToBand(previousTx) != BandUtils.FreqToBand(TxFrequencyHz(snap)))
         {
@@ -1129,8 +1162,38 @@ public sealed class RadioService : IDisposable
         return snap;
     }
 
-    public static long TxFrequencyHz(StateDto state) =>
-        state.TxVfo == TxVfo.B ? state.VfoBHz : state.VfoHz;
+    // Caller holds _sync. RX1/RX2 are always valid TX targets; an extra DDC
+    // (>= 2) is valid only while exposed/enabled — otherwise fall back to RX1 so
+    // TX never points at a receiver that isn't streaming.
+    private int ClampTxReceiverIndexUnderLock(int index)
+    {
+        if (index <= 0) return 0;
+        if (index == 1) return 1;
+        if (index >= _extraReceivers.Length) return 0;
+        return _extraReceivers[index] is { Enabled: true } ? index : 0;
+    }
+
+    // Authoritative TX carrier frequency for the selected TX target. Index 0 =
+    // RX1 (VFO A), 1 = RX2 (VFO B), >= 2 = an extra DDC read from the projected
+    // Receivers[] array. Use this static form on a SNAPSHOT (Receivers
+    // populated); internal callers holding _sync on the un-projected _state must
+    // use TxFrequencyHzLocked, which resolves >= 2 from _extraReceivers.
+    public static long TxFrequencyHz(StateDto state) => state.TxReceiverIndex switch
+    {
+        <= 0 => state.VfoHz,
+        1 => state.VfoBHz,
+        int i => state.Receivers is { } rs && i < rs.Count ? rs[i].VfoHz : state.VfoHz,
+    };
+
+    // Caller holds _sync. Like TxFrequencyHz but resolves an extra-DDC TX target
+    // (index >= 2) from _extraReceivers, which the internal _state can't carry
+    // (its Receivers list is null until ProjectReceivers runs at Snapshot time).
+    private long TxFrequencyHzLocked(StateDto state) => state.TxReceiverIndex switch
+    {
+        <= 0 => state.VfoHz,
+        1 => state.VfoBHz,
+        int i => i < _extraReceivers.Length && _extraReceivers[i] is { } e ? e.VfoHz : state.VfoHz,
+    };
 
     /// <summary>TX carrier frequency including any active XIT offset. The
     /// displayed VFO is unchanged; only the transmitted carrier moves (Thetis
@@ -1148,7 +1211,7 @@ public sealed class RadioService : IDisposable
         RxMode mode = RxMode.USB;
         Mutate(s =>
         {
-            previousTx = TxFrequencyHz(s);
+            previousTx = TxFrequencyHzLocked(s);
             newA = Math.Clamp(s.VfoBHz, 0L, 60_000_000L);
             mode = s.Mode;
             return s with
@@ -1312,7 +1375,7 @@ public sealed class RadioService : IDisposable
         // XIT (CTUN off, VFO A) also drags the shared LO to dial+XIT for TX, so
         // the pre-TX RX centre must be remembered for RestoreLoAfterTx to put
         // back on un-key — otherwise RX would stay off by the XIT offset.
-        if ((_state.CtunEnabled || _state.TxVfo == TxVfo.B || _state.XitEnabled)
+        if ((_state.CtunEnabled || _state.TxReceiverIndex >= 1 || _state.XitEnabled)
             && _ctunPreTxLoHz == long.MinValue)
             _ctunPreTxLoHz = _state.RadioLoHz;
     }
@@ -1363,12 +1426,12 @@ public sealed class RadioService : IDisposable
             // the tune carrier showed on BOTH receivers (the two-carrier bug).
             // Skip the drag for this case; CTUN and P1 split still drag (P1 has
             // no independent DUC, and CTUN must move the shared LO).
-            if (_state.TxVfo == TxVfo.B && _state.Rx2Enabled
+            if (_state.TxReceiverIndex >= 1 && _state.Rx2Enabled
                 && ConnectedBoardKind == HpsdrBoardKind.OrionMkII)
                 return false;
             // XIT moves the carrier even with CTUN off on VFO A, so align then
             // too (RememberFrozenLoUnderLock captured the RX centre to restore).
-            if (!_state.CtunEnabled && _state.TxVfo != TxVfo.B && !_state.XitEnabled) return false;
+            if (!_state.CtunEnabled && _state.TxReceiverIndex < 1 && !_state.XitEnabled) return false;
             vfo = TxCarrierHz(_state);
             mode = _state.Mode;
             currentLo = _state.RadioLoHz;

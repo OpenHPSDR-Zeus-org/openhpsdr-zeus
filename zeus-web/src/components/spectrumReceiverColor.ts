@@ -9,3 +9,14 @@ export type SpectrumReceiverId = 'A' | 'B';
 export function spectrumReceiverFilterColor(receiver: SpectrumReceiverId): string {
   return receiver === 'B' ? 'var(--signal, #25d366)' : 'var(--accent, #4a9eff)';
 }
+
+// Per-receiver identity colour for the multi-DDC panels (VFO lanes, hero mixer
+// chips). RX1/RX2 keep the canonical A/B accent/signal pair; RX3+ get distinct
+// hues spread around the wheel, kept clear of the reserved accent/tx/power
+// bands. This is data-viz identity (which receiver is which), not UI chrome.
+export function receiverColorByIndex(index: number): string {
+  if (index <= 0) return 'var(--accent, #4a9eff)';
+  if (index === 1) return 'var(--signal, #25d366)';
+  const hue = (175 + (index - 2) * 53) % 360;
+  return `hsl(${hue} 68% 62%)`;
+}

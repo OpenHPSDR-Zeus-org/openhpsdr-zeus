@@ -255,6 +255,32 @@ describe('normalizeState', () => {
     expect(s.nr).toEqual(NR_CONFIG_DEFAULT);
     expect(s.zoomLevel).toBe(1);
   });
+  it('carries the multi-DDC receivers[] array and ceiling (wire v2)', () => {
+    // Regression: normalizeState used to drop receivers/maxReceivers/wireVersion,
+    // so applyState's `s.receivers ?? prev.receivers` kept the empty default and
+    // the "exposed receivers" control was frozen at RX1 (>2 did nothing).
+    const s = normalizeState({
+      wireVersion: 2,
+      maxReceivers: 8,
+      receivers: [
+        { index: 0, enabled: true, adcSource: 0, vfoHz: 7_100_000, mode: 'LSB' },
+        { index: 1, enabled: true, adcSource: 0, vfoHz: 7_150_000, mode: 'USB' },
+        { index: 2, enabled: true, adcSource: 1, vfoHz: 14_200_000, mode: 'USB' },
+      ],
+    });
+    expect(s.wireVersion).toBe(2);
+    expect(s.maxReceivers).toBe(8);
+    expect(s.receivers).toHaveLength(3);
+    expect(s.receivers?.[2]).toMatchObject({ index: 2, enabled: true, adcSource: 1, mode: 'USB' });
+  });
+  it('leaves receivers/maxReceivers undefined when a v1 server omits them', () => {
+    // Undefined (not []/0) lets applyState keep the store's prior values rather
+    // than collapsing the exposed-receiver control.
+    const s = normalizeState({});
+    expect(s.receivers).toBeUndefined();
+    expect(s.maxReceivers).toBeUndefined();
+    expect(s.wireVersion).toBeUndefined();
+  });
   it('reads zoomLevel from the server', () => {
     expect(normalizeState({ zoomLevel: 3 }).zoomLevel).toBe(3);
     expect(normalizeState({ zoomLevel: 4 }).zoomLevel).toBe(4);

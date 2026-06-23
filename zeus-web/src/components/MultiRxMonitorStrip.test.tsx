@@ -20,6 +20,7 @@ function rx(index: number, enabled: boolean): ReceiverDto {
     filterPresetName: 'VAR1',
     afGainDb: 0,
     sampleRateHz: 192_000,
+    muted: false,
   };
 }
 

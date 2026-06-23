@@ -839,7 +839,15 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             return;
         double factor = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _freqCorrectionBits));
         long corrected = (long)Math.Round(hz * factor, MidpointRounding.AwayFromZero);
-        _extraRxFreqHz[receiverIndex] = (uint)Math.Clamp(corrected, 0L, uint.MaxValue);
+        uint next = (uint)Math.Clamp(corrected, 0L, uint.MaxValue);
+        // Idempotent — a no-op when this DDC's NCO is unchanged. OnRadioStateChanged
+        // re-pushes every extra receiver's frequency on EVERY state broadcast, and
+        // those fire continuously during steady RX. Without this guard each one
+        // re-sent the high-priority packet, re-latching the alex/OC band relays —
+        // which chattered the relays the moment RX3 was exposed. Mirrors the same
+        // idempotency the RX2 DDC path (SetRx2Enabled / SetExtraReceivers) relies on.
+        if (_extraRxFreqHz[receiverIndex] == next) return;
+        _extraRxFreqHz[receiverIndex] = next;
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 

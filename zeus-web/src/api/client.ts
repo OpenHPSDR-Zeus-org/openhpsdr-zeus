@@ -290,6 +290,10 @@ export type RadioStateDto = {
   rx2AudioMode: Rx2AudioMode;
   rx2AfGainDb: number;
   txVfo: TxVfo;
+  // Authoritative TX target as a receiver index (0=RX1/VFO A, 1=RX2/VFO B,
+  // >=2 extra DDC). txVfo stays the legacy A/B projection. Optional until a v2
+  // server reports it.
+  txReceiverIndex?: number;
   mode: RxMode;
   modeB: RxMode;
   filterLowHz: number;
@@ -428,6 +432,9 @@ export type ReceiverDto = {
   filterPresetName: string | null;
   afGainDb: number;
   sampleRateHz: number;
+  // Per-receiver audio mute (Thetis chkMUT/chkRX2Mute). The hero mixer + VFO
+  // panel drive this via POST /api/receivers/{index}/mute.
+  muted: boolean;
 };
 
 // CFC mirrors Zeus.Contracts.CfcConfig. Bands array is fixed at 10 entries
@@ -2331,6 +2338,26 @@ export function normalizeAdcProtectionStatus(raw: unknown): AdcProtectionStatusD
   };
 }
 
+// Normalise one wire ReceiverDto (mirrors Zeus.Contracts.ReceiverDto). A
+// malformed entry falls back to safe defaults rather than dropping the whole
+// array, so a single bad receiver can't blank the multi-DDC UI.
+function normalizeReceiver(raw: unknown, fallbackIndex: number): ReceiverDto {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    index: typeof r.index === 'number' ? r.index : fallbackIndex,
+    enabled: typeof r.enabled === 'boolean' ? r.enabled : false,
+    adcSource: typeof r.adcSource === 'number' ? r.adcSource : 0,
+    vfoHz: typeof r.vfoHz === 'number' ? r.vfoHz : 0,
+    mode: normalizeMode(r.mode),
+    filterLowHz: typeof r.filterLowHz === 'number' ? r.filterLowHz : 0,
+    filterHighHz: typeof r.filterHighHz === 'number' ? r.filterHighHz : 0,
+    filterPresetName: typeof r.filterPresetName === 'string' ? r.filterPresetName : null,
+    afGainDb: typeof r.afGainDb === 'number' ? r.afGainDb : 0,
+    sampleRateHz: typeof r.sampleRateHz === 'number' ? r.sampleRateHz : 0,
+    muted: typeof r.muted === 'boolean' ? r.muted : false,
+  };
+}
+
 export function normalizeState(raw: unknown): RadioStateDto {
   const r = (raw ?? {}) as Record<string, unknown>;
   return {
@@ -2347,6 +2374,8 @@ export function normalizeState(raw: unknown): RadioStateDto {
     rx2AudioMode: normalizeRx2AudioMode(r.rx2AudioMode),
     rx2AfGainDb: typeof r.rx2AfGainDb === 'number' ? r.rx2AfGainDb : 0,
     txVfo: normalizeTxVfo(r.txVfo),
+    txReceiverIndex:
+      typeof r.txReceiverIndex === 'number' ? r.txReceiverIndex : undefined,
     mode: normalizeMode(r.mode),
     modeB: normalizeMode(r.modeB ?? r.mode),
     filterLowHz: typeof r.filterLowHz === 'number' ? r.filterLowHz : 0,
@@ -2464,6 +2493,18 @@ export function normalizeState(raw: unknown): RadioStateDto {
     cwPitchHz: typeof r.cwPitchHz === 'number' ? r.cwPitchHz : 600,
     // Legacy server without the field → CTUN off (classic recenter-on-click).
     ctunEnabled: typeof r.ctunEnabled === 'boolean' ? r.ctunEnabled : false,
+    // ---- Multi-DDC receivers array (wire v2) ----
+    // A v1 server omits these. Leave them undefined (not []/0) so applyState's
+    // `s.receivers ?? prev.receivers` keeps the store's prior values instead of
+    // collapsing the exposed-receiver control back to RX1. A v2 server projects
+    // RX1/RX2 into [0]/[1] and appends the contiguous extra DDCs, so the array
+    // is authoritative whenever present. (Without this the receivers menu and
+    // the multi-DDC panels never see RX2+.)
+    receivers: Array.isArray(r.receivers)
+      ? (r.receivers as unknown[]).map((entry, i) => normalizeReceiver(entry, i))
+      : undefined,
+    wireVersion: typeof r.wireVersion === 'number' ? r.wireVersion : undefined,
+    maxReceivers: typeof r.maxReceivers === 'number' ? r.maxReceivers : undefined,
   };
 }
 
@@ -5617,6 +5658,43 @@ export function setTxVfo(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ txVfo: txVfo === 'B' ? 1 : 0 }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// Select the transmit target by receiver index (0=RX1, 1=RX2, >=2 extra DDC).
+// Mirrors POST /api/tx/receiver; the server clamps an unexposed index to RX1.
+export function setTxReceiver(
+  index: number,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/receiver',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ index }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// Per-RX audio mute for the hero mixer / VFO panel. Mirrors
+// POST /api/receivers/{index}/mute. index 0=RX1, 1=RX2, >=2 extra DDC.
+export function setReceiverMuted(
+  index: number,
+  muted: boolean,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    `/api/receivers/${index}/mute`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ muted }),
       signal,
     },
     normalizeState,
