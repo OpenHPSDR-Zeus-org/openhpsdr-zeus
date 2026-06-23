@@ -19,16 +19,23 @@ import { AgcSettingsSection } from './AgcSettingsSection';
 import { AdcProtectionSettingsSection } from './AdcProtectionSettingsSection';
 import { BandwidthSettingsSection } from './BandwidthSettingsSection';
 import { DspFilterArchitectureSection } from './DspFilterArchitectureSection';
+import { FilterShapeSettingsSection } from './FilterShapeSettingsSection';
 import { SquelchSettingsSection } from './SquelchSettingsSection';
 import { SignalIntelligenceSettingsSection } from './SignalIntelligenceSettingsSection';
 import { SmartNrSettingsSection } from './SmartNrSettingsSection';
 import { TxLevelingSettingsSection } from './TxLevelingSettingsSection';
+import { useEasterEggStore } from '../state/easter-egg-store';
 
 // Verbose DSP editor. The control strip carries quick controls (AGC dropdown,
 // SQL toggle); this tab is the full editor exposing every wired parameter, and
 // both drive the same store + endpoints so they stay in sync. One ps-card per
 // control family, mirroring Thetis's Setup ▸ DSP layout.
 export function DspSettingsPanel() {
+  // WDSP Filter Architecture (which also exposes the Active RXA/TXA Filter
+  // readouts) is a hidden diagnostics surface, gated behind the same
+  // header-bolt easter egg as the HARDWARE settings folder. Locked by default;
+  // re-locks every launch.
+  const hardwareUnlocked = useEasterEggStore((s) => s.hardwareUnlocked);
   return (
     <div className="ps-shell">
       <div className="ps-card">
@@ -38,12 +45,21 @@ export function DspSettingsPanel() {
         </h4>
         <BandwidthSettingsSection />
       </div>
+      {hardwareUnlocked && (
+        <div className="ps-card">
+          <h4>
+            WDSP Filter Architecture
+            <span className="ps-card-hint">buffers / taps / window / cache</span>
+          </h4>
+          <DspFilterArchitectureSection />
+        </div>
+      )}
       <div className="ps-card">
         <h4>
-          WDSP Filter Architecture
-          <span className="ps-card-hint">buffers / taps / window / cache</span>
+          SSB Filter Shape
+          <span className="ps-card-hint">RX / TX shoulder rectangularity (#871)</span>
         </h4>
-        <DspFilterArchitectureSection />
+        <FilterShapeSettingsSection />
       </div>
       <div className="ps-card">
         <h4>

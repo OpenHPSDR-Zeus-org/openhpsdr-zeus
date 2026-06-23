@@ -1303,6 +1303,26 @@ public static class ZeusEndpoints
             return r.SetTxFilter(req.LowHz, req.HighHz);
         });
 
+        // SSB bandpass "rectangularity" — issue #871. RX and TX are independent
+        // selectors; each pushes the chosen WDSP fir.c window code (0 = soft /
+        // Blackman-Harris 4-term, 1 = sharp / BH 7-term) into the live engine and
+        // persists to DspSettingsStore.
+        app.MapPost("/api/rx/filter-window", (BandpassWindowSetRequest req, RadioService r) =>
+        {
+            if (!Enum.IsDefined(req.Window))
+                return Results.BadRequest(new { error = $"unknown BandpassWindow {req.Window}" });
+            log.LogInformation("api.rx.filterWindow window={Window}", req.Window);
+            return Results.Ok(r.SetRxBandpassWindow(req.Window));
+        });
+
+        app.MapPost("/api/tx/filter-window", (BandpassWindowSetRequest req, RadioService r) =>
+        {
+            if (!Enum.IsDefined(req.Window))
+                return Results.BadRequest(new { error = $"unknown BandpassWindow {req.Window}" });
+            log.LogInformation("api.tx.filterWindow window={Window}", req.Window);
+            return Results.Ok(r.SetTxBandpassWindow(req.Window));
+        });
+
         // Filter preset endpoints (PRD §5.2). These are the preferred filter surface;
         // /api/bandwidth remains for backward compat. POST /api/filter also accepts
         // an optional PresetName to track which chip is active.

@@ -204,6 +204,8 @@ public sealed class SyntheticDspEngine : IDspEngine
     // the same buffering shape.
     public void SetTxMode(RxMode mode) { }
     public void SetTxFilter(int lowHz, int highHz) { }
+    public void SetRxBandpassWindow(int channelId, BandpassWindow window) { }
+    public void SetTxBandpassWindow(BandpassWindow window) { }
     public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved) => 0;
     public int TxBlockSamples => 1024;
     public int TxOutputSamples => 1024;

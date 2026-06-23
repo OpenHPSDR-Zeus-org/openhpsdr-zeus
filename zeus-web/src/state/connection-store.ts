@@ -51,6 +51,7 @@ import {
   SQUELCH_CONFIG_DEFAULT,
   TX_LEVELING_CONFIG_DEFAULT,
   type AgcConfigDto,
+  type BandpassWindow,
   type ConnectionStatus,
   type NrConfigDto,
   type RadioStateDto,
@@ -98,6 +99,9 @@ export type ConnectionState = {
   filterAdvancedPaneOpen: boolean;
   txFilterLowHz: number;
   txFilterHighHz: number;
+  // SSB bandpass "rectangularity" (#871). Independent RX/TX selectors.
+  rxFilterWindow: BandpassWindow;
+  txFilterWindow: BandpassWindow;
   sampleRate: number;
   agcTopDb: number;
   agc: AgcConfigDto;
@@ -198,6 +202,8 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   filterAdvancedPaneOpen: false,
   txFilterLowHz: 150,
   txFilterHighHz: 2850,
+  rxFilterWindow: 'Normal',
+  txFilterWindow: 'Normal',
   sampleRate: 192_000,
   agcTopDb: 45,
   agc: { ...AGC_CONFIG_DEFAULT },
@@ -259,6 +265,8 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
         filterAdvancedPaneOpen: s.filterAdvancedPaneOpen,
         txFilterLowHz: s.txFilterLowHz,
         txFilterHighHz: s.txFilterHighHz,
+        rxFilterWindow: s.rxFilterWindow,
+        txFilterWindow: s.txFilterWindow,
         sampleRate: s.sampleRate,
         agcTopDb: s.agcTopDb,
         agc: s.agc,

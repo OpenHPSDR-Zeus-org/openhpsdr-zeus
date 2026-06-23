@@ -74,6 +74,13 @@ export type TxVfo = 'A' | 'B';
 export type NrMode = 'Off' | 'Anr' | 'Emnr' | 'Sbnr';
 export type NbMode = 'Off' | 'Nb1' | 'Nb2';
 
+// SSB bandpass "rectangularity" (issue #871). 'Soft' = WDSP fir.c
+// Blackman-Harris 4-term (gentler shoulder, Yaesu-like); 'Sharp' = BH 7-term
+// (steeper shoulder, Icom-like). RX and TX selectors are independent. Match
+// the Zeus.Contracts.BandpassWindow enum (server serialises as the string
+// name via JsonStringEnumConverter).
+export type BandpassWindow = 'Soft' | 'Normal' | 'Sharp';
+
 // RXA AGC mode. PascalCase strings match the server's JsonStringEnumConverter
 // (AgcMode enum). Custom unlocks the per-param controls; Fixed unlocks the
 // fixed-gain field. Med is the Thetis (and Zeus) default.
@@ -242,6 +249,7 @@ export type AdcProtectionConfigDto = {
   maxOffsetDb: number;
   warningThreshold: number;
   magnitudeSoftLimit: number;
+  releaseHoldMs: number;
 };
 
 export const ADC_PROTECTION_CONFIG_DEFAULT: AdcProtectionConfigDto = {
@@ -253,6 +261,7 @@ export const ADC_PROTECTION_CONFIG_DEFAULT: AdcProtectionConfigDto = {
   maxOffsetDb: 31,
   warningThreshold: 3,
   magnitudeSoftLimit: 0,
+  releaseHoldMs: 2000,
 };
 
 export type AdcProtectionStatusDto = {
@@ -299,6 +308,10 @@ export type RadioStateDto = {
   // TX bandpass (signed, per-sideband). Per-mode family memory on the server.
   txFilterLowHz: number;
   txFilterHighHz: number;
+  // SSB bandpass "rectangularity" — operator-selectable WDSP FIR window
+  // (issue #871). RX and TX are independent.
+  rxFilterWindow: BandpassWindow;
+  txFilterWindow: BandpassWindow;
   sampleRate: number;
   agcTopDb: number;
   // AGC mode + custom/fixed params (separate from agcTopDb max-gain).
@@ -2042,8 +2055,15 @@ export function normalizeStatus(v: unknown): ConnectionStatus {
 
 function modeFromWire(v: unknown): RxMode | null {
   if (typeof v === 'string') {
-    return (MODE_ORDER as readonly string[]).includes(v)
-      ? (v as RxMode)
+    // The server serialises RxMode by its C# enum NAME. Every name is all-caps
+    // (USB, CWL, …) EXCEPT FreeDv (PascalCase), while our RxMode literals are
+    // all-caps ('FREEDV'). Match case-insensitively so "FreeDv" resolves to
+    // 'FREEDV' instead of falling through to the 'USB' default in normalizeMode
+    // — that miss is what made FreeDV mode silently revert to USB on the next
+    // state round-trip.
+    const upper = v.toUpperCase();
+    return (MODE_ORDER as readonly string[]).includes(upper)
+      ? (upper as RxMode)
       : null;
   }
   if (typeof v === 'number' && Number.isInteger(v)) {
@@ -2277,6 +2297,10 @@ function normalizeAdcProtectionConfig(raw: unknown): AdcProtectionConfigDto {
       typeof r.magnitudeSoftLimit === 'number'
         ? r.magnitudeSoftLimit
         : ADC_PROTECTION_CONFIG_DEFAULT.magnitudeSoftLimit,
+    releaseHoldMs:
+      typeof r.releaseHoldMs === 'number'
+        ? r.releaseHoldMs
+        : ADC_PROTECTION_CONFIG_DEFAULT.releaseHoldMs,
   };
 }
 
@@ -2372,6 +2396,13 @@ export function normalizeState(raw: unknown): RadioStateDto {
     filterAdvancedPaneOpen: typeof r.filterAdvancedPaneOpen === 'boolean' ? r.filterAdvancedPaneOpen : false,
     txFilterLowHz: typeof r.txFilterLowHz === 'number' ? r.txFilterLowHz : 150,
     txFilterHighHz: typeof r.txFilterHighHz === 'number' ? r.txFilterHighHz : 2850,
+    // Normal = today's default tap count; older servers without the field
+    // hydrate to Normal so first-connect behaviour is unchanged (#871). Any
+    // unrecognised value also falls back to Normal.
+    rxFilterWindow:
+      r.rxFilterWindow === 'Soft' || r.rxFilterWindow === 'Sharp' ? r.rxFilterWindow : 'Normal',
+    txFilterWindow:
+      r.txFilterWindow === 'Soft' || r.txFilterWindow === 'Sharp' ? r.txFilterWindow : 'Normal',
     sampleRate: typeof r.sampleRate === 'number' ? r.sampleRate : 0,
     // Default 80 matches WdspDspEngine.ApplyAgcDefaults and the Thetis
     // AGC_MEDIUM preset. Missing from older servers — tolerate absence.
@@ -5739,6 +5770,41 @@ export function setTxFilter(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ lowHz, highHz }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// SSB bandpass "rectangularity" — issue #871. Independent RX and TX
+// selectors push the chosen WDSP fir.c window (Soft / Sharp) to the live
+// engine and persist server-side.
+export function setRxFilterWindow(
+  window: BandpassWindow,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/rx/filter-window',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ window }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+export function setTxFilterWindow(
+  window: BandpassWindow,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/filter-window',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ window }),
       signal,
     },
     normalizeState,

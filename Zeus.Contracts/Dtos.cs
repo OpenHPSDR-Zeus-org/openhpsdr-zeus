@@ -66,6 +66,20 @@ public enum RxMode : byte
 // for this hardware, so Zeus exposes a two-way selector.
 public enum PsFeedbackSource : byte { Internal = 0, External = 1 }
 
+// SSB bandpass filter "rectangularity" selector (issue #871). Maps directly
+// to the WDSP fir.c window switch — Soft = Blackman-Harris 4-term (gentler
+// shoulder, Yaesu-like), Sharp = Blackman-Harris 7-term (steeper, Icom-like).
+// Sharp is the current hardcoded WDSP default; an operator who never touches
+// the selector hears no change. RX and TX carry independent values.
+// SSB bandpass shoulder-steepness presets (issue #871). Drives the WDSP FIR
+// tap count (nc): Soft = fewest taps (widest transition, Yaesu-like flat
+// shoulder), Normal = today's default nc (no first-connect drift), Sharp =
+// most taps (narrowest transition, Icom-like rectangular shoulder). The byte
+// values are load-bearing: persisted DspSettingsStore rows hold the byte, and
+// pre-#871 rows stored the old two-value "Sharp" as 1 — which now deserialises
+// to Normal (== today's behaviour), so legacy prefs are unchanged. Append-only.
+public enum BandpassWindow : byte { Soft = 0, Normal = 1, Sharp = 2 }
+
 public enum ConnectionStatus { Disconnected, Connecting, Connected, Error }
 
 // Thetis NR-button state: Off = no NR, Anr = NR1 (time-domain LMS),
@@ -960,6 +974,14 @@ public sealed record StateDto(
     // Default 150/2850 matches Thetis's stock SSB TX bandpass.
     int TxFilterLowHz = 150,
     int TxFilterHighHz = 2850,
+    // SSB bandpass "rectangularity" — operator-selectable WDSP fir.c window
+    // (issue #871). Sharp = BH 7-term (current WDSP default; steeper shoulder),
+    // Soft = BH 4-term (gentler shoulder). RX and TX are independent so the
+    // operator can mix sharp-receive with soft-transmit for ESSB containment,
+    // or vice versa. Default Sharp on both sides preserves byte-identical
+    // pre-#871 audio. Persisted in DspSettingsStore.
+    BandpassWindow RxFilterWindow = BandpassWindow.Sharp,
+    BandpassWindow TxFilterWindow = BandpassWindow.Sharp,
     // Master RX AF gain in dB. 0 dB ≡ WDSP SetRXAPanelGain1(1.0), the
     // engine's open-time default — a fresh session that never touches this
     // field is audibly identical to pre-#77 builds. Operator slider range
@@ -1570,6 +1592,11 @@ public sealed record SquelchSetRequest(SquelchConfig Squelch);
 // (/api/tx/leveler-max-gain) is untouched.
 public sealed record TxLevelingSetRequest(TxLevelingConfig TxLeveling);
 
+// SSB bandpass "rectangularity" set request — issue #871. Single-field shape:
+// the client posts the chosen window for the relevant side (RX or TX) and the
+// server pushes the corresponding WDSP fir.c window code into the live engine.
+public sealed record BandpassWindowSetRequest(BandpassWindow Window);
+
 // Per-popover save requests for the NR right-click panels. Nullable shape so
 // the popover can PATCH a single field without disturbing siblings (the server
 // merges on top of the persisted NrConfig and re-applies the engine state).
@@ -1613,10 +1640,12 @@ public sealed record AutoAttSetRequest(bool Enabled);
 // RX ADC protection policy. This is the operator-facing superset of the
 // legacy Auto-ATT toggle: existing /api/auto-att still maps to Enabled, while
 // /api/rx/adc-protection exposes the ramp timing, step size, maximum automatic
-// offset, warning threshold, and optional Protocol-2 max-magnitude soft limit.
-// Defaults preserve the original Thetis-style loop: 100 ms windows, 1 dB
-// attack/release steps, 31 dB maximum offset, warning when overload level > 3,
-// and no magnitude-only attack unless the operator explicitly sets a limit.
+// offset, warning threshold, release hold-off, and optional Protocol-2
+// max-magnitude soft limit. Defaults mirror Thetis' handleOverload loop:
+// 100 ms windows, 1 dB attack/release steps, 31 dB maximum offset, attenuation
+// and the warning lamp both gated on a sustained overload (level > 3), a 2 s
+// hold before the offset unwinds (Thetis' nudAutoAttHold), and no
+// magnitude-only attack unless the operator explicitly sets a limit.
 public sealed record AdcProtectionConfig(
     bool Enabled = true,
     int AttackMs = 100,
@@ -1625,7 +1654,8 @@ public sealed record AdcProtectionConfig(
     int ReleaseStepDb = 1,
     int MaxOffsetDb = 31,
     int WarningThreshold = 3,
-    int MagnitudeSoftLimit = 0);
+    int MagnitudeSoftLimit = 0,
+    int ReleaseHoldMs = 2000);
 
 public sealed record AdcProtectionSetRequest(
     bool? Enabled = null,
@@ -1635,7 +1665,8 @@ public sealed record AdcProtectionSetRequest(
     int? ReleaseStepDb = null,
     int? MaxOffsetDb = null,
     int? WarningThreshold = null,
-    int? MagnitudeSoftLimit = null);
+    int? MagnitudeSoftLimit = null,
+    int? ReleaseHoldMs = null);
 
 public sealed record AdcProtectionStatusDto(
     AdcProtectionConfig Config,

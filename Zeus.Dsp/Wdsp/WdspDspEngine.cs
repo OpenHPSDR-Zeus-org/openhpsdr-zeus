@@ -2190,6 +2190,64 @@ public sealed class WdspDspEngine : IDspEngine
         _log.LogInformation("wdsp.setTxFilter low={Low} high={High}", lowHz, highHz);
     }
 
+    // SSB filter rectangularity (issue #871). The audible shoulder/skirt
+    // steepness of the SSB bandpass is governed by the FIR *tap count* (nc),
+    // NOT by the fir.c window family (Blackman-Harris 4- vs 7-term, which differ
+    // only ~90 dB down in the stopband — inaudible on voice; that was the
+    // original #883 mechanism and the operator heard no change). More taps =>
+    // narrower transition => harder/rectangular shoulder (Icom-like); fewer
+    // taps => wider transition => rounder/flat shoulder (Yaesu-like). This is
+    // exactly Thetis's "Filter Size" lever. The window family stays at WDSP's
+    // open-time BH-7 default for best stopband. SetRX/TXABandpassNC rebuild the
+    // FIR impulse in-place inside csDSP, so it is safe during live audio.
+    //
+    // The preset -> nc map (resolved against the channel's WDSP block 'size'):
+    //   Soft   -> size            (legal floor; widest transition)
+    //   Normal -> max(2048, size) (== the WDSP create_bandpass open value, so a
+    //                              fresh/default session is byte-identical to
+    //                              pre-#871 RF — no default drift)
+    //   Sharp  -> 2 * Normal      (narrowest transition, ~Thetis 4096 default)
+    // nc is clamped to WDSP's legality rule: nc >= size and an integer multiple
+    // of size (bandpass.c NOTE; firmin nfor = nc/size).
+    internal static int ResolveBandpassNc(BandpassWindow shape, int size)
+    {
+        int openNc = Math.Max(2048, size);
+        int nc = shape switch
+        {
+            BandpassWindow.Soft => size,
+            BandpassWindow.Normal => openNc,
+            BandpassWindow.Sharp => openNc * 2,
+            _ => openNc,
+        };
+        if (nc < size) nc = size;
+        if (nc % size != 0) nc = (nc / size) * size;
+        if (nc < size) nc = size;
+        return nc;
+    }
+
+    public void SetRxBandpassWindow(int channelId, BandpassWindow window)
+    {
+        if (_disposed != 0) return;
+        if (!_channels.TryGetValue(channelId, out _)) return;
+        int nc = ResolveBandpassNc(window, RxaDspSize);
+        NativeMethods.SetRXABandpassNC(channelId, nc);
+        _log.LogInformation("wdsp.setRxBandpassShape ch={Ch} shape={Win} nc={Nc} size={Size}",
+            channelId, window, nc, RxaDspSize);
+    }
+
+    public void SetTxBandpassWindow(BandpassWindow window)
+    {
+        if (_disposed != 0) return;
+        lock (_txaLock)
+        {
+            if (_txaChannelId is not int txa) return;
+            int nc = ResolveBandpassNc(window, _txaDspSize);
+            NativeMethods.SetTXABandpassNC(txa, nc);
+            _log.LogInformation("wdsp.setTxBandpassShape txa={Txa} shape={Win} nc={Nc} size={Size}",
+                txa, window, nc, _txaDspSize);
+        }
+    }
+
     /// <summary>Operator-facing TX-monitor toggle. When true, the engine opens
     /// (or reuses) a private RXA channel and feeds it the post-CFIR/RSMPOUT TX
     /// IQ produced inside <see cref="ProcessTxBlock"/>; the demodulated mono
