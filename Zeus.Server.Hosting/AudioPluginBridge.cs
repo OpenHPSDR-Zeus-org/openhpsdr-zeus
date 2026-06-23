@@ -103,6 +103,44 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     private volatile float _rxInPeak;
     private volatile float _rxOutPeak;
 
+    // ── VST-engine TX-audio liveness sampler (diagnostics only) ──────────────
+    // Off-realtime timer that watches for the one engine failure the seq-based
+    // health model is blind to: the engine stays alive AND responsive
+    // (outSeq==inSeq promptly, so DegradedBlocks never climbs and the process
+    // never exits) yet returns dead samples (silence / NaN sanitized to silence)
+    // after sustained TX. The supervisor can't see it, so the operator transmits
+    // silence until a manual profile change forces a fresh load_chain. This timer
+    // never touches the realtime path — it only reads volatile peak fields and the
+    // controller's diagnostic counters off a threadpool thread. See zeus-umt6.
+    private System.Threading.Timer? _livenessTimer;
+    private long _lastEngineDegraded;
+    private int _deadOutputStreak;
+    private int _livenessHeartbeat;
+    private const int LivenessIntervalMs = 2000;
+    // Input clearly above the noise floor (~-40 dBFS) but output effectively
+    // silent (~-80 dBFS) — the dead-output signature.
+    private const float LivenessInPresentPeak = 0.01f;
+    private const float LivenessOutSilentPeak = 1e-4f;
+    // Require the signature to persist before warning, so a brief speech gap or a
+    // MOX edge can't false-trip it (~6 s at the 2 s interval).
+    private const int LivenessWarnAfterTicks = 3;
+    // Re-log cadence (heartbeat when healthy, repeat-warn when wedged): ~10 s.
+    private const int LivenessHeartbeatTicks = 5;
+
+    // ── VST-engine TX auto-recovery escalation (Phase 2, zeus-umt6) ──────────
+    // Once the dead-output signature is confirmed, self-heal instead of waiting for
+    // a manual profile change: Tier-1 re-pushes the chain into the live engine
+    // (re-instantiates plugins — the manual-profile-change fix); if it's STILL dead
+    // a grace window later, Tier-2 recycles the engine process. At most one of each
+    // per episode; both reset when output recovers (or TX/engine drops). Default on
+    // — the operator chose auto-recovery; the off-switch is for tests/diagnostics.
+    internal bool AutoRecoverTxDeadOutput { get; set; } = true;
+    private bool _reloadAttempted;
+    private bool _recycleAttempted;
+    // Ticks AFTER the warn point to let a Tier-1 reload take hold before escalating
+    // to a Tier-2 recycle (~6 s at the 2 s interval).
+    private const int LivenessEscalateAfterTicks = 3;
+
     public AudioPluginBridge(
         PluginManager manager,
         DspPipelineService pipeline,
@@ -317,12 +355,25 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         // Install the handler on whatever engine is currently live.
         if (_pipeline.CurrentEngine is { } engine) AttachToEngine(engine);
 
+        // Arm the VST-engine TX-audio liveness sampler (diagnostics only). Harmless
+        // when VST mode is never selected — the tick short-circuits unless the
+        // out-of-process engine is active and MOX is on.
+        if (_vstEngine is not null)
+        {
+            _lastEngineDegraded = _vstEngine.DegradedBlocks;
+            _livenessTimer = new System.Threading.Timer(
+                _ => LivenessTick(), null, LivenessIntervalMs, LivenessIntervalMs);
+        }
+
         _log.LogInformation("AudioPluginBridge online.");
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken ct)
     {
+        _livenessTimer?.Dispose();
+        _livenessTimer = null;
+
         _manager.PluginActivated   -= OnPluginActivated;
         _manager.PluginDeactivated -= OnPluginDeactivated;
         _pipeline.EngineChanged    -= OnEngineChanged;
@@ -475,6 +526,124 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     {
         _engineInPeak = BlockPeak(input);
         _engineOutPeak = BlockPeak(output);
+    }
+
+    /// <summary>
+    /// Off-realtime diagnostic tick (threadpool, ~2 s). Watches the VST-engine TX
+    /// path for the "alive but output dead" wedge that the supervisor's seq/exit
+    /// health model can't detect, and leaves a trail in the log. NEVER touches the
+    /// realtime path — reads only the volatile meter fields and the controller's
+    /// diagnostic counters. Behaviour-neutral: logs only. See zeus-umt6.
+    /// </summary>
+    private void LivenessTick()
+    {
+        try
+        {
+            var vst = _vstEngine;
+            // Only meaningful while the out-of-process engine is the live TX route
+            // AND we're actually transmitting (the engine meters are only fed during
+            // MOX / monitor). Otherwise reset state and rebase the degraded counter.
+            if (vst is not { IsActive: true } || !_isMoxOn())
+            {
+                _deadOutputStreak = 0;
+                _livenessHeartbeat = 0;
+                _reloadAttempted = false;
+                _recycleAttempted = false;
+                _lastEngineDegraded = vst?.DegradedBlocks ?? _lastEngineDegraded;
+                return;
+            }
+
+            float inPeak = _engineInPeak;
+            float outPeak = _engineOutPeak;
+            long degraded = vst.DegradedBlocks;
+            long degradedDelta = degraded - _lastEngineDegraded;
+            _lastEngineDegraded = degraded;
+            uint engineState = vst.EngineState;
+            uint engineFlags = vst.EngineFlags;
+
+            // The wedge signature: clear input energy, effectively-silent output,
+            // and NOT a transport degrade (degradedDelta==0 means the engine IS
+            // answering — so this is bad audio, not a hang the watchdog would catch).
+            bool deadOutput = inPeak >= LivenessInPresentPeak
+                              && outPeak <= LivenessOutSilentPeak
+                              && degradedDelta == 0;
+
+            if (deadOutput)
+            {
+                _deadOutputStreak++;
+
+                // Tier-1: at the warn point, re-push the chain into the LIVE engine
+                // (re-instantiate plugins) — the same fix a manual profile change
+                // performs. One attempt per episode.
+                if (_deadOutputStreak == LivenessWarnAfterTicks)
+                {
+                    _log.LogWarning(
+                        "VST engine TX output is DEAD while input is present for ~{Sec}s " +
+                        "(in={In:F4} out={Out:F4} degradedΔ={Delta} engineState={State} flags=0x{Flags:X2}). " +
+                        "Engine is responsive (no degraded blocks) but returning silence — the " +
+                        "post-long-TX wedge (zeus-umt6).",
+                        _deadOutputStreak * (LivenessIntervalMs / 1000),
+                        inPeak, outPeak, degradedDelta, engineState, engineFlags);
+
+                    if (AutoRecoverTxDeadOutput && !_reloadAttempted)
+                    {
+                        _reloadAttempted = true;
+                        _log.LogWarning(
+                            "VST TX auto-recovery (Tier 1): reloading the engine chain in place (zeus-umt6).");
+                        vst.RequestChainReload(
+                            "TX output dead while input present; reloading chain in place (zeus-umt6).");
+                    }
+                    return;
+                }
+
+                // Tier-2: still dead a grace window after the reload — recycle the
+                // engine process. One attempt per episode; the relaunch path's
+                // crash-loop cap prevents thrashing on a genuinely broken plugin.
+                if (_deadOutputStreak == LivenessWarnAfterTicks + LivenessEscalateAfterTicks
+                    && AutoRecoverTxDeadOutput && _reloadAttempted && !_recycleAttempted)
+                {
+                    _recycleAttempted = true;
+                    _log.LogWarning(
+                        "VST TX auto-recovery (Tier 2): chain reload did not clear the dead output after " +
+                        "~{Sec}s; recycling the engine process (zeus-umt6).",
+                        _deadOutputStreak * (LivenessIntervalMs / 1000));
+                    vst.ForceRecycle("TX output still dead after chain reload; recycling engine (zeus-umt6).");
+                    return;
+                }
+
+                // Beyond escalation: periodic repeat-warn while still wedged (covers
+                // the case where auto-recovery is off or a broken plugin can't heal).
+                if (_deadOutputStreak > LivenessWarnAfterTicks
+                    && (_deadOutputStreak - LivenessWarnAfterTicks) % LivenessHeartbeatTicks == 0)
+                {
+                    _log.LogWarning(
+                        "VST engine TX output still dead (~{Sec}s): in={In:F4} out={Out:F4} " +
+                        "degradedΔ={Delta} engineState={State} flags=0x{Flags:X2}.",
+                        _deadOutputStreak * (LivenessIntervalMs / 1000),
+                        inPeak, outPeak, degradedDelta, engineState, engineFlags);
+                }
+                return;
+            }
+
+            if (_deadOutputStreak >= LivenessWarnAfterTicks)
+                _log.LogInformation(
+                    "VST engine TX output recovered (in={In:F4} out={Out:F4}).", inPeak, outPeak);
+            _deadOutputStreak = 0;
+            _reloadAttempted = false;
+            _recycleAttempted = false;
+
+            // Periodic healthy heartbeat so the log captures the baseline IN/OUT
+            // levels leading up to any future wedge.
+            if (++_livenessHeartbeat >= LivenessHeartbeatTicks)
+            {
+                _livenessHeartbeat = 0;
+                _log.LogInformation(
+                    "VST TX liveness: in={In:F4} out={Out:F4} degradedΔ={Delta} " +
+                    "engineState={State} flags=0x{Flags:X2}.",
+                    inPeak, outPeak, degradedDelta, engineState, engineFlags);
+            }
+        }
+        catch { /* diagnostics must never throw on the timer thread */ }
     }
 
     /// <summary>Instantaneous block abs-peak — mirrors AudioChain.BlockPeak so the
