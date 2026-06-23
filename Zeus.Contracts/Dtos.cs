@@ -1516,10 +1516,12 @@ public sealed record AutoAttSetRequest(bool Enabled);
 // RX ADC protection policy. This is the operator-facing superset of the
 // legacy Auto-ATT toggle: existing /api/auto-att still maps to Enabled, while
 // /api/rx/adc-protection exposes the ramp timing, step size, maximum automatic
-// offset, warning threshold, and optional Protocol-2 max-magnitude soft limit.
-// Defaults preserve the original Thetis-style loop: 100 ms windows, 1 dB
-// attack/release steps, 31 dB maximum offset, warning when overload level > 3,
-// and no magnitude-only attack unless the operator explicitly sets a limit.
+// offset, warning threshold, release hold-off, and optional Protocol-2
+// max-magnitude soft limit. Defaults mirror Thetis' handleOverload loop:
+// 100 ms windows, 1 dB attack/release steps, 31 dB maximum offset, attenuation
+// and the warning lamp both gated on a sustained overload (level > 3), a 2 s
+// hold before the offset unwinds (Thetis' nudAutoAttHold), and no
+// magnitude-only attack unless the operator explicitly sets a limit.
 public sealed record AdcProtectionConfig(
     bool Enabled = true,
     int AttackMs = 100,
@@ -1528,7 +1530,8 @@ public sealed record AdcProtectionConfig(
     int ReleaseStepDb = 1,
     int MaxOffsetDb = 31,
     int WarningThreshold = 3,
-    int MagnitudeSoftLimit = 0);
+    int MagnitudeSoftLimit = 0,
+    int ReleaseHoldMs = 2000);
 
 public sealed record AdcProtectionSetRequest(
     bool? Enabled = null,
@@ -1538,7 +1541,8 @@ public sealed record AdcProtectionSetRequest(
     int? ReleaseStepDb = null,
     int? MaxOffsetDb = null,
     int? WarningThreshold = null,
-    int? MagnitudeSoftLimit = null);
+    int? MagnitudeSoftLimit = null,
+    int? ReleaseHoldMs = null);
 
 public sealed record AdcProtectionStatusDto(
     AdcProtectionConfig Config,

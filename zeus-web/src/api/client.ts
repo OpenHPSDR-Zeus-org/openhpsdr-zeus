@@ -242,6 +242,7 @@ export type AdcProtectionConfigDto = {
   maxOffsetDb: number;
   warningThreshold: number;
   magnitudeSoftLimit: number;
+  releaseHoldMs: number;
 };
 
 export const ADC_PROTECTION_CONFIG_DEFAULT: AdcProtectionConfigDto = {
@@ -253,6 +254,7 @@ export const ADC_PROTECTION_CONFIG_DEFAULT: AdcProtectionConfigDto = {
   maxOffsetDb: 31,
   warningThreshold: 3,
   magnitudeSoftLimit: 0,
+  releaseHoldMs: 2000,
 };
 
 export type AdcProtectionStatusDto = {
@@ -2278,6 +2280,10 @@ function normalizeAdcProtectionConfig(raw: unknown): AdcProtectionConfigDto {
       typeof r.magnitudeSoftLimit === 'number'
         ? r.magnitudeSoftLimit
         : ADC_PROTECTION_CONFIG_DEFAULT.magnitudeSoftLimit,
+    releaseHoldMs:
+      typeof r.releaseHoldMs === 'number'
+        ? r.releaseHoldMs
+        : ADC_PROTECTION_CONFIG_DEFAULT.releaseHoldMs,
   };
 }
 

@@ -49,6 +49,19 @@ interface RoomMeta {
 const MSG_RATE_LIMIT = 6;
 const RL_WINDOW_MS = 5000;
 
+/**
+ * While operators are connected, rebuild + rebroadcast the roster this often as a
+ * safety net. A freq-strip bug (a hibernation race that broadcasts an unloaded
+ * friend graph, or a stale socket that briefly shadows a live one) used to leave
+ * a friend's frequency dead for everyone until that operator's backend happened
+ * to reconnect — reopening the panel never helped, because the relay kept sending
+ * the same stripped roster. Periodically rebuilding the roster from current
+ * attachments + the loaded graph bounds any such regression to one interval
+ * instead of "dead until reconnect". Only armed while sockets are live, so an
+ * empty room still hibernates.
+ */
+const ROSTER_HEAL_INTERVAL_MS = 120_000;
+
 function norm(callsign: string): string {
   return callsign.trim().toUpperCase();
 }
@@ -263,17 +276,36 @@ export class ChatRoom extends DurableObject<Env> {
     this.broadcastRoster();
   }
 
-  /** Scheduled retention sweep: public room hourly, private rooms/DMs daily. */
+  /**
+   * Scheduled tick: a self-healing roster rebroadcast while operators are
+   * connected, plus the retention sweep (public room hourly, private rooms/DMs
+   * daily). The heal cadence fires this far more often than PRUNE_INTERVAL_MS,
+   * so the actual prune is gated on a persisted timestamp.
+   */
   override async alarm(): Promise<void> {
+    await this.ensureLoaded();
     const now = Date.now();
-    const all = await this.ctx.storage.list<Msg>({ prefix: 'm:' });
-    const dead: string[] = [];
-    for (const [key, m] of all) {
-      const cutoff = m.room === PUBLIC_ROOM ? PUBLIC_RETENTION_MS : PRIVATE_RETENTION_MS;
-      if (now - m.ts > cutoff) dead.push(key);
+
+    const lastPrune = (await this.ctx.storage.get<number>('lastPrune')) ?? 0;
+    if (now - lastPrune >= PRUNE_INTERVAL_MS) {
+      const all = await this.ctx.storage.list<Msg>({ prefix: 'm:' });
+      const dead: string[] = [];
+      for (const [key, m] of all) {
+        const cutoff = m.room === PUBLIC_ROOM ? PUBLIC_RETENTION_MS : PRIVATE_RETENTION_MS;
+        if (now - m.ts > cutoff) dead.push(key);
+      }
+      if (dead.length) await this.ctx.storage.delete(dead);
+      await this.ctx.storage.put('lastPrune', now);
     }
-    if (dead.length) await this.ctx.storage.delete(dead);
-    await this.ctx.storage.setAlarm(now + PRUNE_INTERVAL_MS);
+
+    // Self-heal: rebuild every connected operator's roster from current
+    // attachments + the loaded friend graph, so a transient freq-strip cannot
+    // outlive one interval. Skipped (and the fast cadence stood down) when no one
+    // is connected, letting the DO hibernate.
+    const connected = this.ctx.getWebSockets().length > 0;
+    if (connected) this.broadcastRoster();
+
+    await this.ctx.storage.setAlarm(now + (connected ? ROSTER_HEAL_INTERVAL_MS : PRUNE_INTERVAL_MS));
   }
 
   // --- persistence load ------------------------------------------------------
@@ -309,8 +341,11 @@ export class ChatRoom extends DurableObject<Env> {
     const bans = await this.ctx.storage.list<number>({ prefix: 'ban:' });
     for (const key of bans.keys()) this.bans.add(key.slice(4));
 
+    // Arm the self-heal/prune tick. ensureLoaded() only runs when an event woke
+    // the DO (a socket is live), so schedule the fast heal cadence; alarm() steps
+    // back down to the slow prune cadence once the room empties.
     if ((await this.ctx.storage.getAlarm()) === null) {
-      await this.ctx.storage.setAlarm(Date.now() + PRUNE_INTERVAL_MS);
+      await this.ctx.storage.setAlarm(Date.now() + ROSTER_HEAL_INTERVAL_MS);
     }
     this.loaded = true;
   }
@@ -613,7 +648,8 @@ export class ChatRoom extends DurableObject<Env> {
     const out: Operator[] = [];
     for (const att of best.values()) {
       const canSeeFreq =
-        att.callsign === viewer || (att.freqPublic !== false && (fset?.has(att.callsign) ?? false));
+        att.callsign === viewer ||
+        (att.freqPublic !== false && (fset?.has(att.callsign) ?? false));
       out.push(toOperator(att, canSeeFreq));
     }
     out.sort((a, b) => a.callsign.localeCompare(b.callsign));
