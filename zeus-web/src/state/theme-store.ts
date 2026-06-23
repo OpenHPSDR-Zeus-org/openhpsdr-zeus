@@ -37,31 +37,7 @@ export type ThemeId = 'dark' | 'light';
 //     the panel renders them in a separate group with a warning that they
 //     can break contrast if pushed too far from the theme defaults.
 // Add a token here + a label in TOKEN_META if you want a new picker row.
-export type TweakableToken =
-  // Accent group
-  | '--accent'
-  | '--accent-bright'
-  | '--tx'
-  | '--power'
-  | '--amber'
-  | '--cyan'
-  | '--ok'
-  | '--orange'
-  // Surface group — chassis
-  | '--bg-0'
-  | '--bg-1'
-  | '--bg-2'
-  | '--bg-3'
-  // Surface group — line / edge
-  | '--line'
-  | '--line-soft'
-  | '--line-strong'
-  // Surface group — text
-  | '--fg-0'
-  | '--fg-1'
-  | '--fg-2';
-
-export const TWEAKABLE_TOKENS: ReadonlyArray<TweakableToken> = [
+export const TWEAKABLE_TOKENS = [
   '--accent',
   '--accent-bright',
   '--tx',
@@ -80,7 +56,9 @@ export const TWEAKABLE_TOKENS: ReadonlyArray<TweakableToken> = [
   '--fg-0',
   '--fg-1',
   '--fg-2',
-];
+] as const;
+
+export type TweakableToken = (typeof TWEAKABLE_TOKENS)[number];
 
 type ThemeState = {
   theme: ThemeId;

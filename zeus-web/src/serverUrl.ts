@@ -98,14 +98,6 @@ export function isCapacitorRuntime(): boolean {
   return false;
 }
 
-/** Apply the configured base to a request path. Passes absolute URLs through. */
-export function apiUrl(path: string): string {
-  if (/^[a-z][a-z0-9+.-]*:/i.test(path)) return path; // already absolute
-  const base = getServerBaseUrl();
-  if (!base) return path;
-  return base + (path.startsWith('/') ? path : '/' + path);
-}
-
 /**
  * Build a ws://host/path or wss://host/path URL using the configured
  * server, falling back to window.location when no base is set.

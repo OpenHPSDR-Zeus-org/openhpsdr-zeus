@@ -6,8 +6,9 @@
 // This file is part of the configurable Meters Panel feature. The catalog
 // here is the SINGLE source of truth for "what meter readings exist": both
 // the Library drawer (operator-facing list of available meters) and the
-// runtime selector hook (`useMeterReading`) read from it. Adding a new
-// reading is one row in METER_CATALOG plus one branch in `useMeterReading`.
+// runtime sampler (`sampleByMeterId` / `useBallisticReadingById`) read from
+// it. Adding a new reading is one row in METER_CATALOG plus one branch in the
+// sampler switch.
 //
 // Color discipline (CLAUDE.md, plan §4.6): the only raw hex permitted is
 // amber #FFA028, and only for RX signal-strength bar fills + peak-hold

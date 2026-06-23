@@ -342,7 +342,7 @@ function WorkspaceCanvas({
       { x: number; y: number; w: number; h: number }
     >();
     for (const t of tiles) {
-      const def = getPanelDef(t.panelId, pluginPanelKey);
+      const def = getPanelDef(t.panelId);
       const w = def?.maxW !== undefined ? Math.min(t.w, def.maxW) : t.w;
       const h = def?.maxH !== undefined ? Math.min(t.h, def.maxH) : t.h;
       m.set(t.uid, { x: t.x, y: t.y, w, h });
@@ -502,7 +502,7 @@ function WorkspaceCanvas({
   const rglLayouts = useMemo(
     () => ({
       lg: tiles.map((t) => {
-        const def = getPanelDef(t.panelId, pluginPanelKey);
+        const def = getPanelDef(t.panelId);
         const tileLocked = workspaceLocked || t.locked === true;
         // Geometry is the stored placement, already clamped to the panel's
         // maxW/maxH (placementByUid does the clamp), so a tile saved wider than

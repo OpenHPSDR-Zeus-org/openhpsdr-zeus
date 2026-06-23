@@ -36,7 +36,6 @@ function installLocalStorageShim() {
 installLocalStorageShim();
 
 const {
-  apiUrl,
   getServerBaseUrl,
   installFetchInterceptor,
   setServerBaseUrl,
@@ -80,28 +79,6 @@ describe('getServerBaseUrl / setServerBaseUrl', () => {
     setServerBaseUrl('');
     expect(getServerBaseUrl()).toBe('');
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
-  });
-});
-
-describe('apiUrl', () => {
-  it('returns the path unchanged when no base is configured', () => {
-    expect(apiUrl('/api/state')).toBe('/api/state');
-  });
-
-  it('prepends the configured base for relative paths', () => {
-    setServerBaseUrl('http://192.168.1.23:6060');
-    expect(apiUrl('/api/state')).toBe('http://192.168.1.23:6060/api/state');
-  });
-
-  it('passes absolute URLs through untouched', () => {
-    setServerBaseUrl('http://192.168.1.23:6060');
-    expect(apiUrl('http://other.example/foo')).toBe('http://other.example/foo');
-    expect(apiUrl('https://example.com/x')).toBe('https://example.com/x');
-  });
-
-  it('inserts a leading slash if the caller forgot one', () => {
-    setServerBaseUrl('http://10.0.0.1:6060');
-    expect(apiUrl('api/state')).toBe('http://10.0.0.1:6060/api/state');
   });
 });
 

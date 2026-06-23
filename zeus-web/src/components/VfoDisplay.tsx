@@ -49,7 +49,6 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -306,7 +305,6 @@ export function VfoDisplay({
     return () => el.removeEventListener('wheel', handler);
   }, [applyState, editing, postVfo, targetIndex]);
 
-  const digits = useMemo(() => DIGIT_PLACES, []);
   return (
     <div
       className={`freq-display${compact ? ' compact' : ''}`}
@@ -356,7 +354,7 @@ export function VfoDisplay({
             width: '100%',
           }}
         >
-          {digits.map((place) => {
+          {DIGIT_PLACES.map((place) => {
             const d = digitAt(vfoHz, place.decade);
             const isLeading = vfoHz < place.decade;
             return (

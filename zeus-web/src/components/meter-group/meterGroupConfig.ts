@@ -12,6 +12,7 @@
 // Widget axis range / explicit kind override go in `widget.settings` as a
 // loose record so the schema doesn't have to chase per-meter knobs.
 
+import type { WidgetSettings } from '../meters/widgetSettings';
 import {
   MeterReadingId,
   METER_CATALOG,
@@ -21,16 +22,7 @@ import {
 
 export type MeterGroupDirection = 'row' | 'column';
 
-export interface MeterGroupWidgetSettings {
-  /** Operator override for axis min — falls back to catalog `defaultMin`. */
-  min?: number;
-  /** Operator override for axis max — falls back to catalog `defaultMax`. */
-  max?: number;
-  /** Optional widget label override — falls back to catalog `label`. */
-  label?: string;
-  /** Show the peak-hold tick on the primitive (default true). */
-  peakHold?: boolean;
-}
+export type MeterGroupWidgetSettings = WidgetSettings;
 
 export interface MeterGroupWidget {
   /** Stable per-instance id. */

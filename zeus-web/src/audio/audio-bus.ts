@@ -47,12 +47,6 @@ class AudioBus {
       }
     }
   }
-
-  /** Number of attached consumers — used by callers that want to skip work
-   *  (e.g. requesting the desktop on-demand stream) when nobody is listening. */
-  get subscriberCount(): number {
-    return this.subscribers.size;
-  }
 }
 
 let bus: AudioBus | null = null;

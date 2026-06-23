@@ -312,10 +312,6 @@ export function sendDisplayStreamRequest(enable: boolean): void {
 
 export type MicPcmSendResult = 'sent' | 'native' | 'closed' | 'bad-size' | 'send-error';
 
-function wsUrl(path: string): string {
-  return buildWsUrl(path);
-}
-
 function notifyMicTransportReady(): void {
   const waiters = micTransportWaiters;
   micTransportWaiters = [];
@@ -779,7 +775,7 @@ export function startRealtime(path = '/ws'): () => void {
   const connect = () => {
     if (stopped) return;
     try {
-      ws = new WebSocket(wsUrl(path));
+      ws = new WebSocket(buildWsUrl(path));
     } catch (err) {
       warnOnce('ws-construct-failed', 'WebSocket construction failed', err);
       schedule();
