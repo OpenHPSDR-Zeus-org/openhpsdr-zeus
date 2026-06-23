@@ -48,7 +48,8 @@ import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent }
 import { GripVertical, Sliders, Volume2, VolumeX, X } from 'lucide-react';
 import { Panadapter } from '../../components/Panadapter';
 import { WaterfallSurface } from '../../components/WaterfallSurface';
-import { MultiRxMonitorStrip } from '../../components/MultiRxMonitorStrip';
+import { RxMonitorPane } from '../../components/RxMonitorPane';
+import { RxWaterfallPane } from '../../components/RxWaterfallPane';
 import { ZoomControl } from '../../components/ZoomControl';
 import { WaterfallSpeedControl } from '../../components/WaterfallSpeedControl';
 import { SpectrumControls } from '../../components/SpectrumControls';
@@ -121,12 +122,9 @@ export function HeroPanel({
   const connected = useConnectionStore((s) => s.status === 'Connected');
   const applyState = useConnectionStore((s) => s.applyState);
   const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
-  // Multi-DDC RX3+ (receiver index >= 2). When any are exposed, a strip of
-  // read-only monitor panes renders below the RX1/RX2 panadapter/waterfall.
-  const hasExtraRx = useConnectionStore((s) =>
-    s.receivers.some((r) => r.index >= 2 && r.enabled),
-  );
-  // Per-RX listen/mute mixer + focus selector across every exposed receiver.
+  // Per-RX listen/mute mixer + focus selector + the multi-DDC spectrum grid all
+  // read the exposed-receiver list. RX1/RX2 keep their interactive A/B
+  // panadapter/waterfall; RX3+ render read-only monitor + waterfall panes.
   const receivers = useConnectionStore((s) => s.receivers);
   const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
   const setFocusedRxIndex = useConnectionStore((s) => s.setFocusedRxIndex);
@@ -290,12 +288,24 @@ export function HeroPanel({
     window.addEventListener('pointercancel', onEnd);
   };
 
-  const stitchedGridStyle = {
+  // Exposed receivers in DDC order — drives the multi-DDC spectrum grid. RX1
+  // always; RX2 when enabled; then each active extra DDC (RX3+).
+  const spectrumPanes: { index: number; abId?: 'A' | 'B' }[] = [{ index: 0, abId: 'A' }];
+  if (rx2Enabled) spectrumPanes.push({ index: 1, abId: 'B' });
+  for (const r of receivers.filter((r) => r.index >= 2 && r.enabled))
+    spectrumPanes.push({ index: r.index });
+  const multiRxSpectrum = spectrumPanes.length > 1;
+
+  // ≤4 receivers stitched across one row; beyond that the grid wraps so the last
+  // receivers stack into a second row (e.g. 8 RX = two rows of 4). The panadapter
+  // and waterfall regions share this column count so their cells line up.
+  const spectrumGridStyle = {
     position: 'relative',
     minHeight: 0,
     height: '100%',
     display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+    gridTemplateColumns: `repeat(${Math.min(spectrumPanes.length, 4)}, minmax(0, 1fr))`,
+    gridAutoRows: '1fr',
     gap: 0,
     overflow: 'hidden',
   } as const;
@@ -536,37 +546,30 @@ export function HeroPanel({
             position: 'absolute',
             inset: 0,
             display: 'grid',
-            gridTemplateRows: hasExtraRx
-              ? `${split}fr 8px ${1 - split}fr minmax(96px, 26%)`
-              : `${split}fr 8px ${1 - split}fr`,
+            gridTemplateRows: `${split}fr 8px ${1 - split}fr`,
             zIndex: 1,
           }}
         >
+          {/* Panadapter region — one cell per exposed receiver, ≤4 per row, the
+              rest stacked. RX1/RX2 keep the interactive A/B panadapter; RX3+ get
+              read-only monitor traces. */}
           {connected && (
-            rx2Enabled ? (
-              <div
-                style={stitchedGridStyle}
-              >
-                <div style={{ minWidth: 0, minHeight: 0 }}>
-                  <Panadapter
-                    receiver="A"
-                    stitched
-                    foreground={rxFocus === 'A'}
-                    tuneReceiver="A"
-                  />
+            <div style={spectrumGridStyle}>
+              {spectrumPanes.map((p) => (
+                <div key={p.index} style={{ minWidth: 0, minHeight: 0 }}>
+                  {p.abId ? (
+                    <Panadapter
+                      receiver={p.abId}
+                      stitched={multiRxSpectrum}
+                      foreground={rxFocus === p.abId}
+                      tuneReceiver={p.abId}
+                    />
+                  ) : (
+                    <RxMonitorPane rxIndex={p.index} />
+                  )}
                 </div>
-                <div style={{ minWidth: 0, minHeight: 0 }}>
-                  <Panadapter
-                    receiver="B"
-                    stitched
-                    foreground={rxFocus === 'B'}
-                    tuneReceiver="B"
-                  />
-                </div>
-              </div>
-            ) : (
-              <Panadapter receiver="A" />
-            )
+              ))}
+            </div>
           )}
           <div
             className={`spectrum-splitter ${splitDragging ? 'dragging' : ''}`}
@@ -576,46 +579,33 @@ export function HeroPanel({
             title="Drag to resize panadapter / waterfall"
             onPointerDown={onSplitterPointerDown}
           />
+          {/* Waterfall region. While keyed the server feeds the WDSP TX analyzer
+              pixels into the main display stream, so a single full-width waterfall
+              shows the transmitted spectrum (the TX panafall, issue #81).
+              Otherwise: one waterfall cell per exposed receiver, ≤4 per row then
+              stacked, matching the panadapter grid above. */}
           {connected && (
             keyed ? (
-              // On TX both receivers transmit the same audio, and the server
-              // feeds the WDSP TX analyzer's pixels into the main display
-              // stream while keyed (DspPipelineService, issue #81). So a single
-              // full-width waterfall shows the live transmitted spectrum
-              // scrolling — paired with the panadapter above (also TX while
-              // keyed) it forms a real TX panafall. The TX dB window
-              // (wfTxDbMin/Max) and the left-edge WfDbScale drag let the
-              // operator set the in-passband brightness independently of RX.
               <WaterfallSurface transparent={bgActive} />
-            ) : rx2Enabled ? (
-              <div style={stitchedGridStyle}>
-                <div style={{ minWidth: 0, minHeight: 0 }}>
-                  <WaterfallSurface
-                    receiver="A"
-                    transparent={bgActive}
-                    stitched
-                    foreground={rxFocus === 'A'}
-                    tuneReceiver="A"
-                  />
-                </div>
-                <div style={{ minWidth: 0, minHeight: 0 }}>
-                  <WaterfallSurface
-                    receiver="B"
-                    transparent={bgActive}
-                    stitched
-                    foreground={rxFocus === 'B'}
-                    tuneReceiver="B"
-                  />
-                </div>
-              </div>
             ) : (
-              <WaterfallSurface transparent={bgActive} />
+              <div style={spectrumGridStyle}>
+                {spectrumPanes.map((p) => (
+                  <div key={p.index} style={{ minWidth: 0, minHeight: 0 }}>
+                    {p.abId ? (
+                      <WaterfallSurface
+                        receiver={p.abId}
+                        transparent={bgActive}
+                        stitched={multiRxSpectrum}
+                        foreground={rxFocus === p.abId}
+                        tuneReceiver={p.abId}
+                      />
+                    ) : (
+                      <RxWaterfallPane rxIndex={p.index} />
+                    )}
+                  </div>
+                ))}
+              </div>
             )
-          )}
-          {connected && hasExtraRx && (
-            <div style={{ minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
-              <MultiRxMonitorStrip />
-            </div>
           )}
         </div>
       </div>

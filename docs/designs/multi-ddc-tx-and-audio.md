@@ -75,9 +75,27 @@ Both are extended (not replaced) so legacy callers keep working.
   Band/keyboard tuning) flips incrementally. RX1/RX2 keep stitched-view identity.
 - `VfoDisplay`: accept an optional `rxIndex` for ≥2 — reads
   `receivers[i].vfoHz`, posts `setReceiver(i,{vfoHz})`. A/B unchanged.
-- `VfoPanel`: enumerate exposed receivers → N lanes (focus + TX-select + tune +
-  audible toggle). RX1/RX2 retain swap/copy.
-- `HeroPanel`: per-RX hear/mute chips for every exposed receiver.
+- `VfoPanel`: revamped to a **master-detail** — a compact chip rail (one chip per
+  exposed receiver: id, freq, band, TX/mute dots) + a single active-receiver
+  detail (full digits, listen/mute, TX-select, per-RX AF, A↔B copy/swap). Fixed
+  footprint regardless of receiver count.
+- `HeroPanel`: per-RX hear/mute + focus mixer, surfaced as a small **movable
+  popout** (`RX MIX` trigger) instead of an inline header strip.
+
+### Multi-DDC spectrum grid (waterfall stitching)
+
+The hero panadapter and waterfall regions are a shared grid: **≤4 receivers
+stitched across one row; beyond that the grid wraps so the last receivers stack
+into a second row** (8 RX = two rows of 4). RX1/RX2 keep the interactive A/B
+`Panadapter`/`WaterfallSurface`; RX3+ render read-only live panes —
+`RxMonitorPane` (trace) and the new `RxWaterfallPane` (scrolling waterfall via
+`createWfRenderer` + a per-rxId `planForFrame` key). While keyed the waterfall
+collapses to the single full-width TX panafall (unchanged).
+
+**Scaling note:** each pane owns a WebGL2 context, so 8 receivers = up to 16
+contexts (8 trace + 8 waterfall) plus the chrome — near the browser's ~16-context
+ceiling. The panes already handle context loss, but a future optimisation is a
+shared/pooled renderer if 8-RX panafall proves context-starved on weak GPUs.
 
 ## Test plan
 
