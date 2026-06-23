@@ -251,6 +251,21 @@ public sealed class ChatService : BackgroundService
     public Task UnbanAsync(string callsign, CancellationToken ct) =>
         SendFriendActionAsync("admin_unban", "callsign", callsign, ct);
 
+    /// <summary>Admin: clears a room's history (defaults to the public lobby).</summary>
+    public Task ClearRoomAsync(string? room, CancellationToken ct)
+    {
+        var roomId = string.IsNullOrWhiteSpace(room) ? "lobby" : room.Trim();
+        return SendFrameAsync(RequireSocket(), new { t = "admin_clear_room", room = roomId }, ct);
+    }
+
+    /// <summary>Admin: broadcasts a one-off global announcement to all operators.</summary>
+    public Task BroadcastAsync(string text, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            throw new ArgumentException("message text is empty", nameof(text));
+        return SendFrameAsync(RequireSocket(), new { t = "admin_broadcast", text = text.Trim() }, ct);
+    }
+
     private Task SendRoomMemberAsync(string verb, string room, string callsign, CancellationToken ct)
     {
         var call = (callsign ?? string.Empty).Trim().ToUpperInvariant();
@@ -539,6 +554,19 @@ public sealed class ChatService : BackgroundService
                     _lastError = ReadString(root, "message") ?? "You have been banned from ZeusChat.";
                     _hub.BroadcastChatEvent(ChatEventFrame.Banned(_lastError));
                     PushStatus();
+                    break;
+                case "cleared":
+                    var clearedRoom = ReadString(root, "room") ?? "lobby";
+                    // The in-memory ring caches only the public room; group/DM
+                    // scrollback lives on the relay, so nothing local to drop.
+                    if (clearedRoom == "lobby") _messages.Clear();
+                    _hub.BroadcastChatEvent(ChatEventFrame.Cleared(clearedRoom));
+                    break;
+                case "notice":
+                    _hub.BroadcastChatEvent(ChatEventFrame.Notice(
+                        ReadString(root, "from") ?? string.Empty,
+                        ReadString(root, "text") ?? string.Empty,
+                        ReadLong(root, "ts") ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
                     break;
                 case "error":
                     var code = ReadString(root, "code");

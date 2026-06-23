@@ -255,6 +255,12 @@ export class ChatRoom extends DurableObject<Env> {
       case 'admin_unban':
         if (this.isAdmin(me)) await this.unbanUser(norm(msg.callsign ?? ''));
         return;
+      case 'admin_clear_room':
+        if (this.isAdmin(me)) await this.clearRoom(msg.room ?? PUBLIC_ROOM);
+        return;
+      case 'admin_broadcast':
+        if (this.isAdmin(me)) this.broadcastNotice(me, (msg.text ?? '').slice(0, MAX_MESSAGE_LEN));
+        return;
 
       case 'ping':
         this.send(ws, { t: 'pong' });
@@ -474,6 +480,29 @@ export class ChatRoom extends DurableObject<Env> {
     const msgKeys = [...(await this.ctx.storage.list({ prefix: `m:${room}:` })).keys()];
     if (msgKeys.length) await this.ctx.storage.delete(msgKeys);
     for (const call of exMembers) this.pushRooms(call);
+  }
+
+  // --- admin: clear history / global announcement ----------------------------
+
+  /**
+   * Admin: permanently delete a room's stored messages and tell everyone who can
+   * see the room to drop their local scrollback. Defaults to the public lobby.
+   */
+  private async clearRoom(room: string): Promise<void> {
+    if (room !== PUBLIC_ROOM && !this.rooms.has(room)) return;
+    const msgKeys = [...(await this.ctx.storage.list({ prefix: `m:${room}:` })).keys()];
+    if (msgKeys.length) await this.ctx.storage.delete(msgKeys);
+    this.deliverToRoom(room, { t: 'cleared', room });
+  }
+
+  /**
+   * Admin: push a one-off global announcement to every connected operator. The
+   * notice is ephemeral (not persisted) — it surfaces as a prominent banner on
+   * each client regardless of which room they're viewing.
+   */
+  private broadcastNotice(admin: string, text: string): void {
+    if (!text.trim()) return;
+    this.broadcast({ t: 'notice', from: admin, text, ts: Date.now() });
   }
 
   // --- bans ------------------------------------------------------------------

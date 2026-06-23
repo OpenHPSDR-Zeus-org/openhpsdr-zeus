@@ -147,3 +147,9 @@ public sealed record ChatRoomRequest(string Room);
 
 /// <summary>Toggle whether this operator's frequency may be shared (eye toggle).</summary>
 public sealed record ChatFreqVisibilityRequest(bool Public);
+
+/// <summary>Admin: clear a room's history. <paramref name="Room"/> defaults to the public lobby.</summary>
+public sealed record ChatClearRequest(string? Room = null);
+
+/// <summary>Admin: broadcast a one-off global announcement to every connected operator.</summary>
+public sealed record ChatBroadcastRequest(string Text);

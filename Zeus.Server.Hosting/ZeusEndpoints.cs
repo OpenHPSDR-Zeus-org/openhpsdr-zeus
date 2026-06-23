@@ -3005,6 +3005,10 @@ public static class ZeusEndpoints
             Run(() => chat.BanAsync(req.Callsign, ctx.RequestAborted)));
         app.MapPost("/api/chat/admin/unban", (ChatFriendRequest req, ChatService chat, HttpContext ctx) =>
             Run(() => chat.UnbanAsync(req.Callsign, ctx.RequestAborted)));
+        app.MapPost("/api/chat/admin/clear", (ChatClearRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.ClearRoomAsync(req.Room, ctx.RequestAborted)));
+        app.MapPost("/api/chat/admin/broadcast", (ChatBroadcastRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.BroadcastAsync(req.Text, ctx.RequestAborted)));
 
         // Point-to-point propagation (DE → DX). Proxies the HamClock sidecar's
         // ITU-R P.533-14 engine; always returns 200 with an {available:false}
