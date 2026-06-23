@@ -50,6 +50,7 @@ import { FlexWorkspace } from './layout/FlexWorkspace';
 import { WorkspaceErrorBoundary } from './layout/WorkspaceErrorBoundary';
 import { AppErrorBoundary } from './layout/AppErrorBoundary';
 import { currentDetachedWorkspaceLayoutId } from './layout/workspace-windows';
+import { placeTileInPage } from './layout/workspace';
 import { ConfirmDialog } from './layout/ConfirmDialog';
 import { AfGainSlider } from './components/AfGainSlider';
 import { AgcSlider } from './components/AgcSlider';
@@ -153,6 +154,7 @@ export default function App() {
   const status = useConnectionStore((s) => s.status);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const mode = useConnectionStore((s) => s.mode);
+  const modeB = useConnectionStore((s) => s.modeB);
   const preampOn = useConnectionStore((s) => s.preampOn);
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
@@ -357,6 +359,24 @@ export default function App() {
       if (state.mode !== prev.mode || state.modeB !== prev.modeB) getAudioClient().reset();
     });
   }, []);
+
+  // Selecting FreeDV mode surfaces the FreeDV panel (submode / SYNC / SNR /
+  // TX-text sidechannel) so the operator gets immediate feedback and the modem
+  // controls — without it the mode runs USB underneath with no visible change,
+  // which reads as "nothing happened". Fires on the transition into FreeDV on
+  // either VFO and is idempotent: it won't add a second tile if the panel is
+  // already in the active layout, and it won't re-add a tile the operator
+  // removed unless they switch away from FreeDV and back. We only place it when
+  // it fits the CURRENT page — never spill onto a freshly-minted page and yank
+  // the operator's console out from under them. On a full page the panel stays
+  // a manual Add-Panel action.
+  useEffect(() => {
+    if (mode !== 'FREEDV' && modeB !== 'FREEDV') return;
+    const ls = useLayoutStore.getState();
+    if (ls.workspace.tiles.some((t) => t.panelId === 'freedv')) return;
+    const fits = placeTileInPage('freedv', ls.workspace.tiles, ls.viewportCols, ls.viewportRows);
+    if (fits) ls.addTile('freedv');
+  }, [mode, modeB]);
 
   useEffect(() => {
     return useTxStore.subscribe((state, prev) => {
