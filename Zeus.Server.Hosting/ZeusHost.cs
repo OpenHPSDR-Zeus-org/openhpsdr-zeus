@@ -433,7 +433,13 @@ public static class ZeusHost
         // internal Pi) and routes its buttons/encoders/LEDs through the same
         // RadioService/TxService seams the web UI uses. Presence-gated: idles
         // on hosts with no panel device, so it is safe to register everywhere.
-        builder.Services.AddHostedService<Zeus.Server.FrontPanel.G2FrontPanelService>();
+        // Per-install enable / device / baud overrides live in
+        // G2PanelSettingsStore (Radio Settings card); the service is a singleton
+        // so the settings endpoint can read its live status + trigger a reconnect.
+        builder.Services.AddSingleton<Zeus.Server.FrontPanel.G2PanelSettingsStore>();
+        builder.Services.AddSingleton<Zeus.Server.FrontPanel.G2FrontPanelService>();
+        builder.Services.AddHostedService(sp =>
+            sp.GetRequiredService<Zeus.Server.FrontPanel.G2FrontPanelService>());
 
         // QRZ.com XML client. HttpClient default timeout is 100 s — cap at 10 s so a
         // hung login surfaces quickly in the UI.

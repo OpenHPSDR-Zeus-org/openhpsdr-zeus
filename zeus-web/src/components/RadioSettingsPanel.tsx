@@ -6,7 +6,9 @@
 //
 // RADIO SETTINGS tab. Cards:
 //   1. PTT-IN → MOX enable gate, with a live PTT-IN status lamp.
-//   2. Audio Input — the single-select TX-audio SOURCE (external-audio-jacks
+//   2. Front Panel — ANAN G2 / G2-Ultra ANDROMEDA serial bridge enable +
+//      device/baud override + live connected lamp (auto-detects on the G2 Pi).
+//   3. Audio Input — the single-select TX-audio SOURCE (external-audio-jacks
 //      re-port). Board-gated off the per-board capability flags carried in the
 //      /api/radio/audio GET response, so the picker offers only the jacks the
 //      connected board has. Host is always available and is the default.
@@ -21,8 +23,9 @@
 // surfaces (tokens only, no new chrome / palette). Layout / visual specifics
 // are the maintainer's call — this stays clean and minimal.
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { usePttStore } from '../state/ptt-store';
+import { useG2PanelStore } from '../state/g2panel-store';
 import { useAudioStore, type TxAudioSource } from '../state/audio-store';
 import {
   useAntennaStore,
@@ -60,6 +63,17 @@ export function RadioSettingsPanel() {
   const loadPtt = usePttStore((s) => s.load);
   const setPttEnabled = usePttStore((s) => s.setEnabled);
 
+  const g2Enabled = useG2PanelStore((s) => s.enabled);
+  const g2DevicePath = useG2PanelStore((s) => s.devicePath);
+  const g2Baud = useG2PanelStore((s) => s.baud);
+  const g2Connected = useG2PanelStore((s) => s.connected);
+  const g2ActivePath = useG2PanelStore((s) => s.activeDevicePath);
+  const g2ActiveBaud = useG2PanelStore((s) => s.activeBaud);
+  const g2PanelType = useG2PanelStore((s) => s.panelType);
+  const g2Inflight = useG2PanelStore((s) => s.inflight);
+  const loadG2 = useG2PanelStore((s) => s.load);
+  const updateG2 = useG2PanelStore((s) => s.update);
+
   const audio = useAudioStore((s) => s.settings);
   const audioInflight = useAudioStore((s) => s.inflight);
   const loadAudio = useAudioStore((s) => s.load);
@@ -72,9 +86,25 @@ export function RadioSettingsPanel() {
 
   useEffect(() => {
     void loadPtt();
+    void loadG2();
     void loadAudio();
     void loadAntenna();
-  }, [loadPtt, loadAudio, loadAntenna]);
+  }, [loadPtt, loadG2, loadAudio, loadAntenna]);
+
+  // Poll the front-panel bridge status while this tab is mounted so the
+  // connected lamp reflects plug/unplug without a manual reload.
+  useEffect(() => {
+    const id = window.setInterval(() => void loadG2(), 3000);
+    return () => window.clearInterval(id);
+  }, [loadG2]);
+
+  // Local draft for the device-path field — commit on blur / Enter so we don't
+  // PUT on every keystroke. Re-sync when the server value changes.
+  const [g2PathDraft, setG2PathDraft] = useState(g2DevicePath);
+  useEffect(() => setG2PathDraft(g2DevicePath), [g2DevicePath]);
+  const commitG2Path = () => {
+    if (g2PathDraft.trim() !== g2DevicePath) void updateG2({ devicePath: g2PathDraft.trim() });
+  };
 
   // Per-board source-availability gates ride the /api/radio/audio response, so
   // we read them straight off the audio settings (no separate caps fetch).
@@ -175,6 +205,115 @@ export function RadioSettingsPanel() {
             <em>Release hang time — bridges CW inter-character gaps. Fixed for now.</em>
           </div>
           <span style={{ color: 'var(--fg-2)' }}>{pttHangMs} ms</span>
+        </div>
+      </div>
+
+      {/* ANAN G2 / G2-Ultra hardware front panel (ANDROMEDA serial bridge).
+          Ungated — the panel is a host serial device; on the G2 Pi it
+          auto-detects, on a Windows/macOS host point it at the COM port. */}
+      <div className="ps-card">
+        <h4>
+          <svg className="ps-ic-sm" viewBox="0 0 12 12">
+            <path d="M1.5 2.5h9v7h-9zM3 4.5h2M3 6.5h2M7 4.5h2M7 6.5h2" fill="none" />
+          </svg>
+          Front Panel
+          <span className="ps-card-hint">ANAN G2 / G2-Ultra (ANDROMEDA)</span>
+        </h4>
+
+        <div className="ps-field">
+          <div className="ps-name">
+            Status
+            <em>
+              Live bridge state. Connects automatically when the panel's serial
+              line is found; idle if no panel is wired to this host.
+            </em>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span
+              aria-hidden
+              style={{
+                width: '0.6rem',
+                height: '0.6rem',
+                borderRadius: '50%',
+                background: g2Connected ? 'var(--accent)' : 'var(--fg-3)',
+                boxShadow: g2Connected ? '0 0 6px var(--accent)' : 'none',
+                transition: 'background 60ms linear',
+              }}
+            />
+            <span style={{ color: g2Connected ? 'var(--accent)' : 'var(--fg-2)' }}>
+              {g2Connected
+                ? `connected${g2PanelType === 5 ? ' · G2-Ultra' : g2PanelType > 0 ? ` · type ${g2PanelType}` : ''}`
+                : 'not connected'}
+            </span>
+            {g2Connected && g2ActivePath ? (
+              <span style={{ color: 'var(--fg-3)', fontSize: '0.8em' }}>
+                {g2ActivePath} @ {g2ActiveBaud}
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="ps-field">
+          <div className="ps-name">
+            Enable
+            <em>
+              When off, the front-panel buttons / VFO / encoders are ignored
+              (the bridge never opens the port).
+            </em>
+          </div>
+          <label className="ps-check">
+            <input
+              type="checkbox"
+              checked={g2Enabled}
+              disabled={g2Inflight}
+              onChange={(e) => void updateG2({ enabled: e.target.checked })}
+            />
+            <span className="ps-check-box" />
+            <span>Front-panel bridge</span>
+          </label>
+        </div>
+
+        <div className="ps-field">
+          <div className="ps-name">
+            Serial Device
+            <em>
+              Leave blank to auto-detect (the g2-front line on the G2's Pi). On a
+              Windows / macOS host enter the panel's port, e.g. COM5 or
+              /dev/ttyACM0.
+            </em>
+          </div>
+          <input
+            className="ps-select-mini"
+            type="text"
+            placeholder="auto-detect"
+            value={g2PathDraft}
+            disabled={g2Inflight || !g2Enabled}
+            onChange={(e) => setG2PathDraft(e.target.value)}
+            onBlur={commitG2Path}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitG2Path();
+            }}
+          />
+        </div>
+
+        <div className="ps-field">
+          <div className="ps-name">
+            Baud
+            <em>
+              Auto picks 9600 for the 8&quot; Mk2 control front (and CM4/CM5 UART)
+              or 115200 for the RP2040 “Front V1”.
+            </em>
+          </div>
+          <select
+            className="ps-select-mini"
+            value={g2Baud}
+            disabled={g2Inflight || !g2Enabled}
+            onChange={(e) => void updateG2({ baud: Number.parseInt(e.target.value, 10) })}
+          >
+            <option value={0}>Auto</option>
+            <option value={9600}>9600</option>
+            <option value={115200}>115200</option>
+          </select>
         </div>
       </div>
 

@@ -613,6 +613,28 @@ public sealed record ExternalPttStatusDto(
 // requires a physical footswitch edge).
 public sealed record PttEnableSetRequest(bool Enabled);
 
+// State of the ANAN G2 / G2-Ultra hardware front-panel bridge — body of
+// GET/PUT /api/radio/front-panel. The Enabled/DevicePath/Baud trio are the
+// operator's stored settings (DevicePath empty + Baud 0 = auto-detect); the
+// Connected/Active*/PanelType trio is the live bridge status (Connected =
+// serial line open; PanelType 5 = a recognised G2-Ultra handshake).
+public sealed record G2PanelSettingsDto(
+    bool Enabled,
+    string? DevicePath,
+    int Baud,
+    bool Connected,
+    string? ActiveDevicePath,
+    int ActiveBaud,
+    int PanelType);
+
+// Request body for PUT /api/radio/front-panel. Every field optional — only the
+// supplied ones change. DevicePath "" clears the override (back to auto-detect);
+// Baud 0 = auto.
+public sealed record G2PanelSettingsSetRequest(
+    bool? Enabled = null,
+    string? DevicePath = null,
+    int? Baud = null);
+
 public sealed record HardwareKeyingStatusDto(
     int SchemaVersion,
     string? ActiveProtocol,
