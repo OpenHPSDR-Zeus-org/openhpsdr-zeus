@@ -233,6 +233,36 @@ public sealed class RadioService : IDisposable
     private const double AgcCutStressThresholdDb = -10.0;
     private const double AgcCutTargetDb = -8.0;
     private const double AgcAdcPressureThresholdDbfs = -6.0;
+
+    // ── Auto-AGC-T threshold servo (Thetis parity) ──────────────────────────
+    // Auto-AGC-T sets the AGC *threshold* (knee) to the noise floor, exactly as
+    // Thetis does (console.cs setAGCThresholdPoint:45969-46016 + WDSP
+    // SetRXAAGCThresh/GetRXAAGCTop, wcpAGC.c:477-495). We compute the resulting
+    // WDSP max-gain ("AGC-T top") in-process and drive it through the existing
+    // SetAgcTop apply path: SetRXAAGCTop(top) and SetRXAAGCThresh(thresh) set the
+    // identical max_gain, so the in-process form is bit-faithful to Thetis while
+    // avoiding a second engine round-trip on the hot meter path.
+    //
+    // Thetis user offset on the floor (udRX1AutoAGCOffset), default 0 dB.
+    private const double AutoAgcOffsetDb = 0.0;
+    // Calibration that aligns our panadapter noise-floor dBm with the WDSP AGC
+    // threshold reference (Thetis agcCalOffset, console.cs:33287 — ~2 dB + display
+    // cal). Our spectrumFloorDbm already carries the panadapter calibration, so
+    // the residual is small; this is the one bench-tunable knob. 0 = identity.
+    private const double AgcThreshCalOffsetDb = 0.0;
+    // FFT size WDSP uses in the threshold→max-gain conversion. MUST equal
+    // WdspDspEngine.RxaInSize (the size passed to SetRXAAGCThresh) so the
+    // in-process form matches the engine exactly.
+    private const double AgcThreshFftSize = 1024.0;
+    // 20·log10(out_target), out_target = (1−e^−n_tau)·0.9999 with n_tau=4
+    // (wcpAGC.c:122, create_wcpagc RXA.c:340/345). Constant across all modes.
+    private const double AgcOutTargetDb = -0.1615;
+    // Thetis clamps: AGC threshold to [-160,+2] dBm (console.cs:45978) and the
+    // resulting AGC top to [-20,+120] dB (console.cs:45997).
+    private const double AgcThreshMinDbm = -160.0;
+    private const double AgcThreshMaxDbm = 2.0;
+    private const double AgcTopMinDb = -20.0;
+    private const double AgcTopMaxDb = 120.0;
     private double _agcOffsetDb;
     private long _lastAgcTickMs = long.MinValue;
     private long _lastAutoAgcVfoHz = long.MinValue;
@@ -2135,12 +2165,41 @@ public sealed class RadioService : IDisposable
     }
 
     /// <summary>
-    /// Auto-AGC control loop. Estimates the band noise floor from a sliding
-    /// window of S-meter samples and chooses an absolute effective AGC-T that
-    /// places that floor near TargetAudioDb at the WDSP output, then derives
-    /// AgcOffsetDb = target − AgcTopDb so the same noise floor converges to
-    /// the same effective value regardless of where the user parked the
-    /// slider baseline. Slew-limited so adjustments are inaudibly gradual.
+    /// Thetis auto-AGC-T servo math: given the estimated band noise floor (dBm),
+    /// return the WDSP AGC max-gain ("AGC-T top", dB) that seats the AGC knee at
+    /// that floor. This is WDSP's own SetRXAAGCThresh→GetRXAAGCTop conversion
+    /// (wcpAGC.c:477-495) computed in-process, so SetRXAAGCTop(top) reproduces the
+    /// exact max_gain SetRXAAGCThresh(floor) would — bit-faithful to Thetis with
+    /// no extra engine round-trip. Inputs (filter width, sample rate, FFT size,
+    /// slope=0 for canned modes) are the same WDSP uses, so the only free term is
+    /// <see cref="AgcThreshCalOffsetDb"/>.
+    /// </summary>
+    internal double AutoAgcTopFromNoiseFloor(double noiseFloorDbm)
+    {
+        // 1) Desired AGC threshold (Thetis: floor + userOffset − cal), clamped.
+        double thresh = Math.Clamp(
+            noiseFloorDbm + AutoAgcOffsetDb - AgcThreshCalOffsetDb,
+            AgcThreshMinDbm, AgcThreshMaxDbm);
+        // 2) WDSP bandwidth/FFT term: 10·log10((fhigh−flow)·size/rate) (wcpAGC.c:482).
+        //    fhigh−flow is the RX passband width WDSP runs (our _state filter edges).
+        double bwHz = Math.Max(1.0, Math.Abs(_state.FilterHighHz - _state.FilterLowHz));
+        double rate = Math.Max(1.0, _state.SampleRate);
+        double noiseOffset = 10.0 * Math.Log10(bwHz * AgcThreshFftSize / rate);
+        // 3) top = 20·log10(max_gain) = 20·log10(out_target) − 20·log10(var_gain)
+        //    − (thresh + noiseOffset). Canned modes run slope 0 ⇒ var_gain 1 ⇒ its
+        //    term is 0 (Thetis auto-AGC-T is used with canned modes).
+        double top = AgcOutTargetDb - (thresh + noiseOffset);
+        // 4) Thetis rounds and clamps the resulting top (console.cs:45996-45998).
+        return Math.Clamp(Math.Round(top), AgcTopMinDb, AgcTopMaxDb);
+    }
+
+    /// <summary>
+    /// Auto-AGC-T control loop. Estimates the band noise floor from a sliding
+    /// window of panadapter-FFT floor samples (low percentile = robust to
+    /// signals) and, via <see cref="AutoAgcTopFromNoiseFloor"/>, seats the AGC
+    /// knee at that floor exactly as Thetis does — carrying the result as
+    /// AgcOffsetDb on top of the operator baseline. A deadband suppresses
+    /// sub-dB dither; band/VFO jumps re-seed the window (fast-attack).
     /// </summary>
     internal void HandleRxMeterForAutoAgc(double signalDbm, long nowMs) =>
         HandleRxMetersForAutoAgc(signalDbm, double.NaN, double.NaN, double.NaN, nowMs);
@@ -2233,37 +2292,30 @@ public sealed class RadioService : IDisposable
             double desiredOffset = _agcOffsetDb;
             if (windowReady)
             {
-                var sorted = new double[_noiseFloorWindowFill];
+                // Robust floor estimate: a low percentile of the window rejects
+                // transient signal energy so we track the true noise, not peaks.
+                // stackalloc (≤ AgcNoiseFloorWindowSamples doubles) keeps the
+                // 500 ms loop allocation-free — no per-tick GC pressure.
+                Span<double> sorted = stackalloc double[_noiseFloorWindowFill];
                 for (int i = 0; i < _noiseFloorWindowFill; i++)
                     sorted[i] = _noiseFloorWindow[i];
-                Array.Sort(sorted);
+                sorted.Sort();
                 int floorIndex = Math.Clamp(
                     (int)Math.Round((sorted.Length - 1) * AgcNoiseFloorPercentile),
                     0,
                     sorted.Length - 1);
                 noiseFloor = sorted[floorIndex];
 
-                // Auto-AGC chooses an *absolute* effective AGC-T from the noise
-                // floor: place the band noise at TargetAudioDb after WDSP's
-                // max-gain stage, so a quiet band lands at ~80 dB and a noisy
-                // band lands at ~50 dB regardless of where the user parked the
-                // slider baseline. The offset is whatever it takes to reach that
-                // absolute target on top of the current AgcTopDb baseline.
-                const double TargetAudioDb = -40.0;     // desired audio-output noise level
-                double targetEffective = Math.Clamp(
-                    TargetAudioDb - noiseFloor, AgcMinEffectiveAgcT, AgcMaxEffectiveAgcT);
-                // SYMMETRIC noise-floor tracking (Thetis parity, #806). Effective
-                // AGC-T follows the floor in BOTH directions: a quiet band raises
-                // gain, a noisy band lowers it. The old Math.Max(0, …) clamp let
-                // the loop only ADD gain above the slider baseline, so with the
-                // default 80 dB baseline the offset stayed pinned at 0 on any
-                // normal band (floor > −120 dBm) — the operator "barely heard a
-                // change". The [20,100] clamp on targetEffective above is the
-                // safety rail (Thetis's threshold clamp equivalent); ADC-pressure
-                // protection below can still pull further. Manual AGC-T is
-                // untouched: SetAgcTop zeroes the offset and disables auto, so
-                // this line never runs in manual mode.
-                desiredOffset = targetEffective - _state.AgcTopDb;
+                // Thetis auto-AGC-T: drive the AGC *threshold* (knee) to the noise
+                // floor and let WDSP derive the max-gain ("AGC-T top"). That top
+                // becomes the effective AGC-T; AgcOffsetDb carries it relative to
+                // the operator baseline so state/slider reflect it and the existing
+                // SetAgcTop(AgcTopDb+AgcOffsetDb) apply path pushes the same
+                // max_gain SetRXAAGCThresh would have. Manual AGC-T is untouched:
+                // SetAgcTop zeroes the offset and disables auto, so this never runs
+                // in manual mode.
+                double autoTop = AutoAgcTopFromNoiseFloor(noiseFloor);
+                desiredOffset = autoTop - _state.AgcTopDb;
             }
             else if (_agcOffsetDb < 0.0 && (!hasAgcGain || agcGainDb >= AgcCutStressThresholdDb || !adcUnderPressure))
             {

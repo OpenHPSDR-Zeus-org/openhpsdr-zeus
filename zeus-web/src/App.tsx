@@ -995,6 +995,7 @@ export default function App() {
             className="btn sm topbar-scroll-btn"
             onClick={() => scrollTopbarControls(-1)}
             disabled={!topbarScroll.canLeft}
+            hidden={!topbarScroll.canLeft && !topbarScroll.canRight}
             title="Previous topbar controls"
             aria-label="Previous topbar controls"
           >
@@ -1041,6 +1042,7 @@ export default function App() {
             className="btn sm topbar-scroll-btn"
             onClick={() => scrollTopbarControls(1)}
             disabled={!topbarScroll.canRight}
+            hidden={!topbarScroll.canLeft && !topbarScroll.canRight}
             title="Next topbar controls"
             aria-label="Next topbar controls"
           >
