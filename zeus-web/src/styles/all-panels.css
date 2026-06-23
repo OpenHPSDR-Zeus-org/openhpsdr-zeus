@@ -464,6 +464,7 @@
 .workspace-tile[data-panel-id='logbook'] > .workspace-tile-body,
 .workspace-tile[data-panel-id='qrz'] > .workspace-tile-body,
 .workspace-tile[data-panel-id='dsp'] > .workspace-tile-body,
+.workspace-tile[data-panel-id='freedv'] > .workspace-tile-body,
 .workspace-tile[data-panel-id='chat'] > .workspace-tile-body,
 .workspace-tile[data-panel-id='filterpresets'] > .workspace-tile-body {
   display: flex;
@@ -478,6 +479,7 @@
 .workspace-tile[data-panel-id='logbook'] > .workspace-tile-body > *,
 .workspace-tile[data-panel-id='qrz'] > .workspace-tile-body > *,
 .workspace-tile[data-panel-id='dsp'] > .workspace-tile-body > *,
+.workspace-tile[data-panel-id='freedv'] > .workspace-tile-body > *,
 .workspace-tile[data-panel-id='chat'] > .workspace-tile-body > *,
 .workspace-tile[data-panel-id='filterpresets'] > .workspace-tile-body > * {
   flex: 1 1 auto;
