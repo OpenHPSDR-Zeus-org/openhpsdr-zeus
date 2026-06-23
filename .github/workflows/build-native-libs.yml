@@ -84,9 +84,9 @@ jobs:
           # never rebuilds libspecbleach in CI). No vendored source patch
           # is required.
           #
-          # WDSP_WITH_NR4=ON pulls in native/libspecbleach/ as a STATIC sub-
-          # target embedded into wdsp.dll. NR3 stays OFF (librnnoise not
-          # vendored). Both flags are explicit for build-log clarity.
+          # WDSP_WITH_NR4=ON pulls in native/libspecbleach/ and WDSP_WITH_NR3=ON
+          # pulls in native/rnnoise/ as STATIC sub-targets embedded into wdsp.dll.
+          # Both flags are explicit for build-log clarity.
           #
           # arm64 also passes CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded so
           # WDSP itself is built with /MT, matching the static-CRT FFTW
@@ -112,7 +112,7 @@ jobs:
             '-T', 'ClangCL',
             "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake",
             "-DVCPKG_TARGET_TRIPLET=$triplet",
-            '-DWDSP_WITH_NR3=OFF',
+            '-DWDSP_WITH_NR3=ON',
             '-DWDSP_WITH_NR4=ON'
           )
           if ("${{ matrix.arch }}" -eq "arm64") {
@@ -147,6 +147,24 @@ jobs:
           $exports
           if ($count -ne 8) {
             throw "Expected 8 SetRXASBNR* exports, got $count. NR4 did not link correctly."
+          }
+
+      - name: Verify RNNR exports
+        run: |
+          # NR3/RNNoise: confirm the rebuild links the vendored librnnoise-backed
+          # rnnr.c (3 RNNR exports: SetRXARNNRRun/Position, RNNRloadModel). If this
+          # fails the build is silently stub-based and NR3 won't work at runtime.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstall = & $vswhere -latest -property installationPath
+          $dumpbin = Get-ChildItem -Path "$vsInstall\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" |
+                     Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dumpbin) { throw "dumpbin.exe not found under $vsInstall\VC\Tools\MSVC" }
+          $exports = & $dumpbin /EXPORTS native/build/Release/wdsp.dll | Select-String "RNNR"
+          $count = ($exports | Measure-Object).Count
+          Write-Host "Found $count RNNR exports:"
+          $exports
+          if ($count -ne 3) {
+            throw "Expected 3 RNNR exports, got $count. NR3 did not link correctly."
           }
 
       - name: Stage DLL
@@ -283,12 +301,12 @@ jobs:
       - name: Configure CMake (x64)
         if: matrix.arch == 'x64'
         run: |
-          # WDSP_WITH_NR4=ON pulls in native/libspecbleach/ as a STATIC sub-
-          # target embedded into libwdsp.so. NR3 stays OFF (librnnoise not
-          # vendored). Both flags are explicit for build-log clarity.
+          # WDSP_WITH_NR4=ON pulls in native/libspecbleach/ and WDSP_WITH_NR3=ON
+          # pulls in native/rnnoise/ as STATIC sub-targets embedded into libwdsp.so.
+          # Both flags are explicit for build-log clarity.
           cmake -S native/wdsp -B native/build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DWDSP_WITH_NR3=OFF \
+            -DWDSP_WITH_NR3=ON \
             -DWDSP_WITH_NR4=ON
 
       - name: Configure CMake (arm64)
@@ -296,7 +314,7 @@ jobs:
         run: |
           cmake -S native/wdsp -B native/build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DWDSP_WITH_NR3=OFF \
+            -DWDSP_WITH_NR3=ON \
             -DWDSP_WITH_NR4=ON \
             -DFFTW_ROOT=$HOME/fftw-arm64 \
             -DCMAKE_SYSTEM_NAME=Linux \
@@ -324,6 +342,23 @@ jobs:
           $nm_tool -D native/build/libwdsp.so | grep "SetRXASBNR" || true
           if [ "$count" -ne 8 ]; then
             echo "ERROR: Expected 8 SetRXASBNR* exports, got $count. NR4 did not link correctly."
+            exit 1
+          fi
+
+      - name: Verify RNNR exports
+        run: |
+          # NR3/RNNoise: confirm libwdsp.so carries the 3 RNNR exports
+          # (SetRXARNNRRun/Position, RNNRloadModel). A stub-based build would have
+          # zero and NR3 would be silently broken at runtime.
+          nm_tool="nm"
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            nm_tool="aarch64-linux-gnu-nm"
+          fi
+          count=$($nm_tool -D native/build/libwdsp.so | grep -c "RNNR" || true)
+          echo "Found $count RNNR exports:"
+          $nm_tool -D native/build/libwdsp.so | grep "RNNR" || true
+          if [ "$count" -ne 3 ]; then
+            echo "ERROR: Expected 3 RNNR exports, got $count. NR3 did not link correctly."
             exit 1
           fi
 
@@ -453,7 +488,7 @@ jobs:
         run: |
           cmake -S native/wdsp -B native/build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DWDSP_WITH_NR3=OFF \
+            -DWDSP_WITH_NR3=ON \
             -DWDSP_WITH_NR4=ON
 
       - name: Build
@@ -466,6 +501,17 @@ jobs:
           echo "Found $count _SetRXASBNR* exports"
           if [ "$count" -ne 8 ]; then
             echo "ERROR: Expected 8 _SetRXASBNR* exports, got $count. NR4 did not link correctly."
+            exit 1
+          fi
+
+      - name: Verify RNNR exports
+        run: |
+          # NR3/RNNoise: 3 RNNR exports (SetRXARNNRRun/Position, RNNRloadModel).
+          # macOS nm prefixes C symbols with an underscore; match the RNNR substring.
+          count=$(nm -gU native/build/libwdsp.dylib | grep -c "RNNR" || true)
+          echo "Found $count RNNR exports"
+          if [ "$count" -ne 3 ]; then
+            echo "ERROR: Expected 3 RNNR exports, got $count. NR3 did not link correctly."
             exit 1
           fi
 

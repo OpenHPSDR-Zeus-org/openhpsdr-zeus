@@ -177,6 +177,37 @@ single-precision build of FFTW3) on every host that rebuilds the native
 library. FFTW3f is a separately-distributed library and is not vendored
 into Zeus; see `native/README.md` for the per-platform install hint.
 
+## librnnoise (RNNoise)
+
+Zeus's NR3 (RNNoise) signal path links against **RNNoise** (xiph), vendored
+in-tree under [`native/rnnoise/`](native/rnnoise/). Like libspecbleach it is
+built as a static sub-target of `libwdsp` with hidden symbol visibility, so the
+RNNR exports surface from `libwdsp.{so,dll,dylib}` directly with no separate
+runtime dependency.
+
+RNNoise is **Copyright (C) Jean-Marc Valin and the Xiph.Org Foundation** and is
+distributed under the **BSD 3-Clause License**. The full licence text is
+preserved verbatim at [`native/rnnoise/COPYING`](native/rnnoise/COPYING);
+provenance, the pinned upstream commit, and a re-vendor recipe are in
+[`native/rnnoise/VENDORING.md`](native/rnnoise/VENDORING.md).
+
+The vendored copy is the upstream xiph `main`-branch architecture (the
+weights-file / DNN variant whose `rnnoise_model_from_filename` API
+`native/wdsp/rnnr.c` calls). Zeus ships **no** RNNoise model: the library is
+built with `USE_WEIGHTS_FILE` and a minimal `rnnoise_data.c` (the
+`init_rnnoise()` function only, no default weights), so NR3 is a clean
+pass-through until the operator installs a weights file at runtime. See
+`native/rnnoise/VENDORING.md` for the no-bundled-model details.
+
+Upstream:
+- <https://github.com/xiph/rnnoise> (mirror of <https://gitlab.xiph.org/xiph/rnnoise>)
+
+BSD-3-Clause → GPL-2.0-or-later is one-way licence-compatible, so linking
+RNNoise into Zeus's GPL-2-or-later distribution is consistent with both
+licences. The RNNoise `src/` is vendored unmodified except for the minimal
+`rnnoise_data.c` described above; per-file headers are preserved as received
+from upstream and must remain so on re-vendor.
+
 ## Relationship to pihpsdr
 
 Zeus is independent of pihpsdr but **routinely consulted pihpsdr source as
