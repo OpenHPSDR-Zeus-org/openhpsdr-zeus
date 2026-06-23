@@ -367,6 +367,14 @@ public sealed class RadioService : IDisposable
         // TxLevelingConfig defaults so first-connect behaviour is unchanged
         // (Thetis §6.1-6.3). The Leveler max-gain stays on LevelerMaxGainDb.
         var persistedTxLeveling = _dspSettingsStore.GetTxLeveling() ?? new TxLevelingConfig();
+        // SSB bandpass "rectangularity" (issue #871). Null on a fresh install
+        // falls back to BandpassWindow.Normal, which resolves to the WDSP
+        // open-time tap count (nc = max(2048, dsp_size)), so first-connect audio
+        // is byte-identical to pre-#871 builds. A pre-#871 persisted row stored
+        // the old two-value "Sharp" as byte 1, which now deserialises to Normal
+        // (same byte) — also today's behaviour. RX and TX are independent.
+        var persistedRxFilterWindow = _dspSettingsStore.GetRxFilterWindow() ?? BandpassWindow.Normal;
+        var persistedTxFilterWindow = _dspSettingsStore.GetTxFilterWindow() ?? BandpassWindow.Normal;
 
         // TX Audio Profile startup overlay. If the operator has a "last loaded"
         // unified TX Audio Profile, its scalar/config values overlay the
@@ -492,6 +500,8 @@ public sealed class RadioService : IDisposable
             FilterAdvancedPaneOpen: filterPresetStore?.GetAdvancedPaneOpen() ?? false,
             TxFilterLowHz: overlayTxFilterLow ?? rsSnap?.TxFilterLowHz ?? 150,
             TxFilterHighHz: overlayTxFilterHigh ?? rsSnap?.TxFilterHighHz ?? 2850,
+            RxFilterWindow: persistedRxFilterWindow,
+            TxFilterWindow: persistedTxFilterWindow,
             RxAfGainDb: rsSnap?.RxAfGainDb ?? 0.0,
             // 0 dB unity matches the engine's TXA fresh-open default; legacy
             // rows missing the field hydrate to that same default. A last-loaded
@@ -2916,6 +2926,24 @@ public sealed class RadioService : IDisposable
         };
         Mutate(s => s with { TxLeveling = clamped });
         _dspSettingsStore.SetTxLeveling(clamped);
+        return Snapshot();
+    }
+
+    // SSB bandpass "rectangularity" — issue #871. Independent RX and TX
+    // selectors push the operator's chosen WDSP FIR window (Soft = BH 4-term,
+    // Sharp = BH 7-term) through DspPipelineService's _appliedRx/TxBandpassWindow
+    // latch and persist to DspSettingsStore so the choice survives a restart.
+    public StateDto SetRxBandpassWindow(BandpassWindow window)
+    {
+        Mutate(s => s with { RxFilterWindow = window });
+        _dspSettingsStore.SetRxFilterWindow(window);
+        return Snapshot();
+    }
+
+    public StateDto SetTxBandpassWindow(BandpassWindow window)
+    {
+        Mutate(s => s with { TxFilterWindow = window });
+        _dspSettingsStore.SetTxFilterWindow(window);
         return Snapshot();
     }
 

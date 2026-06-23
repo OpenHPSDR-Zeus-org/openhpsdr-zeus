@@ -819,6 +819,13 @@ public class DspPipelineService : BackgroundService,
     // defaults so a connect landing on defaults still matches what
     // ApplyStateToNewChannel force-pushed.
     private TxLevelingConfig _appliedTxLeveling = new();
+    // RX/TX bandpass "rectangularity" latches — issue #871. Seeded to
+    // BandpassWindow.Normal (= byte 1), which resolves to the WDSP open-time tap
+    // count, so a connect landing on the default matches what
+    // ApplyStateToNewChannel force-pushed. Same change-detect pattern as the
+    // other _applied* siblings.
+    private BandpassWindow _appliedRxBandpassWindow = BandpassWindow.Normal;
+    private BandpassWindow _appliedTxBandpassWindow = BandpassWindow.Normal;
     private int _appliedZoomLevel = 1;
     // PureSignal latched values — same change-detect pattern as the others
     // so OnRadioStateChanged only fires the (possibly heavy)
@@ -3305,6 +3312,17 @@ public class DspPipelineService : BackgroundService,
             _appliedTxLowHz = txLow;
             _appliedTxHighHz = txHigh;
         }
+        if (s.RxFilterWindow != _appliedRxBandpassWindow)
+        {
+            engine.SetRxBandpassWindow(channel, s.RxFilterWindow);
+            if (rx2Channel >= 0) engine.SetRxBandpassWindow(rx2Channel, s.RxFilterWindow);
+            _appliedRxBandpassWindow = s.RxFilterWindow;
+        }
+        if (s.TxFilterWindow != _appliedTxBandpassWindow)
+        {
+            engine.SetTxBandpassWindow(s.TxFilterWindow);
+            _appliedTxBandpassWindow = s.TxFilterWindow;
+        }
         if (s.AgcTopDb != _appliedAgcTopDb || s.AgcOffsetDb != _appliedAgcOffsetDb)
         {
             double effectiveAgc = s.AgcTopDb + s.AgcOffsetDb;
@@ -3662,6 +3680,11 @@ public class DspPipelineService : BackgroundService,
         // fresh engine doesn't key up with a USB-positive default while in LSB.
         var (txOpenLow, txOpenHigh) = SignedTxFilterFor(s);
         engine.SetTxFilter(txOpenLow, txOpenHigh);
+        // Issue #871 — push the operator's chosen FIR window onto the fresh
+        // engine so a reconnect rebuilds the RX/TX bandpass at the saved
+        // shoulder shape rather than the WDSP open-time Sharp default.
+        engine.SetRxBandpassWindow(channelId, s.RxFilterWindow);
+        engine.SetTxBandpassWindow(s.TxFilterWindow);
         engine.SetVfoHz(channelId, s.VfoHz);
         // Replay the WDSP shift on fresh-channel open so a connect landing
         // with VfoHz != RadioLoHz (persisted across restart) is demodulating
@@ -3721,6 +3744,8 @@ public class DspPipelineService : BackgroundService,
         _appliedAgc = agc;
         _appliedSquelch = squelch;
         _appliedTxLeveling = txLeveling;
+        _appliedRxBandpassWindow = s.RxFilterWindow;
+        _appliedTxBandpassWindow = s.TxFilterWindow;
         _appliedZoomLevel = s.ZoomLevel;
     }
 
@@ -3894,6 +3919,7 @@ public class DspPipelineService : BackgroundService,
         engine.SetNoiseReduction(channelId, nr);
         engine.SetAgc(channelId, agc);
         engine.SetSquelch(channelId, squelch);
+        engine.SetRxBandpassWindow(channelId, s.RxFilterWindow);
         engine.SetZoom(channelId, s.ZoomLevel);
     }
 

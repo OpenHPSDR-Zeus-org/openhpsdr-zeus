@@ -197,6 +197,8 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
         public RxStageMeters GetRxStageMeters(int channelId) => RxStageMeters.Silent;
         public void SetTxMode(RxMode mode) { }
         public void SetTxFilter(int lowHz, int highHz) { }
+        public void SetRxBandpassWindow(int channelId, BandpassWindow window) { }
+        public void SetTxBandpassWindow(BandpassWindow window) { }
         public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved) => 0;
         public void SetTxTune(bool on) { }
         public TxStageMeters GetTxStageMeters() => TxStageMeters.Silent;

@@ -170,6 +170,8 @@ public class RadioMicReceiverTests
         public RxStageMeters GetRxStageMeters(int channelId) => RxStageMeters.Silent;
         public void SetTxMode(RxMode mode) { }
         public void SetTxFilter(int lowHz, int highHz) { }
+        public void SetRxBandpassWindow(int channelId, BandpassWindow window) { }
+        public void SetTxBandpassWindow(BandpassWindow window) { }
         public void SetTxPanelGain(double linearGain) { }
         public void SetTxLevelerMaxGain(double maxGainDb) { }
         public void SetTxTune(bool on) { }

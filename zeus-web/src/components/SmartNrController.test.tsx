@@ -91,6 +91,8 @@ function mockState(nr: NrConfigDto): RadioStateDto {
     filterAdvancedPaneOpen: conn.filterAdvancedPaneOpen,
     txFilterLowHz: conn.txFilterLowHz,
     txFilterHighHz: conn.txFilterHighHz,
+    rxFilterWindow: conn.rxFilterWindow,
+    txFilterWindow: conn.txFilterWindow,
     sampleRate: conn.sampleRate,
     agcTopDb: conn.agcTopDb,
     agc: { ...AGC_CONFIG_DEFAULT },
