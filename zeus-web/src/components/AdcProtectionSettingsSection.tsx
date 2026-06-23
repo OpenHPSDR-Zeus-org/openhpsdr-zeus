@@ -260,10 +260,19 @@ export function AdcProtectionSettingsSection() {
           label="Warn Level"
           value={draft.warningThreshold}
           min={0}
-          max={5}
+          max={4}
           disabled={!draft.enabled}
-          onChange={(v) => update({ warningThreshold: clampInt(v, 0, 5) })}
+          onChange={(v) => update({ warningThreshold: clampInt(v, 0, 4) })}
           formatValue={(v) => `${Math.round(v)}`}
+        />
+        <Slider
+          label="Release Hold"
+          value={draft.releaseHoldMs}
+          min={0}
+          max={10000}
+          disabled={!draft.enabled}
+          onChange={(v) => update({ releaseHoldMs: clampInt(v, 0, 10000) })}
+          formatValue={(v) => `${Math.round(v)} ms`}
         />
       </div>
 
