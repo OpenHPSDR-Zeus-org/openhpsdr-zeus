@@ -4739,6 +4739,11 @@ export class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    // Set from the server's 409 body when a P2 connect is refused because the
+    // radio is owned by another controller. `reclaimable` means the caller can
+    // offer a Reclaim-then-connect takeover (see /api/connect/p2 busy guard).
+    public readonly busy: boolean = false,
+    public readonly reclaimable: boolean = false,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -4754,20 +4759,20 @@ async function jsonFetch<T>(
   if (!res.ok) {
     // Server returns { error: "..." } on 400; fall back to status text otherwise.
     let message = `${res.status} ${res.statusText}`;
+    let busy = false;
+    let reclaimable = false;
     try {
       const body = (await res.json()) as unknown;
-      if (
-        body &&
-        typeof body === 'object' &&
-        'error' in body &&
-        typeof (body as { error: unknown }).error === 'string'
-      ) {
-        message = (body as { error: string }).error;
+      if (body && typeof body === 'object') {
+        const b = body as { error?: unknown; busy?: unknown; reclaimable?: unknown };
+        if (typeof b.error === 'string') message = b.error;
+        busy = b.busy === true;
+        reclaimable = b.reclaimable === true;
       }
     } catch {
       /* non-JSON body — keep status text */
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, busy, reclaimable);
   }
   const raw = (await res.json()) as unknown;
   return parse(raw);

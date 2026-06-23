@@ -58,6 +58,7 @@ import {
   uploadPrefsDatabase,
   exportPrefsDatabase,
   restartApp,
+  ApiError,
   type PrefsDatabaseInfo,
   type RadioInfoDto,
 } from '../api/client';
@@ -441,6 +442,11 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
   // Pending "take over a Busy radio" confirmation. Holds the discovered radio
   // the operator asked to force-connect to; the dialog kicks the current owner.
   const [pendingTakeover, setPendingTakeover] = useState<RadioInfoDto | null>(null);
+  // Same takeover, Manual-connect path: a manual connect to a Busy radio comes
+  // back as a 409 (reclaimable) rather than a discovered row, so we stash the
+  // resolved form params here and offer the same Reclaim-then-connect flow.
+  const [pendingManualTakeover, setPendingManualTakeover] =
+    useState<Required<Pick<SavedEndpoint, 'ip' | 'port' | 'protocol' | 'sampleRate' | 'board'>> & { label?: string } | null>(null);
 
   const [manualIp, setManualIp] = useState(manualFormDefaults.ip);
   const [manualPort, setManualPort] = useState(manualFormDefaults.port);
@@ -597,7 +603,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
   );
 
   const handleManualConnect = useCallback(
-    async (override?: Partial<SavedEndpoint>) => {
+    async (override?: Partial<SavedEndpoint>, force = false) => {
       if (inflightRef.current) return;
       const ip = (override?.ip ?? manualIp).trim();
       const port = override?.port ?? manualPort;
@@ -636,12 +642,12 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
         }
 
         if (protocol === 'P2') {
-          await apiConnectP2({ endpoint: ep, sampleRate });
+          await apiConnectP2({ endpoint: ep, sampleRate, force });
           const fresh = await fetchState();
           applyState(fresh);
           hydrateTxFromState(fresh);
         } else {
-          const next = await apiConnect({ endpoint: ep, sampleRate });
+          const next = await apiConnect({ endpoint: ep, sampleRate, force });
           applyState(next);
           hydrateTxFromState(next);
         }
@@ -654,7 +660,17 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
         }
         setManualFormDefaults({ ip, port, protocol, sampleRate, board, label: '' });
       } catch (err) {
-        setManualError(errorMessage(err));
+        // Busy radio (relay-chatter guard, P2 only): the server refuses a
+        // second-master connect with a 409 { reclaimable: true }. Offer the
+        // same Reclaim-then-connect takeover the Discover path exposes instead
+        // of dead-ending on the error text. `force` is already set on a retry
+        // after reclaim, so a still-Busy radio can't loop the prompt.
+        if (!force && err instanceof ApiError && err.reclaimable) {
+          setManualError(null);
+          setPendingManualTakeover({ ip, port, protocol, sampleRate, board, label });
+        } else {
+          setManualError(errorMessage(err));
+        }
       } finally {
         setInflight(false);
       }
@@ -664,6 +680,36 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
       manualSave, applyState, hydrateTxFromState, setBoardId, setConnectedProtocol, setInflight,
       setLastConnectedEndpoint, saveEndpoint, setManualFormDefaults,
     ],
+  );
+
+  // Take over a Busy radio from the Manual path: send the protocol stop to kick
+  // the current owner, then re-run the manual connect with force=true so the
+  // still-settling Busy status doesn't re-block it. Mirrors handleForceConnect
+  // for the Discover path.
+  const handleManualForceConnect = useCallback(
+    async (snap: NonNullable<typeof pendingManualTakeover>) => {
+      if (inflightRef.current) return;
+      const ep = `${snap.ip}:${snap.port}`;
+      // Latch the ref directly (the effect that mirrors `inflight` only runs on
+      // the next render) so the reclaim shows as inflight and a stray click
+      // can't double-submit during the radio's settle window.
+      inflightRef.current = true;
+      setInflight(true);
+      setManualError(null);
+      try {
+        await reclaimRadio(ep, snap.protocol === 'P2' ? 'P2' : 'P1');
+      } catch (err) {
+        setManualError(errorMessage(err));
+        inflightRef.current = false;
+        setInflight(false);
+        return;
+      }
+      // Release the latch so handleManualConnect's own guard passes; it owns the
+      // inflight state for the forced connect from here.
+      inflightRef.current = false;
+      await handleManualConnect(snap, /* force */ true);
+    },
+    [handleManualConnect, setInflight],
   );
 
   const doDisconnect = useCallback(async () => {
@@ -1094,6 +1140,27 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
             {' '}({endpointFor(pendingTakeover) || pendingTakeover.ipAddress}) is
             in use by another client. Taking it over sends a stop command that
             disconnects whoever is currently using it — including an active
+            transmission — and then connects Zeus.
+          </p>
+        </ConfirmDialog>
+      )}
+      {pendingManualTakeover && (
+        <ConfirmDialog
+          title="Take over this radio?"
+          confirmLabel="Take over"
+          cancelLabel="Cancel"
+          intent="danger"
+          onConfirm={() => {
+            const target = pendingManualTakeover;
+            setPendingManualTakeover(null);
+            void handleManualForceConnect(target);
+          }}
+          onCancel={() => setPendingManualTakeover(null)}
+        >
+          <p style={{ margin: 0 }}>
+            <strong>{pendingManualTakeover.ip}:{pendingManualTakeover.port}</strong>{' '}
+            is in use by another controller. Taking it over sends a stop command
+            that disconnects whoever is currently using it — including an active
             transmission — and then connects Zeus.
           </p>
         </ConfirmDialog>
