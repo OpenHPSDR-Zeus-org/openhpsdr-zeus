@@ -154,6 +154,7 @@ public sealed class RadioStateEntry
     public int AdcProtectionMaxOffsetDb { get; set; } = 31;
     public int AdcProtectionWarningThreshold { get; set; } = 3;
     public int AdcProtectionMagnitudeSoftLimit { get; set; }
+    public int AdcProtectionReleaseHoldMs { get; set; } = 2000;
     public int AttenDb { get; set; }
     public bool AutoAgcEnabled { get; set; }
     // RX preamp toggle (PRE). Not part of older rows; default false matches
