@@ -19,11 +19,20 @@ import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import * as viewCenter from '../state/view-center';
 
-// Issue #846: licence-class band overlay drawn behind the spectrum trace.
+// Issue #846: licence-class band overlay rendered as a header treatment along
+// the top of the panadapter, in and just under the frequency-scale bar — so the
+// spectrum body stays clean for the trace (KB2UKA, 2026-06-23).
 //
-// Each band-plan segment for the active region renders as a translucent
-// horizontal stripe along the bottom of the panadapter, plus a tiny label
-// along the top edge. Colour encodes licence/mode legality:
+// Each band-plan segment for the active region paints two coordinated pieces:
+//   1. A translucent colour TINT inside the frequency-number bar (the black
+//      strip at the very top that carries the MHz ticks), with a crisp 2px
+//      colour underline seating it against the spectrum. Low alpha keeps the
+//      tick numbers fully legible through the tint.
+//   2. A DESCRIPTION chip (e.g. "20M Phone") on the same baseline and with the
+//      same padding/typography as the RX VFO label box, so the header reads as
+//      one row: VFO box on the left, licence-class chips across the top.
+//
+// Colour encodes licence/mode legality:
 //   - green   → amateur, the operator's current mode is permitted here
 //   - amber   → amateur, but the current mode is NOT permitted (e.g. SSB in
 //               the CW-only sub-band — the same colour code Zeus uses for
@@ -41,18 +50,21 @@ import * as viewCenter from '../state/view-center';
 // their existing clean look so the operator can compare bands at a glance.
 
 const COLORS = {
-  // Bottom strip (the translucent bar) and the matching top boundary line.
-  inLicence: { strip: 'rgba(80, 200, 120, 0.18)', edge: 'rgba(80, 200, 120, 0.45)', label: 'rgba(200, 240, 210, 0.95)' },
-  outOfMode: { strip: 'rgba(255, 160, 40, 0.18)', edge: 'rgba(255, 160, 40, 0.45)', label: 'rgba(255, 220, 170, 0.95)' },
-  nonAmateur: { strip: 'rgba(255, 80, 80, 0.18)', edge: 'rgba(255, 80, 80, 0.45)', label: 'rgba(255, 200, 200, 0.95)' },
+  // `tint` fills the freq-number bar (kept low-alpha so ticks read through);
+  // `edge` is the crisp underline + chip border; `label` is the chip text.
+  inLicence: { tint: 'rgba(80, 200, 120, 0.22)', edge: 'rgba(80, 200, 120, 0.65)', label: 'rgba(200, 240, 210, 0.96)' },
+  outOfMode: { tint: 'rgba(255, 160, 40, 0.22)', edge: 'rgba(255, 160, 40, 0.65)', label: 'rgba(255, 220, 170, 0.96)' },
+  nonAmateur: { tint: 'rgba(255, 80, 80, 0.22)', edge: 'rgba(255, 80, 80, 0.65)', label: 'rgba(255, 200, 200, 0.96)' },
 } as const;
 
-// Strip height as a fraction of the panadapter (bottom band only — the trace
-// keeps the upper portion uncluttered). 18% lands well below typical signal
-// peaks while staying tall enough to read at a glance.
-const STRIP_HEIGHT_FRAC = 0.18;
-// Min visible width before we even bother laying out a label, so a 100 Hz
-// sliver doesn't try to render text under it.
+// Geometry of the header row, in px. FREQ_BAR_HEIGHT matches FreqAxis's `h-5`
+// (20px) so the tint fills exactly the frequency-number bar; HEADER_LINE_TOP
+// matches the RX VFO label box's `top: 24` so the description chips share its
+// baseline.
+const FREQ_BAR_HEIGHT_PX = 20;
+const HEADER_LINE_TOP_PX = 24;
+// Min visible width before we lay out a description chip, so a 100 Hz sliver
+// doesn't try to render text under it.
 const MIN_LABEL_WIDTH_PCT = 4;
 
 type BandOverlayProps = {
@@ -136,33 +148,39 @@ export function BandOverlay({ receiver = 'A' }: BandOverlayProps = {}) {
   if (!enabled || !laidOut || laidOut.length === 0) return null;
 
   return (
+    // z-[11] sits above the freq-axis bar (z-10) so the tint reads over its
+    // black background, but below the dial marker (z-15) and the VFO label box
+    // (z-25), which stay crisply on top.
     <div
       aria-hidden
-      className="pointer-events-none absolute inset-0 z-[4] overflow-hidden"
+      className="pointer-events-none absolute inset-0 z-[11] overflow-hidden"
     >
       <div ref={stripRef} className="absolute inset-0">
         {laidOut.map(({ seg, leftPct, widthPct, colors }) => (
-          <div
-            key={`${seg.regionId}:${seg.lowHz}`}
-            className="absolute"
-            style={{
-              left: `${leftPct}%`,
-              width: `${widthPct}%`,
-              bottom: 0,
-              height: `${STRIP_HEIGHT_FRAC * 100}%`,
-              background: colors.strip,
-              borderTop: `1px solid ${colors.edge}`,
-              borderLeft: `1px solid ${colors.edge}`,
-              borderRight: `1px solid ${colors.edge}`,
-            }}
-          >
+          <div key={`${seg.regionId}:${seg.lowHz}`}>
+            {/* Colour tint inside the frequency-number bar, with a crisp
+                underline seating it against the spectrum. */}
+            <div
+              className="absolute"
+              style={{
+                left: `${leftPct}%`,
+                width: `${widthPct}%`,
+                top: 0,
+                height: FREQ_BAR_HEIGHT_PX,
+                background: colors.tint,
+                borderBottom: `2px solid ${colors.edge}`,
+              }}
+            />
+            {/* Description chip on the VFO-label-box baseline, styled to match
+                it (rounded-sm px-2 py-0.5 font-mono text-[10px]). */}
             {widthPct >= MIN_LABEL_WIDTH_PCT && (
               <div
-                className="absolute left-1/2 -translate-x-1/2 truncate whitespace-nowrap font-mono text-[9px]"
+                className="absolute -translate-x-1/2 whitespace-nowrap rounded-sm px-2 py-0.5 font-mono text-[10px] leading-none"
                 style={{
-                  bottom: 1,
-                  maxWidth: '100%',
-                  padding: '0 3px',
+                  left: `${leftPct + widthPct / 2}%`,
+                  top: HEADER_LINE_TOP_PX,
+                  background: 'rgba(8, 10, 14, 0.78)',
+                  border: `1px solid ${colors.edge}`,
                   color: colors.label,
                   textShadow: '0 0 2px rgba(0,0,0,0.85)',
                 }}
