@@ -232,10 +232,11 @@ public sealed class WdspDspEngine : IDspEngine
         public int FilterLowAbsHz = 150;
         public int FilterHighAbsHz = 2850;
         public RxaMode CurrentMode = RxaMode.USB;
-        // Thetis "AGC Top" max-gain setting in dB. 90 matches the Thetis
-        // default (radio.cs:1021 rx_agc_max_gain); the /api/agcGain endpoint can
-        // override at runtime.
-        public double AgcTopDb = 90.0;
+        // "AGC Top" max-gain setting in dB. With slope=0 (flat leveling, see
+        // ApplyAgcCore) 90 dB drops the AGC knee into the noise floor and pumps
+        // it up in speech gaps (choppy RX); 80 keeps the knee above the noise.
+        // The /api/agcGain endpoint can override at runtime up to 90.
+        public double AgcTopDb = 80.0;
         // AGC mode last applied via SetAgc / ApplyAgcDefaults. MED matches the
         // open-time default; surfaced so callers / tests can read back the mode.
         public AgcMode CurrentAgcMode = AgcMode.Med;
@@ -3485,21 +3486,34 @@ public sealed class WdspDspEngine : IDspEngine
     private static void ApplyAgcDefaults(int id)
     {
         ApplyAgcCore(id, new AgcConfig(AgcMode.Med));
-        NativeMethods.SetRXAAGCTop(id, 90.0);            // max gain, dB (Thetis radio.cs:1021 default)
+        NativeMethods.SetRXAAGCTop(id, 80.0);            // max gain, dB (keeps AGC knee above noise floor at slope=0)
     }
 
-    // Canned-mode presets, verbatim from Thetis console.cs:27958-28024. Hang/Decay
-    // in ms. HangThreshold: MED/FAST hard-set 100 (slider disabled); LONG/SLOW
-    // leave it at the Thetis slider/init default (0). Custom returns the Med
-    // baseline so a null custom field falls back somewhere sane.
+    // Canned-mode presets. Hang/Decay in ms. LONG/SLOW/FAST mirror Thetis
+    // console.cs:27958-28024 (= the native SetRXAAGCMode canned values in
+    // wcpAGC.c:354-382) verbatim.
+    //
+    // MED is a deliberate Zeus divergence: stock WDSP MED ships hangtime=0, so
+    // with our flat slope=0 leveling (ApplyAgcCore) the gain recovers over the
+    // 250 ms decay in every speech gap and pumps the noise floor up between
+    // words — audibly choppy RX. We give MED a 250 ms hang to bridge inter-
+    // syllable/word gaps so the gain holds steady through a QSO instead of
+    // pumping. The hang only engages when hang_backaverage > hang_level, and
+    // hang_level = 0.637·max_input at HangThreshold 100 — i.e. only near
+    // full-scale. So MED also drops to HangThreshold 0 (like LONG/SLOW), which
+    // lowers hang_level to ~0.637·min_volts so the hang engages across the
+    // normal signal range. This realises the project's "constant loudness, no
+    // pumping" AGC requirement on the default mode. FAST stays hang-free (snappy
+    // by design). Custom returns the Med baseline so a null custom field falls
+    // back somewhere sane.
     private static (int HangMs, int DecayMs, int HangThreshold) AgcPreset(AgcMode mode) => mode switch
     {
         AgcMode.Long => (2000, 2000, 0),
         AgcMode.Slow => (1000, 500, 0),
-        AgcMode.Med => (0, 250, 100),
+        AgcMode.Med => (250, 250, 0),
         AgcMode.Fast => (0, 50, 100),
-        AgcMode.Fixed => (0, 250, 100),
-        _ => (0, 250, 100),
+        AgcMode.Fixed => (250, 250, 0),
+        _ => (250, 250, 0),
     };
 
     // Pushes the AGC mode + custom/fixed params to WDSP. Shared by ApplyAgcDefaults

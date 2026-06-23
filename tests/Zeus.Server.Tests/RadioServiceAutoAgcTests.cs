@@ -35,21 +35,25 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
     }
 
     [Fact]
-    public void FreshRadio_UsesWdspMediumAgcTopBaseline()
+    public void FreshRadio_UsesDefaultAgcTopBaseline()
     {
+        // Default baseline is 80 dB, not the WDSP/Thetis 90: at slope=0 (flat
+        // leveling) a 90 dB AGC top sinks the knee into the noise floor and pumps
+        // it in speech gaps. 80 keeps the knee above the noise. The slider ceiling
+        // stays 90 (RadioService.MaxAgcTopDb) as headroom for weak bands.
         using var radio = NewRadio();
 
-        Assert.Equal(90.0, radio.Snapshot().AgcTopDb);
+        Assert.Equal(80.0, radio.Snapshot().AgcTopDb);
     }
 
     [Fact]
     public void AutoAgc_LowersEffectiveBelowBaseline_OnNoisyBand()
     {
-        // Symmetric tracking (#806): default baseline AgcTopDb is 90; a noisy
+        // Symmetric tracking (#806): default baseline AgcTopDb is 80; a noisy
         // -80 dBm floor wants effective = clamp(-40-(-80)=40, 20, 100) = 40, so
-        // the offset goes NEGATIVE (40-90 = -50) — the loop lowers gain below the
+        // the offset goes NEGATIVE (40-80 = -40) — the loop lowers gain below the
         // slider baseline on a noisy band. This is the behavior the old
-        // Math.Max(0, …) clamp suppressed (making auto-AGC inaudible at the 90 dB
+        // Math.Max(0, …) clamp suppressed (making auto-AGC inaudible at the
         // default); the spectrum-floor source is exercised here explicitly.
         using var radio = NewRadio();
         radio.SetAutoAgc(true);
@@ -60,8 +64,8 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
                 adcPkDbfs: double.NaN, agcGainDb: double.NaN, nowMs: i * 500);
 
         var snap = radio.Snapshot();
-        Assert.Equal(90.0, snap.AgcTopDb);
-        Assert.Equal(-50.0, snap.AgcOffsetDb);
+        Assert.Equal(80.0, snap.AgcTopDb);
+        Assert.Equal(-40.0, snap.AgcOffsetDb);
         Assert.Equal(40.0, snap.AgcTopDb + snap.AgcOffsetDb); // effective AGC-T
     }
 

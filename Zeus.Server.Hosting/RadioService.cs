@@ -56,9 +56,15 @@ namespace Zeus.Server;
 public sealed class RadioService : IDisposable
 {
     private const int DefaultHpsdrPort = 1024;
-    internal const double DefaultAgcTopDb = 90.0;   // Thetis radio.cs:1021 rx_agc_max_gain default
+    // Default AGC-T baseline. With slope=0 (flat leveling — see WdspDspEngine
+    // ApplyAgcCore) the AGC knee sits at out_target/max_gain; max_gain = 10^(top/20).
+    // At 90 dB the knee sinks ~13 dB into the noise floor, so the AGC normalizes
+    // the noise itself and pumps it up in speech gaps (choppy RX). 80 keeps the
+    // knee above the noise while still normalizing real signals to one loudness.
+    // The slider ceiling stays 90 (MaxAgcTopDb) as headroom for weak bands.
+    internal const double DefaultAgcTopDb = 80.0;
     // Operator AGC-T baseline range. Below ~30 dB the RX audio is effectively
-    // muted and 90 dB is the Thetis default / loudest the AGC will drive; the
+    // muted and 90 dB is the loudest the AGC will drive; the
     // old -20..120 span (mirroring the raw Thetis slider) exposed a large dead
     // region the operator never used. The slider is linear across this window.
     // NOTE: this bounds only the manual baseline (AgcTopDb). Auto-AGC's offset
