@@ -1823,6 +1823,68 @@ public static class ZeusEndpoints
             return Results.Ok(r.SetNr4(req));
         });
 
+        // ---- NR3 (RNNoise) model management (issue #79 follow-up) ----
+        // Zeus ships no model; NR3 stays hidden in the UI until the operator
+        // installs an RNNoise weights file here — either a multipart upload or a
+        // server-side fetch from a URL. Native availability + the installed
+        // model name also ride StateDto, so the GET is a convenience for the
+        // install panel.
+        app.MapGet("/api/rx/nr3/model", (RadioService r) =>
+        {
+            var s = r.Snapshot();
+            return Results.Ok(new { available = s.WdspNr3RnnrAvailable, modelName = s.Nr3ModelName });
+        });
+
+        app.MapPost("/api/rx/nr3/model", async (HttpRequest http, RadioService r) =>
+        {
+            if (!http.HasFormContentType || http.Form.Files.Count == 0)
+                return Results.BadRequest(new { error = "expected multipart/form-data with a 'file' field" });
+            var file = http.Form.Files["file"] ?? http.Form.Files[0];
+            if (file.Length == 0)
+                return Results.BadRequest(new { error = "uploaded model file is empty" });
+            using var ms = new MemoryStream();
+            await file.CopyToAsync(ms);
+            try
+            {
+                var state = r.InstallNr3Model(ms.ToArray(), file.FileName);
+                log.LogInformation("api.rx.nr3.model.install name=\"{Name}\" bytes={Bytes}", file.FileName, ms.Length);
+                return Results.Ok(state);
+            }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (InvalidOperationException ex) { return Results.Problem(ex.Message); }
+        });
+
+        app.MapPost("/api/rx/nr3/model/download", async (Nr3ModelDownloadRequest req, RadioService r, IHttpClientFactory httpFactory) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.Url) ||
+                !Uri.TryCreate(req.Url, UriKind.Absolute, out var uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+                return Results.BadRequest(new { error = "url must be an absolute http(s) URL" });
+            try
+            {
+                var client = httpFactory.CreateClient();
+                client.Timeout = TimeSpan.FromSeconds(60);
+                // Cap the buffered response so a wrong (huge) URL can't OOM the
+                // host; the model store enforces its own 64 MiB ceiling too.
+                client.MaxResponseContentBufferSize = 80L * 1024 * 1024;
+                var bytes = await client.GetByteArrayAsync(uri);
+                var name = Path.GetFileName(uri.LocalPath);
+                if (string.IsNullOrWhiteSpace(name)) name = "model.rnnn";
+                var state = r.InstallNr3Model(bytes, name);
+                log.LogInformation("api.rx.nr3.model.download url=\"{Url}\" bytes={Bytes}", req.Url, bytes.Length);
+                return Results.Ok(state);
+            }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (HttpRequestException ex) { return Results.BadRequest(new { error = $"download failed: {ex.Message}" }); }
+            catch (TaskCanceledException) { return Results.BadRequest(new { error = "download timed out" }); }
+        });
+
+        app.MapDelete("/api/rx/nr3/model", (RadioService r) =>
+        {
+            log.LogInformation("api.rx.nr3.model.remove");
+            return Results.Ok(r.RemoveNr3Model());
+        });
+
         // Manual notch filters (MNF) — the client posts the full notch list on
         // every change (and on connect). GET returns the current set so a fresh
         // client (or a reconnect) can hydrate. Notches kill EMF/birdies in the

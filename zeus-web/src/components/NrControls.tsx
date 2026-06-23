@@ -55,14 +55,24 @@ import { NrSettingsSection, type NrSettingsMode } from './nr/NrSettingsSection';
 
 // NR-button cycle mirrors the proven operator NR paths: Off -> NR1 (ANR,
 // time-domain LMS) -> NR2 (EMNR, Ephraim-Malah spectral) -> NR4 (SBNR,
-// libspecbleach). NR3 (RNNR) is intentionally skipped; see issue #79. Removed
-// NR modes are not part of the normal cycle.
-const NR_CYCLE: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
+// libspecbleach) -> NR3 (RNNR, RNNoise). NR3 is appended to the cycle only when
+// libwdsp exports RNNR AND the operator has installed a model (Zeus ships none;
+// install it from the DSP menu) — see nrCycleFor(). Removed NR modes are not
+// part of the normal cycle.
+const NR_CYCLE_BASE: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
+
+// NR3 stays out of the cycle until both the native symbols are present and a
+// model is installed, so the operator never lands on an inert NR3.
+function nrCycleFor(nr3Ready: boolean): readonly NrMode[] {
+  return nr3Ready ? [...NR_CYCLE_BASE, 'Rnnr'] : NR_CYCLE_BASE;
+}
+
 const NR_LABEL: Record<NrMode, string> = {
   Off: 'NR',
   Anr: 'NR',
   Emnr: 'NR2',
   Sbnr: 'NR4',
+  Rnnr: 'NR3',
 };
 
 const NB_CYCLE: readonly NbMode[] = ['Off', 'Nb1', 'Nb2'];
@@ -82,6 +92,7 @@ function nrButtonTitle(mode: NrMode): string {
     case 'Anr': return 'NR1 (ANR, time-domain LMS)';
     case 'Emnr': return 'NR2 (EMNR, spectral)';
     case 'Sbnr': return 'NR4 (SBNR, libspecbleach)';
+    case 'Rnnr': return 'NR3 (RNNoise, neural)';
   }
 }
 
@@ -129,12 +140,17 @@ export function NrControls() {
     [setLocalNr, applyState],
   );
 
+  const nr3Available = useConnectionStore((s) => s.wdspNr3RnnrAvailable);
+  const nr3ModelName = useConnectionStore((s) => s.nr3ModelName);
+  const nr3Ready = nr3Available && !!nr3ModelName;
+
   const cycleNr = useCallback(() => {
     if (!connected) return;
-    const idx = NR_CYCLE.indexOf(nr.nrMode);
-    const nextIdx = (idx < 0 ? 0 : idx + 1) % NR_CYCLE.length;
-    send({ ...nr, nrMode: NR_CYCLE[nextIdx]! });
-  }, [nr, send, connected]);
+    const cycle = nrCycleFor(nr3Ready);
+    const idx = cycle.indexOf(nr.nrMode);
+    const nextIdx = (idx < 0 ? 0 : idx + 1) % cycle.length;
+    send({ ...nr, nrMode: cycle[nextIdx]! });
+  }, [nr, send, connected, nr3Ready]);
 
   const cycleNb = useCallback(() => {
     const idx = NB_CYCLE.indexOf(nr.nbMode);

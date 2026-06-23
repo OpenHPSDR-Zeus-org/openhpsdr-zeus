@@ -71,7 +71,7 @@ export type RxMode =
 export type Rx2AudioMode = 'both' | 'rx1' | 'rx2';
 export type TxVfo = 'A' | 'B';
 
-export type NrMode = 'Off' | 'Anr' | 'Emnr' | 'Sbnr';
+export type NrMode = 'Off' | 'Anr' | 'Emnr' | 'Sbnr' | 'Rnnr';
 export type NbMode = 'Off' | 'Nb1' | 'Nb2';
 
 // SSB bandpass "rectangularity" (issue #871). 'Soft' = WDSP fir.c
@@ -212,7 +212,7 @@ export const NR2_CORE_DEFAULTS = {
   npeMethod: 0 as 0 | 1 | 2,         // OSMS
   aeRun: true,
   trainT1: -0.5,
-  trainT2: 2.0,
+  trainT2: 0.2, // Thetis udDSPNR2trainT2 NUD default (range 0.02..0.3)
 } as const;
 
 export const GAIN_METHOD_LABELS = ['Linear', 'Log', 'Gamma', 'Trained'] as const;
@@ -335,6 +335,12 @@ export type RadioStateDto = {
   adcOverloadWarning: boolean;
   preampOn: boolean;
   nr: NrConfigDto;
+  // NR3 (RNNoise): native availability (libwdsp RNNR exports present) plus the
+  // operator-installed model file name (null = none installed). NR3 is revealed
+  // in the NR cycle only when available AND a model is installed — Zeus ships no
+  // model, so the operator installs one via the DSP menu.
+  wdspNr3RnnrAvailable: boolean;
+  nr3ModelName: string | null;
   zoomLevel: ZoomLevel;
   // PureSignal persisted settings — server is the source of truth, hydrated
   // into tx-store on connect so a fresh browser (no localStorage) sees the
@@ -2038,7 +2044,7 @@ const MODE_ORDER: readonly RxMode[] = [
 ];
 
 const RX2_AUDIO_MODE_ORDER: readonly Rx2AudioMode[] = ['both', 'rx1', 'rx2'];
-const NR_MODE_ORDER: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
+const NR_MODE_ORDER: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr', 'Rnnr'];
 const NB_MODE_ORDER: readonly NbMode[] = ['Off', 'Nb1', 'Nb2'];
 
 export function normalizeStatus(v: unknown): ConnectionStatus {
@@ -2435,6 +2441,8 @@ export function normalizeState(raw: unknown): RadioStateDto {
     // StateDto.Nr is nullable on the server (older clients) — fall back to
     // the engine's declared defaults so the UI has something to render.
     nr: normalizeNr(r.nr),
+    wdspNr3RnnrAvailable: Boolean(r.wdspNr3RnnrAvailable),
+    nr3ModelName: typeof r.nr3ModelName === 'string' ? r.nr3ModelName : null,
     zoomLevel: normalizeZoomLevel(r.zoomLevel),
     // PureSignal persisted settings. Defaults match RadioService.cs init and
     // PsSettingsEntry — older servers without the fields fall back cleanly.
@@ -6230,6 +6238,50 @@ export function setNr4(
     },
     normalizeState,
   );
+}
+
+// ---- NR3 (RNNoise) model management ----
+// Zeus ships no model; the operator installs an RNNoise weights file (upload or
+// URL fetch) via the DSP menu. `available` reflects whether libwdsp exports the
+// RNNR symbols; `modelName` is the installed file name (null = none).
+export type Nr3ModelStatus = { available: boolean; modelName: string | null };
+
+export function getNr3ModelStatus(signal?: AbortSignal): Promise<Nr3ModelStatus> {
+  return jsonFetch(
+    '/api/rx/nr3/model',
+    { signal },
+    (raw) => {
+      const r = (raw ?? {}) as Record<string, unknown>;
+      return {
+        available: Boolean(r.available),
+        modelName: typeof r.modelName === 'string' ? r.modelName : null,
+      };
+    },
+  );
+}
+
+export function uploadNr3Model(file: File, signal?: AbortSignal): Promise<RadioStateDto> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  // No content-type header: the browser sets multipart/form-data + boundary.
+  return jsonFetch('/api/rx/nr3/model', { method: 'POST', body: form, signal }, normalizeState);
+}
+
+export function downloadNr3Model(url: string, signal?: AbortSignal): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/rx/nr3/model/download',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+export function removeNr3Model(signal?: AbortSignal): Promise<RadioStateDto> {
+  return jsonFetch('/api/rx/nr3/model', { method: 'DELETE', signal }, normalizeState);
 }
 
 // MOX endpoint returns {moxOn} — not a full StateDto — because MOX is
