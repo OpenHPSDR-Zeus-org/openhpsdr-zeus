@@ -39,17 +39,17 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
     {
         using var radio = NewRadio();
 
-        Assert.Equal(80.0, radio.Snapshot().AgcTopDb);
+        Assert.Equal(90.0, radio.Snapshot().AgcTopDb);
     }
 
     [Fact]
     public void AutoAgc_LowersEffectiveBelowBaseline_OnNoisyBand()
     {
-        // Symmetric tracking (#806): default baseline AgcTopDb is 80; a noisy
+        // Symmetric tracking (#806): default baseline AgcTopDb is 90; a noisy
         // -80 dBm floor wants effective = clamp(-40-(-80)=40, 20, 100) = 40, so
-        // the offset goes NEGATIVE (40-80 = -40) — the loop lowers gain below the
+        // the offset goes NEGATIVE (40-90 = -50) — the loop lowers gain below the
         // slider baseline on a noisy band. This is the behavior the old
-        // Math.Max(0, …) clamp suppressed (making auto-AGC inaudible at the 80 dB
+        // Math.Max(0, …) clamp suppressed (making auto-AGC inaudible at the 90 dB
         // default); the spectrum-floor source is exercised here explicitly.
         using var radio = NewRadio();
         radio.SetAutoAgc(true);
@@ -60,8 +60,8 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
                 adcPkDbfs: double.NaN, agcGainDb: double.NaN, nowMs: i * 500);
 
         var snap = radio.Snapshot();
-        Assert.Equal(80.0, snap.AgcTopDb);
-        Assert.Equal(-40.0, snap.AgcOffsetDb);
+        Assert.Equal(90.0, snap.AgcTopDb);
+        Assert.Equal(-50.0, snap.AgcOffsetDb);
         Assert.Equal(40.0, snap.AgcTopDb + snap.AgcOffsetDb); // effective AGC-T
     }
 
@@ -341,11 +341,11 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
     public void SetAgcTop_ClampsBaselineToRange()
     {
         using var radio = NewRadio();
-        // Operator baseline range is 30..80 dB (loudest 80 / quietest 30).
-        Assert.Equal(80.0, radio.SetAgcTop(200.0).AgcTopDb);
+        // Operator baseline range is 30..90 dB (loudest 90 / quietest 30).
+        Assert.Equal(90.0, radio.SetAgcTop(200.0).AgcTopDb);
         Assert.Equal(30.0, radio.SetAgcTop(-50.0).AgcTopDb);
         // Just outside each rail clamps to the rail; in-range passes through.
-        Assert.Equal(80.0, radio.SetAgcTop(80.5).AgcTopDb);
+        Assert.Equal(90.0, radio.SetAgcTop(90.5).AgcTopDb);
         Assert.Equal(30.0, radio.SetAgcTop(29.5).AgcTopDb);
         Assert.Equal(55.0, radio.SetAgcTop(55.0).AgcTopDb);
     }
@@ -354,13 +354,13 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
     public void HydratedBaseline_ClampsLegacyAboveMaxIntoRange()
     {
         // A legacy persisted value from the old -20..120 slider must not park
-        // the thumb off the new 30..80 rail on restart.
+        // the thumb off the new 30..90 rail on restart.
         using (var seed = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _basePath + ".dsp.db"))
         {
             seed.SetAgcTopDb(120.0);
         }
         using var radio = NewRadio(); // reopens the same dsp.db, hydrates on construct
-        Assert.Equal(80.0, radio.Snapshot().AgcTopDb);
+        Assert.Equal(90.0, radio.Snapshot().AgcTopDb);
     }
 
     [Fact]
