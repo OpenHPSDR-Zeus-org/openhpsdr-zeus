@@ -82,6 +82,10 @@ public sealed class AudioProcessingModeService : IHostedService
         // back EMPTY. Replay the operator's chain (with saved per-plugin state) so
         // VST mode recovers transparently — same path as a live chain edit.
         _engine.Reconnected += OnEngineReconnected;
+        // Tier-1 TX-output-dead self-heal: the liveness watchdog asks us to re-push
+        // the chain into the LIVE engine (re-instantiating plugins) without a process
+        // recycle — same effect as a manual profile change. (zeus-umt6)
+        _engine.ChainReloadRequested += OnChainReloadRequested;
         _engine.Faulted += reason =>
             _log.LogWarning("VST engine fault: {Reason}", reason);
         // Keep the live engine's loaded chain in sync with operator edits made
@@ -116,6 +120,18 @@ public sealed class AudioProcessingModeService : IHostedService
     }
 
     /// <summary>
+    /// The TX-liveness watchdog found the engine returning dead audio while still
+    /// responsive and asked for an in-place chain reload (Tier-1 recovery). Re-push
+    /// the chain so every engine plugin is re-instantiated — the same fix a manual
+    /// profile change performs, with no process recycle. Control thread. (zeus-umt6)
+    /// </summary>
+    private void OnChainReloadRequested()
+    {
+        _log.LogWarning("VST engine TX-output recovery: re-pushing chain into the live engine (zeus-umt6).");
+        if (_engine.IsActive) LoadChainIntoEngine();
+    }
+
+    /// <summary>
     /// Engine control-plane events (control thread). We watch <c>chain</c> to keep
     /// the id-&gt;slot map aligned with the engine's ACTUAL slot indices — the
     /// engine compacts slots past any plugin that failed to load, so load-order
@@ -129,7 +145,19 @@ public sealed class AudioProcessingModeService : IHostedService
         {
             if (!e.TryGetProperty("event", out var evt)
                 || evt.ValueKind != System.Text.Json.JsonValueKind.String) return;
-            if (evt.GetString() != "chain") return;
+            var name = evt.GetString();
+            // Engine-reported faults (plugin load failures, processing errors). These
+            // were previously dropped — surface them so a wedge that the seq-based
+            // health model can't see (engine alive but output dead) leaves a trail.
+            if (name is "error" or "warning")
+            {
+                var msg = e.TryGetProperty("message", out var m)
+                    && m.ValueKind == System.Text.Json.JsonValueKind.String
+                        ? m.GetString() : null;
+                _log.LogWarning("VST engine {Kind}: {Message}", name, msg ?? "(no message)");
+                return;
+            }
+            if (name != "chain") return;
             if (!e.TryGetProperty("plugins", out var plugins)
                 || plugins.ValueKind != System.Text.Json.JsonValueKind.Array) return;
 
