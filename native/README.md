@@ -24,9 +24,12 @@ native/
 
 ## NR3 / NR4 build flags
 
-- `WDSP_WITH_NR3` — RNNoise (NR3) support. **OFF by default**; librnnoise is
-  not yet vendored. When OFF, `stubs/nr3/rnnr_stub.c` is compiled in place of
-  `rnnr.c`, leaving `rnnr.p->run` at 0 so the NR3 branch never executes.
+- `WDSP_WITH_NR3` — RNNoise (NR3) support. **ON by default** since xiph/rnnoise
+  is vendored at `native/rnnoise/` and built as a static sub-target — without a
+  baked-in model, so NR3 is inert until the operator installs a weights file
+  (see `native/rnnoise/VENDORING.md`). When OFF, `stubs/nr3/rnnr_stub.c` is
+  compiled in place of `rnnr.c`, leaving `rnnr.p->run` at 0 so the NR3 branch
+  never executes.
 - `WDSP_WITH_NR4` — libspecbleach / SBNR support. **ON by default** since
   libspecbleach is vendored at `native/libspecbleach/`. When OFF,
   `stubs/nr4/sbnr_stub.c` is compiled instead.
