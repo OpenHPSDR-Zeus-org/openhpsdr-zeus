@@ -2048,8 +2048,15 @@ export function normalizeStatus(v: unknown): ConnectionStatus {
 
 function modeFromWire(v: unknown): RxMode | null {
   if (typeof v === 'string') {
-    return (MODE_ORDER as readonly string[]).includes(v)
-      ? (v as RxMode)
+    // The server serialises RxMode by its C# enum NAME. Every name is all-caps
+    // (USB, CWL, …) EXCEPT FreeDv (PascalCase), while our RxMode literals are
+    // all-caps ('FREEDV'). Match case-insensitively so "FreeDv" resolves to
+    // 'FREEDV' instead of falling through to the 'USB' default in normalizeMode
+    // — that miss is what made FreeDV mode silently revert to USB on the next
+    // state round-trip.
+    const upper = v.toUpperCase();
+    return (MODE_ORDER as readonly string[]).includes(upper)
+      ? (upper as RxMode)
       : null;
   }
   if (typeof v === 'number' && Number.isInteger(v)) {
