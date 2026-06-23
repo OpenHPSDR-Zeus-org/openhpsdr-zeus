@@ -2801,6 +2801,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Test seam: run a hi-priority status body (the bytes that follow the
+    /// 4-byte sequence header — i.e. payload[0] is the PTT/Dot/Dash/PLL byte)
+    /// through the exact decode + dispatch path the UDP-1025 RX loop uses,
+    /// raising <see cref="TelemetryReceived"/>. Lets higher layers
+    /// integration-test the telemetry wiring (e.g. PTT-IN → MOX) against a real
+    /// client instance without standing up a socket. Not a hot path.
+    /// </summary>
+    internal void RaiseHiPriStatusForTest(ReadOnlySpan<byte> bodyAfterSeqHeader)
+    {
+        var buf = new byte[HiPriSeqHeaderBytes + bodyAfterSeqHeader.Length];
+        bodyAfterSeqHeader.CopyTo(buf.AsSpan(HiPriSeqHeaderBytes));
+        HandleHiPriStatusPacket(buf, buf.Length);
+    }
+
     // PS-armed packet shape on UDP 1035: 16-byte header (4 seq, 8 timestamp,
     // 4 reserved) followed by 119 sample pairs at 12 bytes each (6B DDC0 +
     // 6B DDC1). 16 + 119*12 = 1444 = BufLen. We accumulate into the 1024-

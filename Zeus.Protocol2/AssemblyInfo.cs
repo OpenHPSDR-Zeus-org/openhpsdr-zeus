@@ -50,3 +50,7 @@ using System.Runtime.CompilerServices;
 // delegates to Protocol2Client's pure antenna-bit helpers so the firewall and
 // the wire path share one copy of the math — byte-identical by construction.
 [assembly: InternalsVisibleTo("Zeus.Server.Hosting")]
+// HardwarePttEndToEndTests drives the hi-priority status seam
+// (RaiseHiPriStatusForTest) to integration-test the live P2 PTT-IN → MOX wiring
+// across the RadioService / ExternalPttService seams without a UDP socket.
+[assembly: InternalsVisibleTo("Zeus.Server.Tests")]

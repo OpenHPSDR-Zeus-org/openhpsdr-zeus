@@ -56,6 +56,32 @@ internal sealed unsafe class VstEngineBridge : IVstEngineBridge
     /// <summary>Count of blocks that fell through to passthrough (timeout / stale).</summary>
     public long DegradedBlocks => Interlocked.Read(ref _degraded);
 
+    /// <summary>
+    /// Engine-written lifecycle state (OffEngineState: 0=init 1=running 2=draining).
+    /// Diagnostics-only reader — capture a stable base pointer and null-check it so a
+    /// race with <see cref="Dispose"/> degrades to 0 instead of faulting on a torn map.
+    /// </summary>
+    public uint EngineState
+    {
+        get
+        {
+            if (Volatile.Read(ref _disposed) != 0) return 0;
+            var b = _base;
+            return b == null ? 0u : *(uint*)(b + VstEngineProtocol.OffEngineState);
+        }
+    }
+
+    /// <summary>Engine-written flags (OffFlags: bit0 = bypassed / empty chain). Diagnostics-only.</summary>
+    public uint EngineFlags
+    {
+        get
+        {
+            if (Volatile.Read(ref _disposed) != 0) return 0;
+            var b = _base;
+            return b == null ? 0u : *(uint*)(b + VstEngineProtocol.OffFlags);
+        }
+    }
+
     public string ShmName { get; }
 
     private VstEngineBridge(string shm, MemoryMappedFile mmf, MemoryMappedViewAccessor view,

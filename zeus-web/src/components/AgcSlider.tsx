@@ -55,13 +55,13 @@ import {
 import { useConnectionStore } from '../state/connection-store';
 import { useLiveSlider } from '../hooks/useLiveSlider';
 
-// AGC top (max gain) in dB. 80 is the loudest the AGC drives (the Thetis
-// AGC_MEDIUM default / upper gain limit); 30 is the quietest useful baseline.
-// The slider is linear across this 30..80 window — the old 0..120 span was
+// AGC top (max gain) in dB. 90 is the loudest the AGC drives (the Thetis
+// rx_agc_max_gain default, radio.cs:1021); 30 is the quietest useful baseline.
+// The slider is linear across this 30..90 window — the old 0..120 span was
 // mostly dead travel the operator never used. The backend enforces the same
 // bounds (RadioService.MinAgcTopDb/MaxAgcTopDb).
 const MIN = 30;
-const MAX = 80;
+const MAX = 90;
 // Auto-AGC adds an offset on top of the baseline, so the EFFECTIVE value the
 // readout shows can roam outside 30..80. Clamp the readout to the wider
 // effective range the server allows (RadioService AgcMin/MaxEffectiveAgcT =

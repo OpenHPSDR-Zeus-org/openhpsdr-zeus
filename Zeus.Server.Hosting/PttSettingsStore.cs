@@ -12,11 +12,12 @@
 // status lamp (so the operator sees the footswitch press) but does NOT promote
 // the hardware edge to MOX — keying stays UI-only.
 //
-// Defaults OFF (opt-in): a fresh install / pre-feature DB leaves the footswitch
-// inert until the operator enables the gate in Radio Settings. A persisted ON
-// flag only ARMS the gate across restarts; it never auto-keys MOX — actual TX
-// still requires a physical footswitch edge (edge-triggered in
-// ExternalPttService).
+// Defaults ON (Thetis-faithful): a fresh install / pre-feature DB keys MOX from
+// the footswitch out of the box, exactly like Thetis. Arming the gate never
+// auto-keys MOX on its own — actual TX still requires a physical footswitch
+// edge (edge-triggered in ExternalPttService), so default-ON is safe: the radio
+// only transmits when the operator presses the pedal. An operator who wants
+// UI-only keying turns the gate OFF in Radio Settings; that choice persists.
 //
 // Single-row LiteDB collection ("ptt_settings") sharing zeus-prefs.db, mirroring
 // ChatEnabledStore. Insert/Update (NOT Upsert with Id=0) avoids the LiteDB
@@ -51,14 +52,15 @@ public sealed class PttSettingsStore : IDisposable
     }
 
     /// <summary>Whether hardware PTT-IN is promoted to MOX. A missing row (fresh
-    /// install / pre-feature DB) defaults to OFF — hardware PTT-IN keying is
-    /// opt-in; the operator enables the footswitch gate in Radio Settings.</summary>
+    /// install / pre-feature DB) defaults to ON — the footswitch keys MOX out of
+    /// the box, like Thetis. The operator can turn the gate OFF in Radio
+    /// Settings for UI-only keying; that choice is persisted.</summary>
     public bool Get()
     {
         lock (_sync)
         {
             var entry = _rows.FindAll().FirstOrDefault();
-            return entry?.Enabled ?? false;
+            return entry?.Enabled ?? true;
         }
     }
 

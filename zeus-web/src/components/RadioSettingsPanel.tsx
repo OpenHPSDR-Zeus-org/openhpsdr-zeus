@@ -5,7 +5,7 @@
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 //
 // RADIO SETTINGS tab. Cards:
-//   1. PTT-IN → MOX opt-in gate, with a live PTT-IN status lamp.
+//   1. PTT-IN → MOX enable gate, with a live PTT-IN status lamp.
 //   2. Audio Input — the single-select TX-audio SOURCE (external-audio-jacks
 //      re-port). Board-gated off the per-board capability flags carried in the
 //      /api/radio/audio GET response, so the picker offers only the jacks the
@@ -14,7 +14,8 @@
 // Every board exposes a PTT-IN line, so that card is ungated by board. The
 // `keyed` lamp is driven live by the PttStatusFrame WS edge regardless of the
 // enable toggle; the toggle only controls whether a footswitch press is promoted
-// to host MOX. Defaults OFF (opt-in) server-side.
+// to host MOX. Defaults ON (Thetis-faithful) server-side; promotion is
+// edge-triggered so default-ON never auto-keys without a real footswitch edge.
 //
 // Visual idiom reuses PsSettingsPanel's `.ps-shell` / `.ps-card` / `.ps-field`
 // surfaces (tokens only, no new chrome / palette). Layout / visual specifics
