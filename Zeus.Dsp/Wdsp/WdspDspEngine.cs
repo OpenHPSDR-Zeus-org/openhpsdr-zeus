@@ -2190,19 +2190,49 @@ public sealed class WdspDspEngine : IDspEngine
         _log.LogInformation("wdsp.setTxFilter low={Low} high={High}", lowHz, highHz);
     }
 
-    // SSB filter rectangularity (issue #871). WDSP's fir.c exposes two FIR
-    // window shapes via fir_bandpass's wintype parameter: Soft = 0
-    // (Blackman-Harris 4-term, gentler shoulder), Sharp = 1 (BH 7-term, the
-    // current hardcoded RX/TX default at OpenChannel/OpenTxChannel). The
-    // setters below rebuild the bandpass FIR impulse response in-place — WDSP
-    // takes the criticalsection around the swap so it's safe to call during
-    // live audio.
+    // SSB filter rectangularity (issue #871). The audible shoulder/skirt
+    // steepness of the SSB bandpass is governed by the FIR *tap count* (nc),
+    // NOT by the fir.c window family (Blackman-Harris 4- vs 7-term, which differ
+    // only ~90 dB down in the stopband — inaudible on voice; that was the
+    // original #883 mechanism and the operator heard no change). More taps =>
+    // narrower transition => harder/rectangular shoulder (Icom-like); fewer
+    // taps => wider transition => rounder/flat shoulder (Yaesu-like). This is
+    // exactly Thetis's "Filter Size" lever. The window family stays at WDSP's
+    // open-time BH-7 default for best stopband. SetRX/TXABandpassNC rebuild the
+    // FIR impulse in-place inside csDSP, so it is safe during live audio.
+    //
+    // The preset -> nc map (resolved against the channel's WDSP block 'size'):
+    //   Soft   -> size            (legal floor; widest transition)
+    //   Normal -> max(2048, size) (== the WDSP create_bandpass open value, so a
+    //                              fresh/default session is byte-identical to
+    //                              pre-#871 RF — no default drift)
+    //   Sharp  -> 2 * Normal      (narrowest transition, ~Thetis 4096 default)
+    // nc is clamped to WDSP's legality rule: nc >= size and an integer multiple
+    // of size (bandpass.c NOTE; firmin nfor = nc/size).
+    internal static int ResolveBandpassNc(BandpassWindow shape, int size)
+    {
+        int openNc = Math.Max(2048, size);
+        int nc = shape switch
+        {
+            BandpassWindow.Soft => size,
+            BandpassWindow.Normal => openNc,
+            BandpassWindow.Sharp => openNc * 2,
+            _ => openNc,
+        };
+        if (nc < size) nc = size;
+        if (nc % size != 0) nc = (nc / size) * size;
+        if (nc < size) nc = size;
+        return nc;
+    }
+
     public void SetRxBandpassWindow(int channelId, BandpassWindow window)
     {
         if (_disposed != 0) return;
         if (!_channels.TryGetValue(channelId, out _)) return;
-        NativeMethods.SetRXABandpassWindow(channelId, (int)window);
-        _log.LogInformation("wdsp.setRxBandpassWindow ch={Ch} win={Win}", channelId, window);
+        int nc = ResolveBandpassNc(window, RxaDspSize);
+        NativeMethods.SetRXABandpassNC(channelId, nc);
+        _log.LogInformation("wdsp.setRxBandpassShape ch={Ch} shape={Win} nc={Nc} size={Size}",
+            channelId, window, nc, RxaDspSize);
     }
 
     public void SetTxBandpassWindow(BandpassWindow window)
@@ -2211,9 +2241,11 @@ public sealed class WdspDspEngine : IDspEngine
         lock (_txaLock)
         {
             if (_txaChannelId is not int txa) return;
-            NativeMethods.SetTXABandpassWindow(txa, (int)window);
+            int nc = ResolveBandpassNc(window, _txaDspSize);
+            NativeMethods.SetTXABandpassNC(txa, nc);
+            _log.LogInformation("wdsp.setTxBandpassShape txa={Txa} shape={Win} nc={Nc} size={Size}",
+                txa, window, nc, _txaDspSize);
         }
-        _log.LogInformation("wdsp.setTxBandpassWindow win={Win}", window);
     }
 
     /// <summary>Operator-facing TX-monitor toggle. When true, the engine opens

@@ -366,12 +366,14 @@ public sealed class RadioService : IDisposable
         // TxLevelingConfig defaults so first-connect behaviour is unchanged
         // (Thetis §6.1-6.3). The Leveler max-gain stays on LevelerMaxGainDb.
         var persistedTxLeveling = _dspSettingsStore.GetTxLeveling() ?? new TxLevelingConfig();
-        // SSB bandpass "rectangularity" (issue #871). Null on a fresh install /
-        // legacy DB row falls back to BandpassWindow.Sharp, the WDSP hardcoded
-        // default at OpenChannel/OpenTxChannel time, so first-connect audio is
-        // byte-identical to pre-#871 builds. RX and TX are independent.
-        var persistedRxFilterWindow = _dspSettingsStore.GetRxFilterWindow() ?? BandpassWindow.Sharp;
-        var persistedTxFilterWindow = _dspSettingsStore.GetTxFilterWindow() ?? BandpassWindow.Sharp;
+        // SSB bandpass "rectangularity" (issue #871). Null on a fresh install
+        // falls back to BandpassWindow.Normal, which resolves to the WDSP
+        // open-time tap count (nc = max(2048, dsp_size)), so first-connect audio
+        // is byte-identical to pre-#871 builds. A pre-#871 persisted row stored
+        // the old two-value "Sharp" as byte 1, which now deserialises to Normal
+        // (same byte) — also today's behaviour. RX and TX are independent.
+        var persistedRxFilterWindow = _dspSettingsStore.GetRxFilterWindow() ?? BandpassWindow.Normal;
+        var persistedTxFilterWindow = _dspSettingsStore.GetTxFilterWindow() ?? BandpassWindow.Normal;
 
         // TX Audio Profile startup overlay. If the operator has a "last loaded"
         // unified TX Audio Profile, its scalar/config values overlay the

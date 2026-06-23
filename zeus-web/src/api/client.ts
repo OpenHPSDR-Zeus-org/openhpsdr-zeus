@@ -79,7 +79,7 @@ export type NbMode = 'Off' | 'Nb1' | 'Nb2';
 // (steeper shoulder, Icom-like). RX and TX selectors are independent. Match
 // the Zeus.Contracts.BandpassWindow enum (server serialises as the string
 // name via JsonStringEnumConverter).
-export type BandpassWindow = 'Soft' | 'Sharp';
+export type BandpassWindow = 'Soft' | 'Normal' | 'Sharp';
 
 // RXA AGC mode. PascalCase strings match the server's JsonStringEnumConverter
 // (AgcMode enum). Custom unlocks the per-param controls; Fixed unlocks the
@@ -2354,10 +2354,13 @@ export function normalizeState(raw: unknown): RadioStateDto {
     filterAdvancedPaneOpen: typeof r.filterAdvancedPaneOpen === 'boolean' ? r.filterAdvancedPaneOpen : false,
     txFilterLowHz: typeof r.txFilterLowHz === 'number' ? r.txFilterLowHz : 150,
     txFilterHighHz: typeof r.txFilterHighHz === 'number' ? r.txFilterHighHz : 2850,
-    // Sharp = WDSP fir.c default (BH 7-term); older servers without the field
-    // hydrate to Sharp so first-connect behaviour is byte-identical (#871).
-    rxFilterWindow: r.rxFilterWindow === 'Soft' ? 'Soft' : 'Sharp',
-    txFilterWindow: r.txFilterWindow === 'Soft' ? 'Soft' : 'Sharp',
+    // Normal = today's default tap count; older servers without the field
+    // hydrate to Normal so first-connect behaviour is unchanged (#871). Any
+    // unrecognised value also falls back to Normal.
+    rxFilterWindow:
+      r.rxFilterWindow === 'Soft' || r.rxFilterWindow === 'Sharp' ? r.rxFilterWindow : 'Normal',
+    txFilterWindow:
+      r.txFilterWindow === 'Soft' || r.txFilterWindow === 'Sharp' ? r.txFilterWindow : 'Normal',
     sampleRate: typeof r.sampleRate === 'number' ? r.sampleRate : 0,
     // Default 80 matches WdspDspEngine.ApplyAgcDefaults and the Thetis
     // AGC_MEDIUM preset. Missing from older servers — tolerate absence.

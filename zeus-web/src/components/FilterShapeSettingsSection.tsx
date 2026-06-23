@@ -14,10 +14,12 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-// SSB bandpass "rectangularity" — issue #871. Independent RX/TX selectors
-// drive WDSP's fir.c FIR window (Soft = Blackman-Harris 4-term, Sharp =
-// BH 7-term). Same dsp-cfg row idiom as BandwidthSettingsSection so this
-// reads as another DSP-tab control family.
+// SSB bandpass "rectangularity" — issue #871. Independent RX/TX selectors set
+// the WDSP FIR tap count (SetRX/TXABandpassNC), which is what actually changes
+// the audible shoulder/skirt steepness: Soft = fewest taps (wide transition,
+// Yaesu-like flat), Normal = today's default (no change vs prior builds), Sharp
+// = most taps (narrow transition, Icom-like rectangular). Same dsp-cfg row idiom
+// as BandwidthSettingsSection so this reads as another DSP-tab control family.
 
 import { useCallback, useEffect, useRef } from 'react';
 import {
@@ -28,8 +30,9 @@ import {
 import { useConnectionStore } from '../state/connection-store';
 
 const SHAPES: ReadonlyArray<{ value: BandpassWindow; label: string; hint: string }> = [
-  { value: 'Soft', label: 'Soft', hint: 'Gentle shoulder — Yaesu-like' },
-  { value: 'Sharp', label: 'Sharp', hint: 'Steep shoulder — Icom-like (default)' },
+  { value: 'Soft', label: 'Soft', hint: 'Gentle, rounded shoulder — Yaesu-like' },
+  { value: 'Normal', label: 'Normal', hint: 'Default shoulder' },
+  { value: 'Sharp', label: 'Sharp', hint: 'Steep, rectangular shoulder — Icom-like' },
 ];
 
 export function FilterShapeSettingsSection() {

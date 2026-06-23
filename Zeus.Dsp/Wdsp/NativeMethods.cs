@@ -132,6 +132,13 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXABandpassWindow(int channel, int wintype);
 
+    // SSB filter rectangularity (issue #871) — sets the RXA bandpass FIR tap
+    // count, which governs the audible transition/shoulder steepness. WDSP
+    // bandpass.c:SetRXABandpassNC rebuilds rxa[ch].bp1 inside csDSP, live-safe.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXABandpassNC(int channel, int nc);
+
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXAPanelRun(int channel, int run);
@@ -659,6 +666,13 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetTXABandpassWindow(int channel, int wintype);
+
+    // SSB filter rectangularity (issue #871) — sets the TXA bandpass FIR tap
+    // count (transmit shoulder steepness). WDSP bandpass.c:SetTXABandpassNC
+    // rebuilds txa[ch].bp0/bp1/bp2 inside csDSP, live-safe.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXABandpassNC(int channel, int nc);
 
     // Correcting FIR — compensates the sinc droop introduced by TXA's
     // 48k → 192k upsample on P2. P2 firmware requires this on; P1 leaves it

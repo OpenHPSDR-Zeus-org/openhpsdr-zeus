@@ -820,11 +820,12 @@ public class DspPipelineService : BackgroundService,
     // ApplyStateToNewChannel force-pushed.
     private TxLevelingConfig _appliedTxLeveling = new();
     // RX/TX bandpass "rectangularity" latches — issue #871. Seeded to
-    // BandpassWindow.Sharp (= 1) so a connect landing on the WDSP default
-    // matches what ApplyStateToNewChannel force-pushed. Same change-detect
-    // pattern as the other _applied* siblings.
-    private BandpassWindow _appliedRxBandpassWindow = BandpassWindow.Sharp;
-    private BandpassWindow _appliedTxBandpassWindow = BandpassWindow.Sharp;
+    // BandpassWindow.Normal (= byte 1), which resolves to the WDSP open-time tap
+    // count, so a connect landing on the default matches what
+    // ApplyStateToNewChannel force-pushed. Same change-detect pattern as the
+    // other _applied* siblings.
+    private BandpassWindow _appliedRxBandpassWindow = BandpassWindow.Normal;
+    private BandpassWindow _appliedTxBandpassWindow = BandpassWindow.Normal;
     private int _appliedZoomLevel = 1;
     // PureSignal latched values — same change-detect pattern as the others
     // so OnRadioStateChanged only fires the (possibly heavy)

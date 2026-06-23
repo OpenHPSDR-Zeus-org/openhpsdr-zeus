@@ -71,7 +71,14 @@ public enum PsFeedbackSource : byte { Internal = 0, External = 1 }
 // shoulder, Yaesu-like), Sharp = Blackman-Harris 7-term (steeper, Icom-like).
 // Sharp is the current hardcoded WDSP default; an operator who never touches
 // the selector hears no change. RX and TX carry independent values.
-public enum BandpassWindow : byte { Soft = 0, Sharp = 1 }
+// SSB bandpass shoulder-steepness presets (issue #871). Drives the WDSP FIR
+// tap count (nc): Soft = fewest taps (widest transition, Yaesu-like flat
+// shoulder), Normal = today's default nc (no first-connect drift), Sharp =
+// most taps (narrowest transition, Icom-like rectangular shoulder). The byte
+// values are load-bearing: persisted DspSettingsStore rows hold the byte, and
+// pre-#871 rows stored the old two-value "Sharp" as 1 — which now deserialises
+// to Normal (== today's behaviour), so legacy prefs are unchanged. Append-only.
+public enum BandpassWindow : byte { Soft = 0, Normal = 1, Sharp = 2 }
 
 public enum ConnectionStatus { Disconnected, Connecting, Connected, Error }
 
