@@ -40,8 +40,9 @@
 #include <cstdio>
 #include <algorithm>
 
-// Editor (IPlugView) hosting is Windows-only for now — the plug-in GUI
-// is a native window we create + message-pump on a dedicated thread.
+// Editor (IPlugView) hosting: on Windows the plug-in GUI is a native window
+// we create + message-pump on a dedicated thread; on Linux it embeds into an
+// X11 window driven by a Steinberg Linux::IRunLoop (see the __linux__ block).
 #ifdef _WIN32
 #  ifndef WIN32_LEAN_AND_MEAN
 #    define WIN32_LEAN_AND_MEAN
@@ -273,7 +274,8 @@ struct LoadedPlugin {
     vst::AudioBusBuffers              out_bus{};
     vst::ProcessData                  process_data{};
     vst::ProcessSetup                 process_setup{};
-    vst::ParameterChanges             input_changes; // for set_param queueing
+    vst::ParameterChanges             input_changes;  // for set_param queueing
+    vst::ParameterChanges             output_changes; // plug-in param automation out (drained/cleared each block)
 
     // True when `controller` is a *separate* edit-controller object we
     // created + initialized (vs. a single-component effect where the
@@ -480,6 +482,9 @@ bool wire_buses_and_activate(LoadedPlugin& p, int32_t* status_out) {
     p.process_data.inputs  = (in_bus_count  > 0) ? &p.in_bus  : nullptr;
     p.process_data.outputs = (out_bus_count > 0) ? &p.out_bus : nullptr;
     p.process_data.inputParameterChanges = &p.input_changes;
+    // A spec-compliant host always supplies an output queue too; some plug-ins
+    // (e.g. DPF-based) assert/refuse when it is null. Cleared every block.
+    p.process_data.outputParameterChanges = &p.output_changes;
 
     return true;
 }
@@ -1162,8 +1167,11 @@ int32_t zvst_process(
         return ZVST_OTHER;
     }
 
-    // Clear any queued parameter changes — they've been applied.
+    // Clear any queued parameter changes — they've been applied. The output
+    // queue is drained the same way: we don't surface plug-in automation back
+    // to the host yet, so reset it so it can't grow unbounded across blocks.
     p->input_changes.clearQueue();
+    p->output_changes.clearQueue();
 
     return ZVST_OK;
 }
