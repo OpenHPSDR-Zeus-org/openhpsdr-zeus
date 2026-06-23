@@ -281,7 +281,12 @@ public class NoiseReductionSyntheticFixtureTests
 
         Assert.True(metrics.Rms > 1e-7, $"{result.Label}: expected non-silent output");
         Assert.True(metrics.Rms < 0.50, $"{result.Label}: output RMS too high ({Describe(result)})");
-        Assert.True(metrics.Peak < 0.98, $"{result.Label}: output peak approaches clipping ({Describe(result)})");
+        // Thetis-parity AGC runs slope 0 (flat output): it normalizes every
+        // signal — including the noise floor on the NR-off baseline — to the
+        // same target loudness, which drives the peak hotter (~0.98) than the
+        // old slope-35 profile did. Output must still stay below digital
+        // full-scale; the RX pipeline's LimitRxAudioBuffer is the hard ceiling.
+        Assert.True(metrics.Peak < 0.99, $"{result.Label}: output peak approaches clipping ({Describe(result)})");
         Assert.True(Math.Abs(metrics.DcOffset) < 0.05, $"{result.Label}: unexpected DC offset ({Describe(result)})");
     }
 
