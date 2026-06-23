@@ -83,12 +83,14 @@ public enum BandpassWindow : byte { Soft = 0, Normal = 1, Sharp = 2 }
 public enum ConnectionStatus { Disconnected, Connecting, Connected, Error }
 
 // Thetis NR-button state: Off = no NR, Anr = NR1 (time-domain LMS),
-// Emnr = NR2 (Ephraim-Malah), Sbnr = NR4 (libspecbleach, issue #79).
-// NR3 (RNNR) is intentionally absent: training data for the bundled RNNoise
-// model is voice-corpus-only and underperforms on HF noise. All modes are
-// mutually exclusive in WDSP, so the button carries them in one enum. Byte
-// order is fixed — appending only — because persisted DspSettingsStore rows
-// would mis-deserialize on a reorder.
+// Emnr = NR2 (Ephraim-Malah), Sbnr = NR4 (libspecbleach, issue #79),
+// Rnnr = NR3 (RNNoise). NR3 ships with NO bundled model — the operator
+// installs an RNNoise weights file via the DSP menu, and NR3 only becomes
+// selectable once a model is present (Zeus serves no default model; the
+// stock RNNoise voice corpus underperforms on HF, so bring-your-own). All
+// modes are mutually exclusive in WDSP, so the button carries them in one
+// enum. Byte order is fixed — appending only — because persisted
+// DspSettingsStore rows would mis-deserialize on a reorder.
 [JsonConverter(typeof(NrModeJsonConverter))]
 public enum NrMode : byte
 {
@@ -96,6 +98,7 @@ public enum NrMode : byte
     Anr,
     Emnr,
     Sbnr = 3,
+    Rnnr = 4,
 }
 
 public sealed class NrModeJsonConverter : JsonConverter<NrMode>
@@ -103,7 +106,7 @@ public sealed class NrModeJsonConverter : JsonConverter<NrMode>
     public override NrMode Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         if (reader.TokenType == JsonTokenType.Number && reader.TryGetByte(out var numericValue))
-            return numericValue <= (byte)NrMode.Sbnr ? (NrMode)numericValue : NrMode.Off;
+            return numericValue <= (byte)NrMode.Rnnr ? (NrMode)numericValue : NrMode.Off;
 
         if (reader.TokenType == JsonTokenType.String)
         {
@@ -111,6 +114,7 @@ public sealed class NrModeJsonConverter : JsonConverter<NrMode>
             if (string.Equals(stringValue, nameof(NrMode.Anr), StringComparison.OrdinalIgnoreCase)) return NrMode.Anr;
             if (string.Equals(stringValue, nameof(NrMode.Emnr), StringComparison.OrdinalIgnoreCase)) return NrMode.Emnr;
             if (string.Equals(stringValue, nameof(NrMode.Sbnr), StringComparison.OrdinalIgnoreCase)) return NrMode.Sbnr;
+            if (string.Equals(stringValue, nameof(NrMode.Rnnr), StringComparison.OrdinalIgnoreCase)) return NrMode.Rnnr;
         }
 
         return NrMode.Off;
@@ -123,6 +127,7 @@ public sealed class NrModeJsonConverter : JsonConverter<NrMode>
             NrMode.Anr => nameof(NrMode.Anr),
             NrMode.Emnr => nameof(NrMode.Emnr),
             NrMode.Sbnr => nameof(NrMode.Sbnr),
+            NrMode.Rnnr => nameof(NrMode.Rnnr),
             _ => nameof(NrMode.Off),
         });
     }
@@ -1242,7 +1247,17 @@ public sealed record StateDto(
     // Null = diversity off (default), byte-identical to today's single-ADC RX
     // path. See DiversityConfig. Ephemeral — re-armed each session (like PS),
     // never auto-armed on restart.
-    DiversityConfig? Diversity = null);
+    DiversityConfig? Diversity = null,
+
+    // ---- NR3 (RNNoise) availability + installed model ----
+    // WdspNr3RnnrAvailable: the loaded libwdsp exports the RNNR symbols
+    // (SetRXARNNRRun / SetRXARNNRPosition / RNNRloadModel). False on builds
+    // compiled with WDSP_WITH_NR3=OFF — NR3 is then hidden in the UI.
+    // Nr3ModelName: file name of the operator-installed RNNoise weights file,
+    // or null when none is installed. NR3 only becomes selectable when the
+    // native symbols are present AND a model is installed (Zeus ships none).
+    bool WdspNr3RnnrAvailable = false,
+    string? Nr3ModelName = null);
 
 /// <summary>Canonical CW constants shared between backend and wire DTOs.
 /// Single source of truth — CwOffset (server-side) and StateDto both
@@ -1562,6 +1577,11 @@ public sealed record TxPreKeyDelaySetRequest(int DelayMs);
 public sealed record TuneDriveSetRequest(int Percent);
 
 public sealed record NrSetRequest(NrConfig Nr);
+
+// NR3 (RNNoise) model install-from-URL request. The operator pastes a URL to a
+// compatible RNNoise weights file; the server fetches and installs it. Uploads
+// use multipart/form-data instead (no DTO). Zeus hosts no model of its own.
+public sealed record Nr3ModelDownloadRequest(string Url);
 
 // AGC mode + custom-params set request. Replace-style (the whole AgcConfig is
 // posted on every change), matching NrSetRequest. The separate AGC max-gain

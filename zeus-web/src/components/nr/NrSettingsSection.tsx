@@ -322,7 +322,10 @@ function Nr2Panel() {
     persistPost2({ post2Taper: r });
   };
 
-  // Resets BOTH groups to Thetis-parity factory state. Two endpoints fire;
+  // Resets BOTH groups to Zeus factory state. Method/Trained values track
+  // Thetis exactly; Post-Process defaults to ON (a deliberate Zeus
+  // improvement over the Thetis baseline, which ships post-proc OFF). Two
+  // endpoints fire;
   // each response reconciles independently via applyState (last write wins,
   // and both servers' merged states agree on the reset values).
   const resetDefaults = () => {
@@ -428,7 +431,7 @@ function Nr2Panel() {
             label="T2"
             value={trainT2}
             min={0.02}
-            max={3.5}
+            max={0.3}
             step={0.01}
             decimals={2}
             onChange={onTrainT2Change}

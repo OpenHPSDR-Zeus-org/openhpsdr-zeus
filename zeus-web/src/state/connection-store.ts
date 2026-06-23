@@ -135,6 +135,11 @@ export type ConnectionState = {
   radioLoHz: number;
   cwPitchHz: number;
   nr: NrConfigDto;
+  // NR3 (RNNoise): native availability (libwdsp RNNR exports) + the operator-
+  // installed model name (null = none). NR3 appears in the NR cycle only when
+  // available AND a model is installed.
+  wdspNr3RnnrAvailable: boolean;
+  nr3ModelName: string | null;
   zoomLevel: ZoomLevel;
   inflight: boolean;
   // Endpoint of the most recently successful /api/connect. Survives a
@@ -213,6 +218,8 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   radioLoHz: 14_200_000,
   cwPitchHz: 600,
   nr: { ...NR_CONFIG_DEFAULT },
+  wdspNr3RnnrAvailable: false,
+  nr3ModelName: null,
   zoomLevel: 1,
   inflight: false,
   lastConnectedEndpoint: null,
@@ -271,6 +278,8 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
         radioLoHz: s.radioLoHz,
         cwPitchHz: s.cwPitchHz,
         nr: s.nr,
+        wdspNr3RnnrAvailable: s.wdspNr3RnnrAvailable,
+        nr3ModelName: s.nr3ModelName,
         zoomLevel: s.zoomLevel,
       };
     }),

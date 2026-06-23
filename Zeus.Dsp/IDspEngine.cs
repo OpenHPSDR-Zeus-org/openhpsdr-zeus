@@ -151,6 +151,13 @@ public interface IDspEngine : IDisposable
 
     void SetNoiseReduction(int channelId, NrConfig cfg);
 
+    /// <summary>Load (or, with a null/empty path, clear) the process-global
+    /// RNNoise (NR3) model shared by every RNNR channel. Returns false when the
+    /// loaded libwdsp lacks NR3 support (built with WDSP_WITH_NR3=OFF) so the
+    /// caller can report "NR3 unavailable on this build". No-op returning false
+    /// on Synthetic.</summary>
+    bool LoadNr3Model(string? modelFilePath);
+
     /// <summary>
     /// Replace the full manual-notch (MNF) set applied to the RX audio. Notch
     /// centre/width are absolute RF Hz; the engine rewrites the WDSP notch

@@ -143,6 +143,10 @@ public sealed class SyntheticDspEngine : IDspEngine
         if (!Enum.IsDefined(cfg.NbMode)) throw new ArgumentException($"unknown NbMode {cfg.NbMode}", nameof(cfg));
     }
 
+    // No RNNoise backend in the synthetic engine — report "unavailable" so the
+    // server surfaces NR3 as off rather than pretending a model loaded.
+    public bool LoadNr3Model(string? modelFilePath) => false;
+
     // Manual notch filters have no audio effect in the synthetic engine; accept
     // and ignore so dev/CI exercises the full plumbing without a WDSP backend.
     public void SetNotches(IReadOnlyList<NotchDto> notches) => ArgumentNullException.ThrowIfNull(notches);
