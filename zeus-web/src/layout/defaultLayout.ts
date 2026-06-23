@@ -4,12 +4,14 @@
 // Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // Default workspace layout for the react-grid-layout (RGL) substrate. 12-col
-// grid. The right column is a stack of fixed-width tiles (vfo/smeter/tx/
-// txmeters/dsp); width caps live in panels.ts via maxW so the operator can
-// only resize them vertically. The left column is BANDWIDTH FILTER on top
-// and the panadapter hero filling the remaining vertical space. FlexWorkspace
-// shrinks rows when needed for short viewports, but does not stretch panel
-// heights just because the window is taller.
+// grid. The right column starts as a stack of 6-wide tiles (vfo/smeter/tx/
+// txmeters/dsp). These are no longer width-capped — every panel is freely
+// resizable to grid extents now (the panadapter-style "any size" model) — so
+// the 6-wide seeds here are just a sane starting arrangement, not a ceiling;
+// the operator can widen any of them. The left column is BANDWIDTH FILTER on
+// top and the panadapter hero filling the remaining vertical space.
+// FlexWorkspace shrinks rows when needed for short viewports, but does not
+// stretch panel heights just because the window is taller.
 //
 // Coordinates are in the 24-column × 48-row (schema-v8) grid. Total height =
 // WORKSPACE_TARGET_ROWS (48). The top-left row pairs the Bandwidth Filter

@@ -53,7 +53,7 @@ import {
 import { planForFrame } from '../gl/frame-plan';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import { registerFrameConsumer, selectDisplaySlice, useDisplayStore } from '../state/display-store';
-import { useDisplaySettingsStore } from '../state/display-settings-store';
+import { useDisplaySettingsStore, shouldTxAutoRange } from '../state/display-settings-store';
 import { useConnectionStore } from '../state/connection-store';
 import { enhanceInto, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { normalizeStitchedBins, stitchFloorShiftDb } from '../dsp/stitch-normalizer';
@@ -339,14 +339,17 @@ export function Panadapter({
         }
       }
 
-      // While keyed, fit the TX display windows to the live transmitted signal
-      // (no-op when TX auto-range is off). The panadapter is the always-present
-      // TX surface, so it drives the fit regardless of which waterfall renderer
-      // is active. Receiver A only — that's the slice the server feeds TX
-      // pixels into; RX2 (receiver B) keeps its own RX window during TX.
+      // While transmitting voice (MOX/PTT), fit the TX display windows to the
+      // live signal. TUNE and two-tone are excluded — see shouldTxAutoRange();
+      // their narrow carrier would collapse the fit onto the noise floor. The
+      // panadapter is the always-present TX surface, so it drives the fit
+      // regardless of which waterfall renderer is active. Receiver A only —
+      // that's the slice the server feeds TX pixels into; RX2 (receiver B)
+      // keeps its own RX window during TX.
       if (receiver === 'A' && slice.panValid && slice.panDb) {
-        const { moxOn, tunOn } = useTxStore.getState();
-        if (moxOn || tunOn) useDisplaySettingsStore.getState().updateTxAutoRange(slice.panDb);
+        const tx = useTxStore.getState();
+        const ds = useDisplaySettingsStore.getState();
+        if (shouldTxAutoRange(tx, ds.txAutoRange)) ds.updateTxAutoRange(slice.panDb);
       }
 
       requestRedraw();
@@ -408,7 +411,17 @@ export function Panadapter({
     // 50 Hz from the worklet, RxDbm at 5 Hz, PaTempC at 2 Hz, etc.), which
     // raises the floor on the redraw rate above the spectrum-tick rate.
     const unsubTx = useTxStore.subscribe((state, prev) => {
-      if (state.moxOn !== prev.moxOn || state.tunOn !== prev.tunOn) {
+      if (
+        state.moxOn !== prev.moxOn ||
+        state.tunOn !== prev.tunOn ||
+        state.twoToneOn !== prev.twoToneOn
+      ) {
+        // When auto-range isn't engaging for this TX type (TUNE / two-tone, or
+        // master off), snap the TX window back to the fixed/saved range so a
+        // carrier left narrow by a prior voice-MOX fit renders clean. Voice MOX
+        // lets the per-frame fit drive it instead.
+        const ds = useDisplaySettingsStore.getState();
+        if (!shouldTxAutoRange(state, ds.txAutoRange)) ds.restoreSavedTxWindows();
         // buildAnchor gates Pop off while keyed, so rebuild from the last raw
         // trace on the MOX/TUN edge to avoid a one-frame enhanced-vs-TX-range
         // mismap before the first TX frame adopts.

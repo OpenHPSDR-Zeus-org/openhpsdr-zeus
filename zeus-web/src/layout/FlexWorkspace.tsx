@@ -54,6 +54,7 @@ import {
   type WorkspaceTile,
 } from './workspace';
 import { AddPanelModal } from './AddPanelModal';
+import { ScaleToFitTile } from './ScaleToFitTile';
 import { TileChrome } from './TileChrome';
 import { ConfirmDialog } from './ConfirmDialog';
 import { TerminatorLines } from '../components/design/TerminatorLines';
@@ -554,6 +555,16 @@ function WorkspaceCanvas({
           rowHeight={rowHeight}
           margin={[WORKSPACE_GRID_MARGIN_PX, rowMargin]}
           containerPadding={[0, 0]}
+          // Resize handles on the sides and bottom — NOT the top edge.
+          // 'n'/'ne'/'nw' would overlay the tile header and steal the
+          // mousedown that drags the panel (a header-grab would start a resize
+          // instead of a move). 'e'/'w' reach any width, 's' any height, and
+          // the bottom corners cover diagonal — enough for "any size" while the
+          // header stays grabbable. all-panels.css styles each handle
+          // per-direction so they don't stack in the SE corner.
+          resizeConfig={{
+            handles: ['s', 'e', 'w', 'se', 'sw'],
+          }}
           compactor={workspaceCompactor}
           // Position tiles via top/left rather than transform: translate3d.
           // RGL's default `transformStrategy` uses CSS transforms, which
@@ -680,7 +691,24 @@ const PanelTile = memo(function PanelTile({
         onToggleLock={handleToggleLock}
       />
       <div className="workspace-tile-body">
-        <PanelBody tile={tile} layoutId={layoutId} />
+        {!def.fillNative &&
+        (def.scaleToFit === true ||
+          (def.designW !== undefined && def.designH !== undefined)) ? (
+          // Explicit design size wins; otherwise auto-measure mode (the
+          // scaleToFit opt-in renders ScaleToFitTile with no design props so
+          // it measures the content's intrinsic footprint itself).
+          def.designW !== undefined && def.designH !== undefined ? (
+            <ScaleToFitTile designW={def.designW} designH={def.designH}>
+              <PanelBody tile={tile} layoutId={layoutId} />
+            </ScaleToFitTile>
+          ) : (
+            <ScaleToFitTile>
+              <PanelBody tile={tile} layoutId={layoutId} />
+            </ScaleToFitTile>
+          )
+        ) : (
+          <PanelBody tile={tile} layoutId={layoutId} />
+        )}
       </div>
     </div>
   );

@@ -151,13 +151,39 @@ export interface PanelDef {
    *  toolbars (Meters has gear / library / settings drawers; Panadapter has
    *  band/zoom/cursor strip; Azimuth has SP/LP toggles). */
   headerless?: boolean;
-  /** Width cap in 12-col grid units. When set, RGL won't let the operator
-   *  drag the tile any wider — the closest analogue to "anchor: top, right"
-   *  in a Windows-Forms-style designer. Right-column stack panels (vfo /
-   *  smeter / dsp / txmeters / azimuth / tx) cap at 3 so they grow only in
-   *  height, never sprawling into the panadapter column. Omit for
-   *  freely-sizable panels. */
+  /** Opt OUT of the generic ScaleToFitTile wrapper at the
+   *  `.workspace-tile-body` seam. Panels whose content already fills the tile
+   *  fluidly via flex/CSS, or whose pointer model breaks under a CSS transform
+   *  (Leaflet maps that cache container px and need invalidateSize, canvas
+   *  mini-pans, iframe embeds) set this so PanelBody renders them directly.
+   *  Default (unset) is also "render natively" — a panel only gets scaled when
+   *  it explicitly declares a `designW`/`designH` AND does not set this flag.
+   *  The flag exists so a panel that DOES have a design size can still force
+   *  native rendering, and so plugin panels have a documented escape hatch. */
+  fillNative?: boolean;
+  /** Width cap in grid units. Historically pinned the right-column stack so
+   *  panels grew only in height. Now unused by built-in panels — every tile is
+   *  freely resizable to grid extents (the panadapter-style "any size" goal).
+   *  Retained on the interface so the propagation/clamp guards in
+   *  FlexWorkspace stay type-safe and a future panel (or plugin) can still cap
+   *  width if it ever needs to. RGL clamps drag-resize to this when set. */
   maxW?: number;
+  /** Natural authoring width/height (CSS px) for ScaleToFitTile. When BOTH are
+   *  set and `fillNative` is not, PanelTile wraps the panel body in
+   *  ScaleToFitTile, which uniformly scales the panel to fill its tile (the
+   *  panadapter-style "content follows tile size" behaviour). Seed these from a
+   *  panel's natural footprint at its default tile size so scale ~= 1 nominally
+   *  and only diverges when the operator resizes. Omit for panels that already
+   *  fluid-fill via CSS — they need no transform. */
+  designW?: number;
+  designH?: number;
+  /** Opt INTO auto-measured ScaleToFitTile (no design size needed) — content
+   *  scales uniformly to fill the tile like the panadapter. PanelTile wraps the
+   *  panel body in ScaleToFitTile in auto-measure mode, which reads the
+   *  content's intrinsic footprint via a ResizeObserver and scales it to the
+   *  tile. Only set on panels whose root is shrink-wrappable (fixed/content
+   *  sized); panels that already fluid-fill via flex/CSS need no transform. */
+  scaleToFit?: boolean;
   /** Height cap in grid rows. Optional ceiling on vertical growth.
    *  Omit for freely-sizable panels. */
   maxH?: number;
@@ -199,7 +225,14 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'vfo',
     tags: ['frequency', 'vfo', 'tuning'],
     component: VfoPanel,
-    maxW: 6,
+    // The VFO lane grid uses minmax(0,1fr) for the digit column and fills via
+    // height:100%, so it needs a DEFINITE box — auto-measure's max-content would
+    // collapse the 1fr digit column to zero (blank panel, "4 blank tabs"). An
+    // explicit design size ≈ the default 6×14 tile footprint scales the digits
+    // uniformly as the tile grows while staying ~1:1 at the default layout.
+    // Bench-tune designW/designH if the nominal zoom looks off.
+    designW: 340,
+    designH: 210,
     minW: 4,
     minH: 6,
   },
@@ -209,7 +242,6 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'meters',
     tags: ['signal', 'meter', 'rx', 'smeter'],
     component: SMeterPanel,
-    maxW: 6,
     minW: 4,
     minH: 4,
   },
@@ -228,7 +260,11 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'tools',
     tags: ['azimuth', 'map', 'bearing', 'great-circle'],
     component: AzimuthPanel,
-    maxW: 6,
+    // Leaflet caches its container's pixel size and would need invalidateSize()
+    // under a CSS transform, and click-to-bearing math reads container px — so
+    // this panel must never be wrapped in ScaleToFitTile. It fills its tile
+    // natively via the map container's 100%/100% sizing.
+    fillNative: true,
     minW: 4,
     minH: 10,
   },
@@ -238,6 +274,9 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'tools',
     tags: ['rotator', 'compass', 'bearing', 'heading', 'sp', 'lp', 'map'],
     component: RotatorCompassPanel,
+    // Map/compass surface measures its own container in pixels — render native
+    // (no CSS-transform scale) like the azimuth map.
+    fillNative: true,
   },
   rotatordial: {
     id: 'rotatordial',
@@ -255,7 +294,12 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'dsp',
     tags: ['dsp', 'noise', 'filter', 'nr', 'anf'],
     component: DspFlexPanel,
-    maxW: 6,
+    // DSP is a control grid (buttons/sliders), not an instrument readout — it
+    // must stay at a readable native size, NOT zoom (uniform scale just shrinks
+    // the controls). So it renders native and fills its tile. The old
+    // overlap-when-small bug (NB/NR/ANF/SNB/NBP rows stacking on each other) is
+    // fixed in CSS: .dsp-row no longer flex-shrinks, so the panel scrolls
+    // (DspFlexPanel overflow:auto) when the tile is shorter than the controls.
     minW: 4,
     minH: 6,
   },
@@ -265,6 +309,11 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'tools',
     tags: ['cw', 'morse', 'keyer', 'wpm'],
     component: CwPanel,
+    // Root is flex:1 (fills via the parent height), so it needs a DEFINITE box —
+    // explicit design size, not auto-measure (which collapses the fill). Scales
+    // the keyer controls uniformly with the tile. Bench-tunable.
+    designW: 340,
+    designH: 260,
     minW: 6,
     minH: 6,
   },
@@ -298,11 +347,9 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'meters',
     tags: ['tx', 'power', 'swr', 'alc', 'meters'],
     component: TxMetersPanel,
-    maxW: 6,
     // The immersive cluster stacks three gauge sections + a footer; below
     // ~6 legacy rows the lower sections clip behind the tile's inner
-    // scrollbar. minW must stay BELOW maxW — when they're equal RGL pins the
-    // width and the tile can't be resized sideways at all.
+    // scrollbar, so it keeps a height floor.
     minW: 4,
     minH: 12,
   },
@@ -312,7 +359,6 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'meters',
     tags: ['tx', 'audio', 'fidelity', 'broadcast', 'mic', 'alc', 'leveler', 'cfc'],
     component: TxFidelityPanel,
-    maxW: 6,
     minW: 4,
     minH: 20,
   },
@@ -322,7 +368,6 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'controls',
     tags: ['tx', 'drive', 'tune', 'mic', 'mic-gain', 'power', 'filter', 'bandpass'],
     component: TxPanel,
-    maxW: 6,
     minW: 4,
     minH: 8,
   },
@@ -332,6 +377,10 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'dsp',
     tags: ['filter', 'bandwidth', 'passband', 'ribbon'],
     component: FilterRibbonPanel,
+    // The mini-pan is a pointer-driven <canvas> whose drag math reads container
+    // pixels; a CSS-transform scale would desync the hit-testing. Render native
+    // and let the canvas fill its tile.
+    fillNative: true,
     minW: 6,
     minH: 4,
   },
@@ -341,10 +390,6 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'dsp',
     tags: ['filter', 'presets', 'bandwidth', 'passband', 'var', 'custom'],
     component: FilterPresetsPanel,
-    // Caps to the right-column stack width (like smeter/tx/txmeters) so the
-    // preset card tucks under the TX meters instead of sprawling into the
-    // panadapter column. minW stays below maxW or RGL pins the width.
-    maxW: 6,
     minW: 4,
     minH: 6,
   },
@@ -354,6 +399,14 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'tools',
     tags: ['puresignal', 'ps', 'tx', 'predistortion', 'linearization', 'twotone'],
     component: PsFlexPanel,
+    // Root is flex:1 + overflow:auto, so it needs a DEFINITE box — explicit
+    // design size, not auto-measure (which collapses the fill). Scales the PS
+    // controls uniformly with the tile; bench-tunable. Presentation-only: this
+    // generic workspace sizing touches NO PureSignal logic, arm/disarm,
+    // persistence, or calibration. Added under explicit KB2UKA authorization
+    // (PureSignal is a full-stop subsystem; sign-off on record for this change).
+    designW: 340,
+    designH: 240,
     minW: 6,
     minH: 8,
   },
@@ -363,6 +416,9 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'controls',
     tags: ['band', 'frequency', 'hf', 'tuning'],
     component: BandPanel,
+    // Root is content-sized (padding + overflow only, no fill) — scales to
+    // follow the tile like the panadapter.
+    scaleToFit: true,
     minW: 6,
     minH: 4,
   },
@@ -372,6 +428,9 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'controls',
     tags: ['mode', 'modulation', 'ssb', 'cw', 'am', 'fm'],
     component: ModePanel,
+    // Root is content-sized (padding + overflow only, no fill) — scales to
+    // follow the tile like the panadapter.
+    scaleToFit: true,
     minW: 4,
     minH: 4,
   },
@@ -381,6 +440,11 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'controls',
     tags: ['step', 'tuning', 'frequency', 'increment'],
     component: StepPanel,
+    // Root is width:100% over a flex row of step buttons. Against the
+    // shrink-to-fit (max-content) inner box, the percentage resolves to the
+    // button row's intrinsic width — a finite footprint that scales with the
+    // tile rather than reflowing at a fixed font size.
+    scaleToFit: true,
     minW: 4,
     minH: 4,
   },
@@ -399,7 +463,6 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'tools',
     tags: ['recorder', 'wav', 'tape', 'record', 'playback', 'audio', 'reel'],
     component: WavRecorderPanel,
-    maxW: 8,
   },
   analogmeter: {
     id: 'analogmeter',
@@ -433,6 +496,10 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'tools',
     tags: ['hamclock', 'dashboard', 'propagation', 'dx', 'cluster', 'satellite', 'pota', 'sota', 'space weather', 'map'],
     component: HamClockPanel,
+    // Full dashboard embedded as an iframe — fills the tile natively and must
+    // not be CSS-transform scaled (would blur the embedded page and confuse
+    // its own internal pointer handling).
+    fillNative: true,
     // Wants the whole workspace — it's a full dashboard embedded as an iframe.
     minW: 8,
     minH: 16,

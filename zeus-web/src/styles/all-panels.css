@@ -94,26 +94,57 @@
   transition: all var(--dur-fast) var(--ease-out);
 }
 
-/* Bottom-right resize handle — bigger chevron + larger hit area than the
- * meters-grid (workspace tiles are larger so the handle should be too).
- * Always visible at low contrast; brightens to --accent on hover so the
- * operator sees the affordance the moment they hover the tile. The hit
- * box is 20×20 (vs the chevron's 10×10) to match the easier-to-hit RGL
- * default and to overlay the panel body for tiles whose body content
- * (panadapter canvas) would otherwise capture the pointerdown. */
+/* Resize handles — every edge and corner (RGL emits eight via the
+ * resizeHandles prop). Shared base: a 20×20 invisible hit box sitting above
+ * the panel body so grabs aren't intercepted by canvas pointerdown listeners
+ * (panadapter, world map). The base react-resizable/css/styles.css (imported
+ * above) provides each handle's per-direction POSITION (top/left/right/bottom)
+ * and a rotated arrow image; we drop the image and the rotate so the hit box
+ * stays an axis-aligned square, keep the base positioning, and draw our own
+ * chevron only on the SE corner. The old unqualified override pinned every
+ * handle to right:2px;bottom:2px;cursor:se-resize — which stacked all eight in
+ * the SE corner — so each direction now carries its own cursor instead. */
 .all-panels-grid .react-resizable-handle {
   background-image: none;
   width: 20px;
   height: 20px;
-  right: 2px;
-  bottom: 2px;
-  cursor: se-resize;
-  /* Sit above the panel body so corner-grabs aren't intercepted by canvas
-   * pointerdown listeners (panadapter, world map). z-index here is low so
-   * the workspace's own dragging overlays still win. */
+  /* Override the base per-direction rotate so the square hit box (and the SE
+   * chevron drawn below) isn't spun. */
+  transform: none;
+  /* z-index here is low so the workspace's own dragging overlays still win. */
   z-index: 2;
 }
-.all-panels-grid .react-resizable-handle::after {
+/* Per-direction cursors. Positioning is inherited from the base react-resizable
+ * stylesheet; we only restyle, we do not reposition. */
+.all-panels-grid .react-resizable-handle-e {
+  cursor: e-resize;
+}
+.all-panels-grid .react-resizable-handle-w {
+  cursor: w-resize;
+}
+.all-panels-grid .react-resizable-handle-n {
+  cursor: n-resize;
+}
+.all-panels-grid .react-resizable-handle-s {
+  cursor: s-resize;
+}
+.all-panels-grid .react-resizable-handle-se {
+  cursor: se-resize;
+}
+.all-panels-grid .react-resizable-handle-sw {
+  cursor: sw-resize;
+}
+.all-panels-grid .react-resizable-handle-ne {
+  cursor: ne-resize;
+}
+.all-panels-grid .react-resizable-handle-nw {
+  cursor: nw-resize;
+}
+/* Visible chevron affordance only on the SE corner — bigger than the
+ * meters-grid (workspace tiles are larger). Always visible at low contrast;
+ * brightens to --accent on hover/resize. The edge/corner handles stay
+ * invisible hit boxes so the tile chrome doesn't sprout eight chevrons. */
+.all-panels-grid .react-resizable-handle-se::after {
   content: '';
   position: absolute;
   right: 4px;
@@ -125,11 +156,11 @@
   opacity: 0.7;
   transition: opacity var(--dur-fast), border-color var(--dur-fast);
 }
-.all-panels-grid .react-grid-item:hover .react-resizable-handle::after {
+.all-panels-grid .react-grid-item:hover .react-resizable-handle-se::after {
   opacity: 1;
   border-color: var(--accent);
 }
-.all-panels-grid .react-grid-item.resizing .react-resizable-handle::after {
+.all-panels-grid .react-grid-item.resizing .react-resizable-handle-se::after {
   border-color: var(--accent);
   opacity: 1;
 }

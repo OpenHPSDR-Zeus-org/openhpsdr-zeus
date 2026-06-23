@@ -58,6 +58,7 @@ import {
   WATERFALL_SCROLL_SPEED_MIN,
   TX_FIXED_DB_MAX,
   TX_FIXED_DB_MIN,
+  shouldTxAutoRange,
   useDisplaySettingsStore,
 } from './display-settings-store';
 
@@ -273,6 +274,16 @@ describe('TX display analyzer params', () => {
 describe('TX auto-range', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })));
+    // In-memory localStorage so saved-range round-trips are deterministic and
+    // isolated per test, regardless of the runtime env (local node has no
+    // localStorage; CI jsdom does — direct global access isn't portable).
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+    });
     useDisplaySettingsStore.setState({
       txAutoRange: true,
       txDbMin: -80,
@@ -320,5 +331,75 @@ describe('TX auto-range', () => {
   it('a manual TX window edit switches auto-range off', () => {
     useDisplaySettingsStore.getState().setTxDbRange(-76, 14);
     expect(useDisplaySettingsStore.getState().txAutoRange).toBe(false);
+  });
+
+  describe('shouldTxAutoRange — engages only for voice MOX/PTT', () => {
+    const tx = (over: Partial<{ moxOn: boolean; tunOn: boolean; twoToneOn: boolean }> = {}) => ({
+      moxOn: false,
+      tunOn: false,
+      twoToneOn: false,
+      ...over,
+    });
+
+    it('engages for voice MOX when master enable is on', () => {
+      expect(shouldTxAutoRange(tx({ moxOn: true }), true)).toBe(true);
+    });
+
+    it('does NOT engage for TUNE', () => {
+      expect(shouldTxAutoRange(tx({ tunOn: true }), true)).toBe(false);
+    });
+
+    it('does NOT engage for two-tone, even if MOX is also keyed', () => {
+      expect(shouldTxAutoRange(tx({ twoToneOn: true }), true)).toBe(false);
+      expect(shouldTxAutoRange(tx({ moxOn: true, twoToneOn: true }), true)).toBe(false);
+    });
+
+    it('does NOT engage when the master enable is off', () => {
+      expect(shouldTxAutoRange(tx({ moxOn: true }), false)).toBe(false);
+    });
+
+    it('does NOT engage when not transmitting', () => {
+      expect(shouldTxAutoRange(tx(), true)).toBe(false);
+    });
+  });
+
+  it('restoreSavedTxWindows falls back to the fixed range when nothing is saved', () => {
+    // Deterministic regardless of test order — clear any persisted range first.
+    localStorage.removeItem('zeus.display.txDbRange');
+    localStorage.removeItem('zeus.display.wfTxDbRange');
+    // Simulate a window left narrow by a prior voice-MOX auto-fit.
+    useDisplaySettingsStore.setState({
+      txDbMin: -64,
+      txDbMax: -52,
+      wfTxDbMin: -64,
+      wfTxDbMax: -52,
+    });
+    useDisplaySettingsStore.getState().restoreSavedTxWindows();
+    const r = useDisplaySettingsStore.getState();
+    expect(r.txDbMin).toBe(TX_FIXED_DB_MIN);
+    expect(r.txDbMax).toBe(TX_FIXED_DB_MAX);
+    expect(r.wfTxDbMin).toBe(TX_FIXED_DB_MIN);
+    expect(r.wfTxDbMax).toBe(TX_FIXED_DB_MAX);
+    // The auto-range master flag is independent — restore must not touch it.
+    expect(r.txAutoRange).toBe(true);
+  });
+
+  it('restoreSavedTxWindows snaps a narrowed window back to the operator-saved range', () => {
+    localStorage.setItem('zeus.display.txDbRange', JSON.stringify({ txDbMin: -70, txDbMax: 10 }));
+    localStorage.setItem('zeus.display.wfTxDbRange', JSON.stringify({ wfTxDbMin: -70, wfTxDbMax: 10 }));
+    useDisplaySettingsStore.setState({
+      txDbMin: -64,
+      txDbMax: -52,
+      wfTxDbMin: -64,
+      wfTxDbMax: -52,
+    });
+    useDisplaySettingsStore.getState().restoreSavedTxWindows();
+    const r = useDisplaySettingsStore.getState();
+    expect(r.txDbMin).toBe(-70);
+    expect(r.txDbMax).toBe(10);
+    expect(r.wfTxDbMin).toBe(-70);
+    expect(r.wfTxDbMax).toBe(10);
+    localStorage.removeItem('zeus.display.txDbRange');
+    localStorage.removeItem('zeus.display.wfTxDbRange');
   });
 });
