@@ -999,7 +999,7 @@ export default function App() {
             title="Previous topbar controls"
             aria-label="Previous topbar controls"
           >
-            <ChevronLeft size={14} aria-hidden />
+            <ChevronLeft size={14} strokeWidth={2.25} aria-hidden />
           </button>
           <div
             ref={topbarControlsRef}
@@ -1046,7 +1046,7 @@ export default function App() {
             title="Next topbar controls"
             aria-label="Next topbar controls"
           >
-            <ChevronRight size={14} aria-hidden />
+            <ChevronRight size={14} strokeWidth={2.25} aria-hidden />
           </button>
         </div>
 

@@ -526,9 +526,18 @@
 }
 .topbar .topbar-scroll-btn svg {
   pointer-events: none;
+  /* Brighter than the strip buttons' --fg-1 glyphs so the white chevron
+     reads clearly against the near-black panel. This selector (.topbar +
+     .topbar-scroll-btn + svg) outranks `.topbar .btn { color: --fg-1 }`,
+     so it wins regardless of source order. */
+  color: var(--fg-0);
 }
 .topbar .topbar-scroll-btn:disabled {
-  opacity: 0.32;
+  /* When a direction has nothing left to scroll, hide the arrow glyph but
+     KEEP its 24px column reserved (visibility, not opacity/display) so the
+     strip's edge button never slides into the arrow's space. The arrow can
+     therefore never appear to cover a button at any window width. */
+  visibility: hidden;
   cursor: default;
 }
 .topbar .btn {
