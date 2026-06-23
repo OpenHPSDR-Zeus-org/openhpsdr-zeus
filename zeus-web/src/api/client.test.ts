@@ -144,6 +144,16 @@ describe('normalizeMode', () => {
     expect(normalizeMode(1)).toBe('USB');
     expect(normalizeMode(4)).toBe('AM');
     expect(normalizeMode(9)).toBe('DIGU');
+    expect(normalizeMode(10)).toBe('FREEDV');
+  });
+  it('matches the server enum name case-insensitively (FreeDv → FREEDV)', () => {
+    // The server serialises RxMode by its C# enum name: all-caps for every mode
+    // except FreeDv (PascalCase). Without case-insensitive matching, "FreeDv"
+    // missed MODE_ORDER and normalizeMode fell back to USB, making FreeDV mode
+    // silently revert to USB on the next state round-trip.
+    expect(normalizeMode('FreeDv')).toBe('FREEDV');
+    expect(normalizeMode('FREEDV')).toBe('FREEDV');
+    expect(normalizeMode('usb')).toBe('USB');
   });
   it('falls back to USB on garbage', () => {
     expect(normalizeMode('nope')).toBe('USB');
