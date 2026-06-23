@@ -884,7 +884,7 @@ public sealed record StateDto(
     int FilterLowHz,
     int FilterHighHz,
     int SampleRate,
-    double AgcTopDb = 80.0,
+    double AgcTopDb = 90.0,
     // AGC mode + custom params (issue: DSP controls Thetis parity §4). Nullable
     // so legacy state frames (no Agc field) deserialize unchanged; null at the
     // engine seam means "use the Med canned profile". Persisted globally via

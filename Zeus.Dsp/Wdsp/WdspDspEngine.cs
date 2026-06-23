@@ -232,9 +232,10 @@ public sealed class WdspDspEngine : IDspEngine
         public int FilterLowAbsHz = 150;
         public int FilterHighAbsHz = 2850;
         public RxaMode CurrentMode = RxaMode.USB;
-        // Thetis "AGC Top" max-gain setting in dB. 80 matches the Thetis
-        // AGC_MEDIUM default; the /api/agcGain endpoint can override at runtime.
-        public double AgcTopDb = 80.0;
+        // Thetis "AGC Top" max-gain setting in dB. 90 matches the Thetis
+        // default (radio.cs:1021 rx_agc_max_gain); the /api/agcGain endpoint can
+        // override at runtime.
+        public double AgcTopDb = 90.0;
         // AGC mode last applied via SetAgc / ApplyAgcDefaults. MED matches the
         // open-time default; surfaced so callers / tests can read back the mode.
         public AgcMode CurrentAgcMode = AgcMode.Med;
@@ -3484,16 +3485,17 @@ public sealed class WdspDspEngine : IDspEngine
     private static void ApplyAgcDefaults(int id)
     {
         ApplyAgcCore(id, new AgcConfig(AgcMode.Med));
-        NativeMethods.SetRXAAGCTop(id, 80.0);            // max gain, dB
+        NativeMethods.SetRXAAGCTop(id, 90.0);            // max gain, dB (Thetis radio.cs:1021 default)
     }
 
-    // Canned-mode presets (Thetis console.cs:27960+; design §4.4). Hang/Decay in
-    // ms, HangThreshold 0..100. Custom returns the Med baseline so a null custom
-    // field falls back somewhere sane.
+    // Canned-mode presets, verbatim from Thetis console.cs:27958-28024. Hang/Decay
+    // in ms. HangThreshold: MED/FAST hard-set 100 (slider disabled); LONG/SLOW
+    // leave it at the Thetis slider/init default (0). Custom returns the Med
+    // baseline so a null custom field falls back somewhere sane.
     private static (int HangMs, int DecayMs, int HangThreshold) AgcPreset(AgcMode mode) => mode switch
     {
-        AgcMode.Long => (2000, 2000, 100),
-        AgcMode.Slow => (1000, 500, 100),
+        AgcMode.Long => (2000, 2000, 0),
+        AgcMode.Slow => (1000, 500, 0),
         AgcMode.Med => (0, 250, 100),
         AgcMode.Fast => (0, 50, 100),
         AgcMode.Fixed => (0, 250, 100),
@@ -3503,12 +3505,14 @@ public sealed class WdspDspEngine : IDspEngine
     // Pushes the AGC mode + custom/fixed params to WDSP. Shared by ApplyAgcDefaults
     // (channel open, before the ChannelState is registered) and SetAgc (runtime),
     // so both paths produce identical WDSP state. Does NOT touch SetRXAAGCTop —
-    // the max-gain has its own path. Attack is bound to the Thetis-default 2
-    // (decay serves as rise-time; Thetis doesn't wire attack to the UI — §4.5).
+    // the max-gain has its own path. Attack is the WDSP create-time default of
+    // 1 ms (RXA.c: tau_attack = 0.001): Thetis NEVER calls SetRXAAGCAttack, so it
+    // runs every mode at the 1 ms default — its "Attack 2ms" UI tooltip is label
+    // text the code never applies. We set it explicitly to 1 to match exactly.
     private static void ApplyAgcCore(int id, AgcConfig cfg)
     {
         NativeMethods.SetRXAAGCMode(id, (int)cfg.Mode);
-        NativeMethods.SetRXAAGCAttack(id, 2);
+        NativeMethods.SetRXAAGCAttack(id, 1);
 
         int hangMs, decayMs, hangThreshold;
         if (cfg.Mode == AgcMode.Custom)
@@ -3525,9 +3529,13 @@ public sealed class WdspDspEngine : IDspEngine
         NativeMethods.SetRXAAGCDecay(id, decayMs);
         NativeMethods.SetRXAAGCHangThreshold(id, hangThreshold);
 
-        // WDSP wants slope ×10 (Thetis setup.cs:9088). Custom uses the operator
-        // slope; every canned mode uses the Thetis MED slope (35) verbatim.
-        int slope = cfg.Mode == AgcMode.Custom ? (cfg.Slope ?? 0) * 10 : 35;
+        // Thetis's default slope is 0 (radio.cs:1110 rx_agc_slope; the
+        // udDSPAGCSlope UI default is 0) and the canned-mode switch never sets
+        // it, so every non-custom mode runs at slope 0 — a flat-output AGC that
+        // holds all signals at the same loudness. Custom applies the operator
+        // slope ×10 (Thetis setup.cs:9088). The old hard-coded 35 made every
+        // mode let stronger signals stay louder, which is NOT Thetis behaviour.
+        int slope = cfg.Mode == AgcMode.Custom ? (cfg.Slope ?? 0) * 10 : 0;
         NativeMethods.SetRXAAGCSlope(id, slope);
 
         if (cfg.Mode == AgcMode.Fixed)

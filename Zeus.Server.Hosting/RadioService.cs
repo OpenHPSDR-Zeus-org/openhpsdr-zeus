@@ -56,16 +56,16 @@ namespace Zeus.Server;
 public sealed class RadioService : IDisposable
 {
     private const int DefaultHpsdrPort = 1024;
-    internal const double DefaultAgcTopDb = 80.0;
+    internal const double DefaultAgcTopDb = 90.0;   // Thetis radio.cs:1021 rx_agc_max_gain default
     // Operator AGC-T baseline range. Below ~30 dB the RX audio is effectively
-    // muted and above ~80 dB it is the loudest the AGC will drive; the old
-    // -20..120 span (mirroring the raw Thetis slider) exposed a large dead
+    // muted and 90 dB is the Thetis default / loudest the AGC will drive; the
+    // old -20..120 span (mirroring the raw Thetis slider) exposed a large dead
     // region the operator never used. The slider is linear across this window.
     // NOTE: this bounds only the manual baseline (AgcTopDb). Auto-AGC's offset
     // (AgcOffsetDb) and the effective value it pushes to WDSP are NOT bounded
     // by this — see AgcMinEffectiveAgcT / AgcMaxEffectiveAgcT.
     internal const double MinAgcTopDb = 30.0;
-    internal const double MaxAgcTopDb = 80.0;
+    internal const double MaxAgcTopDb = 90.0;
 
     private readonly object _sync = new();
     private readonly ILoggerFactory _loggerFactory;
@@ -2770,9 +2770,9 @@ public sealed class RadioService : IDisposable
         => DriveByteMath.ComputeFullByte(drivePct, paGainDb, maxWatts);
 
     // "AGC Top" slider — max post-AGC gain in dB. Clamped to the operator
-    // baseline range (MinAgcTopDb..MaxAgcTopDb = 30..80); below 30 the audio
-    // is effectively muted and above 80 it's the loudest the AGC drives, so the
-    // wider raw-Thetis span was dead travel. This clamp is authoritative for
+    // baseline range (MinAgcTopDb..MaxAgcTopDb = 30..90); below 30 the audio
+    // is effectively muted and 90 is the Thetis default / loudest the AGC
+    // drives, so the wider raw-Thetis span was dead travel. This clamp is authoritative for
     // BOTH the REST /api/agcGain endpoint and the TCI agc_gain command.
     // DspPipelineService picks this up through the StateChanged event and
     // forwards it to the active engine.
