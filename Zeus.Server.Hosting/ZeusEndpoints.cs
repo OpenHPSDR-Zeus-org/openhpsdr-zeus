@@ -691,18 +691,24 @@ public static class ZeusEndpoints
             _                            => Results.StatusCode(500),
         };
 
-        // When the operator has selected the out-of-process VST route but the
-        // engine isn't routing, an editor open would otherwise fall through to
-        // the in-process bridge and surface the in-process "set
-        // ZEUS_ENABLE_VST_LOAD=1" hint — which is irrelevant to VST mode and
-        // sends a new operator down the wrong path. Point them at the actual
-        // fix instead: install the engine (the "Download VST Engine" affordance)
-        // or wait for it to come up. Returns null in every other case so Native
-        // mode keeps the existing in-process editor behaviour unchanged.
-        static IResult? VstEngineEditorGuard(AudioProcessingModeService mode)
+        // When an editor open can't succeed in the current mode, a naive open
+        // would fall through to the in-process bridge and surface its "set
+        // ZEUS_ENABLE_VST_LOAD=1" hint — a developer-only escape hatch that sends
+        // a new operator down the wrong (and unsafe) path. Point them at the
+        // supported fix instead: the crash-isolated out-of-process engine
+        // ("Download VST Engine" + VST processing mode). This covers two cases:
+        // VST mode with no routing engine, and Native mode where the in-process
+        // bridge won't host the plugin (TX native load is opt-in). Returns null
+        // when the open should proceed — the engine is routing, or the bridge can
+        // host this plugin (RX VSTs load in-process; TX only with the dev opt-in).
+        static IResult? VstEngineEditorGuard(string id, AudioProcessingModeService mode)
         {
+            var nativeLoadEnabled = VstDirectoryScanService.IsRxPluginId(id)
+                || Zeus.Plugins.Host.Audio.VstHostAudioPlugin.TxNativeLoadEnabled;
             var error = VstEditorHint.EngineUnavailableMessage(
-                mode.Mode, mode.EngineActive, AudioProcessingModeService.FindEngineExe() is not null);
+                mode.Mode, mode.EngineActive,
+                AudioProcessingModeService.FindEngineExe() is not null,
+                nativeLoadEnabled);
             return error is null ? null : Results.Json(new { error }, statusCode: 409);
         }
 
@@ -728,7 +734,7 @@ public static class ZeusEndpoints
                 // processing mode; only the TX path is gated on the VST engine.
                 if (rxVst.HasEngineSlot(id))
                     return MapEditorResult(rxVst.OpenEditor(id), open: true);
-                if (VstEngineEditorGuard(mode) is { } guard)
+                if (VstEngineEditorGuard(id, mode) is { } guard)
                     return guard;
                 var result = mode.EngineActive && mode.HasEngineSlot(id)
                     ? mode.OpenEditor(id)
@@ -758,7 +764,7 @@ public static class ZeusEndpoints
         app.MapPost("/api/tx-audio-suite/plugins/{id}/editor",
             (string id, AudioPluginBridge bridge, AudioProcessingModeService mode) =>
             {
-                if (VstEngineEditorGuard(mode) is { } guard)
+                if (VstEngineEditorGuard(id, mode) is { } guard)
                     return guard;
                 var result = mode.EngineActive && mode.HasEngineSlot(id)
                     ? mode.OpenEditor(id)
@@ -780,29 +786,36 @@ public static class ZeusEndpoints
         // auto-detects RX slots, but route-aware callers should use this
         // receive-side URL so separate TX/RX VST instances never depend on
         // ambiguous editor routing.
+        // RX VSTs are hosted out-of-process only when the dedicated RX engine is
+        // installed AND active; otherwise (Native mode — the default, and the
+        // only option until the operator installs the VST engine) the in-process
+        // AudioPluginBridge loads and renders the RX VST editor. So fall back to
+        // the bridge exactly like the generic /api/audio-suite route does. Without
+        // this fallback a fresh install 404s the editor for a perfectly-loaded
+        // in-process RX VST and surfaces the wrong "engine missing" hint.
         app.MapGet("/api/rx-audio-suite/plugins/{id}/editor",
-            (string id, RxVstEngineService rxVst) =>
+            (string id, RxVstEngineService rxVst, AudioPluginBridge bridge) =>
             {
-                if (!rxVst.HasEngineSlot(id))
-                    return Results.NotFound(new { error = "No such plugin in the RX Audio Suite chain." });
-                return Results.Ok(new { open = rxVst.IsEditorOpen(id) });
+                if (rxVst.HasEngineSlot(id))
+                    return Results.Ok(new { open = rxVst.IsEditorOpen(id) });
+                return Results.Ok(new { open = bridge.IsEditorOpen(id) });
             });
 
         app.MapPost("/api/rx-audio-suite/plugins/{id}/editor",
-            (string id, RxVstEngineService rxVst) =>
+            (string id, RxVstEngineService rxVst, AudioPluginBridge bridge) =>
             {
                 var result = rxVst.HasEngineSlot(id)
                     ? rxVst.OpenEditor(id)
-                    : EditorActionResult.NotFound;
+                    : bridge.OpenEditor(id);
                 return MapEditorResult(result, open: true);
             });
 
         app.MapDelete("/api/rx-audio-suite/plugins/{id}/editor",
-            (string id, RxVstEngineService rxVst) =>
+            (string id, RxVstEngineService rxVst, AudioPluginBridge bridge) =>
             {
                 var result = rxVst.HasEngineSlot(id)
                     ? rxVst.CloseEditor(id)
-                    : EditorActionResult.NotFound;
+                    : bridge.CloseEditor(id);
                 return MapEditorResult(result, open: false);
             });
 

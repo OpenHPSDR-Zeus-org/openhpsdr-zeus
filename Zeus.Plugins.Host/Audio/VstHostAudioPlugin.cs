@@ -63,6 +63,15 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
             && Environment.GetEnvironmentVariable("ZEUS_DISABLE_RX_VST_LOAD") != "1";
     }
 
+    /// <summary>
+    /// Whether the in-process bridge will natively host a TX-slot VST. Stays
+    /// opt-in (a crashing in-process TX VST can hard-crash the radio backend),
+    /// so this is false for a normal operator and true only when the developer
+    /// escape hatch <c>ZEUS_ENABLE_VST_LOAD=1</c> is set. When false, the
+    /// supported way to run TX VSTs is the crash-isolated out-of-process engine.
+    /// </summary>
+    public static bool TxNativeLoadEnabled => NativeLoadEnabled("tx.post-leveler");
+
     public Task InitializeAudioAsync(IAudioHost host, CancellationToken ct)
     {
         if (!NativeLoadEnabled(_slot))
