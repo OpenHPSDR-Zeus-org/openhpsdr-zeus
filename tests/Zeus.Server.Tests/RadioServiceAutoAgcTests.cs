@@ -43,14 +43,14 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
     }
 
     [Fact]
-    public void AutoAgc_LowersEffectiveBelowBaseline_OnNoisyBand()
+    public void AutoAgc_SeatsKneeAtNoiseFloor_OnNoisyBand()
     {
-        // Symmetric tracking (#806): default baseline AgcTopDb is 90; a noisy
-        // -80 dBm floor wants effective = clamp(-40-(-80)=40, 20, 100) = 40, so
-        // the offset goes NEGATIVE (40-90 = -50) — the loop lowers gain below the
-        // slider baseline on a noisy band. This is the behavior the old
-        // Math.Max(0, …) clamp suppressed (making auto-AGC inaudible at the 90 dB
-        // default); the spectrum-floor source is exercised here explicitly.
+        // Thetis auto-AGC-T seats the AGC knee at the noise floor. Default
+        // baseline is 90 dB; a noisy -80 dBm floor resolves (via the WDSP
+        // threshold→top conversion) to an effective AGC-T below the baseline, so
+        // AgcOffsetDb goes negative — the loop lowers gain on a noisy band. The
+        // exact value comes from the servo helper (unit-tested separately), so
+        // this asserts the loop WIRES it, not a magic constant.
         using var radio = NewRadio();
         radio.SetAutoAgc(true);
 
@@ -59,15 +59,21 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
                 signalDbm: -50.0, spectrumFloorDbm: -80.0,
                 adcPkDbfs: double.NaN, agcGainDb: double.NaN, nowMs: i * 500);
 
+        double expectedTop = radio.AutoAgcTopFromNoiseFloor(-80.0); // 68 dB at default BW/rate
         var snap = radio.Snapshot();
         Assert.Equal(90.0, snap.AgcTopDb);
-        Assert.Equal(-50.0, snap.AgcOffsetDb);
-        Assert.Equal(40.0, snap.AgcTopDb + snap.AgcOffsetDb); // effective AGC-T
+        Assert.Equal(expectedTop - 90.0, snap.AgcOffsetDb);       // offset = top − baseline
+        Assert.Equal(expectedTop, snap.AgcTopDb + snap.AgcOffsetDb); // effective AGC-T = seated top
+        Assert.True(snap.AgcOffsetDb < 0.0, "noisy band lowers gain below baseline");
     }
 
     [Fact]
-    public void AutoAgc_DoesNotRaiseGainOnSingleQuietDip()
+    public void AutoAgc_RejectsSingleQuietDip_TracksSteadyFloor()
     {
+        // A single deep dip (-120) must not spike the gain: the low-percentile
+        // floor estimate rejects the outlier and tracks the steady -90 dBm floor.
+        // So the seated top reflects -90 (autoTop≈78), NOT the -120 dip
+        // (autoTop≈108). This proves the estimator's robustness to transients.
         using var radio = NewRadio();
         radio.SetAgcTop(60.0);
         radio.SetAutoAgc(true);
@@ -76,15 +82,16 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
         for (int i = 0; i < samples.Length; i++)
             radio.HandleRxMeterForAutoAgc(samples[i], i * 500);
 
-        Assert.True(radio.Snapshot().AgcOffsetDb <= 0.0);
+        double steadyTop = radio.AutoAgcTopFromNoiseFloor(-90.0);
+        Assert.Equal(steadyTop - 60.0, radio.Snapshot().AgcOffsetDb);
     }
 
     [Fact]
     public void AutoAgc_JumpsToNoiseFloorTarget_FastNotSlewed()
     {
-        // baseline 45; a -100 dBm floor wants effective = clamp(-40-(-100),20,100)
-        // = 60, so the offset target is 60-45 = 15 dB. The loop JUMPS to it once
-        // it has a few samples (~1.5 s) — it does NOT crawl there 0.5 dB/tick.
+        // baseline 45; a quiet -100 dBm floor seats the knee high (autoTop≈88 at
+        // default BW/rate) ⇒ offset ≈ +43. The loop JUMPS to the target once it
+        // has a few samples (~1.5 s) — it does NOT crawl there 0.5 dB/tick.
         using var radio = NewRadio();
         radio.SetAgcTop(45.0);
         radio.SetAutoAgc(true);
@@ -94,7 +101,7 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
         for (int i = 0; i < 4; i++)
             radio.HandleRxMeterForAutoAgc(-100.0, i * 500);
 
-        Assert.Equal(15.0, radio.Snapshot().AgcOffsetDb);
+        Assert.Equal(radio.AutoAgcTopFromNoiseFloor(-100.0) - 45.0, radio.Snapshot().AgcOffsetDb);
     }
 
     [Fact]
@@ -109,17 +116,16 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
         radio.SetAutoAgc(true);
         for (int i = 0; i < 4; i++)
             radio.HandleRxMeterForAutoAgc(-100.0, i * 500);
-        Assert.Equal(15.0, radio.Snapshot().AgcOffsetDb); // quiet band: +15
+        Assert.Equal(radio.AutoAgcTopFromNoiseFloor(-100.0) - 45.0, radio.Snapshot().AgcOffsetDb); // quiet band
 
         radio.SetVfo(7_100_000); // > 0.5 MHz move => fast-attack re-seed
         for (int i = 4; i < 8; i++)
             radio.HandleRxMeterForAutoAgc(-70.0, i * 500); // noisier band
 
-        // New floor -70 -> effective clamp(-40-(-70),20,100)=30 -> offset 30-45 =
-        // -15. Symmetric tracking (#806): it re-seeded to the new band and now
-        // LOWERS gain below baseline on the noisier band (the old clamp pinned
-        // this at 0). The re-seed is what makes the jump fast and complete.
-        Assert.Equal(-15.0, radio.Snapshot().AgcOffsetDb);
+        // Re-seeded to the new band: the seated top now follows the -70 floor
+        // (autoTop≈58 ⇒ offset 58-45≈+13), lower than the quiet band. The re-seed
+        // is what makes the jump fast and complete.
+        Assert.Equal(radio.AutoAgcTopFromNoiseFloor(-70.0) - 45.0, radio.Snapshot().AgcOffsetDb);
     }
 
     [Fact]
@@ -127,10 +133,10 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
     {
         // The spectrum floor MUST win over signalDbm (#806). Feed a quiet real
         // floor (-105) alongside a loud, contaminated signalDbm (-50, the kind of
-        // post-AGC RMS value that fooled the old loop). The result must reflect
-        // the spectrum floor: target = clamp(-40-(-105)=65, 20, 100) = 65 ⇒
-        // offset = 65-60 = +5. If signalDbm had been used, target would clamp to
-        // 20 ⇒ offset -40 — so +5 proves the spectrum source is authoritative.
+        // post-AGC RMS value that fooled the old loop). The seated top must
+        // reflect the quiet -105 floor (positive offset), NOT the loud -50
+        // (which would give a large negative offset) — proving spectrum is
+        // authoritative.
         using var radio = NewRadio();
         radio.SetAgcTop(60.0);
         radio.SetAutoAgc(true);
@@ -140,7 +146,8 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
                 signalDbm: -50.0, spectrumFloorDbm: -105.0,
                 adcPkDbfs: double.NaN, agcGainDb: double.NaN, nowMs: i * 500);
 
-        Assert.Equal(5.0, radio.Snapshot().AgcOffsetDb);
+        Assert.Equal(radio.AutoAgcTopFromNoiseFloor(-105.0) - 60.0, radio.Snapshot().AgcOffsetDb);
+        Assert.True(radio.Snapshot().AgcOffsetDb > 0.0, "tracks the quiet spectrum floor, not loud signalDbm");
     }
 
     [Fact]
@@ -148,7 +155,7 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
     {
         // No spectrum available (synthetic engine / stale frame): the loop falls
         // back to signalDbm and behaves exactly as the S-meter-only path. baseline
-        // 45, floor -100 ⇒ target clamp(-40-(-100)=60,20,100)=60 ⇒ offset +15.
+        // 45, floor -100 ⇒ seated top ≈ 88 ⇒ offset ≈ +43.
         using var radio = NewRadio();
         radio.SetAgcTop(45.0);
         radio.SetAutoAgc(true);
@@ -158,7 +165,7 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
                 signalDbm: -100.0, spectrumFloorDbm: double.NaN,
                 adcPkDbfs: double.NaN, agcGainDb: double.NaN, nowMs: i * 500);
 
-        Assert.Equal(15.0, radio.Snapshot().AgcOffsetDb);
+        Assert.Equal(radio.AutoAgcTopFromNoiseFloor(-100.0) - 45.0, radio.Snapshot().AgcOffsetDb);
     }
 
     [Fact]
@@ -172,23 +179,23 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
         radio.SetAgcTop(45.0);
         radio.SetAutoAgc(true);
 
-        // Converge on the spectrum floor: -100 ⇒ target clamp(60) ⇒ offset +15.
+        // Converge on the spectrum floor: -100 ⇒ seated top ≈ 88 ⇒ offset ≈ +43.
         for (int i = 0; i < 4; i++)
             radio.HandleRxMetersForAutoAgc(
                 signalDbm: -50.0, spectrumFloorDbm: -100.0,
                 adcPkDbfs: double.NaN, agcGainDb: double.NaN, nowMs: i * 500);
-        Assert.Equal(15.0, radio.Snapshot().AgcOffsetDb);
+        Assert.Equal(radio.AutoAgcTopFromNoiseFloor(-100.0) - 45.0, radio.Snapshot().AgcOffsetDb);
 
         // Spectrum goes dark for several seconds while a noisier S-meter floor
         // (-70) keeps arriving. After the transient hold (< 1.5 s) the fallback
-        // re-engages, re-seeds, and converges: target clamp(-40-(-70)=30) ⇒
-        // offset 30-45 = -15. Before the fix the offset stayed frozen at +15.
+        // re-engages, re-seeds, and converges to the -70 floor (lower gain).
+        // Before the latch-freeze fix the offset stayed frozen at the quiet value.
         for (int i = 4; i < 16; i++)
             radio.HandleRxMetersForAutoAgc(
                 signalDbm: -70.0, spectrumFloorDbm: double.NaN,
                 adcPkDbfs: double.NaN, agcGainDb: double.NaN, nowMs: i * 500);
 
-        Assert.Equal(-15.0, radio.Snapshot().AgcOffsetDb);
+        Assert.Equal(radio.AutoAgcTopFromNoiseFloor(-70.0) - 45.0, radio.Snapshot().AgcOffsetDb);
     }
 
     [Fact]
@@ -213,9 +220,8 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
     {
         // The protective ADC cut must require ADC pressure: WDSP AGC cutting
         // (agcGain -24.5) with clean ADC headroom (-60 dBfs) must NOT pull gain
-        // down. The floor is chosen neutral so the noise-floor path itself wants
-        // offset 0 (baseline 52, floor -92 ⇒ target clamp(-40-(-92)=52,20,100)=52
-        // ⇒ 52-52 = 0), isolating the protective path: it stays disengaged.
+        // below what the noise-floor servo alone wants. So the offset equals the
+        // pure floor-path value (no extra protective cut applied).
         using var radio = NewRadio();
         radio.SetAgcTop(52.0);
         radio.SetAutoAgc(true);
@@ -225,7 +231,7 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
 
         var snap = radio.Snapshot();
         Assert.Equal(52.0, snap.AgcTopDb);
-        Assert.Equal(0.0, snap.AgcOffsetDb);
+        Assert.Equal(radio.AutoAgcTopFromNoiseFloor(-92.0) - 52.0, snap.AgcOffsetDb);
     }
 
     [Fact]
@@ -235,21 +241,22 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
         radio.SetAgcTop(60.0);
         radio.SetAutoAgc(true);
 
-        // Sustained overload drives the protective cut negative (jumps fast). The
-        // floor source here is a quiet -105 dBm so the noise-floor path itself
-        // wants a positive offset; only the ADC-pressure protection forces it
-        // negative.
-        for (int i = 0; i < 4; i++)
-            radio.HandleRxMetersForAutoAgc(signalDbm: -105.0, adcPkDbfs: -5.0, agcGainDb: -28.0, nowMs: i * 500);
+        // Floor-path target for a -70 dBm floor at baseline 60 (≈ -2 dB offset).
+        double floorOffset = radio.AutoAgcTopFromNoiseFloor(-70.0) - 60.0;
 
-        Assert.True(radio.Snapshot().AgcOffsetDb < 0.0, "overload should pull the offset negative");
+        // Sustained overload (ADC near full scale, WDSP cutting hard) drives the
+        // protective cut BELOW the floor-path target (jumps fast).
+        for (int i = 0; i < 4; i++)
+            radio.HandleRxMetersForAutoAgc(signalDbm: -70.0, adcPkDbfs: -5.0, agcGainDb: -28.0, nowMs: i * 500);
+
+        Assert.True(radio.Snapshot().AgcOffsetDb < floorOffset,
+            "overload should cut the offset below the floor-path target");
 
         // ADC pressure clears and WDSP is no longer cutting: the offset recovers
-        // (jumps) back to the noise-floor target — baseline 60, floor -105 ⇒
-        // target clamp(-40-(-105)=65,20,100)=65 ⇒ offset +5.
-        radio.HandleRxMetersForAutoAgc(signalDbm: -105.0, adcPkDbfs: -18.0, agcGainDb: 0.0, nowMs: 2_000);
+        // (jumps) back to the pure noise-floor target.
+        radio.HandleRxMetersForAutoAgc(signalDbm: -70.0, adcPkDbfs: -18.0, agcGainDb: 0.0, nowMs: 2_000);
 
-        Assert.Equal(5.0, radio.Snapshot().AgcOffsetDb);
+        Assert.Equal(floorOffset, radio.Snapshot().AgcOffsetDb);
     }
 
     // ── issue #733: AGC-T slider must be authoritative ────────────────────────
@@ -310,13 +317,13 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
         radio.SetAutoAgc(true);
         for (int i = 0; i < 4; i++)
             radio.HandleRxMeterForAutoAgc(-100.0, i * 500);
-        Assert.Equal(15.0, radio.Snapshot().AgcOffsetDb);
+        Assert.Equal(radio.AutoAgcTopFromNoiseFloor(-100.0) - 45.0, radio.Snapshot().AgcOffsetDb);
 
         radio.SetAttenuator(new HpsdrAtten(20)); // operator step => re-seed
         for (int i = 4; i < 8; i++)
             radio.HandleRxMeterForAutoAgc(-70.0, i * 500);
 
-        Assert.Equal(-15.0, radio.Snapshot().AgcOffsetDb);
+        Assert.Equal(radio.AutoAgcTopFromNoiseFloor(-70.0) - 45.0, radio.Snapshot().AgcOffsetDb);
     }
 
     [Fact]
@@ -328,13 +335,13 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
         radio.SetAutoAgc(true);
         for (int i = 0; i < 4; i++)
             radio.HandleRxMeterForAutoAgc(-100.0, i * 500);
-        Assert.Equal(15.0, radio.Snapshot().AgcOffsetDb);
+        Assert.Equal(radio.AutoAgcTopFromNoiseFloor(-100.0) - 45.0, radio.Snapshot().AgcOffsetDb);
 
         radio.SetPreamp(true); // toggle => re-seed
         for (int i = 4; i < 8; i++)
             radio.HandleRxMeterForAutoAgc(-70.0, i * 500);
 
-        Assert.Equal(-15.0, radio.Snapshot().AgcOffsetDb);
+        Assert.Equal(radio.AutoAgcTopFromNoiseFloor(-70.0) - 45.0, radio.Snapshot().AgcOffsetDb);
     }
 
     [Fact]
@@ -383,6 +390,34 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
         }
         using var radio = NewRadio();
         Assert.Equal(45.0, radio.Snapshot().AgcTopDb);
+    }
+
+    // ── Thetis auto-AGC-T servo math (AutoAgcTopFromNoiseFloor) ───────────────
+    [Fact]
+    public void AutoAgcTopFromNoiseFloor_SeatsKneeAtFloor_ThetisMath()
+    {
+        // WDSP SetRXAAGCThresh→GetRXAAGCTop at the default RX config (filter
+        // 100..2850 ⇒ BW 2750, FFT 1024, 192 kSps):
+        //   noiseOffset = 10·log10(2750·1024/192000) = 11.66 dB
+        //   top         = round(20·log10(out_target) − (floor + noiseOffset))
+        //               = round(-0.1615 − floor − 11.66) = round(-11.83 − floor)
+        // A 10 dB quieter floor ⇒ ~10 dB more gain (1:1), the Thetis contract.
+        using var radio = NewRadio();
+        Assert.Equal(88.0, radio.AutoAgcTopFromNoiseFloor(-100.0));
+        Assert.Equal(78.0, radio.AutoAgcTopFromNoiseFloor(-90.0));
+        Assert.Equal(68.0, radio.AutoAgcTopFromNoiseFloor(-80.0));
+    }
+
+    [Fact]
+    public void AutoAgcTopFromNoiseFloor_AppliesThetisClamps()
+    {
+        using var radio = NewRadio();
+        // Resulting AGC top clamps to Thetis's [-20, +120] dB. A very low floor
+        // would compute > 120 dB of gain; it pegs at 120.
+        Assert.Equal(120.0, radio.AutoAgcTopFromNoiseFloor(-140.0));
+        // Threshold clamps to [-160, +2] dBm: floors at/above +2 dBm produce the
+        // same seated top (the upper threshold rail).
+        Assert.Equal(radio.AutoAgcTopFromNoiseFloor(2.0), radio.AutoAgcTopFromNoiseFloor(50.0));
     }
 
     // ── AGC knee removed: AGC-T is the single manual AGC control ───────────────
