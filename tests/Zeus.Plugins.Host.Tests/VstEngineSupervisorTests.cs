@@ -121,6 +121,8 @@ public class VstEngineSupervisorTests
         public bool EngineReady { get; set; }
         public int WaitBudgetMs { get; set; }
         public int ResetCount { get; private set; }
+        public uint EngineState { get; set; }
+        public uint EngineFlags { get; set; }
 
         /// <summary>
         /// When > 0, every read of <see cref="DegradedBlocks"/> advances the counter
@@ -286,6 +288,91 @@ public class VstEngineSupervisorTests
         Assert.True(recycled, "watchdog should force-recycle a hung engine");
         Assert.True(created.Count >= 2);
         Assert.Contains(created, p => p.Killed); // the watchdog killed it, not a clean exit
+    }
+
+    // ── Tier-1 recovery: in-place chain reload, only while live ───────────────
+    [Fact]
+    public async Task RequestChainReload_RaisesEvent_OnlyWhenActive()
+    {
+        var created = new List<FakeProcess>();
+        Func<string, IVstEngineProcess> launch = _ =>
+        {
+            var p = new FakeProcess();
+            p.SignalReady(ReadyPayload());
+            created.Add(p);
+            return p;
+        };
+
+        await using var c = NewController(launch, out _);
+
+        var reloads = 0;
+        c.ChainReloadRequested += () => Interlocked.Increment(ref reloads);
+
+        // Before activation the engine is not the live route — must be a no-op so we
+        // never push a chain at a dead engine.
+        c.RequestChainReload("test (inactive)");
+        Assert.Equal(0, reloads);
+
+        await c.ActivateAsync(TimeSpan.FromSeconds(5));
+        Assert.True(c.IsActive);
+
+        // While live it asks owners to replay their chain (the manual-profile-change
+        // fix) without recycling the process.
+        c.RequestChainReload("test (active)");
+        Assert.Equal(1, reloads);
+        Assert.Single(created); // no process recycle
+        Assert.Equal(0, c.RestartCount);
+
+        c.Deactivate();
+        c.RequestChainReload("test (after deactivate)");
+        Assert.Equal(1, reloads); // no further reloads once down
+    }
+
+    // ── Tier-2 recovery: force-recycle kills the process and relaunches ───────
+    [Fact]
+    public async Task ForceRecycle_KillsProcess_AndRelaunches_ReplayingChain()
+    {
+        var created = new List<FakeProcess>();
+        Func<string, IVstEngineProcess> launch = _ =>
+        {
+            var p = new FakeProcess();
+            p.SignalReady(ReadyPayload());
+            created.Add(p);
+            return p;
+        };
+
+        await using var c = NewController(launch, out _);
+        c.RelaunchBaseDelayMs = 5;
+        c.RelaunchMaxDelayMs = 20;
+        c.MaxRelaunchesPerWindow = 100;
+
+        var reconnected = 0;
+        c.Reconnected += () => Interlocked.Increment(ref reconnected);
+
+        await c.ActivateAsync(TimeSpan.FromSeconds(5));
+        Assert.True(c.IsActive);
+        Assert.Single(created);
+
+        // Escalation: the TX-liveness watchdog couldn't clear the wedge with a
+        // reload, so it recycles. Routes through the normal exit→relaunch path.
+        c.ForceRecycle("test recycle");
+
+        Assert.True(await WaitUntilAsync(() => created.Count >= 2 && c.IsActive, 3000),
+            "ForceRecycle should kill the engine and relaunch it");
+        Assert.True(created[0].Killed); // killed, not a clean exit
+        Assert.True(c.RestartCount >= 1);
+        Assert.True(reconnected >= 1, "relaunch should fire Reconnected so owners replay the chain");
+        Assert.Equal("test recycle", c.LastFault);
+    }
+
+    // ── ForceRecycle on an inactive engine is a safe no-op ────────────────────
+    [Fact]
+    public async Task ForceRecycle_WhenInactive_IsNoOp()
+    {
+        await using var c = NewController(_ => new FakeProcess(), out _);
+        c.ForceRecycle("test (inactive)"); // must not throw or spawn anything
+        Assert.False(c.IsActive);
+        Assert.Equal(0, c.RestartCount);
     }
 
     // ── Deactivate cancels the supervisor (no relaunch after intentional stop) ─

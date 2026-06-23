@@ -5443,13 +5443,17 @@ public class DspPipelineService : BackgroundService,
                     squelch,
                     _adaptiveSquelch);
 
-                // Final receive loudness guard. WDSP AGC and supported NR have
-                // already run by this point (and any RX audio plugin has had
-                // its shot), so weak cleaned audio can be lifted without
-                // letting a sudden strong signal blast the speaker.
-                ApplyRxAudioLeveler(
-                    audioBuf.AsSpan(0, audioSampleCount),
-                    ref _rxAudioLeveler);
+                // RX loudness normalization is WDSP's AGC alone — exactly as in
+                // Thetis, where the demod->AGC->AF-panel-gain chain is the only
+                // gain path and there is NO post-demod leveler. The former
+                // always-on ApplyRxAudioLeveler stage (which Thetis lacks) was a
+                // SECOND adaptive AGC running in series with WDSP's; the two
+                // chased each other and produced pumping, weak-signal crackle and
+                // inconsistent loudness ("audio sounds like crap"). WDSP AGC
+                // (attack 1 ms, mode-aware hang/decay, max-gain top) already
+                // normalizes perceived volume across signal strengths; the hard
+                // LimitRxAudioBuffer clip below remains the only safety ceiling,
+                // matching Thetis's output clamp.
 
                 // CW sidetone is mixed (+=) into the RX block so every
                 // downstream sink — browser WS, native audio, TCI audio

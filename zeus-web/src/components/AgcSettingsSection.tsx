@@ -188,11 +188,11 @@ export function AgcSettingsSection() {
         <input
           type="range"
           min={30}
-          max={80}
+          max={90}
           step={1}
           value={agcTopDb}
           disabled={topDisabled}
-          title={autoEnabled ? 'Auto-AGC is controlling max gain' : 'AGC-T max gain (30-80 dB)'}
+          title={autoEnabled ? 'Auto-AGC is controlling max gain' : 'AGC-T max gain (30-90 dB)'}
           onChange={(e) => sendTop(Number(e.currentTarget.value))}
           style={{
             flex: 1,
