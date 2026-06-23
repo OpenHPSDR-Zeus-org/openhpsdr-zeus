@@ -15,7 +15,10 @@
 # because libspecbleach is single-precision.
 #
 # NR3 (RNNoise) and NR4 (libspecbleach / SBNR) are gated by separate flags:
-#   * WDSP_WITH_NR3 — OFF by default. librnnoise is not yet vendored.
+#   * WDSP_WITH_NR3 — OFF by default. Turn ON after vendoring xiph/rnnoise under
+#                    native/rnnoise/ (see native/rnnoise/VENDORING.md). Built
+#                    without the default model — NR3 needs an operator-installed
+#                    model at runtime.
 #   * WDSP_WITH_NR4 — ON  by default. libspecbleach is vendored under
 #                    native/libspecbleach/ (see Phase 1a of #162).
 
@@ -307,6 +310,48 @@ if(WDSP_WITH_NR4)
     endif()
 
     target_link_libraries(wdsp PRIVATE specbleach)
+endif()
+
+# -----------------------------------------------------------------------------
+# librnnoise (NR3 / RNNoise) — vendored at native/rnnoise/, built inline as a
+# STATIC sub-target so it embeds into libwdsp (same pattern as libspecbleach).
+#
+# Built WITHOUT the baked-in default model: Zeus requires the operator to
+# install a model (RNNRloadModel / rnnoise_model_from_filename), so the large
+# default-weights translation unit is excluded and the "stock model" path is
+# gated off (xiph's --disable-default-model equivalent). NR3 is then inert until
+# a model file is loaded. See native/rnnoise/VENDORING.md for the vendor step
+# and the pinned upstream tag.
+# -----------------------------------------------------------------------------
+if(WDSP_WITH_NR3)
+    set(RNNOISE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../rnnoise)
+    if(NOT EXISTS ${RNNOISE_DIR}/include/rnnoise.h)
+        message(FATAL_ERROR "WDSP_WITH_NR3=ON but native/rnnoise/ is missing or incomplete. See native/rnnoise/VENDORING.md.")
+    endif()
+
+    # Drop the compiled-in default-model data unit(s) so no stock weights ship.
+    file(GLOB_RECURSE RNNOISE_SRCS "${RNNOISE_DIR}/src/*.c")
+    list(FILTER RNNOISE_SRCS EXCLUDE REGEX ".*rnnoise_data.*\\.c$")
+    add_library(rnnoise STATIC ${RNNOISE_SRCS})
+    set_target_properties(rnnoise PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        C_VISIBILITY_PRESET hidden
+        C_STANDARD 99
+    )
+    target_include_directories(rnnoise PUBLIC ${RNNOISE_DIR}/include PRIVATE ${RNNOISE_DIR}/src)
+    # USE_WEIGHTS_FILE gates off the stock-model code path (matches xiph's
+    # --disable-default-model), so rnnoise_create(NULL) yields an inert denoiser
+    # until RNNRloadModel installs a model.
+    target_compile_definitions(rnnoise PRIVATE USE_WEIGHTS_FILE)
+    if(NOT MSVC)
+        target_compile_options(rnnoise PRIVATE
+            -Wno-unused-variable -Wno-unused-function -Wno-unused-but-set-variable)
+    endif()
+
+    # rnnr.c does #include "rnnoise.h" — point it at the vendored header (the
+    # stub include dir is intentionally NOT added when WDSP_WITH_NR3 is ON).
+    target_include_directories(wdsp PRIVATE ${RNNOISE_DIR}/include)
+    target_link_libraries(wdsp PRIVATE rnnoise)
 endif()
 
 # -----------------------------------------------------------------------------

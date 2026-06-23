@@ -349,7 +349,10 @@ describe('normalizeNrMode / normalizeNbMode', () => {
     expect(normalizeNrMode(0)).toBe('Off');
     expect(normalizeNrMode(1)).toBe('Anr');
     expect(normalizeNrMode(2)).toBe('Emnr');
-    expect(normalizeNrMode(4)).toBe('Off');
+    expect(normalizeNrMode(3)).toBe('Sbnr');
+    expect(normalizeNrMode(4)).toBe('Rnnr');
+    // 5 is past the last defined ordinal (Rnnr = 4) → Off.
+    expect(normalizeNrMode(5)).toBe('Off');
     expect(normalizeNbMode(2)).toBe('Nb2');
   });
   it('falls back to Off on garbage', () => {

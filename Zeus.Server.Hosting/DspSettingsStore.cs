@@ -572,8 +572,11 @@ public sealed class DspSettingsStore : IDisposable
         e.CfcBand10Freq = c.Bands[9].FreqHz; e.CfcBand10Comp = c.Bands[9].CompLevelDb; e.CfcBand10Post = c.Bands[9].PostGainDb;
     }
 
+    // Keep this in lock-step with RadioService.IsSupportedNrMode — the store
+    // must persist every mode RadioService treats as supported, or the live
+    // selection (e.g. NR3 / Rnnr) is silently dropped to Off on the next read.
     private static NrMode NormalizeNrMode(NrMode mode) =>
-        mode is NrMode.Off or NrMode.Anr or NrMode.Emnr or NrMode.Sbnr
+        mode is NrMode.Off or NrMode.Anr or NrMode.Emnr or NrMode.Sbnr or NrMode.Rnnr
             ? mode
             : NrMode.Off;
 

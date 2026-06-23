@@ -159,6 +159,7 @@ public class RadioMicReceiverTests
         public void SetRxDisplayFastAttack(int channelId, bool fast) { }
         public void SetRxAfGainDb(int channelId, double db) { }
         public void SetNoiseReduction(int channelId, NrConfig cfg) { }
+        public bool LoadNr3Model(string? modelFilePath) => false;
         public void SetZoom(int channelId, int level) { }
         public int ReadAudio(int channelId, Span<float> output) => 0;
         public bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut) => false;

@@ -470,6 +470,28 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXASBNRnoiseScalingType(int channel, int noise_scaling_type);
 
+    // RNNR (NR3) — RNNoise recurrent-network denoiser. Symbols defined in
+    // native/wdsp/rnnr.c, gated by WDSP_WITH_NR3 (OFF until xiph/rnnoise is
+    // vendored — see native/rnnoise/VENDORING.md). Builds without NR3 compile
+    // stubs/nr3/rnnr_stub.c, which does NOT export these symbols, so calls here
+    // fail with EntryPointNotFoundException; the engine guards on
+    // Nr3RnnrAvailable before invoking. RNNRloadModel is process-global (loads
+    // the model used by every RNNR channel); the path is the operator-installed
+    // RNNoise weights file. A NULL/empty path reverts to the baked-in model —
+    // but Zeus builds rnnoise WITHOUT a default model, so NR3 stays inert until
+    // a model is loaded.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXARNNRRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXARNNRPosition(int channel, int position);
+
+    [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void RNNRloadModel(string filePath);
+
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXASNBARun(int channel, int run);

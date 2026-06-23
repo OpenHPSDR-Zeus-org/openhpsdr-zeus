@@ -71,6 +71,9 @@ public sealed class RadioService : IDisposable
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<RadioService> _log;
     private readonly DspSettingsStore _dspSettingsStore;
+    // NR3 (RNNoise) operator-installed model store. Optional (null in older test
+    // constructions); when null, NR3 reports no installed model.
+    private readonly Nr3ModelStore? _nr3ModelStore;
     private readonly PaSettingsStore _paStore;
     // Per-band external-antenna selection (external-ports plan — antenna slice,
     // #804). Optional so existing constructions (tests) stay valid; null → the
@@ -343,11 +346,12 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null, Nr3ModelStore? nr3ModelStore = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
         _dspSettingsStore = dspSettingsStore;
+        _nr3ModelStore = nr3ModelStore;
         _paStore = paStore;
         _antennaStore = antennaStore;
         _preferredRadioStore = preferredRadioStore;
@@ -522,6 +526,12 @@ public sealed class RadioService : IDisposable
             TxLeveling: persistedTxLeveling,
             AttenDb: rsSnap?.AttenDb ?? 0,
             Nr: persistedNr,
+            // NR3 (RNNoise): native availability is a static probe of the loaded
+            // libwdsp's RNNR exports; the installed-model name comes from the
+            // operator's model store. The frontend reveals NR3 only when both
+            // are present (symbols available AND a model installed).
+            WdspNr3RnnrAvailable: Zeus.Dsp.Wdsp.WdspDspEngine.Nr3RnnrAvailable,
+            Nr3ModelName: _nr3ModelStore?.GetActiveModelName(),
             ZoomLevel: rsSnap?.ZoomLevel ?? 1,
             AutoAttEnabled: _adcProtection.Enabled,
             AttOffsetDb: 0,         // always reset — control-loop accumulator
@@ -2984,11 +2994,41 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
+    // ---- NR3 (RNNoise) model management ----
+    // The operator installs an RNNoise weights file (Zeus ships none). The model
+    // store persists the file to disk and raises Changed, which the DSP pipeline
+    // observes to (re)load it into libwdsp (process-global RNNRloadModel). We
+    // mirror the active model name into StateDto so the UI can reveal NR3 once a
+    // model is present.
+    public StateDto InstallNr3Model(byte[] content, string fileName)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        if (_nr3ModelStore is null)
+            throw new InvalidOperationException("NR3 model store is not configured.");
+        _nr3ModelStore.Install(content, fileName);
+        var name = _nr3ModelStore.GetActiveModelName();
+        Mutate(s => s with { Nr3ModelName = name });
+        return Snapshot();
+    }
+
+    public StateDto RemoveNr3Model()
+    {
+        if (_nr3ModelStore is null || !_nr3ModelStore.Remove())
+            return Snapshot();
+        Mutate(s => s with { Nr3ModelName = null });
+        // If NR3 was the active mode, fall back to Off (persisted via SetNr) so
+        // the operator isn't stranded on a now-model-less, inert NR3.
+        var cur = Snapshot().Nr;
+        if (cur?.NrMode == NrMode.Rnnr)
+            return SetNr(cur with { NrMode = NrMode.Off });
+        return Snapshot();
+    }
+
     private static NrConfig NormalizeNrConfig(NrConfig cfg) =>
         IsSupportedNrMode(cfg.NrMode) ? cfg : cfg with { NrMode = NrMode.Off };
 
     private static bool IsSupportedNrMode(NrMode mode) =>
-        mode is NrMode.Off or NrMode.Anr or NrMode.Emnr or NrMode.Sbnr;
+        mode is NrMode.Off or NrMode.Anr or NrMode.Emnr or NrMode.Sbnr or NrMode.Rnnr;
 
     // AGC mode + custom/fixed params. Replace-style like SetNr; the engine apply
     // happens in DspPipelineService via the _appliedAgc latch. The separate AGC

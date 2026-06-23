@@ -1112,7 +1112,8 @@ public class DspPipelineService : BackgroundService,
         FrontendDspSceneDiagnosticsService? frontendDspScene = null,
         DisplaySettingsStore? displaySettings = null,
         FreeDvService? freeDv = null,
-        Func<TxAudioIngest?>? txIngestFactory = null)
+        Func<TxAudioIngest?>? txIngestFactory = null,
+        Nr3ModelStore? nr3ModelStore = null)
     {
         _radio = radio;
         _hub = hub;
@@ -1132,6 +1133,38 @@ public class DspPipelineService : BackgroundService,
         _secondaryRx = new SecondaryRx[MaxReceivers];
         for (int i = 1; i < MaxReceivers; i++)
             _secondaryRx[i] = new SecondaryRx();
+
+        _nr3ModelStore = nr3ModelStore;
+        if (_nr3ModelStore is not null)
+        {
+            // NR3 (RNNoise) model is process-global in libwdsp. Re-push the
+            // operator's installed model whenever a fresh engine spins up
+            // (reconnect / WDSP↔synthetic swap) and whenever the operator
+            // installs/removes a model. Both funnel through LoadNr3ModelInto so
+            // the engine-lock discipline lives in one place.
+            EngineChanged += LoadNr3ModelInto;
+            _nr3ModelStore.Changed += _ => ReloadNr3ModelToCurrentEngine();
+        }
+    }
+
+    // Operator-installed RNNoise (NR3) model store. Optional so test
+    // constructions keep working; when null, NR3 model loading is skipped
+    // entirely (NR3 stays inert).
+    private readonly Nr3ModelStore? _nr3ModelStore;
+
+    // Push the active NR3 model path into the given engine under the engine
+    // lock. A null/empty path clears the model (NR3 inert) — we always call so
+    // a reused process never keeps a stale model after a remove.
+    private void LoadNr3ModelInto(IDspEngine engine)
+    {
+        var path = _nr3ModelStore?.GetActiveModelPath();
+        lock (_engineLock) { engine.LoadNr3Model(path); }
+    }
+
+    private void ReloadNr3ModelToCurrentEngine()
+    {
+        var engine = Volatile.Read(ref _engine);
+        if (engine is not null) LoadNr3ModelInto(engine);
     }
 
     // Lazily resolve TxAudioIngest (DI cycle avoidance — see field comment) and

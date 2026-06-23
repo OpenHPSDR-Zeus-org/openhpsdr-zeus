@@ -500,6 +500,9 @@ public static class ZeusHost
         builder.Services.AddSingleton<DiagnosticReportBuilder>();
 
         builder.Services.AddSingleton<DspSettingsStore>();
+        // NR3 (RNNoise) operator-installed model store. Auto-injected into
+        // RadioService + DspPipelineService (both have an optional param).
+        builder.Services.AddSingleton<Nr3ModelStore>();
         builder.Services.AddSingleton<CfcPresetStore>();
         builder.Services.AddSingleton<PaSettingsStore>();
         builder.Services.AddSingleton<PreferredRadioStore>();

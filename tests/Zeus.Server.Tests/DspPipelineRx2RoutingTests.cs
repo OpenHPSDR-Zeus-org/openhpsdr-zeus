@@ -235,6 +235,7 @@ public class DspPipelineRx2RoutingTests
         public void SetRxDisplayFastAttack(int channelId, bool fast) { }
         public void SetRxAfGainDb(int channelId, double db) { }
         public void SetNoiseReduction(int channelId, NrConfig cfg) { }
+        public bool LoadNr3Model(string? modelFilePath) => false;
         public void SetNotches(IReadOnlyList<NotchDto> notches) { }
         public void SetNotchTuneFrequencyHz(double loHz) { }
         public void SetZoom(int channelId, int level) { }

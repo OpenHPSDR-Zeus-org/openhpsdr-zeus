@@ -137,6 +137,13 @@ public sealed class WdspDspEngine : IDspEngine
         nameof(NativeMethods.SetRXASBNRnoiseScalingType),
     ];
 
+    private static readonly string[] Nr3RnnrRequiredExports =
+    [
+        nameof(NativeMethods.SetRXARNNRRun),
+        nameof(NativeMethods.SetRXARNNRPosition),
+        nameof(NativeMethods.RNNRloadModel),
+    ];
+
     private static bool AllNativeExportsAvailable(string[] symbolNames)
     {
         if (!WdspNativeLoader.TryProbe()) return false;
@@ -153,6 +160,8 @@ public sealed class WdspDspEngine : IDspEngine
     public static bool EmnrPost2Available => AllNativeExportsAvailable(EmnrPost2RequiredExports);
 
     public static bool Nr4SbnrAvailable => AllNativeExportsAvailable(SbnrRequiredExports);
+
+    public static bool Nr3RnnrAvailable => AllNativeExportsAvailable(Nr3RnnrRequiredExports);
 
     private static double FiniteOrZero(double value) =>
         double.IsFinite(value) ? value : 0.0;
@@ -931,6 +940,7 @@ public sealed class WdspDspEngine : IDspEngine
             case NrMode.Anr:
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
                 TrySetSbnrRun(channelId, 0);
+                TrySetRnnrRun(channelId, 0);
                 NativeMethods.SetRXAANRVals(channelId, NrDefaults.AnrTaps, NrDefaults.AnrDelay, NrDefaults.AnrGain, NrDefaults.AnrLeakage);
                 NativeMethods.SetRXAANRPosition(channelId, NrDefaults.Position);
                 NativeMethods.SetRXAANRRun(channelId, 1);
@@ -938,6 +948,7 @@ public sealed class WdspDspEngine : IDspEngine
             case NrMode.Emnr:
                 NativeMethods.SetRXAANRRun(channelId, 0);
                 TrySetSbnrRun(channelId, 0);
+                TrySetRnnrRun(channelId, 0);
                 // Core EMNR algorithm selectors (gain method, NPE method, AE
                 // filter) plus the optional Trained-method T1/T2 tuning. All
                 // operator-tunable; null fields fall back to NrDefaults so the
@@ -960,13 +971,31 @@ public sealed class WdspDspEngine : IDspEngine
                 NativeMethods.SetRXAANRRun(channelId, 0);
                 TrySetEmnrPost2Run(channelId, 0);
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
+                TrySetRnnrRun(channelId, 0);
                 ApplyNr4Sbnr(channelId, cfg);
+                break;
+            case NrMode.Rnnr:
+                // NR3 — RNNoise. Disable the other post-RXA NR paths, then
+                // enable RNNR. The model is loaded process-globally via
+                // RNNRloadModel at install/startup (LoadNr3Model), NOT here —
+                // a per-channel call would thrash the shared model. Guarded by
+                // TrySetRnnr* so a libwdsp without NR3 exports (WDSP_WITH_NR3
+                // OFF) leaves the channel NR-off instead of crashing. If no
+                // model is loaded, rnnr.c's create_rnnr left rnnoise_create
+                // NULL, so xrnnr passes audio through untouched — inert, safe.
+                NativeMethods.SetRXAANRRun(channelId, 0);
+                TrySetEmnrPost2Run(channelId, 0);
+                NativeMethods.SetRXAEMNRRun(channelId, 0);
+                TrySetSbnrRun(channelId, 0);
+                TrySetRnnrPosition(channelId, NrDefaults.Position);
+                TrySetRnnrRun(channelId, 1);
                 break;
             default:
                 NativeMethods.SetRXAANRRun(channelId, 0);
                 TrySetEmnrPost2Run(channelId, 0);
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
                 TrySetSbnrRun(channelId, 0);
+                TrySetRnnrRun(channelId, 0);
                 break;
         }
         state.CurrentNrMode = cfg.NrMode;
@@ -1201,6 +1230,48 @@ public sealed class WdspDspEngine : IDspEngine
         catch (EntryPointNotFoundException) { /* libwdsp lacks post2; nothing to turn off */ }
     }
 
+    // NR3 (RNNoise) Run/Position guards — same shape as the SBNR ones. A
+    // libwdsp built with WDSP_WITH_NR3=OFF (the stub) does not export RNNR
+    // symbols, so every call is wrapped: NR3 then behaves as a no-op rather
+    // than crashing the worker.
+    private void TrySetRnnrRun(int channelId, int run)
+    {
+        try { NativeMethods.SetRXARNNRRun(channelId, run); }
+        catch (EntryPointNotFoundException) { /* libwdsp lacks NR3; nothing to toggle */ }
+    }
+
+    private void TrySetRnnrPosition(int channelId, int position)
+    {
+        try { NativeMethods.SetRXARNNRPosition(channelId, position); }
+        catch (EntryPointNotFoundException) { /* libwdsp lacks NR3; position is moot */ }
+    }
+
+    // Loads (or, with a null/empty path, clears) the process-global RNNoise
+    // model used by every RNNR channel. Called by the server when the operator
+    // installs/removes a model and once at startup if one is already installed.
+    // Returns false when libwdsp lacks NR3 support so the caller can surface
+    // "NR3 unavailable on this build" instead of silently succeeding. Zeus
+    // builds rnnoise without a baked-in model, so clearing the path leaves NR3
+    // inert (audio passes through) rather than falling back to a stock model.
+    public bool LoadNr3Model(string? modelFilePath)
+    {
+        try
+        {
+            NativeMethods.RNNRloadModel(modelFilePath ?? string.Empty);
+            _log.LogInformation(
+                "wdsp.rnnr.loadModel path=\"{Path}\"",
+                string.IsNullOrEmpty(modelFilePath) ? "(none — NR3 inert)" : modelFilePath);
+            return true;
+        }
+        catch (EntryPointNotFoundException ex)
+        {
+            _log.LogWarning(
+                "wdsp.rnnr.unavailable reason=\"libwdsp build does not export RNNR symbols (WDSP_WITH_NR3=OFF — xiph/rnnoise not vendored)\" detail={Msg}",
+                ex.Message);
+            return false;
+        }
+    }
+
     // Post-RXA NR defaults — sourced from Thetis setup.designer.cs + radio.cs.
     // UI-space scaling (gain × 1e-6, leakage × 1e-3) is already resolved: these
     // are the post-scale values WDSP actually receives. See docs/prd/10-noise-reduction.md.
@@ -1219,11 +1290,16 @@ public sealed class WdspDspEngine : IDspEngine
         public const int EmnrAeRun = 1;
         public const int Position = 1;
 
-        // Thetis Setup → DSP "Trained" T1/T2 NUDs (setup.designer.cs:43244,
-        // 43276). Defaults match Thetis exactly; only consulted by WDSP when
+        // Thetis Setup → DSP "Trained" T1/T2 NUDs (setup.designer.cs:43330 /
+        // 43298). Pushed raw via SetRXAEMNRtrainZetaThresh / SetRXAEMNRtrainT2
+        // (setup.cs:29384 / 32308). Only consulted by WDSP when
         // EmnrGainMethod=3 (Trained gain method).
+        //   T1: udDSPNR2trainThresh.Value = -0.5  (range -5..5, step 0.1)
+        //   T2: udDSPNR2trainT2.Value     =  0.2  (range 0.02..0.3, step 0.01)
+        // NB: Thetis packs the T2 NUD as decimal{2,0,0,scale=1} = 0.2 — earlier
+        // Zeus read it as 2.0 (a 10× error). It is 0.2.
         public const double EmnrTrainT1 = -0.5;
-        public const double EmnrTrainT2 = 2.0;
+        public const double EmnrTrainT2 = 0.2;
 
         // post2 defaults sourced from Thetis radio.cs:2103/2122/2160 (raw
         // NumericUpDown values 0..100, default 15/15/12). The /100 scaling
@@ -1232,6 +1308,13 @@ public sealed class WdspDspEngine : IDspEngine
         // ends up storing. (post2Rate has no /100 in WDSP, so 5.0 is correct
         // as-is.) Earlier Zeus defaults of 0.15 were 100× too small once WDSP
         // divided again, leaving comfort-noise effectively silent.
+        //
+        // Run defaults ON — this is a DELIBERATE Zeus divergence, not Thetis
+        // parity: Thetis's "Noise post proc" checkbox ships OFF
+        // (setup.designer.cs chkNR2PostProc_enable_rx1, no Checked=true). Zeus
+        // enables post2 by default because the comfort-noise injection masks
+        // the musical-warble artifacts of frequency-domain EMNR, which the
+        // maintainers consider an improvement over the Thetis baseline.
         public const int EmnrPost2Run = 1;
         public const double EmnrPost2Factor = 15.0;
         public const double EmnrPost2Nlevel = 15.0;
