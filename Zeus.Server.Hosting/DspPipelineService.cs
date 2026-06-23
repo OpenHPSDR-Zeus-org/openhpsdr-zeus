@@ -3199,16 +3199,28 @@ public class DspPipelineService : BackgroundService,
     // values at the ENGINE seam only — the stores/StateDto keep the operator's
     // real SSB settings, so leaving FreeDV restores the SSB chain automatically
     // (the latches re-push the stored values once the effective config flips
-    // back). RX AGC goes Fixed so AGC pumping/clipping can't corrupt the modem
-    // audio fed to freedv_rx; Leveler + Compressor off and CFC off keep TX
-    // linear. ALC run-state is never touched (the engine keeps ALC on — the SSB
-    // modulator emits zero IQ with ALC off), so it still acts as a safety limiter.
-    // The Fixed AGC gain is seeded from the operator's own AGC-T baseline (the
-    // band-appropriate level they already receive at) rather than a blind
-    // constant, so the modem audio lands in a healthy range without pumping.
-    // Bench-tunable: if decode level proves off, this is the single knob.
+    // back). RX AGC goes Fixed (seeded from the operator's AGC-T baseline) so AGC
+    // pumping/clipping can't corrupt the modem audio fed to freedv_rx.
+    //
+    // TX gain staging is the subtle part. The codec2 modem audio is LOW level
+    // (~-20 dBFS peak), so with every TX dynamics stage bypassed the SSB
+    // modulator is barely driven (measured 0.18 W). The Compressor (CPDR) and CFC
+    // are NONLINEAR — they flatten OFDM and splatter, so they stay off. But the
+    // Leveler is a *slow* auto-level: on a steady-RMS OFDM signal it converges to
+    // a near-constant gain, so it supplies the makeup linearly without destroying
+    // the ~10 dB crest factor. We keep it ON with a bounded makeup ceiling
+    // (FreeDvLevelerMaxGainDb) chosen to bring the OFDM PEAKS to a safe headroom
+    // (~-6 dBFS) rather than slamming the average to 0 (which would clip the peaks
+    // and produce the high-power-but-undecodable signal the old SSB chain made).
+    // ALC run-state is never touched (the engine keeps ALC on — the SSB modulator
+    // emits zero IQ with ALC off) so it still catches stray peaks. Bench-tunable:
+    // raise/lower FreeDvLevelerMaxGainDb to trade average power against crest
+    // (watch outputCrestFactorDb in /api/diagnostics/v2/tx — keep it ~>=8 dB).
     private static readonly TxLevelingConfig FreeDvTxLevelingProfile =
-        new(LevelerEnabled: false, CompressorEnabled: false);
+        new(LevelerEnabled: true, CompressorEnabled: false);
+    // Leveler makeup ceiling for FreeDV. ~-20 dBFS modem peak + this should land
+    // OFDM peaks near -6 dBFS — clean, decodable, moderate (not full-SSB) power.
+    private const double FreeDvLevelerMaxGainDb = 14.0;
 
     private void OnRadioStateChanged(StateDto s)
     {
@@ -3404,10 +3416,13 @@ public class DspPipelineService : BackgroundService,
             engine.SetTxPanelGain(micLinear);
             _appliedTxMicGainLinear = micLinear;
         }
-        if (s.LevelerMaxGainDb != _appliedTxLevelerMaxGainDb)
+        // FreeDV: raise the Leveler makeup ceiling so the low-level OFDM is driven
+        // to a usable (but headroom-safe) level. Operator's value restored on exit.
+        double levelerMax = freeDvMode ? FreeDvLevelerMaxGainDb : s.LevelerMaxGainDb;
+        if (levelerMax != _appliedTxLevelerMaxGainDb)
         {
-            engine.SetTxLevelerMaxGain(s.LevelerMaxGainDb);
-            _appliedTxLevelerMaxGainDb = s.LevelerMaxGainDb;
+            engine.SetTxLevelerMaxGain(levelerMax);
+            _appliedTxLevelerMaxGainDb = levelerMax;
         }
         var nr = NormalizeNrConfig(s.Nr ?? new NrConfig());
         if (!nr.Equals(_appliedNr))
