@@ -44,7 +44,7 @@
 // License for details.
 
 import { create } from 'zustand';
-import type { ColormapId } from '../gl/colormap';
+import { COLORMAPS, type ColormapId } from '../gl/colormap';
 import {
   deleteDisplayImage,
   displayImageUrl,
@@ -97,6 +97,7 @@ const TX_STORAGE_KEY = 'zeus.display.txDbRange';
 const WF_STORAGE_KEY = 'zeus.display.wfDbRange';
 const WF_TX_STORAGE_KEY = 'zeus.display.wfTxDbRange';
 const WF_SCROLL_SPEED_STORAGE_KEY = 'zeus.display.wfScrollSpeed';
+const COLORMAP_STORAGE_KEY = 'zeus.display.colormap';
 const BAND_OVERLAY_STORAGE_KEY = 'zeus.display.bandOverlay';
 const BAND_EDGE_ALERT_STORAGE_KEY = 'zeus.display.bandEdgeAlert';
 
@@ -154,6 +155,31 @@ function writeSavedWaterfallScrollSpeed(value: number): void {
   try {
     if (typeof localStorage === 'undefined') return;
     localStorage.setItem(WF_SCROLL_SPEED_STORAGE_KEY, String(value));
+  } catch {
+    // quota exceeded / private mode — accept silently.
+  }
+}
+
+const DEFAULT_COLORMAP: ColormapId = 'blue';
+
+function isColormapId(v: unknown): v is ColormapId {
+  return typeof v === 'string' && COLORMAPS.some((cm) => cm.id === v);
+}
+
+function readSavedColormap(): ColormapId {
+  try {
+    if (typeof localStorage === 'undefined') return DEFAULT_COLORMAP;
+    const raw = localStorage.getItem(COLORMAP_STORAGE_KEY);
+    return isColormapId(raw) ? raw : DEFAULT_COLORMAP;
+  } catch {
+    return DEFAULT_COLORMAP;
+  }
+}
+
+function writeSavedColormap(value: ColormapId): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(COLORMAP_STORAGE_KEY, value);
   } catch {
     // quota exceeded / private mode — accept silently.
   }
@@ -542,6 +568,7 @@ const initialTxRange = readSavedTxRange();
 const initialWfRange = readSavedWfRange();
 const initialWfTxRange = readSavedWfTxRange();
 const initialWaterfallScrollSpeed = readSavedWaterfallScrollSpeed();
+const initialColormap = readSavedColormap();
 const initialShowBandOverlay = readBoolFlag(BAND_OVERLAY_STORAGE_KEY, true);
 const initialBandEdgeAlertEnabled = readBoolFlag(BAND_EDGE_ALERT_STORAGE_KEY, true);
 
@@ -566,7 +593,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   // rendering the clean carrier as "grass". Those fall back to the Thetis-parity
   // fixed TX_FIXED_DB_MIN/MAX (-80..+20) window via restoreSavedTxWindows().
   txAutoRange: true,
-  colormap: 'blue',
+  colormap: initialColormap,
   waterfallScrollSpeed: initialWaterfallScrollSpeed,
   // Defaults until the server-side fetch lands (see hydrateFromServer at the
   // bottom of this file). The operator briefly sees a plain panadapter on
@@ -674,7 +701,11 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
       set({ autoRange: false, dbMin: saved.dbMin, dbMax: saved.dbMax });
     }
   },
-  setColormap: (colormap) => set({ colormap }),
+  setColormap: (colormap) => {
+    if (!isColormapId(colormap)) return;
+    set({ colormap });
+    writeSavedColormap(colormap);
+  },
   setWaterfallScrollSpeed: (value) => {
     const next = normalizeWaterfallScrollSpeed(value);
     set({ waterfallScrollSpeed: next });
