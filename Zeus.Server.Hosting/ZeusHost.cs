@@ -97,7 +97,12 @@ public static class ZeusHost
         // an http.sys URL ACL — see #30.
         var tciSection = builder.Configuration.GetSection("Tci");
         var tciEnabled = tciSection.GetValue<bool>("Enabled");
-        var tciBindAddress = tciSection.GetValue<string?>("BindAddress") ?? "0.0.0.0";
+        // Fail safe: an unconfigured bind address is loopback-only, NOT all
+        // interfaces. TCI has no authentication, so the transport (LAN trust,
+        // or a VPN like Tailscale bound to a specific 100.x IP) is the security
+        // boundary — an operator who enables TCI in appsettings without naming
+        // a bind address must not silently expose full TX control to the LAN/WAN.
+        var tciBindAddress = tciSection.GetValue<string?>("BindAddress") ?? "127.0.0.1";
         var tciPort = tciSection.GetValue<int?>("Port") ?? 40001;
 
         // Prefs-DB integrity guard (#637). Probe the shared zeus-prefs.db ONCE
