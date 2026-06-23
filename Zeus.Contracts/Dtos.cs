@@ -1248,7 +1248,16 @@ public sealed record ConnectRequest(
     // server uses it as the connected board kind instead of the historical
     // "P2 active ⇒ assume OrionMkII" fallback. Null/omitted = legacy
     // behaviour. Issue #171.
-    byte? BoardId = null);
+    byte? BoardId = null,
+    // Operator opt-in to take over a radio another controller is already
+    // driving. /api/connect/p2 normally refuses to become a SECOND master on a
+    // radio whose discovery reply reports Busy — connecting alongside another
+    // controller makes the band/antenna/T-R relay matrix chatter and can brown
+    // out the radio (observed on a co-located Saturn all-in-one running
+    // saturn-go + p2app). The takeover flow sends a reclaim stop first and sets
+    // this so the post-reclaim re-connect isn't re-blocked by the busy guard
+    // while the radio is still settling. Default false = guard enforced.
+    bool Force = false);
 
 public sealed record VfoSetRequest(long Hz, int Receiver = 0);
 

@@ -987,9 +987,14 @@ public static class ZeusEndpoints
             }
         });
 
-        app.MapPost("/api/connect/p2", async (ConnectRequest req, DspPipelineService dsp, WdspWisdomInitializer wisdom, HttpContext ctx) =>
+        app.MapPost("/api/connect/p2", async (
+            ConnectRequest req,
+            DspPipelineService dsp,
+            WdspWisdomInitializer wisdom,
+            Zeus.Protocol2.Discovery.IRadioDiscovery p2Discovery,
+            HttpContext ctx) =>
         {
-            log.LogInformation("api.connect.p2 endpoint={Ep} rate={Rate}", req.Endpoint, req.SampleRate);
+            log.LogInformation("api.connect.p2 endpoint={Ep} rate={Rate} force={Force}", req.Endpoint, req.SampleRate, req.Force);
 
             if (wisdom.Phase != WisdomPhase.Ready)
                 return Results.Json(
@@ -998,6 +1003,58 @@ public static class ZeusEndpoints
 
             if (!TryParseIpEndpoint(req.Endpoint, out var ipEndpoint))
                 return Results.BadRequest(new { error = $"Invalid endpoint '{req.Endpoint}'." });
+
+            // HARDWARE-SAFETY GUARD (relay chatter / PSU brown-out).
+            // Before opening the relay-bearing high-priority stream, unicast-probe
+            // the radio and refuse to connect if it reports Busy — i.e. another
+            // controller (a co-located saturn-go / p2app stack, or another
+            // Zeus/Thetis client) is already driving it. Two masters publishing
+            // DIFFERENT band/antenna/ALEX-relay selections make the FPGA flip the
+            // BPF/LPF/T-R relay matrix every packet; the relay inrush can brown
+            // out a shared PSU and reboot the host (observed 2026-06-23 on a
+            // co-located CM5 Saturn all-in-one). A single Zeus master is fine —
+            // the danger requires a second, disagreeing controller. The operator
+            // takes over deliberately via Reclaim, which stops the other owner
+            // and re-connects with force=true. The probe fails OPEN: a radio that
+            // doesn't answer the probe is NOT blocked, so this never strands a
+            // legitimate connect. The probe must NOT weaken the co-located
+            // ephemeral-port bind — it only reads discovery, it doesn't touch the
+            // connect socket.
+            if (!req.Force)
+            {
+                Zeus.Protocol2.Discovery.DiscoveredRadio? probe = null;
+                try
+                {
+                    probe = await p2Discovery.ProbeAsync(
+                        ipEndpoint.Address, TimeSpan.FromMilliseconds(700), ctx.RequestAborted);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    // Probe failure (socket setup, etc.) must not block a connect —
+                    // log and fall through, same fail-open posture as no-reply.
+                    log.LogWarning(ex, "api.connect.p2 busy-probe failed — allowing connect");
+                }
+
+                if (probe?.Details.Busy == true)
+                {
+                    log.LogWarning(
+                        "api.connect.p2 REFUSED — radio {Ip} reports BUSY (another controller owns it); refusing second-master connect",
+                        ipEndpoint.Address);
+                    return Results.Json(
+                        new
+                        {
+                            error =
+                                "This radio is already in use by another controller. Connecting Zeus as a " +
+                                "second master would make the band/antenna/T-R relays chatter and can brown " +
+                                "out the radio. Stop the other controller (e.g. saturn-go / another client), " +
+                                "or use Reclaim to take exclusive control, then connect again.",
+                            busy = true,
+                            reclaimable = true,
+                        },
+                        statusCode: StatusCodes.Status409Conflict);
+                }
+            }
 
             var rateKhz = req.SampleRate switch
             {

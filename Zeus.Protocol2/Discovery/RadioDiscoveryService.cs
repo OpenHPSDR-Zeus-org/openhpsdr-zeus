@@ -156,6 +156,115 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
         return byMac.Values.OrderBy(IpSortKey).ToList();
     }
 
+    /// <inheritdoc />
+    public Task<DiscoveredRadio?> ProbeAsync(IPAddress radioIp, TimeSpan timeout, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(radioIp);
+        return ProbeEndpointAsync(new IPEndPoint(radioIp, HpsdrPort), timeout, ct);
+    }
+
+    /// <summary>
+    /// Unicast-probe core. Public surface always targets <see cref="HpsdrPort"/>
+    /// (1024); this overload takes an explicit endpoint so a unit test can point
+    /// the probe at a loopback fake radio on an unprivileged port.
+    /// </summary>
+    internal async Task<DiscoveredRadio?> ProbeEndpointAsync(
+        IPEndPoint radioEndpoint,
+        TimeSpan timeout,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(radioEndpoint);
+
+        using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        Protocol2Client.DisableUdpConnReset(socket);
+        socket.Bind(new IPEndPoint(IPAddress.Any, 0));
+
+        var packet = BuildDiscoveryPacket();
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(timeout);
+
+        // Unicast straight at the radio — no broadcast. Resend a few times: the
+        // first UDP datagram to a freshly-ARPed host is frequently dropped (the
+        // same first-UDP-drop quirk DiscoverAsync / Protocol1Client work around).
+        for (var attempt = 0; attempt < SendAttempts; attempt++)
+        {
+            try
+            {
+                await socket.SendToAsync(packet, SocketFlags.None, radioEndpoint, timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (SocketException ex)
+            {
+                _log.LogWarning(ex, "p2.probe.send.error radio={Radio}", radioEndpoint.Address);
+            }
+        }
+
+        var receiveBuffer = new byte[ReceiveBufferSize];
+        var any = new IPEndPoint(IPAddress.Any, 0);
+        try
+        {
+            while (!timeoutCts.IsCancellationRequested)
+            {
+                SocketReceiveFromResult res;
+                try
+                {
+                    res = await socket.ReceiveFromAsync(
+                        receiveBuffer,
+                        SocketFlags.None,
+                        any,
+                        timeoutCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+                {
+                    // Windows WSAECONNRESET (10054): stray ICMP port-unreachable.
+                    continue;
+                }
+                catch (SocketException ex)
+                {
+                    _log.LogWarning(ex, "p2.probe.socket.error radio={Radio}", radioEndpoint.Address);
+                    break;
+                }
+
+                var fromIp = ((IPEndPoint)res.RemoteEndPoint).Address;
+                // Only trust a reply from the radio we actually probed — ignore a
+                // stray broadcast answer from a different radio on the segment so
+                // the busy verdict can never be attributed to the wrong host.
+                if (!fromIp.Equals(radioEndpoint.Address))
+                    continue;
+
+                var slice = new ReadOnlySpan<byte>(receiveBuffer, 0, res.ReceivedBytes);
+                if (ReplyParser.TryParse(slice, fromIp, out var radio))
+                {
+                    _log.LogInformation(
+                        "p2.probe.reply radio={Ip} board={Board} busy={Busy}",
+                        radio.Ip,
+                        radio.Board,
+                        radio.Details.Busy);
+                    return radio;
+                }
+            }
+        }
+        finally
+        {
+            try { socket.Shutdown(SocketShutdown.Both); } catch (SocketException) { }
+        }
+
+        // No answer within the window. The caller treats this as "can't confirm
+        // busy" and fails OPEN (allows the connect) — the guard only blocks on a
+        // positive Busy reply, never on silence, so it can't strand a legitimate
+        // connect to a radio that simply doesn't answer a unicast probe.
+        _log.LogInformation("p2.probe.noreply radio={Radio}", radioEndpoint.Address);
+        return null;
+    }
+
     private async Task SendProbesAsync(
         Socket socket,
         ReadOnlyMemory<byte> packet,

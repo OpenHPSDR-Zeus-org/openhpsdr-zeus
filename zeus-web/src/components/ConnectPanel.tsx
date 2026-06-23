@@ -516,7 +516,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
   // Busy-radio takeover flow. Caller owns the inflight/error state so both
   // entry points can wrap it (the takeover sends a reclaim first).
   const performConnect = useCallback(
-    async (r: RadioInfoDto) => {
+    async (r: RadioInfoDto, force = false) => {
       const ep = endpointFor(r);
       const isP2 = (r.details?.protocol ?? 'P1') === 'P2';
       if (isP2) {
@@ -528,6 +528,11 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
           endpoint: ep,
           sampleRate: DEFAULT_SAMPLE_RATE,
           boardId: rawBoardId ?? undefined,
+          // Takeover path only: the server refuses a second-master connect to a
+          // Busy radio (relay-chatter guard). After reclaim has stopped the
+          // other owner, force past the guard so the still-settling radio's
+          // lingering Busy status doesn't re-block the re-connect.
+          force,
         });
         const fresh = await fetchState();
         applyState(fresh);
@@ -581,7 +586,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
       setError(null);
       try {
         await reclaimRadio(ep, isP2 ? 'P2' : 'P1');
-        await performConnect(r);
+        await performConnect(r, /* force */ true);
       } catch (err) {
         setError(errorMessage(err));
       } finally {

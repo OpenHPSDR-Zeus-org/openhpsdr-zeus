@@ -1986,6 +1986,11 @@ export type ConnectRequest = {
   // identifies as Hermes/0x01 on P2). Omit for manual connects where the
   // board is unknown.
   boardId?: number;
+  // Take over a radio another controller is already driving. /api/connect/p2
+  // refuses to become a second master on a Busy radio (relay-chatter / brown-out
+  // guard); the Reclaim-then-connect takeover flow sets this so the post-reclaim
+  // re-connect isn't re-blocked while the radio is still settling.
+  force?: boolean;
 };
 
 // System.Text.Json can serialize enums as either numbers (default) or strings
