@@ -135,6 +135,25 @@ public class AudioSuitePreviewEndpointTests : IClassFixture<AudioSuitePreviewEnd
         Assert.Equal(HttpStatusCode.BadRequest, rxScan.StatusCode);
     }
 
+    [Fact]
+    public async Task RxEditorRouteFallsBackToInProcessBridge_WhenOutOfProcessEngineInactive()
+    {
+        // Fresh-install / Native mode: the out-of-process RX VST engine isn't
+        // installed, so RX VSTs are hosted by the in-process AudioPluginBridge.
+        // The RX editor route must fall back to the bridge (open=false for an
+        // unknown/unloaded plugin) rather than 404 — a 404 here is what spammed
+        // the console and surfaced the wrong "engine missing" hint on a new PC.
+        using var client = _factory.CreateClient();
+
+        var res = await client.GetAsync(
+            "/api/rx-audio-suite/plugins/com.openhpsdr.zeus.rxvst.clear/editor");
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        using var json = await res.Content.ReadFromJsonAsync<JsonDocument>();
+        Assert.NotNull(json);
+        Assert.False(json!.RootElement.GetProperty("open").GetBoolean());
+    }
+
     public sealed class Factory : IsolatedPrefsFactory
     {
     }
