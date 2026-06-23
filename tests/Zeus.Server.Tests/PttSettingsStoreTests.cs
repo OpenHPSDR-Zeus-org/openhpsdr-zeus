@@ -5,7 +5,9 @@
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 //
 // PttSettingsStore — per-install hardware-PTT-IN → MOX enable gate.
-//   • Default OFF: a fresh DB (no row) returns false (opt-in safety).
+//   • Default ON: a fresh DB (no row) returns true (Thetis-faithful — the
+//     footswitch keys out of the box; promotion is still edge-triggered so a
+//     persisted/default ON never auto-keys on its own).
 //   • Set/Get round-trips both directions.
 //   • The flag PERSISTS across a store re-open on the same DB path (a persisted
 //     ON flag arms the gate after restart; it never auto-keys MOX — that stays
@@ -27,10 +29,10 @@ public class PttSettingsStoreTests : IDisposable
     }
 
     [Fact]
-    public void Get_FreshDb_DefaultsOff()
+    public void Get_FreshDb_DefaultsOn()
     {
         using var store = new PttSettingsStore(NullLogger<PttSettingsStore>.Instance, _dbPath);
-        Assert.False(store.Get());
+        Assert.True(store.Get());
     }
 
     [Fact]
