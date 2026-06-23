@@ -226,17 +226,17 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'vfo',
     tags: ['frequency', 'vfo', 'tuning'],
     component: VfoPanel,
-    // The VFO detail card's frequency readout (.freq-display) is a
-    // container-query box (container-type:size + 9cqw digits), so it needs a
-    // DEFINITE box from an ancestor — auto-measure's max-content would collapse
-    // it (blank panel). An explicit design size lets ScaleToFitTile pin that box
-    // and scale the chip-rail + detail master layout uniformly as the tile
-    // grows. designH must cover the full master-detail stack (rail + head +
-    // readout + actions + tools ≈ 290px); the old 210 was sized for the retired
-    // compact dual-VFO grid and clipped the new layout's lower controls, leaving
-    // only the chip rail visible/scrolling. Bench-tune if the nominal zoom is off.
-    designW: 340,
-    designH: 290,
+    // Render native (NOT ScaleToFitTile). The post-#894 master-detail layout
+    // (chip rail + detail card) is variable-height — the rail grows with the
+    // receiver count — so a fixed design box can never be right: a short box
+    // clips the lower controls, a tall box shrinks the whole panel to a
+    // thumbnail in the default short/wide tile (digits scaled to ~0.58, dead
+    // space either side). Filling the tile keeps the digits full-size; the
+    // readout (.freq-display, container-type:size) gets its definite height from
+    // the tile chain + its own min-height, and .vfo-md scrolls if the tile is
+    // shorter than the detail stack. See the all-panels.css flex-body list and
+    // the .vfo-md overflow rule that make the fill + scroll work.
+    fillNative: true,
     minW: 4,
     minH: 6,
   },

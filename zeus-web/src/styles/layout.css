@@ -2192,10 +2192,17 @@
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+  /* Render native (no ScaleToFitTile) — fill the tile and scroll the detail
+     stack when the tile is shorter than it, instead of uniformly shrinking the
+     digits to a thumbnail. The chip rail stays pinned at the top. */
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 .vfo-md__rail {
   display: flex;
   gap: 5px;
+  flex: 0 0 auto;
   overflow-x: auto;
   padding: 2px;
   scrollbar-width: thin;
