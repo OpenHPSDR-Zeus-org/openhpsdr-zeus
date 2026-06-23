@@ -2163,6 +2163,33 @@ public static class ZeusEndpoints
             return Results.Ok(externalPtt.Snapshot());
         });
 
+        // ANAN G2 / G2-Ultra hardware front-panel bridge settings (per-install).
+        // GET returns the stored enable/device/baud plus live bridge status
+        // (connected + active device/baud + panel type). PUT updates the stored
+        // settings and reconnects the bridge — no server restart. DevicePath ""
+        // clears the override (auto-detect); Baud 0 = auto. On the G2 Pi the
+        // defaults auto-detect the panel; on a Windows/macOS host point it at the
+        // COM port here. Ungated — the panel is a host serial device.
+        app.MapGet("/api/radio/front-panel", (Zeus.Server.FrontPanel.G2FrontPanelService svc) =>
+        {
+            return Results.Ok(svc.Snapshot());
+        });
+
+        app.MapPut("/api/radio/front-panel",
+            (G2PanelSettingsSetRequest req,
+             Zeus.Server.FrontPanel.G2PanelSettingsStore store,
+             Zeus.Server.FrontPanel.G2FrontPanelService svc) =>
+        {
+            if (req.Baud is int b && b is not (0 or 9600 or 115200))
+                return Results.BadRequest(new { error = $"unsupported baud {b} (use 0=auto, 9600, or 115200)" });
+            var cur = store.Get();
+            store.Set(
+                enabled: req.Enabled ?? cur.Enabled,
+                devicePath: req.DevicePath ?? cur.DevicePath,
+                baud: req.Baud ?? cur.Baud);
+            return Results.Ok(svc.Snapshot());
+        });
+
         // Global (per-radio) TX-audio source (external-audio-jacks re-port). GET
         // surfaces the per-board capability gates + the RESOLVED (board-clamped)
         // source so the single-select picker shows only the jacks the connected

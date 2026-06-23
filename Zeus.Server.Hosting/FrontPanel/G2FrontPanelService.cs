@@ -18,6 +18,7 @@
 
 using System.IO.Ports;
 using System.Text;
+using Zeus.Contracts;
 
 namespace Zeus.Server.FrontPanel;
 
@@ -37,6 +38,7 @@ namespace Zeus.Server.FrontPanel;
 public sealed class G2FrontPanelService : BackgroundService
 {
     private readonly G2PanelOptions _opts;
+    private readonly G2PanelSettingsStore _store;
     private readonly RadioService _radio;
     private readonly TxService _tx;
     private readonly G2PanelActionRouter _router;
@@ -45,6 +47,15 @@ public sealed class G2FrontPanelService : BackgroundService
     private readonly AndromedaParser _parser = new();
     private readonly object _writeLock = new();
     private SerialPort? _port;
+
+    // Per-iteration linked CTS so a settings change (RequestReconnect) can break
+    // the current session/idle wait and force the loop to re-resolve the device.
+    private volatile CancellationTokenSource? _wakeCts;
+
+    // Live status for the Radio Settings card (GET /api/radio/front-panel).
+    private volatile bool _connected;
+    private volatile string? _activePath;
+    private volatile int _activeBaud;
 
     // ANDROMEDA console type announced via ZZZS. 5 = G2 Ultra (Mk2). Actions
     // are only routed for type 5; an unrecognised type is logged and ignored
@@ -58,6 +69,7 @@ public sealed class G2FrontPanelService : BackgroundService
 
     public G2FrontPanelService(
         IConfiguration config,
+        G2PanelSettingsStore store,
         RadioService radio,
         TxService tx,
         BandMemoryStore bandMemory,
@@ -66,43 +78,99 @@ public sealed class G2FrontPanelService : BackgroundService
     {
         _opts = new G2PanelOptions();
         config.GetSection(G2PanelOptions.Section).Bind(_opts);
+        _store = store;
         _radio = radio;
         _tx = tx;
         _log = log;
         _router = new G2PanelActionRouter(radio, tx, bandMemory,
             loggerFactory.CreateLogger<G2PanelActionRouter>());
+        // A Settings change re-resolves the device and reconnects without a
+        // server restart (enable toggled, COM port / baud edited).
+        _store.Changed += OnSettingsChanged;
+    }
+
+    private void OnSettingsChanged() => RequestReconnect();
+
+    /// <summary>Break the current serial session / idle wait so the run loop
+    /// re-reads settings and re-resolves the device. Safe to call from the
+    /// settings endpoint thread.</summary>
+    public void RequestReconnect()
+    {
+        try { _wakeCts?.Cancel(); }
+        catch (ObjectDisposedException) { /* loop already advanced */ }
+    }
+
+    /// <summary>Stored operator settings (Enabled / DevicePath / Baud) layered
+    /// over the G2FrontPanel config defaults, with the live bridge status.
+    /// Backs GET/PUT /api/radio/front-panel.</summary>
+    public G2PanelSettingsDto Snapshot()
+    {
+        var s = _store.Get();
+        return new G2PanelSettingsDto(
+            Enabled: s.Enabled,
+            DevicePath: s.DevicePath,
+            Baud: s.Baud,
+            Connected: _connected,
+            ActiveDevicePath: _activePath,
+            ActiveBaud: _activeBaud,
+            PanelType: _panelType);
+    }
+
+    // Stored settings layered over config: a stored value wins, else the
+    // G2FrontPanel config value, else unset (→ auto-detect / per-symlink baud).
+    private (bool Enabled, string? DevicePath, int Baud) Effective()
+    {
+        var s = _store.Get();
+        string? path = !string.IsNullOrWhiteSpace(s.DevicePath) ? s.DevicePath
+            : (!string.IsNullOrWhiteSpace(_opts.DevicePath) ? _opts.DevicePath : null);
+        int baud = s.Baud > 0 ? s.Baud : _opts.Baud;
+        return (s.Enabled, path, baud);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!_opts.Enabled)
-        {
-            _log.LogInformation("g2panel.disabled (G2FrontPanel:Enabled=false)");
-            return;
-        }
-
         while (!stoppingToken.IsCancellationRequested)
         {
-            var dev = ResolveDevice();
+            // Fresh linked CTS each pass so RequestReconnect() (settings change)
+            // can break this iteration without tearing down the service.
+            using var wake = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+            _wakeCts = wake;
+            var ct = wake.Token;
+
+            var eff = Effective();
+            if (!eff.Enabled)
+            {
+                // Disabled in Settings — wait until that changes (or shutdown),
+                // holding the port closed. RequestReconnect wakes us.
+                _log.LogInformation("g2panel.disabled (settings/config Enabled=false)");
+                await DelaySafe(Timeout.InfiniteTimeSpan, ct);
+                continue;
+            }
+
+            var dev = ResolveDevice(eff.DevicePath, eff.Baud);
             if (dev is null)
             {
                 // No panel on this host — idle and re-probe. Quiet by design.
-                await DelaySafe(TimeSpan.FromSeconds(10), stoppingToken);
+                await DelaySafe(TimeSpan.FromSeconds(10), ct);
                 continue;
             }
 
             try
             {
-                await RunPanelAsync(dev.Value.Path, dev.Value.Baud, stoppingToken);
+                await RunPanelAsync(dev.Value.Path, dev.Value.Baud, ct);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 break;
             }
+            catch (OperationCanceledException)
+            {
+                // Wake from a settings change — loop and re-resolve.
+            }
             catch (Exception ex)
             {
                 _log.LogWarning(ex, "g2panel.session.error device={Dev}; reconnecting", dev.Value.Path);
-                await DelaySafe(TimeSpan.FromSeconds(5), stoppingToken);
+                await DelaySafe(TimeSpan.FromSeconds(5), ct);
             }
             finally
             {
@@ -111,15 +179,15 @@ public sealed class G2FrontPanelService : BackgroundService
         }
     }
 
-    private (string Path, int Baud)? ResolveDevice()
+    private (string Path, int Baud)? ResolveDevice(string? devicePath, int baud)
     {
-        if (!string.IsNullOrWhiteSpace(_opts.DevicePath))
-            return (_opts.DevicePath!, _opts.Baud > 0 ? _opts.Baud : 9600);
+        if (!string.IsNullOrWhiteSpace(devicePath))
+            return (devicePath!, baud > 0 ? baud : 9600);
 
         // Auto-detect the udev-published symlink (Linux / G2 Pi).
-        foreach (var (path, baud) in G2PanelOptions.KnownSymlinks)
+        foreach (var (path, symlinkBaud) in G2PanelOptions.KnownSymlinks)
         {
-            try { if (File.Exists(path)) return (path, _opts.Baud > 0 ? _opts.Baud : baud); }
+            try { if (File.Exists(path)) return (path, baud > 0 ? baud : symlinkBaud); }
             catch { /* path probing is best-effort */ }
         }
         return null;
@@ -139,6 +207,9 @@ public sealed class G2FrontPanelService : BackgroundService
         };
         port.Open();
         _port = port;
+        _activePath = path;
+        _activeBaud = baud;
+        _connected = true;
         _log.LogInformation("g2panel.open device={Dev} baud={Baud}", path, baud);
 
         // Opening the line resets Arduino-class panels into the bootloader for
@@ -254,6 +325,8 @@ public sealed class G2FrontPanelService : BackgroundService
 
     private void ClosePort()
     {
+        _connected = false;
+        _panelType = 0;
         var port = _port;
         _port = null;
         if (port is null) return;
@@ -268,6 +341,7 @@ public sealed class G2FrontPanelService : BackgroundService
 
     public override void Dispose()
     {
+        _store.Changed -= OnSettingsChanged;
         ClosePort();
         base.Dispose();
     }
