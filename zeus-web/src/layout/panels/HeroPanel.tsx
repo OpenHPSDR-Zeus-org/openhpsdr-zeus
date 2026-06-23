@@ -45,16 +45,17 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
-import { GripVertical, X } from 'lucide-react';
+import { GripVertical, Sliders, Volume2, VolumeX, X } from 'lucide-react';
 import { Panadapter } from '../../components/Panadapter';
 import { WaterfallSurface } from '../../components/WaterfallSurface';
-import { MultiRxMonitorStrip } from '../../components/MultiRxMonitorStrip';
+import { RxMonitorPane } from '../../components/RxMonitorPane';
+import { RxWaterfallPane } from '../../components/RxWaterfallPane';
 import { ZoomControl } from '../../components/ZoomControl';
 import { WaterfallSpeedControl } from '../../components/WaterfallSpeedControl';
 import { SpectrumControls } from '../../components/SpectrumControls';
 import { LeafletWorldMap } from '../../components/design/LeafletWorldMap';
 import { LeafletMapErrorBoundary } from '../../components/design/LeafletMapErrorBoundary';
-import { setRx2, type Rx2AudioMode } from '../../api/client';
+import { setReceiverMuted } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
 import { useTxStore } from '../../state/tx-store';
 import { useRotatorStore } from '../../state/rotator-store';
@@ -79,12 +80,6 @@ interface HeroPanelProps {
   workspaceLocked?: boolean;
   onToggleLock?: () => void;
 }
-
-const RX_AUDIO_MODES: readonly { mode: Rx2AudioMode; label: string; title: string }[] = [
-  { mode: 'rx1', label: 'RX 1', title: 'Hear RX1 only' },
-  { mode: 'both', label: 'Both', title: 'Hear RX1 and RX2 together' },
-  { mode: 'rx2', label: 'RX 2', title: 'Hear RX2 only' },
-];
 
 // Hero panel: Panadapter + Waterfall with optional Leaflet world-map overlay.
 // Registered as headerless in panels.ts — this component owns the single
@@ -127,14 +122,15 @@ export function HeroPanel({
   const connected = useConnectionStore((s) => s.status === 'Connected');
   const applyState = useConnectionStore((s) => s.applyState);
   const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
-  // Multi-DDC RX3+ (receiver index >= 2). When any are exposed, a strip of
-  // read-only monitor panes renders below the RX1/RX2 panadapter/waterfall.
-  const hasExtraRx = useConnectionStore((s) =>
-    s.receivers.some((r) => r.index >= 2 && r.enabled),
-  );
-  const rx2AudioMode = useConnectionStore((s) => s.rx2AudioMode);
+  // Per-RX listen/mute mixer + focus selector + the multi-DDC spectrum grid all
+  // read the exposed-receiver list. RX1/RX2 keep their interactive A/B
+  // panadapter/waterfall; RX3+ render read-only monitor + waterfall panes.
+  const receivers = useConnectionStore((s) => s.receivers);
+  const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
+  const setFocusedRxIndex = useConnectionStore((s) => s.setFocusedRxIndex);
+  // A/B stitched-view foreground for the RX1/RX2 panadapter/waterfall. Kept in
+  // lockstep with focusedRxIndex by setFocusedRxIndex.
   const rxFocus = useConnectionStore((s) => s.rxFocus);
-  const setRxFocus = useConnectionStore((s) => s.setRxFocus);
   // During TX the waterfall region shows the live transmitted spectrum
   // (WDSP TX analyzer pixels, streamed by the server while keyed).
   const keyed = useTxStore((s) => s.moxOn || s.tunOn);
@@ -151,6 +147,12 @@ export function HeroPanel({
   const tileInstanceConfig = tile?.instanceConfig;
   const [split, setSplit] = useState(() => readInitialSplit(tileInstanceConfig));
   const [splitDragging, setSplitDragging] = useState(false);
+  // RX audio mixer popout — small movable window (replaces the cramped inline
+  // header switch). Position is null until first opened, then set from the
+  // trigger button so it appears next to it; the title bar drags it anywhere.
+  const [mixerOpen, setMixerOpen] = useState(false);
+  const [mixerPos, setMixerPos] = useState<{ x: number; y: number } | null>(null);
+  const mixerTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     const persisted = readInstanceSplit(tileInstanceConfig);
@@ -242,19 +244,69 @@ export function HeroPanel({
   // tile-drag start. The .workspace-tile-header strip itself stays the
   // drag handle.
   const stopDrag = (e: ReactPointerEvent | ReactMouseEvent) => e.stopPropagation();
-  const chooseRxAudioMode = (mode: Rx2AudioMode) => {
-    if (mode === 'rx1') setRxFocus('A');
-    if (mode === 'rx2') setRxFocus('B');
-    useConnectionStore.setState({ rx2AudioMode: mode });
-    setRx2({ audioMode: mode }).then(applyState).catch(() => {});
+  // Per-RX listen/mute (Thetis chkMUT/chkRX2Mute). "audible" is the UI sense;
+  // the wire/state field is `muted`. Optimistic so the chip reacts immediately.
+  const toggleAudible = (index: number, audible: boolean) => {
+    const muted = !audible;
+    useConnectionStore.setState((s) => ({
+      receivers: s.receivers.map((r) => (r.index === index ? { ...r, muted } : r)),
+    }));
+    setReceiverMuted(index, muted).then(applyState).catch(() => {});
+  };
+  // Receivers exposed in the mixer/focus row: RX1 always, RX2 when enabled, plus
+  // every active extra DDC.
+  const exposedReceivers = receivers.filter((r) => r.index === 0 || r.enabled);
+  const multiRx = exposedReceivers.length > 1;
+
+  const toggleMixer = () => {
+    setMixerOpen((open) => {
+      if (!open && mixerPos === null) {
+        const rect = mixerTriggerRef.current?.getBoundingClientRect();
+        if (rect) setMixerPos({ x: Math.max(8, rect.right - 184), y: rect.bottom + 6 });
+      }
+      return !open;
+    });
   };
 
-  const stitchedGridStyle = {
+  // Drag the mixer popout by its title bar. Window-level listeners (like the
+  // splitter) so the drag keeps tracking even if the cursor outruns the bar.
+  const onMixerDragStart = (e: ReactPointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const base = mixerPos ?? { x: e.clientX - 90, y: e.clientY };
+    const originX = e.clientX;
+    const originY = e.clientY;
+    const onMove = (ev: PointerEvent) => {
+      setMixerPos({ x: base.x + (ev.clientX - originX), y: base.y + (ev.clientY - originY) });
+    };
+    const onEnd = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onEnd);
+      window.removeEventListener('pointercancel', onEnd);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onEnd);
+    window.addEventListener('pointercancel', onEnd);
+  };
+
+  // Exposed receivers in DDC order — drives the multi-DDC spectrum grid. RX1
+  // always; RX2 when enabled; then each active extra DDC (RX3+).
+  const spectrumPanes: { index: number; abId?: 'A' | 'B' }[] = [{ index: 0, abId: 'A' }];
+  if (rx2Enabled) spectrumPanes.push({ index: 1, abId: 'B' });
+  for (const r of receivers.filter((r) => r.index >= 2 && r.enabled))
+    spectrumPanes.push({ index: r.index });
+  const multiRxSpectrum = spectrumPanes.length > 1;
+
+  // ≤4 receivers stitched across one row; beyond that the grid wraps so the last
+  // receivers stack into a second row (e.g. 8 RX = two rows of 4). The panadapter
+  // and waterfall regions share this column count so their cells line up.
+  const spectrumGridStyle = {
     position: 'relative',
     minHeight: 0,
     height: '100%',
     display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+    gridTemplateColumns: `repeat(${Math.min(spectrumPanes.length, 4)}, minmax(0, 1fr))`,
+    gridAutoRows: '1fr',
     gap: 0,
     overflow: 'hidden',
   } as const;
@@ -280,40 +332,21 @@ export function HeroPanel({
         <span className="workspace-tile-title" title={typeof heroTitle === 'string' ? heroTitle : undefined}>
           {heroTitle}
         </span>
-        {rx2Enabled && (
-          <div
-            className="hero-rx-audio-switch"
+        {multiRx && (
+          <button
+            ref={mixerTriggerRef}
+            type="button"
+            className={`hero-rx-mixer-trigger ${mixerOpen ? 'is-open' : ''}`}
+            onClick={toggleMixer}
             onPointerDown={stopDrag}
             onMouseDown={stopDrag}
-            role="group"
-            aria-label="Select RX audio and VFO target"
+            aria-pressed={mixerOpen}
+            aria-label="Receiver audio mixer"
+            title="Receiver audio mixer — hear/mute and focus each DDC"
           >
-            {RX_AUDIO_MODES.map((m) => (
-              <button
-                key={m.mode}
-                type="button"
-                className={`hero-rx-audio-switch__key ${rx2AudioMode === m.mode ? 'is-active' : ''}`}
-                onClick={() => chooseRxAudioMode(m.mode)}
-                aria-pressed={rx2AudioMode === m.mode}
-                title={m.title}
-              >
-                <span>{m.label}</span>
-              </button>
-            ))}
-            <span className="hero-rx-audio-switch__divider" aria-hidden="true" />
-            {(['A', 'B'] as const).map((receiver) => (
-              <button
-                key={receiver}
-                type="button"
-                className={`hero-rx-audio-switch__key hero-rx-audio-switch__key--vfo ${rxFocus === receiver ? 'is-active' : ''}`}
-                onClick={() => setRxFocus(receiver)}
-                aria-pressed={rxFocus === receiver}
-                title={`Focus VFO ${receiver} for mode, filter, band, keyboard tuning, and meters.`}
-              >
-                <span>{receiver}</span>
-              </button>
-            ))}
-          </div>
+            <Sliders size={11} />
+            <span>RX MIX</span>
+          </button>
         )}
         <div
           className="hero-tile-controls"
@@ -401,6 +434,72 @@ export function HeroPanel({
           </button>
         ) : null}
       </div>
+      {multiRx && mixerOpen && (
+        <div
+          className="hero-rx-mixer-popout"
+          style={{ left: mixerPos?.x ?? 80, top: mixerPos?.y ?? 64 }}
+          onPointerDown={stopDrag}
+          onMouseDown={stopDrag}
+          role="dialog"
+          aria-label="Receiver audio mixer"
+        >
+          <div className="hero-rx-mixer-popout__bar" onPointerDown={onMixerDragStart}>
+            <span className="hero-rx-mixer-popout__grip" aria-hidden="true">
+              <GripVertical size={11} />
+            </span>
+            <span className="hero-rx-mixer-popout__title">RX Mixer</span>
+            <button
+              type="button"
+              className="hero-rx-mixer-popout__close"
+              onClick={() => setMixerOpen(false)}
+              aria-label="Close mixer"
+              title="Close"
+            >
+              <X size={12} />
+            </button>
+          </div>
+          <div className="hero-rx-mixer-popout__section">
+            <div className="hero-rx-mixer-popout__label">Listen / mute</div>
+            <div className="hero-rx-mixer-popout__row">
+              {exposedReceivers.map((r) => {
+                const audible = !r.muted;
+                return (
+                  <button
+                    key={`hear-${r.index}`}
+                    type="button"
+                    className={`hero-rx-audio-switch__key ${audible ? 'is-active' : 'is-muted'}`}
+                    onClick={() => toggleAudible(r.index, !audible)}
+                    aria-pressed={audible}
+                    title={audible ? `Mute RX${r.index + 1} audio` : `Hear RX${r.index + 1} audio`}
+                  >
+                    {audible ? <Volume2 size={11} /> : <VolumeX size={11} />}
+                    <span>{`RX${r.index + 1}`}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="hero-rx-mixer-popout__section">
+            <div className="hero-rx-mixer-popout__label">Focus</div>
+            <div className="hero-rx-mixer-popout__row">
+              {exposedReceivers.map((r) => (
+                <button
+                  key={`focus-${r.index}`}
+                  type="button"
+                  className={`hero-rx-audio-switch__key hero-rx-audio-switch__key--vfo ${
+                    focusedRxIndex === r.index ? 'is-active' : ''
+                  }`}
+                  onClick={() => setFocusedRxIndex(r.index)}
+                  aria-pressed={focusedRxIndex === r.index}
+                  title={`Focus RX${r.index + 1} for mode, filter, band, keyboard tuning, and meters.`}
+                >
+                  <span>{`RX${r.index + 1}`}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       <div className="hero-body" style={{ flex: 1, position: 'relative' }}>
         {imageMode && (
           <div
@@ -451,37 +550,30 @@ export function HeroPanel({
             position: 'absolute',
             inset: 0,
             display: 'grid',
-            gridTemplateRows: hasExtraRx
-              ? `${split}fr 8px ${1 - split}fr minmax(96px, 26%)`
-              : `${split}fr 8px ${1 - split}fr`,
+            gridTemplateRows: `${split}fr 8px ${1 - split}fr`,
             zIndex: 1,
           }}
         >
+          {/* Panadapter region — one cell per exposed receiver, ≤4 per row, the
+              rest stacked. RX1/RX2 keep the interactive A/B panadapter; RX3+ get
+              read-only monitor traces. */}
           {connected && (
-            rx2Enabled ? (
-              <div
-                style={stitchedGridStyle}
-              >
-                <div style={{ minWidth: 0, minHeight: 0 }}>
-                  <Panadapter
-                    receiver="A"
-                    stitched
-                    foreground={rxFocus === 'A'}
-                    tuneReceiver="A"
-                  />
+            <div style={spectrumGridStyle}>
+              {spectrumPanes.map((p) => (
+                <div key={p.index} style={{ minWidth: 0, minHeight: 0 }}>
+                  {p.abId ? (
+                    <Panadapter
+                      receiver={p.abId}
+                      stitched={multiRxSpectrum}
+                      foreground={rxFocus === p.abId}
+                      tuneReceiver={p.abId}
+                    />
+                  ) : (
+                    <RxMonitorPane rxIndex={p.index} />
+                  )}
                 </div>
-                <div style={{ minWidth: 0, minHeight: 0 }}>
-                  <Panadapter
-                    receiver="B"
-                    stitched
-                    foreground={rxFocus === 'B'}
-                    tuneReceiver="B"
-                  />
-                </div>
-              </div>
-            ) : (
-              <Panadapter receiver="A" />
-            )
+              ))}
+            </div>
           )}
           <div
             className={`spectrum-splitter ${splitDragging ? 'dragging' : ''}`}
@@ -491,46 +583,33 @@ export function HeroPanel({
             title="Drag to resize panadapter / waterfall"
             onPointerDown={onSplitterPointerDown}
           />
+          {/* Waterfall region. While keyed the server feeds the WDSP TX analyzer
+              pixels into the main display stream, so a single full-width waterfall
+              shows the transmitted spectrum (the TX panafall, issue #81).
+              Otherwise: one waterfall cell per exposed receiver, ≤4 per row then
+              stacked, matching the panadapter grid above. */}
           {connected && (
             keyed ? (
-              // On TX both receivers transmit the same audio, and the server
-              // feeds the WDSP TX analyzer's pixels into the main display
-              // stream while keyed (DspPipelineService, issue #81). So a single
-              // full-width waterfall shows the live transmitted spectrum
-              // scrolling — paired with the panadapter above (also TX while
-              // keyed) it forms a real TX panafall. The TX dB window
-              // (wfTxDbMin/Max) and the left-edge WfDbScale drag let the
-              // operator set the in-passband brightness independently of RX.
               <WaterfallSurface transparent={bgActive} />
-            ) : rx2Enabled ? (
-              <div style={stitchedGridStyle}>
-                <div style={{ minWidth: 0, minHeight: 0 }}>
-                  <WaterfallSurface
-                    receiver="A"
-                    transparent={bgActive}
-                    stitched
-                    foreground={rxFocus === 'A'}
-                    tuneReceiver="A"
-                  />
-                </div>
-                <div style={{ minWidth: 0, minHeight: 0 }}>
-                  <WaterfallSurface
-                    receiver="B"
-                    transparent={bgActive}
-                    stitched
-                    foreground={rxFocus === 'B'}
-                    tuneReceiver="B"
-                  />
-                </div>
-              </div>
             ) : (
-              <WaterfallSurface transparent={bgActive} />
+              <div style={spectrumGridStyle}>
+                {spectrumPanes.map((p) => (
+                  <div key={p.index} style={{ minWidth: 0, minHeight: 0 }}>
+                    {p.abId ? (
+                      <WaterfallSurface
+                        receiver={p.abId}
+                        transparent={bgActive}
+                        stitched={multiRxSpectrum}
+                        foreground={rxFocus === p.abId}
+                        tuneReceiver={p.abId}
+                      />
+                    ) : (
+                      <RxWaterfallPane rxIndex={p.index} />
+                    )}
+                  </div>
+                ))}
+              </div>
             )
-          )}
-          {connected && hasExtraRx && (
-            <div style={{ minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
-              <MultiRxMonitorStrip />
-            </div>
           )}
         </div>
       </div>

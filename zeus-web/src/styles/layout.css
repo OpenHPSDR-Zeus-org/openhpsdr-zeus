@@ -1449,6 +1449,108 @@
   background: linear-gradient(180deg, var(--accent-bright), var(--accent));
   box-shadow: 0 0 12px rgba(78,166,255,0.26);
 }
+
+/* RX audio mixer — small header trigger + movable popout (replaces the inline
+ * switch so any number of DDC receivers fit without crowding the header). */
+.hero-rx-mixer-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 6px;
+  color: var(--fg-2);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.09);
+  font: 800 9px/1 var(--font-sans);
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+.hero-rx-mixer-trigger:hover {
+  color: var(--fg-0);
+  border-color: rgba(255,255,255,0.16);
+}
+.hero-rx-mixer-trigger.is-open {
+  color: var(--fg-0);
+  border-color: var(--accent);
+  box-shadow: 0 0 9px rgba(78,166,255,0.22);
+}
+.hero-rx-mixer-popout {
+  position: fixed;
+  z-index: 60;
+  min-width: 172px;
+  max-width: 280px;
+  background:
+    linear-gradient(180deg, var(--panel-top, #14181d), var(--panel-bot, #0c0f12));
+  border: 1px solid rgba(255,255,255,0.13);
+  border-radius: 9px;
+  box-shadow: 0 12px 34px rgba(0,0,0,0.52);
+  padding-bottom: 9px;
+  user-select: none;
+}
+.hero-rx-mixer-popout__bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 7px 6px 9px;
+  cursor: grab;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.hero-rx-mixer-popout__bar:active {
+  cursor: grabbing;
+}
+.hero-rx-mixer-popout__grip {
+  color: var(--fg-3);
+  display: inline-flex;
+}
+.hero-rx-mixer-popout__title {
+  flex: 1;
+  font: 800 9px/1 var(--font-sans);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--fg-1);
+}
+.hero-rx-mixer-popout__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+.hero-rx-mixer-popout__close:hover {
+  color: var(--fg-0);
+  background: rgba(255,255,255,0.08);
+}
+.hero-rx-mixer-popout__section {
+  padding: 8px 9px 0;
+}
+.hero-rx-mixer-popout__label {
+  font: 700 8px/1 var(--font-sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  margin-bottom: 5px;
+}
+.hero-rx-mixer-popout__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.hero-rx-mixer-popout .hero-rx-audio-switch__key {
+  min-width: 34px;
+  height: 22px;
+  border: 1px solid rgba(255,255,255,0.09);
+  background: rgba(255,255,255,0.03);
+}
+.hero-rx-mixer-popout .hero-rx-audio-switch__key.is-muted {
+  color: var(--fg-3);
+  opacity: 0.6;
+}
 .spectrum-wrap,
 .spectrum-canvas,
 .waterfall-canvas {
@@ -1854,6 +1956,7 @@
 .vfo-rx2-pill,
 .vfo-tool-key,
 .vfo-focus-key,
+.vfo-listen-key,
 .vfo-tx-key {
   display: inline-flex;
   align-items: center;
@@ -1877,6 +1980,7 @@
 .vfo-rx2-pill:hover,
 .vfo-tool-key:hover,
 .vfo-focus-key:hover,
+.vfo-listen-key:hover,
 .vfo-tx-key:hover {
   color: var(--fg-0);
   background:
@@ -1887,6 +1991,7 @@
 .vfo-rx2-pill:disabled,
 .vfo-tool-key:disabled,
 .vfo-focus-key:disabled,
+.vfo-listen-key:disabled,
 .vfo-tx-key:disabled {
   opacity: 0.42;
   cursor: default;
@@ -1927,7 +2032,8 @@
 }
 .vfo-stack {
   display: grid;
-  grid-template-rows: repeat(2, 70px);
+  /* One row per exposed receiver (RX1..RXN); grows with the multi-DDC count. */
+  grid-auto-rows: 70px;
   min-height: 140px;
   overflow: hidden;
   background:
@@ -1940,7 +2046,7 @@
 .vfo-lane {
   position: relative;
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) 38px;
+  grid-template-columns: 34px minmax(0, 1fr) 30px 38px;
   align-items: center;
   gap: 7px;
   min-height: 70px;
@@ -2032,6 +2138,22 @@
   border-color: color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 62%, transparent);
   box-shadow: 0 0 13px color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 28%, transparent);
 }
+.vfo-listen-key {
+  width: 28px;
+  min-width: 28px;
+  height: 32px;
+  padding: 0;
+  color: var(--fg-3);
+}
+.vfo-listen-key.is-on {
+  color: var(--fg-0);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 60%, white),
+    var(--vfo-filter-color, var(--accent))
+  );
+  border-color: color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 55%, transparent);
+}
 .vfo-tx-key {
   width: 36px;
   min-width: 36px;
@@ -2047,6 +2169,135 @@
   background: var(--tx-soft);
   border-color: var(--tx);
   box-shadow: 0 0 10px rgba(230,58,43,0.18);
+}
+
+/* ===== Multi-DDC VFO panel — chip rail + active detail (master-detail) ===== */
+.vfo-md {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.vfo-md__rail {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  padding: 2px;
+  scrollbar-width: thin;
+}
+.vfo-md__rail::-webkit-scrollbar { height: 5px; }
+.vfo-md__rail::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.16); border-radius: 3px; }
+.vfo-chip {
+  position: relative;
+  flex: 0 0 auto;
+  display: grid;
+  gap: 1px;
+  min-width: 72px;
+  padding: 5px 9px 5px 10px;
+  text-align: left;
+  color: var(--fg-2);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.012)),
+    rgba(0,0,0,0.18);
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color var(--dur-fast), background var(--dur-fast), opacity var(--dur-fast);
+}
+.vfo-chip::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 6px; bottom: 6px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: transparent;
+}
+.vfo-chip:hover { border-color: rgba(255,255,255,0.16); color: var(--fg-1); }
+.vfo-chip.is-active {
+  color: var(--fg-0);
+  border-color: color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 62%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 13%, transparent), transparent),
+    rgba(0,0,0,0.2);
+}
+.vfo-chip.is-active::before {
+  background: var(--vfo-filter-color, var(--accent));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 70%, transparent);
+}
+.vfo-chip.is-muted { opacity: 0.55; }
+.vfo-chip.is-tx { border-color: color-mix(in srgb, var(--tx) 55%, transparent); }
+.vfo-chip__id {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font: 800 10px/1 var(--font-sans);
+  color: var(--vfo-filter-color, var(--accent));
+}
+.vfo-chip__tx {
+  font: 800 8px/1 var(--font-sans);
+  color: var(--tx);
+  letter-spacing: 0.04em;
+}
+.vfo-chip__freq { font: 700 12px/1.1 var(--font-mono, monospace); color: var(--fg-0); }
+.vfo-chip__band { font: 700 8px/1 var(--font-mono, monospace); color: var(--fg-3); letter-spacing: 0.04em; }
+.vfo-chip--add {
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  color: var(--fg-3);
+}
+.vfo-chip--add:hover { color: var(--fg-0); }
+
+.vfo-md__detail {
+  position: relative;
+  display: grid;
+  gap: 7px;
+  padding: 9px 10px 10px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.008)),
+    rgba(0,0,0,0.16);
+  border: 1px solid rgba(255,255,255,0.09);
+  border-left: 2px solid var(--vfo-filter-color, var(--accent));
+  border-radius: 8px;
+  min-width: 0;
+}
+.vfo-md__detail.is-tx { border-left-color: var(--tx); }
+.vfo-md__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.vfo-md__title {
+  font: 800 11px/1 var(--font-sans);
+  letter-spacing: 0.03em;
+  color: var(--fg-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vfo-md__band { font: 700 10px/1 var(--font-mono, monospace); color: var(--fg-2); }
+.vfo-md__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.vfo-md__af {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  color: var(--fg-2);
+  font: 700 9px/1 var(--font-sans);
+}
+.vfo-md__af input[type="range"] { flex: 1; min-width: 0; }
+.vfo-md__af-val { min-width: 24px; text-align: right; color: var(--fg-1); }
+.vfo-md__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
 }
 .vfo-audio-strip {
   display: grid;
