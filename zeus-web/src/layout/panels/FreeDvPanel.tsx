@@ -25,10 +25,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   getFreeDvStatus,
   setFreeDvConfig,
+  getFreeDvInstallStatus,
+  startFreeDvInstall,
   FREEDV_SUBMODES,
   type FreeDvStatusDto,
   type FreeDvSubmode,
   type FreeDvConfigRequest,
+  type FreeDvInstallStatusDto,
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
 import { useQrzStore } from '../../state/qrz-store';
@@ -124,7 +127,7 @@ export function FreeDvPanel() {
     sendConfig({ txText: ownCallsign });
   }, [ownCallsign, status, sendConfig]);
 
-  // Library missing — show the clear unavailable state instead of dead controls.
+  // Library missing — offer the one-click install instead of dead controls.
   if (status && !status.nativeAvailable) {
     return (
       <div className="dsp-cfg" style={{ gap: 8 }}>
@@ -140,11 +143,10 @@ export function FreeDvPanel() {
             lineHeight: 1.5,
           }}
         >
-          FreeDV library not installed / building — telemetry unavailable. The
-          codec2 modem isn't present in this build, so digital-voice decode and
-          encode can't run yet.
-          {status.libraryVersion ? ` (${status.libraryVersion})` : ''}
+          The codec2 modem isn't installed yet, so FreeDV decode/encode can't run.
+          Install it once and FreeDV works every time you pick the mode.
         </div>
+        <FreeDvInstallSection />
       </div>
     );
   }
@@ -406,6 +408,135 @@ function FreeDvHeader({
               : 'idle'}
         {status?.libraryVersion ? ` · ${status.libraryVersion}` : ''}
       </span>
+    </div>
+  );
+}
+
+// One-click codec2 install. The backend downloads the prebuilt modem Zeus
+// committed for this platform and reloads it live (see FreeDvNativeInstaller);
+// once it reports installed, the panel's status poll flips nativeAvailable and
+// this whole branch is replaced by the live controls — so the "done" state here
+// is only ever momentary.
+function FreeDvInstallSection() {
+  const [install, setInstall] = useState<FreeDvInstallStatusDto | null>(null);
+  const timerRef = useRef<number | null>(null);
+  const pollAbort = useRef<AbortController | null>(null);
+
+  const phase = install?.phase ?? 'idle';
+  const busy = phase === 'downloading' || phase === 'staging';
+  const failed = phase === 'failed';
+  const done = phase === 'done';
+
+  const stopTimer = useCallback(() => {
+    if (timerRef.current != null) {
+      window.clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  const poll = useCallback(() => {
+    pollAbort.current?.abort();
+    const ac = new AbortController();
+    pollAbort.current = ac;
+    getFreeDvInstallStatus(ac.signal)
+      .then((s) => {
+        if (ac.signal.aborted) return;
+        setInstall(s);
+        // Terminal phase (or already installed) — stop polling.
+        if (s.installed || (s.phase !== 'downloading' && s.phase !== 'staging')) stopTimer();
+      })
+      .catch(() => {
+        /* next tick retries */
+      });
+  }, [stopTimer]);
+
+  const start = useCallback(() => {
+    startFreeDvInstall()
+      .then((s) => {
+        setInstall(s);
+        if (s.phase === 'downloading' || s.phase === 'staging') {
+          stopTimer();
+          timerRef.current = window.setInterval(poll, 500);
+        }
+      })
+      .catch(() => setInstall({ phase: 'failed', percent: 0, message: 'Could not reach the install service.', installed: false }));
+  }, [poll, stopTimer]);
+
+  useEffect(
+    () => () => {
+      stopTimer();
+      pollAbort.current?.abort();
+    },
+    [stopTimer],
+  );
+
+  const label = busy
+    ? `Installing… ${install?.percent ?? 0}%`
+    : failed
+      ? 'Retry install'
+      : done
+        ? 'Starting modem…'
+        : 'Install FreeDV';
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <button
+        type="button"
+        className="btn sm active"
+        disabled={busy || done}
+        onClick={() => {
+          if (!busy && !done) start();
+        }}
+        title="Download the FreeDV (codec2) modem for this platform and enable it"
+        style={{ whiteSpace: 'nowrap', alignSelf: 'flex-start' }}
+      >
+        {label}
+      </button>
+
+      {(busy || failed) && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            padding: '8px 10px',
+            background: 'var(--bg-1)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--r-sm)',
+          }}
+        >
+          {busy && (
+            <div
+              aria-hidden
+              style={{
+                height: 4,
+                borderRadius: 2,
+                background: 'var(--bg-2)',
+                overflow: 'hidden',
+              }}
+            >
+              <div
+                style={{
+                  height: '100%',
+                  width: `${install?.percent ?? 0}%`,
+                  background: 'var(--accent)',
+                  transition: 'width 0.2s ease',
+                }}
+              />
+            </div>
+          )}
+          {install?.message && (
+            <div
+              className="label-xs"
+              style={{ color: failed ? 'var(--tx)' : 'var(--fg-2)', lineHeight: 1.4 }}
+            >
+              {install.message}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

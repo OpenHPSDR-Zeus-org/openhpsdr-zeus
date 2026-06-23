@@ -11,13 +11,21 @@
 // with the WDSP resolver in Zeus.Dsp. The codec2 binary ships under
 // Zeus.Dsp/runtimes/{rid}/native and lands in the shared output directory, so
 // both the assembly-relative and BaseDirectory probes find it at runtime.
+//
+// It is ALSO resolvable from a writable per-user "managed" directory
+// (LocalApplicationData/Zeus/freedv) that the in-app FreeDV installer
+// (FreeDvNativeInstaller) stages into when the bundled binary is missing — e.g.
+// an older build that predates the committed lib, or a platform whose binary
+// wasn't shipped. The managed path is probed FIRST so a freshly-installed lib
+// wins, and TryProbe()'s cached result can be invalidated via ResetProbe() so
+// an install takes effect without restarting the host.
 
 using System.Reflection;
 using System.Runtime.InteropServices;
 
 namespace Zeus.Dsp.FreeDv;
 
-internal static class FreeDvNativeLoader
+public static class FreeDvNativeLoader
 {
     private static readonly object Gate = new();
     private static bool _registered;
@@ -57,6 +65,20 @@ internal static class FreeDvNativeLoader
         }
     }
 
+    /// <summary>
+    /// Drop the cached <see cref="TryProbe"/> result so the next probe re-scans
+    /// the candidate paths. Called after the in-app installer stages a new
+    /// codec2 binary so FreeDV can go live without restarting the host.
+    /// </summary>
+    public static void ResetProbe()
+    {
+        lock (Gate)
+        {
+            _probedLoadable = false;
+            _loadable = false;
+        }
+    }
+
     private static IntPtr Resolve(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
     {
         if (libraryName != FreeDvNativeMethods.LibraryName) return IntPtr.Zero;
@@ -77,6 +99,12 @@ internal static class FreeDvNativeLoader
     {
         string rid = CurrentRid();
         string fileName = NativeFileName();
+
+        // Writable per-user install location first: a binary staged by the
+        // in-app installer should win over (and back-fill) a missing bundled one.
+        string? managed = ManagedLibraryPath();
+        if (managed is not null) yield return managed;
+
         string? asmDir = Path.GetDirectoryName(assembly.Location);
         if (!string.IsNullOrEmpty(asmDir))
         {
@@ -89,7 +117,30 @@ internal static class FreeDvNativeLoader
         yield return Path.Combine(baseDir, fileName);
     }
 
-    private static string CurrentRid()
+    /// <summary>
+    /// The writable per-user directory the in-app installer stages the codec2
+    /// binary into (LocalApplicationData/Zeus/freedv). Cross-platform via
+    /// <see cref="Environment.SpecialFolder.LocalApplicationData"/>:
+    /// %LOCALAPPDATA%\Zeus\freedv on Windows, ~/.local/share/Zeus/freedv on
+    /// Linux, ~/Library/Application Support/Zeus/freedv on macOS. Null only when
+    /// the platform exposes no local-app-data location.
+    /// </summary>
+    public static string? ManagedLibraryDir()
+    {
+        string baseDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (string.IsNullOrEmpty(baseDir)) return null;
+        return Path.Combine(baseDir, "Zeus", "freedv");
+    }
+
+    /// <summary>Full path the codec2 binary is staged at for the current platform.</summary>
+    public static string? ManagedLibraryPath()
+    {
+        string? dir = ManagedLibraryDir();
+        return dir is null ? null : Path.Combine(dir, NativeFileName());
+    }
+
+    /// <summary>Runtime identifier (os-arch) used to resolve the bundled binary, e.g. "win-x64".</summary>
+    public static string CurrentRid()
     {
         string arch = RuntimeInformation.ProcessArchitecture switch
         {
@@ -104,7 +155,8 @@ internal static class FreeDvNativeLoader
         return $"unknown-{arch}";
     }
 
-    private static string NativeFileName()
+    /// <summary>Platform shared-library filename for codec2 (codec2.dll / libcodec2.so / libcodec2.dylib).</summary>
+    public static string NativeFileName()
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return "libcodec2.dylib";
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return "libcodec2.so";
