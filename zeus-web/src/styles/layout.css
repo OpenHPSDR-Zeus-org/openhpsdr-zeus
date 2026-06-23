@@ -505,7 +505,19 @@
   outline-offset: -2px;
 }
 .topbar .topbar-scroll-btn {
+  display: inline-flex;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  align-self: center;
+}
+.topbar .topbar-scroll-btn[hidden] {
   display: none;
+}
+.topbar .topbar-scroll-btn svg {
+  pointer-events: none;
 }
 .topbar .topbar-scroll-btn:disabled {
   opacity: 0.32;
@@ -806,20 +818,6 @@
     border-top: 0;
     scrollbar-width: none;
     scrollbar-gutter: auto;
-  }
-
-  .topbar .topbar-scroll-btn {
-    display: inline-flex;
-    flex: 0 0 24px;
-    width: 24px;
-    height: 28px;
-    min-height: 28px;
-    padding: 0;
-    align-self: center;
-  }
-
-  .topbar .topbar-scroll-btn svg {
-    pointer-events: none;
   }
 
   .topbar .topbar-controls::-webkit-scrollbar {
