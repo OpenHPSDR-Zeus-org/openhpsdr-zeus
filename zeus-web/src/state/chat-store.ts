@@ -45,6 +45,8 @@ import {
   chatRemoveMember,
   chatBan,
   chatUnban,
+  chatClearRoom,
+  chatBroadcast,
   normalizeStatus,
   normalizeOperator,
   normalizeMessage,
@@ -89,7 +91,12 @@ export type ChatEnvelope =
   | { kind: 'history'; room?: unknown; messages: unknown }
   | { kind: 'friends'; friends: unknown }
   | { kind: 'rooms'; rooms: unknown }
-  | { kind: 'banned'; message?: unknown };
+  | { kind: 'banned'; message?: unknown }
+  | { kind: 'cleared'; room?: unknown }
+  | { kind: 'notice'; from?: unknown; text?: unknown; ts?: unknown };
+
+/** A one-off global announcement pushed by an admin (shown as a banner). */
+export type ChatAnnouncement = { from: string; text: string; ts: number };
 
 export type ChatStoreState = {
   enabled: boolean;
@@ -114,6 +121,9 @@ export type ChatStoreState = {
   acceptedFriends: string[];
   incomingRequests: string[];
   outgoingRequests: string[];
+
+  // The latest global admin announcement, shown as a dismissible banner.
+  announcement: ChatAnnouncement | null;
 
   refreshStatus: () => Promise<void>;
   setEnabled: (enabled: boolean) => Promise<void>;
@@ -140,6 +150,9 @@ export type ChatStoreState = {
   removeMember: (room: string, callsign: string) => Promise<void>;
   ban: (callsign: string) => Promise<void>;
   unban: (callsign: string) => Promise<void>;
+  clearRoom: (room?: string) => Promise<void>;
+  broadcast: (text: string) => Promise<void>;
+  dismissAnnouncement: () => void;
   ingest: (envelope: ChatEnvelope) => void;
 };
 
@@ -201,6 +214,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
   acceptedFriends: [],
   incomingRequests: [],
   outgoingRequests: [],
+  announcement: null,
 
   refreshStatus: async () => {
     try {
@@ -367,6 +381,15 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
   unban: async (callsign) => {
     try { await chatUnban(callsign); } catch (err) { set({ relayError: errMsg(err) }); }
   },
+  clearRoom: async (room) => {
+    try { await chatClearRoom(room); } catch (err) { set({ relayError: errMsg(err) }); }
+  },
+  broadcast: async (text) => {
+    const t = text.trim();
+    if (!t) return;
+    try { await chatBroadcast(t); } catch (err) { set({ relayError: errMsg(err) }); }
+  },
+  dismissAnnouncement: () => set({ announcement: null }),
 
   ingest: (envelope) => {
     if (!envelope || typeof envelope !== 'object') return;
@@ -422,6 +445,19 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
       case 'banned':
         set({ relayError: typeof envelope.message === 'string' ? envelope.message : 'You have been banned from ZeusChat.' });
         return;
+      case 'cleared': {
+        const room = typeof envelope.room === 'string' ? envelope.room : PUBLIC_ROOM;
+        set((s) => ({ messagesByRoom: { ...s.messagesByRoom, [room]: [] } }));
+        return;
+      }
+      case 'notice': {
+        const text = typeof envelope.text === 'string' ? envelope.text : '';
+        if (!text) return;
+        const from = typeof envelope.from === 'string' ? envelope.from : '';
+        const ts = typeof envelope.ts === 'number' && Number.isFinite(envelope.ts) ? envelope.ts : Date.now();
+        set({ announcement: { from, text, ts } });
+        return;
+      }
       default:
         warnOnce('chat-ingest-unknown-kind', `unknown chat envelope kind: ${String((envelope as { kind?: unknown }).kind)}`);
     }

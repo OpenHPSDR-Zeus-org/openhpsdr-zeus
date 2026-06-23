@@ -98,6 +98,10 @@ export type ClientToRelay =
   | { t: 'admin_remove_member'; room: string; callsign: string }
   | { t: 'admin_ban'; callsign: string }
   | { t: 'admin_unban'; callsign: string }
+  // Wipe a room's stored history (defaults to the public lobby).
+  | { t: 'admin_clear_room'; room?: string }
+  // Push a one-off global announcement to every connected operator.
+  | { t: 'admin_broadcast'; text: string }
   // Keepalive. The relay auto-responds with {t:"pong"} without waking (see
   // setWebSocketAutoResponse in chat-room.ts) — send this EXACT string:
   // '{"t":"ping"}'.
@@ -117,6 +121,11 @@ export type RelayToClient =
   | { t: 'history'; room: string; messages: Msg[] }
   // A chat message in a room the operator is a member of (including own echo).
   | { t: 'msg'; id: string; from: string; text: string; ts: number; room: string }
+  // A room's history was wiped by an admin — clients should drop their scrollback.
+  | { t: 'cleared'; room: string }
+  // A one-off global announcement from an admin, shown to everyone regardless of
+  // which room they're viewing.
+  | { t: 'notice'; from: string; text: string; ts: number }
   // The operator's friend graph (see ChatFriendsDto on the C# side).
   | { t: 'friends'; accepted: string[]; incoming: string[]; outgoing: string[] }
   // The operator has been banned/kicked; the socket is about to close.

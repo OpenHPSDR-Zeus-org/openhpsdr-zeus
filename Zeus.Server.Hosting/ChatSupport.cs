@@ -50,6 +50,12 @@ public sealed class ChatMessageRing
         }
     }
 
+    /// <summary>Drops all retained messages (e.g. after an admin clears the room).</summary>
+    public void Clear()
+    {
+        lock (_sync) _items.Clear();
+    }
+
     /// <summary>
     /// Returns up to <paramref name="limit"/> of the most recent messages in
     /// chronological (oldest-first) order. A non-positive limit returns all.

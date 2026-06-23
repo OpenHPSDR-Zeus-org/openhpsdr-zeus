@@ -303,3 +303,9 @@ export const chatBan = (callsign: string, signal?: AbortSignal) =>
   postOk('/api/chat/admin/ban', { callsign }, signal);
 export const chatUnban = (callsign: string, signal?: AbortSignal) =>
   postOk('/api/chat/admin/unban', { callsign }, signal);
+/** Admin: wipe a room's history (defaults to the public lobby). */
+export const chatClearRoom = (room?: string, signal?: AbortSignal) =>
+  postOk('/api/chat/admin/clear', room ? { room } : {}, signal);
+/** Admin: broadcast a one-off global announcement to every connected operator. */
+export const chatBroadcast = (text: string, signal?: AbortSignal) =>
+  postOk('/api/chat/admin/broadcast', { text }, signal);

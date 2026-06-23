@@ -988,6 +988,112 @@ function GroupManagementStrip({
 }
 
 // ---------------------------------------------------------------------------
+// Admin console (relay moderators only — N9WAR / KB2UKA)
+// ---------------------------------------------------------------------------
+
+/**
+ * Collapsible strip of network-wide moderator tools, shown only to operators the
+ * relay flagged as admins. Gathers the actions that aren't tied to a single
+ * roster row or room: global announcement, clear the public lobby, and unban.
+ * Per-row ban and per-group management live with their row/tab as before.
+ */
+function AdminConsole() {
+  const [open, setOpen] = useState(false);
+  const [dialog, setDialog] = useState<null | 'broadcast' | 'clear' | 'unban'>(null);
+  const broadcast = useChatStore((s) => s.broadcast);
+  const clearRoom = useChatStore((s) => s.clearRoom);
+  const unban = useChatStore((s) => s.unban);
+
+  return (
+    <div style={{ borderBottom: '1px solid var(--panel-border)', background: 'var(--bg-1)', flexShrink: 0 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          width: '100%',
+          padding: '4px 10px',
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          fontSize: 9.5,
+          fontWeight: 700,
+          letterSpacing: '0.10em',
+          textTransform: 'uppercase',
+          color: 'var(--power)',
+        }}
+      >
+        <span style={{ fontSize: 9, opacity: 0.7 }}>{open ? '▼' : '▶'}</span>
+        Admin Console
+      </button>
+      {open && (
+        <div style={{ padding: '0 10px 8px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          <button type="button" className="btn sm" onClick={() => setDialog('broadcast')}>
+            📢 Global message
+          </button>
+          <button type="button" className="btn sm" onClick={() => setDialog('unban')}>
+            Unban…
+          </button>
+          <button
+            type="button"
+            className="btn sm"
+            onClick={() => setDialog('clear')}
+            style={{ color: 'var(--tx)', borderColor: 'var(--tx)', marginLeft: 'auto' }}
+          >
+            Clear public chat
+          </button>
+        </div>
+      )}
+
+      {dialog === 'broadcast' && (
+        <PromptDialog
+          title="Global message"
+          label="Announcement broadcast to every operator"
+          placeholder="e.g. Net starting now on 7.200"
+          confirmLabel="Send"
+          onSubmit={(v) => {
+            void broadcast(v);
+            setDialog(null);
+          }}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog === 'unban' && (
+        <PromptDialog
+          title="Unban operator"
+          label="Callsign"
+          placeholder="e.g. N0CALL"
+          confirmLabel="Unban"
+          onSubmit={(v) => {
+            void unban(v.toUpperCase());
+            setDialog(null);
+          }}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog === 'clear' && (
+        <ConfirmDialog
+          title="Clear public chat"
+          confirmLabel="Clear"
+          intent="danger"
+          onConfirm={() => {
+            void clearRoom(PUBLIC_ROOM);
+            setDialog(null);
+          }}
+          onCancel={() => setDialog(null)}
+        >
+          Permanently delete <strong>all messages</strong> in the public lobby for everyone? This
+          cannot be undone.
+        </ConfirmDialog>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main panel
 // ---------------------------------------------------------------------------
 
@@ -1006,6 +1112,8 @@ export function ChatPanel() {
   const acceptedFriends = useChatStore((s) => s.acceptedFriends);
   const incomingRequests = useChatStore((s) => s.incomingRequests);
   const outgoingRequests = useChatStore((s) => s.outgoingRequests);
+  const announcement = useChatStore((s) => s.announcement);
+  const dismissAnnouncement = useChatStore((s) => s.dismissAnnouncement);
 
   const refreshStatus = useChatStore((s) => s.refreshStatus);
   const setEnabled = useChatStore((s) => s.setEnabled);
@@ -1370,6 +1478,56 @@ export function ChatPanel() {
           {relayError}
         </div>
       )}
+
+      {/* ── Global announcement banner (admin broadcast) ── */}
+      {announcement && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 8,
+            padding: '7px 10px',
+            borderBottom: '1px solid var(--panel-border)',
+            background: 'var(--accent-soft)',
+            fontSize: 11.5,
+            color: 'var(--fg-1)',
+            lineHeight: 1.4,
+            flexShrink: 0,
+          }}
+        >
+          <span style={{ fontSize: 13, lineHeight: 1 }} aria-hidden>
+            📢
+          </span>
+          <div style={{ flex: 1, minWidth: 0, wordBreak: 'break-word' }}>
+            {announcement.from && (
+              <span className="mono" style={{ fontWeight: 700, color: 'var(--accent-bright)', marginRight: 6 }}>
+                {announcement.from}
+              </span>
+            )}
+            <span>{announcement.text}</span>
+          </div>
+          <button
+            type="button"
+            onClick={dismissAnnouncement}
+            aria-label="Dismiss announcement"
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: 2,
+              cursor: 'pointer',
+              color: 'var(--fg-3)',
+              fontSize: 11,
+              lineHeight: 1,
+              flexShrink: 0,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* ── Admin console (relay moderators only) ── */}
+      {isAdmin && <AdminConsole />}
 
       {/* ── Body: sidebar + right column ── */}
       <div style={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
