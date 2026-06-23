@@ -18,7 +18,6 @@ import { BackgroundSettingsPanel } from './BackgroundSettingsPanel';
 import { SpectrumScaleSettingsPanel } from './SpectrumScaleSettingsPanel';
 import { ThemeSettingsPanel } from './ThemeSettingsPanel';
 import { TraceColorPanel } from './TraceColorPanel';
-import { WaterfallColormapPanel } from './WaterfallColormapPanel';
 
 export function DisplayPanel() {
   return (
@@ -27,7 +26,6 @@ export function DisplayPanel() {
       <BackgroundSettingsPanel />
       <TraceColorPanel />
       <SpectrumScaleSettingsPanel />
-      <WaterfallColormapPanel />
     </div>
   );
 }

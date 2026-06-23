@@ -21,6 +21,7 @@ const MODE_OPTIONS: readonly ToolbarOption[] = [
   { key: 'FM', label: 'FM' },
   { key: 'DIGL', label: 'DIGL' },
   { key: 'DIGU', label: 'DIGU' },
+  { key: 'FREEDV', label: 'FreeDV' },
 ];
 
 export function ModeFavorites() {

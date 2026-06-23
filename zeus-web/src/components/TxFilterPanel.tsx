@@ -61,6 +61,7 @@ function absToSigned(mode: RxMode, lowAbs: number, highAbs: number): { low: numb
     case 'USB':
     case 'DIGU':
     case 'CWU':
+    case 'FREEDV':
       return { low: lCap, high: hCap };
     case 'LSB':
     case 'DIGL':

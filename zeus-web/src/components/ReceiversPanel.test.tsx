@@ -32,6 +32,7 @@ function rx(index: number, enabled: boolean, adcSource = 0): ReceiverDto {
     filterPresetName: 'VAR1',
     afGainDb: 0,
     sampleRateHz: 192_000,
+    audible: true,
   };
 }
 

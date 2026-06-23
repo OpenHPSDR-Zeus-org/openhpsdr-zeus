@@ -59,7 +59,7 @@ import {
 } from '../layout/spectrum-split';
 import './mobile.css';
 
-const MODES: readonly RxMode[] = ['LSB', 'USB', 'CWL', 'CWU', 'AM', 'FM', 'DIGU'];
+const MODES: readonly RxMode[] = ['LSB', 'USB', 'CWL', 'CWU', 'AM', 'FM', 'DIGU', 'FREEDV'];
 
 const MOBILE_VIEWPORT_LOCK =
   'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover';

@@ -201,6 +201,18 @@ public sealed class VstEngineController : IAsyncDisposable
     /// </summary>
     public long DegradedBlocks => _bridge?.DegradedBlocks ?? 0;
 
+    /// <summary>
+    /// Engine-written lifecycle state from the SHM header (0=init, 1=running,
+    /// 2=draining), or 0 when no bridge exists yet. Diagnostics only.
+    /// </summary>
+    public uint EngineState => _bridge?.EngineState ?? 0;
+
+    /// <summary>
+    /// Engine-written flags from the SHM header (bit0 = bypassed / empty chain),
+    /// or 0 when no bridge exists yet. Diagnostics only.
+    /// </summary>
+    public uint EngineFlags => _bridge?.EngineFlags ?? 0;
+
     /// <summary>The engine exe resolved on the last activation attempt, if any.</summary>
     public string? ResolvedEnginePath { get; private set; }
 

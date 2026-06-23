@@ -531,7 +531,30 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         var localBind = FindLocalAddressForSubnet(radioEndpoint.Address) ?? IPAddress.Any;
         // Matched port convention — PC binds 1025, radio sends back with source
         // ports 1025/1026/1027/1035.. which we demux by fromaddr.
-        sock.Bind(new IPEndPoint(localBind, 1025));
+        //
+        // Fall back to an ephemeral local port if 1025 is already taken. This
+        // happens when Zeus runs on the SAME host as the radio's network app —
+        // e.g. a Saturn/ANAN-G2 all-in-one where the on-board p2app already
+        // owns UDP 1025 — and the hard-coded bind would otherwise fail the
+        // whole P2 connect with EADDRINUSE (issue: 500 on /api/connect/p2,
+        // co-located radio). Every openHPSDR P2 radio streams its data back to
+        // the client's *source* port (p2app sets reply_addr.sin_port =
+        // sender's port and never overrides it per stream), so any local port
+        // works — we don't need 1025 to receive, only to send from. Separate-
+        // host setups keep 1025 and behave exactly as before.
+        int localPort = 1025;
+        try
+        {
+            sock.Bind(new IPEndPoint(localBind, 1025));
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
+        {
+            sock.Bind(new IPEndPoint(localBind, 0));
+            localPort = ((IPEndPoint)sock.LocalEndPoint!).Port;
+            _log.LogInformation(
+                "p2.connect local UDP 1025 in use (co-located radio app?) — bound ephemeral port {Port}",
+                localPort);
+        }
         // 4 MiB RX socket buffer. At 1536 kHz a single DDC pushes ~9.3 MB/s, and
         // with several DDCs streaming concurrently the kernel buffer must absorb
         // scheduling jitter without dropping datagrams. 4 MiB ≈ 110 ms of one
@@ -541,9 +564,10 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         catch (SocketException) { sock.ReceiveBufferSize = 1 << 20; }
         _sock = sock;
         _log.LogInformation(
-            "p2.connect radio={Radio} localBind={Local} localPort=1025",
+            "p2.connect radio={Radio} localBind={Local} localPort={Port}",
             radioEndpoint.Address,
-            localBind.Equals(IPAddress.Any) ? "ANY (no subnet match)" : localBind.ToString());
+            localBind.Equals(IPAddress.Any) ? "ANY (no subnet match)" : localBind.ToString(),
+            localPort);
         return Task.CompletedTask;
     }
 
@@ -815,7 +839,15 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             return;
         double factor = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _freqCorrectionBits));
         long corrected = (long)Math.Round(hz * factor, MidpointRounding.AwayFromZero);
-        _extraRxFreqHz[receiverIndex] = (uint)Math.Clamp(corrected, 0L, uint.MaxValue);
+        uint next = (uint)Math.Clamp(corrected, 0L, uint.MaxValue);
+        // Idempotent — a no-op when this DDC's NCO is unchanged. OnRadioStateChanged
+        // re-pushes every extra receiver's frequency on EVERY state broadcast, and
+        // those fire continuously during steady RX. Without this guard each one
+        // re-sent the high-priority packet, re-latching the alex/OC band relays —
+        // which chattered the relays the moment RX3 was exposed. Mirrors the same
+        // idempotency the RX2 DDC path (SetRx2Enabled / SetExtraReceivers) relies on.
+        if (_extraRxFreqHz[receiverIndex] == next) return;
+        _extraRxFreqHz[receiverIndex] = next;
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 

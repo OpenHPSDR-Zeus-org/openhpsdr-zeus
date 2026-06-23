@@ -65,7 +65,8 @@ export type RxMode =
   | 'SAM'
   | 'DSB'
   | 'DIGL'
-  | 'DIGU';
+  | 'DIGU'
+  | 'FREEDV';
 
 export type Rx2AudioMode = 'both' | 'rx1' | 'rx2';
 export type TxVfo = 'A' | 'B';
@@ -280,6 +281,10 @@ export type RadioStateDto = {
   rx2AudioMode: Rx2AudioMode;
   rx2AfGainDb: number;
   txVfo: TxVfo;
+  // Authoritative TX target as a receiver index (0 = RX1/VFO A, 1 = RX2/VFO B,
+  // >= 2 = an extra DDC). Generalises txVfo beyond the A/B pair; txVfo stays as
+  // the legacy A/B projection. Optional until a v2 server reports it.
+  txReceiverIndex?: number;
   mode: RxMode;
   modeB: RxMode;
   filterLowHz: number;
@@ -408,6 +413,10 @@ export type ReceiverDto = {
   filterPresetName: string | null;
   afGainDb: number;
   sampleRateHz: number;
+  // Whether this receiver is mixed into the monitor audio output (per-RX
+  // listen/mute mixer in the hero-rx-audio-switch). RX1 is the audio
+  // clock-master, so muting it removes it from the mix but keeps it clocking.
+  audible: boolean;
 };
 
 // CFC mirrors Zeus.Contracts.CfcConfig. Bands array is fixed at 10 entries
@@ -1985,6 +1994,11 @@ export type ConnectRequest = {
   // identifies as Hermes/0x01 on P2). Omit for manual connects where the
   // board is unknown.
   boardId?: number;
+  // Take over a radio another controller is already driving. /api/connect/p2
+  // refuses to become a second master on a Busy radio (relay-chatter / brown-out
+  // guard); the Reclaim-then-connect takeover flow sets this so the post-reclaim
+  // re-connect isn't re-blocked while the radio is still settling.
+  force?: boolean;
 };
 
 // System.Text.Json can serialize enums as either numbers (default) or strings
@@ -2008,6 +2022,7 @@ const MODE_ORDER: readonly RxMode[] = [
   'DSB',
   'DIGL',
   'DIGU',
+  'FREEDV',
 ];
 
 const RX2_AUDIO_MODE_ORDER: readonly Rx2AudioMode[] = ['both', 'rx1', 'rx2'];
@@ -2294,6 +2309,28 @@ export function normalizeAdcProtectionStatus(raw: unknown): AdcProtectionStatusD
   };
 }
 
+// Normalise one wire ReceiverDto (mirrors Zeus.Contracts.ReceiverDto). A
+// malformed entry falls back to safe defaults rather than dropping the whole
+// array, so a single bad receiver can't blank the multi-DDC UI.
+function normalizeReceiver(raw: unknown, fallbackIndex: number): ReceiverDto {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    index: typeof r.index === 'number' ? r.index : fallbackIndex,
+    enabled: typeof r.enabled === 'boolean' ? r.enabled : false,
+    adcSource: typeof r.adcSource === 'number' ? r.adcSource : 0,
+    vfoHz: typeof r.vfoHz === 'number' ? r.vfoHz : 0,
+    mode: normalizeMode(r.mode),
+    filterLowHz: typeof r.filterLowHz === 'number' ? r.filterLowHz : 0,
+    filterHighHz: typeof r.filterHighHz === 'number' ? r.filterHighHz : 0,
+    filterPresetName: typeof r.filterPresetName === 'string' ? r.filterPresetName : null,
+    afGainDb: typeof r.afGainDb === 'number' ? r.afGainDb : 0,
+    sampleRateHz: typeof r.sampleRateHz === 'number' ? r.sampleRateHz : 0,
+    // Pre-mixer servers omit this — default audible so audio is never silently
+    // muted by a stale payload.
+    audible: typeof r.audible === 'boolean' ? r.audible : true,
+  };
+}
+
 export function normalizeState(raw: unknown): RadioStateDto {
   const r = (raw ?? {}) as Record<string, unknown>;
   return {
@@ -2310,6 +2347,8 @@ export function normalizeState(raw: unknown): RadioStateDto {
     rx2AudioMode: normalizeRx2AudioMode(r.rx2AudioMode),
     rx2AfGainDb: typeof r.rx2AfGainDb === 'number' ? r.rx2AfGainDb : 0,
     txVfo: normalizeTxVfo(r.txVfo),
+    txReceiverIndex:
+      typeof r.txReceiverIndex === 'number' ? r.txReceiverIndex : undefined,
     mode: normalizeMode(r.mode),
     modeB: normalizeMode(r.modeB ?? r.mode),
     filterLowHz: typeof r.filterLowHz === 'number' ? r.filterLowHz : 0,
@@ -2418,6 +2457,17 @@ export function normalizeState(raw: unknown): RadioStateDto {
     cwPitchHz: typeof r.cwPitchHz === 'number' ? r.cwPitchHz : 600,
     // Legacy server without the field → CTUN off (classic recenter-on-click).
     ctunEnabled: typeof r.ctunEnabled === 'boolean' ? r.ctunEnabled : false,
+    // ---- Multi-DDC receivers array (wire v2) ----
+    // A v1 server omits these. Leave them undefined (not []/0) so applyState's
+    // `s.receivers ?? prev.receivers` keeps the store's prior values instead of
+    // collapsing the exposed-receiver control back to RX1. A v2 server projects
+    // RX1/RX2 into [0]/[1] and appends the contiguous extra DDCs, so the array
+    // is authoritative whenever present.
+    receivers: Array.isArray(r.receivers)
+      ? (r.receivers as unknown[]).map((entry, i) => normalizeReceiver(entry, i))
+      : undefined,
+    wireVersion: typeof r.wireVersion === 'number' ? r.wireVersion : undefined,
+    maxReceivers: typeof r.maxReceivers === 'number' ? r.maxReceivers : undefined,
   };
 }
 
@@ -5538,6 +5588,7 @@ export function setReceiver(
     filterLowHz?: number;
     filterHighHz?: number;
     afGainDb?: number;
+    audible?: boolean;
   },
   signal?: AbortSignal,
 ): Promise<RadioStateDto> {
@@ -5554,6 +5605,7 @@ export function setReceiver(
         filterLowHz: req.filterLowHz,
         filterHighHz: req.filterHighHz,
         afGainDb: req.afGainDb,
+        audible: req.audible,
       }),
       signal,
     },
@@ -5575,6 +5627,34 @@ export function setTxVfo(
     },
     normalizeState,
   );
+}
+
+// Select the transmit target by receiver index (0=RX1, 1=RX2, >=2 extra DDC).
+// Mirrors POST /api/tx/receiver; the server clamps an unexposed index to RX1.
+export function setTxReceiver(
+  index: number,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/receiver',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ index }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// Per-RX listen/mute for the hero-rx-audio-switch mixer (POST /api/receivers/
+// {index} with { audible }). index 0=RX1, 1=RX2, >=2 extra DDC.
+export function setReceiverAudible(
+  index: number,
+  audible: boolean,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return setReceiver(index, { audible }, signal);
 }
 
 export function setMode(
@@ -6646,5 +6726,118 @@ export function setMicGain(
       const v = (raw as { micGainDb?: unknown }).micGainDb;
       return { micGainDb: typeof v === 'number' ? v : 0 };
     },
+  );
+}
+
+// ---- FreeDV digital-voice telemetry / config ----
+// FreeDV is a normal selectable RxMode ('FREEDV', byte 10); selecting it goes
+// through setMode like any other mode. The backend forces USB underneath and
+// runs the codec2/FreeDV modem. These endpoints carry the modem telemetry +
+// config that drive the native FreeDV panel — they are NOT part of StateDto.
+
+export type FreeDvSubmode =
+  | 'Mode700D'
+  | 'Mode700E'
+  | 'Mode700C'
+  | 'Mode1600'
+  | 'Mode800XA';
+
+// Panel-facing submode order + short labels (matches freedv-gui's selector).
+export const FREEDV_SUBMODES: ReadonlyArray<{ value: FreeDvSubmode; label: string }> = [
+  { value: 'Mode700D', label: '700D' },
+  { value: 'Mode700E', label: '700E' },
+  { value: 'Mode700C', label: '700C' },
+  { value: 'Mode1600', label: '1600' },
+  { value: 'Mode800XA', label: '800XA' },
+];
+
+// Mirrors the server-side FreeDvStatusDto (GET /api/freedv/status).
+export type FreeDvStatusDto = {
+  nativeAvailable: boolean;
+  active: boolean;
+  submode: FreeDvSubmode;
+  synced: boolean;
+  snrDb: number;
+  squelchEnabled: boolean;
+  snrSquelchThreshDb: number;
+  speechSampleRateHz: number;
+  modemSampleRateHz: number;
+  rxText: string | null;
+  txText: string | null;
+  libraryVersion: string | null;
+};
+
+// PUT /api/freedv/config body — all fields optional, null = leave unchanged.
+export type FreeDvConfigRequest = {
+  submode?: FreeDvSubmode;
+  squelchEnabled?: boolean;
+  snrSquelchThreshDb?: number;
+  txText?: string;
+};
+
+const FREEDV_SUBMODE_ORDER: readonly FreeDvSubmode[] = FREEDV_SUBMODES.map(
+  (s) => s.value,
+);
+
+function normalizeFreeDvSubmode(v: unknown): FreeDvSubmode {
+  if (typeof v === 'string' && (FREEDV_SUBMODE_ORDER as readonly string[]).includes(v)) {
+    return v as FreeDvSubmode;
+  }
+  if (typeof v === 'number' && Number.isInteger(v)) {
+    return FREEDV_SUBMODE_ORDER[v] ?? 'Mode700D';
+  }
+  return 'Mode700D';
+}
+
+// Defensive normalizer: the backend may not be wired yet (404) or may send a
+// partial frame. Coerce every field so the panel never reads undefined.
+function normalizeFreeDvStatus(raw: unknown): FreeDvStatusDto {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const num = (v: unknown, dflt: number): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : dflt;
+  const bool = (v: unknown): boolean => v === true;
+  const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+  return {
+    nativeAvailable: bool(r.nativeAvailable),
+    active: bool(r.active),
+    submode: normalizeFreeDvSubmode(r.submode),
+    synced: bool(r.synced),
+    snrDb: num(r.snrDb, 0),
+    squelchEnabled: bool(r.squelchEnabled),
+    snrSquelchThreshDb: num(r.snrSquelchThreshDb, 0),
+    speechSampleRateHz: num(r.speechSampleRateHz, 8000),
+    modemSampleRateHz: num(r.modemSampleRateHz, 8000),
+    rxText: str(r.rxText),
+    txText: str(r.txText),
+    libraryVersion: str(r.libraryVersion),
+  };
+}
+
+// GET /api/freedv/status. Callers should catch and fall back to an
+// "unavailable" UI state — the backend may 404 transiently while it's wired.
+export function getFreeDvStatus(signal?: AbortSignal): Promise<FreeDvStatusDto> {
+  return jsonFetch('/api/freedv/status', { signal }, normalizeFreeDvStatus);
+}
+
+// PUT /api/freedv/config. Only the supplied fields change; returns the updated
+// status so the panel can reconcile in one round-trip.
+export function setFreeDvConfig(
+  req: FreeDvConfigRequest,
+  signal?: AbortSignal,
+): Promise<FreeDvStatusDto> {
+  return jsonFetch(
+    '/api/freedv/config',
+    {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        submode: req.submode ?? null,
+        squelchEnabled: req.squelchEnabled ?? null,
+        snrSquelchThreshDb: req.snrSquelchThreshDb ?? null,
+        txText: req.txText ?? null,
+      }),
+      signal,
+    },
+    normalizeFreeDvStatus,
   );
 }

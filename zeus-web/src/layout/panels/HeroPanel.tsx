@@ -45,7 +45,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
-import { GripVertical, X } from 'lucide-react';
+import { GripVertical, Sliders, Volume2, VolumeX, X } from 'lucide-react';
 import { Panadapter } from '../../components/Panadapter';
 import { WaterfallSurface } from '../../components/WaterfallSurface';
 import { MultiRxMonitorStrip } from '../../components/MultiRxMonitorStrip';
@@ -54,7 +54,7 @@ import { WaterfallSpeedControl } from '../../components/WaterfallSpeedControl';
 import { SpectrumControls } from '../../components/SpectrumControls';
 import { LeafletWorldMap } from '../../components/design/LeafletWorldMap';
 import { LeafletMapErrorBoundary } from '../../components/design/LeafletMapErrorBoundary';
-import { setRx2, type Rx2AudioMode } from '../../api/client';
+import { setReceiverAudible } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
 import { useTxStore } from '../../state/tx-store';
 import { useRotatorStore } from '../../state/rotator-store';
@@ -79,12 +79,6 @@ interface HeroPanelProps {
   workspaceLocked?: boolean;
   onToggleLock?: () => void;
 }
-
-const RX_AUDIO_MODES: readonly { mode: Rx2AudioMode; label: string; title: string }[] = [
-  { mode: 'rx1', label: 'RX 1', title: 'Hear RX1 only' },
-  { mode: 'both', label: 'Both', title: 'Hear RX1 and RX2 together' },
-  { mode: 'rx2', label: 'RX 2', title: 'Hear RX2 only' },
-];
 
 // Hero panel: Panadapter + Waterfall with optional Leaflet world-map overlay.
 // Registered as headerless in panels.ts — this component owns the single
@@ -132,9 +126,13 @@ export function HeroPanel({
   const hasExtraRx = useConnectionStore((s) =>
     s.receivers.some((r) => r.index >= 2 && r.enabled),
   );
-  const rx2AudioMode = useConnectionStore((s) => s.rx2AudioMode);
+  // Per-RX listen/mute mixer + focus selector across every exposed receiver.
+  const receivers = useConnectionStore((s) => s.receivers);
+  const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
+  const setFocusedRxIndex = useConnectionStore((s) => s.setFocusedRxIndex);
+  // A/B stitched-view foreground for the RX1/RX2 panadapter/waterfall. Kept in
+  // lockstep with focusedRxIndex by setFocusedRxIndex.
   const rxFocus = useConnectionStore((s) => s.rxFocus);
-  const setRxFocus = useConnectionStore((s) => s.setRxFocus);
   // During TX the waterfall region shows the live transmitted spectrum
   // (WDSP TX analyzer pixels, streamed by the server while keyed).
   const keyed = useTxStore((s) => s.moxOn || s.tunOn);
@@ -151,6 +149,12 @@ export function HeroPanel({
   const tileInstanceConfig = tile?.instanceConfig;
   const [split, setSplit] = useState(() => readInitialSplit(tileInstanceConfig));
   const [splitDragging, setSplitDragging] = useState(false);
+  // RX audio mixer popout — small movable window (replaces the cramped inline
+  // header switch). Position is null until first opened, then set from the
+  // trigger button so it appears next to it; the title bar drags it anywhere.
+  const [mixerOpen, setMixerOpen] = useState(false);
+  const [mixerPos, setMixerPos] = useState<{ x: number; y: number } | null>(null);
+  const mixerTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     const persisted = readInstanceSplit(tileInstanceConfig);
@@ -242,11 +246,48 @@ export function HeroPanel({
   // tile-drag start. The .workspace-tile-header strip itself stays the
   // drag handle.
   const stopDrag = (e: ReactPointerEvent | ReactMouseEvent) => e.stopPropagation();
-  const chooseRxAudioMode = (mode: Rx2AudioMode) => {
-    if (mode === 'rx1') setRxFocus('A');
-    if (mode === 'rx2') setRxFocus('B');
-    useConnectionStore.setState({ rx2AudioMode: mode });
-    setRx2({ audioMode: mode }).then(applyState).catch(() => {});
+  // Per-RX listen/mute. RX1 is the audio clock-master; muting it removes it from
+  // the mix but it keeps clocking. Optimistic so the chip reacts immediately.
+  const toggleAudible = (index: number, audible: boolean) => {
+    useConnectionStore.setState((s) => ({
+      receivers: s.receivers.map((r) => (r.index === index ? { ...r, audible } : r)),
+    }));
+    setReceiverAudible(index, audible).then(applyState).catch(() => {});
+  };
+  // Receivers exposed in the mixer/focus row: RX1 always, RX2 when enabled, plus
+  // every active extra DDC.
+  const exposedReceivers = receivers.filter((r) => r.index === 0 || r.enabled);
+  const multiRx = exposedReceivers.length > 1;
+
+  const toggleMixer = () => {
+    setMixerOpen((open) => {
+      if (!open && mixerPos === null) {
+        const rect = mixerTriggerRef.current?.getBoundingClientRect();
+        if (rect) setMixerPos({ x: Math.max(8, rect.right - 184), y: rect.bottom + 6 });
+      }
+      return !open;
+    });
+  };
+
+  // Drag the mixer popout by its title bar. Window-level listeners (like the
+  // splitter) so the drag keeps tracking even if the cursor outruns the bar.
+  const onMixerDragStart = (e: ReactPointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const base = mixerPos ?? { x: e.clientX - 90, y: e.clientY };
+    const originX = e.clientX;
+    const originY = e.clientY;
+    const onMove = (ev: PointerEvent) => {
+      setMixerPos({ x: base.x + (ev.clientX - originX), y: base.y + (ev.clientY - originY) });
+    };
+    const onEnd = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onEnd);
+      window.removeEventListener('pointercancel', onEnd);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onEnd);
+    window.addEventListener('pointercancel', onEnd);
   };
 
   const stitchedGridStyle = {
@@ -280,40 +321,21 @@ export function HeroPanel({
         <span className="workspace-tile-title" title={typeof heroTitle === 'string' ? heroTitle : undefined}>
           {heroTitle}
         </span>
-        {rx2Enabled && (
-          <div
-            className="hero-rx-audio-switch"
+        {multiRx && (
+          <button
+            ref={mixerTriggerRef}
+            type="button"
+            className={`hero-rx-mixer-trigger ${mixerOpen ? 'is-open' : ''}`}
+            onClick={toggleMixer}
             onPointerDown={stopDrag}
             onMouseDown={stopDrag}
-            role="group"
-            aria-label="Select RX audio and VFO target"
+            aria-pressed={mixerOpen}
+            aria-label="Receiver audio mixer"
+            title="Receiver audio mixer — hear/mute and focus each DDC"
           >
-            {RX_AUDIO_MODES.map((m) => (
-              <button
-                key={m.mode}
-                type="button"
-                className={`hero-rx-audio-switch__key ${rx2AudioMode === m.mode ? 'is-active' : ''}`}
-                onClick={() => chooseRxAudioMode(m.mode)}
-                aria-pressed={rx2AudioMode === m.mode}
-                title={m.title}
-              >
-                <span>{m.label}</span>
-              </button>
-            ))}
-            <span className="hero-rx-audio-switch__divider" aria-hidden="true" />
-            {(['A', 'B'] as const).map((receiver) => (
-              <button
-                key={receiver}
-                type="button"
-                className={`hero-rx-audio-switch__key hero-rx-audio-switch__key--vfo ${rxFocus === receiver ? 'is-active' : ''}`}
-                onClick={() => setRxFocus(receiver)}
-                aria-pressed={rxFocus === receiver}
-                title={`Focus VFO ${receiver} for mode, filter, band, keyboard tuning, and meters.`}
-              >
-                <span>{receiver}</span>
-              </button>
-            ))}
-          </div>
+            <Sliders size={11} />
+            <span>RX MIX</span>
+          </button>
         )}
         <div
           className="hero-tile-controls"
@@ -401,6 +423,69 @@ export function HeroPanel({
           </button>
         ) : null}
       </div>
+      {multiRx && mixerOpen && (
+        <div
+          className="hero-rx-mixer-popout"
+          style={{ left: mixerPos?.x ?? 80, top: mixerPos?.y ?? 64 }}
+          onPointerDown={stopDrag}
+          onMouseDown={stopDrag}
+          role="dialog"
+          aria-label="Receiver audio mixer"
+        >
+          <div className="hero-rx-mixer-popout__bar" onPointerDown={onMixerDragStart}>
+            <span className="hero-rx-mixer-popout__grip" aria-hidden="true">
+              <GripVertical size={11} />
+            </span>
+            <span className="hero-rx-mixer-popout__title">RX Mixer</span>
+            <button
+              type="button"
+              className="hero-rx-mixer-popout__close"
+              onClick={() => setMixerOpen(false)}
+              aria-label="Close mixer"
+              title="Close"
+            >
+              <X size={12} />
+            </button>
+          </div>
+          <div className="hero-rx-mixer-popout__section">
+            <div className="hero-rx-mixer-popout__label">Listen / mute</div>
+            <div className="hero-rx-mixer-popout__row">
+              {exposedReceivers.map((r) => (
+                <button
+                  key={`hear-${r.index}`}
+                  type="button"
+                  className={`hero-rx-audio-switch__key ${r.audible ? 'is-active' : 'is-muted'}`}
+                  onClick={() => toggleAudible(r.index, !r.audible)}
+                  aria-pressed={r.audible}
+                  title={r.audible ? `Mute RX${r.index + 1} audio` : `Hear RX${r.index + 1} audio`}
+                >
+                  {r.audible ? <Volume2 size={11} /> : <VolumeX size={11} />}
+                  <span>{`RX${r.index + 1}`}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="hero-rx-mixer-popout__section">
+            <div className="hero-rx-mixer-popout__label">Focus</div>
+            <div className="hero-rx-mixer-popout__row">
+              {exposedReceivers.map((r) => (
+                <button
+                  key={`focus-${r.index}`}
+                  type="button"
+                  className={`hero-rx-audio-switch__key hero-rx-audio-switch__key--vfo ${
+                    focusedRxIndex === r.index ? 'is-active' : ''
+                  }`}
+                  onClick={() => setFocusedRxIndex(r.index)}
+                  aria-pressed={focusedRxIndex === r.index}
+                  title={`Focus RX${r.index + 1} for mode, filter, band, keyboard tuning, and meters.`}
+                >
+                  <span>{`RX${r.index + 1}`}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       <div className="hero-body" style={{ flex: 1, position: 'relative' }}>
         {imageMode && (
           <div

@@ -79,7 +79,14 @@ export type ConnectionState = {
   rx2AudioMode: Rx2AudioMode;
   rx2AfGainDb: number;
   txVfo: TxVfo;
+  // Authoritative TX target as a receiver index (0=RX1, 1=RX2, >=2 extra DDC);
+  // txVfo stays the legacy A/B projection. Driven by the VFO panel TX-select.
+  txReceiverIndex: number;
   rxFocus: TxVfo;
+  // Which exposed receiver the operator is working in the multi-DDC panels
+  // (0=RX1..). Drives the VFO-lane / hero highlight across all DDCs; rxFocus
+  // stays the A/B stitched-view focus and mirrors this for indices 0/1.
+  focusedRxIndex: number;
   mode: RxMode;
   modeB: RxMode;
   filterLowHz: number;
@@ -159,6 +166,7 @@ export type ConnectionState = {
   setSquelch: (squelch: SquelchConfigDto) => void;
   setTxLeveling: (txLeveling: TxLevelingConfigDto) => void;
   setRxFocus: (rxFocus: TxVfo) => void;
+  setFocusedRxIndex: (index: number) => void;
   setZoomLevel: (level: ZoomLevel) => void;
   setLastConnectedEndpoint: (ep: string | null) => void;
   setWisdomPhase: (phase: WisdomPhase) => void;
@@ -176,7 +184,9 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   receivers: [],
   maxReceivers: 8,
   txVfo: 'A',
+  txReceiverIndex: 0,
   rxFocus: 'A',
+  focusedRxIndex: 0,
   mode: 'USB',
   modeB: 'USB',
   filterLowHz: 150,
@@ -234,7 +244,10 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
         receivers: s.receivers ?? prev.receivers,
         maxReceivers: s.maxReceivers ?? prev.maxReceivers,
         txVfo: s.txVfo,
+        txReceiverIndex: s.txReceiverIndex ?? prev.txReceiverIndex,
         rxFocus: s.rx2Enabled ? prev.rxFocus : 'A',
+        // UI-only focus — preserved across server state reconciles.
+        focusedRxIndex: prev.focusedRxIndex,
         mode: s.mode,
         modeB: s.modeB,
         filterLowHz: s.filterLowHz,
@@ -275,6 +288,14 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   setSquelch: (squelch) => set({ squelch }),
   setTxLeveling: (txLeveling) => set({ txLeveling }),
   setRxFocus: (rxFocus) => set({ rxFocus }),
+  // Focus a receiver in the multi-DDC panels. Mirror into rxFocus for the
+  // RX1/RX2 stitched view so the existing A/B focus stays consistent.
+  setFocusedRxIndex: (focusedRxIndex) =>
+    set(
+      focusedRxIndex <= 1
+        ? { focusedRxIndex, rxFocus: focusedRxIndex === 1 ? 'B' : 'A' }
+        : { focusedRxIndex },
+    ),
   setZoomLevel: (zoomLevel) => set({ zoomLevel }),
   setLastConnectedEndpoint: (lastConnectedEndpoint) =>
     set({ lastConnectedEndpoint }),

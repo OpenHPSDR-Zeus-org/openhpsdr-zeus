@@ -178,11 +178,54 @@ jobs:
           $rid = "win-${{ matrix.arch }}"
           Copy-Item "native/build-miniaudio/Release/miniaudio.dll" "Zeus.Dsp/runtimes/$rid/native/miniaudio.dll"
 
+      # ---------- codec2 (FreeDV digital voice modem) ---------------------
+      #
+      # Fetched from drowe67/codec2 (pinned tag, see native/codec2/CMakeLists.txt)
+      # via FetchContent and built through codec2's own CMake. Classic modes
+      # only — no LPCNet / 2020, so no FFTW / vcpkg dependency. Build only the
+      # `codec2` target; the upstream tree also defines CLI tools we don't ship.
+      # PREFIX "" on Windows yields codec2.dll (no "lib" prefix). The DLL lands
+      # under the fetched src tree, so locate it rather than assuming a path.
+      # codec2's OFDM/filter code is C99 _Complex, which MSVC's C compiler CANNOT
+      # build (its UCRT also hijacks the `complex` macro, so clang-cl fails too).
+      # codec2 targets MinGW on Windows (note its CMake `if(MINGW)` branch), so the
+      # x64 DLL is built with MinGW-w64 gcc + Ninja, static-linking libgcc for a
+      # standalone DLL (deps: KERNEL32 + system UCRT only). The native/codec2
+      # CMakeLists PATCH_COMMAND guards codec2's GCC-only global flags so the
+      # build is clean. win-arm64 codec2 needs an aarch64 MinGW (llvm-mingw) —
+      # tracked as a follow-up; FreeDV is gracefully unavailable on win-arm64
+      # until then (the modem reports NativeAvailable=false and passes audio
+      # through). See native/codec2/VENDORING.md.
+      - name: Set up MinGW + Ninja (codec2, x64)
+        if: matrix.arch == 'x64'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+          path-type: inherit
+
+      - name: Build & stage codec2 (x64, MinGW)
+        if: matrix.arch == 'x64'
+        shell: msys2 {0}
+        run: |
+          set -eux
+          cmake -S native/codec2 -B native/build-codec2 -G Ninja \
+            -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SHARED_LINKER_FLAGS="-static-libgcc -static -s"
+          cmake --build native/build-codec2 --config Release --target codec2 --parallel
+          dll=$(find native/build-codec2 -name 'codec2.dll' | head -n1)
+          test -n "$dll"
+          cp "$dll" Zeus.Dsp/runtimes/win-x64/native/codec2.dll
+          objdump -p Zeus.Dsp/runtimes/win-x64/native/codec2.dll | grep 'DLL Name'
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          # Directory upload (not a single file) so the artifact carries both
-          # wdsp.dll and miniaudio.dll. Matches the linux job pattern below.
+          # Directory upload (not a single file) so the artifact carries
+          # wdsp.dll, miniaudio.dll and codec2.dll. Matches the linux job below.
           name: wdsp-windows-${{ matrix.arch }}
           path: Zeus.Dsp/runtimes/win-${{ matrix.arch }}/native/
 
@@ -348,6 +391,43 @@ jobs:
           cp native/build-miniaudio/libminiaudio.so Zeus.Dsp/runtimes/linux-arm64/native/libminiaudio.so
           file Zeus.Dsp/runtimes/linux-arm64/native/libminiaudio.so
 
+      # ---------- codec2 (FreeDV digital voice modem) ---------------------
+      #
+      # Fetched from drowe67/codec2 (pinned tag, see native/codec2/CMakeLists.txt)
+      # via FetchContent and built through codec2's own CMake. Classic modes
+      # only — no LPCNet / 2020, so no FFTW dependency (unlike wdsp). Build only
+      # the `codec2` target; the upstream tree also defines CLI tools we don't
+      # ship. The .so lands under the fetched src tree, so locate it rather than
+      # assuming a path, and copy the real file behind any SONAME symlink.
+      - name: Build & stage codec2 (x64)
+        if: matrix.arch == 'x64'
+        run: |
+          set -eux
+          cmake -S native/codec2 -B native/build-codec2 -DCMAKE_BUILD_TYPE=Release
+          cmake --build native/build-codec2 --config Release --target codec2 --parallel
+          so=$(find native/build-codec2 -name 'libcodec2.so*' ! -type l | head -n1)
+          test -n "$so"
+          cp "$so" Zeus.Dsp/runtimes/linux-x64/native/libcodec2.so
+          ldd Zeus.Dsp/runtimes/linux-x64/native/libcodec2.so
+
+      - name: Build & stage codec2 (arm64)
+        if: matrix.arch == 'arm64'
+        run: |
+          # Reuse the aarch64-linux-gnu cross toolchain installed for wdsp.
+          # Classic codec2 needs no external libs, so no cross-FFTW required.
+          set -eux
+          cmake -S native/codec2 -B native/build-codec2 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++
+          cmake --build native/build-codec2 --config Release --target codec2 --parallel
+          so=$(find native/build-codec2 -name 'libcodec2.so*' ! -type l | head -n1)
+          test -n "$so"
+          cp "$so" Zeus.Dsp/runtimes/linux-arm64/native/libcodec2.so
+          file Zeus.Dsp/runtimes/linux-arm64/native/libcodec2.so
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -424,6 +504,24 @@ jobs:
           cmake --build native/build-miniaudio --config Release --parallel
           cp native/build-miniaudio/libminiaudio.dylib Zeus.Dsp/runtimes/osx-arm64/native/libminiaudio.dylib
           otool -L Zeus.Dsp/runtimes/osx-arm64/native/libminiaudio.dylib
+
+      # ---------- codec2 (FreeDV digital voice modem) ---------------------
+      #
+      # Fetched from drowe67/codec2 (pinned tag, see native/codec2/CMakeLists.txt)
+      # via FetchContent and built through codec2's own CMake. Classic modes
+      # only — no LPCNet / 2020, so no FFTW dependency. Build only the `codec2`
+      # target; the upstream tree also defines CLI tools we don't ship. The
+      # .dylib lands under the fetched src tree, so locate it rather than
+      # assuming a path.
+      - name: Build & stage codec2
+        run: |
+          set -eux
+          cmake -S native/codec2 -B native/build-codec2 -DCMAKE_BUILD_TYPE=Release
+          cmake --build native/build-codec2 --config Release --target codec2 --parallel
+          dylib=$(find native/build-codec2 -name 'libcodec2.dylib' ! -type l | head -n1)
+          test -n "$dylib"
+          cp "$dylib" Zeus.Dsp/runtimes/osx-arm64/native/libcodec2.dylib
+          otool -L Zeus.Dsp/runtimes/osx-arm64/native/libcodec2.dylib
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

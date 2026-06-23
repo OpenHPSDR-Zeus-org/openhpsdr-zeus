@@ -65,7 +65,7 @@ function absToSigned(mode: RxMode, loAbs: number, hiAbs: number): { low: number;
   const hi = Math.max(CUSTOM_MIN, Math.min(CUSTOM_MAX, Math.round(hiAbs)));
   const [lCap, hCap] = lo <= hi ? [lo, hi] : [hi, lo];
   switch (mode) {
-    case 'USB': case 'DIGU': case 'CWU':
+    case 'USB': case 'DIGU': case 'CWU': case 'FREEDV':
       return { low: lCap, high: hCap };
     case 'LSB': case 'DIGL': case 'CWL':
       return { low: -hCap, high: -lCap };

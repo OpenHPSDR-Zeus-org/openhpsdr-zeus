@@ -972,9 +972,14 @@ public static class ZeusEndpoints
             }
         });
 
-        app.MapPost("/api/connect/p2", async (ConnectRequest req, DspPipelineService dsp, WdspWisdomInitializer wisdom, HttpContext ctx) =>
+        app.MapPost("/api/connect/p2", async (
+            ConnectRequest req,
+            DspPipelineService dsp,
+            WdspWisdomInitializer wisdom,
+            Zeus.Protocol2.Discovery.IRadioDiscovery p2Discovery,
+            HttpContext ctx) =>
         {
-            log.LogInformation("api.connect.p2 endpoint={Ep} rate={Rate}", req.Endpoint, req.SampleRate);
+            log.LogInformation("api.connect.p2 endpoint={Ep} rate={Rate} force={Force}", req.Endpoint, req.SampleRate, req.Force);
 
             if (wisdom.Phase != WisdomPhase.Ready)
                 return Results.Json(
@@ -983,6 +988,58 @@ public static class ZeusEndpoints
 
             if (!TryParseIpEndpoint(req.Endpoint, out var ipEndpoint))
                 return Results.BadRequest(new { error = $"Invalid endpoint '{req.Endpoint}'." });
+
+            // HARDWARE-SAFETY GUARD (relay chatter / PSU brown-out).
+            // Before opening the relay-bearing high-priority stream, unicast-probe
+            // the radio and refuse to connect if it reports Busy — i.e. another
+            // controller (a co-located saturn-go / p2app stack, or another
+            // Zeus/Thetis client) is already driving it. Two masters publishing
+            // DIFFERENT band/antenna/ALEX-relay selections make the FPGA flip the
+            // BPF/LPF/T-R relay matrix every packet; the relay inrush can brown
+            // out a shared PSU and reboot the host (observed 2026-06-23 on a
+            // co-located CM5 Saturn all-in-one). A single Zeus master is fine —
+            // the danger requires a second, disagreeing controller. The operator
+            // takes over deliberately via Reclaim, which stops the other owner
+            // and re-connects with force=true. The probe fails OPEN: a radio that
+            // doesn't answer the probe is NOT blocked, so this never strands a
+            // legitimate connect. The probe must NOT weaken the co-located
+            // ephemeral-port bind — it only reads discovery, it doesn't touch the
+            // connect socket.
+            if (!req.Force)
+            {
+                Zeus.Protocol2.Discovery.DiscoveredRadio? probe = null;
+                try
+                {
+                    probe = await p2Discovery.ProbeAsync(
+                        ipEndpoint.Address, TimeSpan.FromMilliseconds(700), ctx.RequestAborted);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    // Probe failure (socket setup, etc.) must not block a connect —
+                    // log and fall through, same fail-open posture as no-reply.
+                    log.LogWarning(ex, "api.connect.p2 busy-probe failed — allowing connect");
+                }
+
+                if (probe?.Details.Busy == true)
+                {
+                    log.LogWarning(
+                        "api.connect.p2 REFUSED — radio {Ip} reports BUSY (another controller owns it); refusing second-master connect",
+                        ipEndpoint.Address);
+                    return Results.Json(
+                        new
+                        {
+                            error =
+                                "This radio is already in use by another controller. Connecting Zeus as a " +
+                                "second master would make the band/antenna/T-R relays chatter and can brown " +
+                                "out the radio. Stop the other controller (e.g. saturn-go / another client), " +
+                                "or use Reclaim to take exclusive control, then connect again.",
+                            busy = true,
+                            reclaimable = true,
+                        },
+                        statusCode: StatusCodes.Status409Conflict);
+                }
+            }
 
             var rateKhz = req.SampleRate switch
             {
@@ -1067,7 +1124,8 @@ public static class ZeusEndpoints
                 mode: req.Mode,
                 filterLowHz: req.FilterLowHz,
                 filterHighHz: req.FilterHighHz,
-                afGainDb: req.AfGainDb));
+                afGainDb: req.AfGainDb,
+                audible: req.Audible));
         });
 
         app.MapPost("/api/tx/vfo", (TxVfoSetRequest req, RadioService r) =>
@@ -1076,6 +1134,17 @@ public static class ZeusEndpoints
                 return Results.BadRequest(new { error = $"unknown txVfo {req.TxVfo}" });
             log.LogInformation("api.tx.vfo txVfo={TxVfo}", req.TxVfo);
             return Results.Ok(r.SetTxVfo(req.TxVfo));
+        });
+
+        // Select the transmit target by receiver index (0=RX1, 1=RX2, >=2 extra
+        // DDC). Generalises /api/tx/vfo beyond the A/B pair; an out-of-range or
+        // not-exposed index clamps to RX1 server-side.
+        app.MapPost("/api/tx/receiver", (TxReceiverSetRequest req, RadioService r) =>
+        {
+            if (req.Index < 0 || req.Index >= Zeus.Contracts.WireContract.MaxReceivers)
+                return Results.BadRequest(new { error = $"tx receiver index out of range (0..{Zeus.Contracts.WireContract.MaxReceivers - 1})" });
+            log.LogInformation("api.tx.receiver index={Index}", req.Index);
+            return Results.Ok(r.SetTxReceiver(req.Index));
         });
 
         // Set the radio's hardware NCO (LO) frequency directly. Does not
@@ -1116,6 +1185,20 @@ public static class ZeusEndpoints
         {
             log.LogInformation("api.bandwidth low={L} high={H}", req.Low, req.High);
             return r.SetFilter(req.Low, req.High);
+        });
+
+        // FreeDV digital-voice telemetry + config. The mode itself is selected
+        // via /api/mode (RxMode.FreeDv); these surface the live modem state
+        // (sync/SNR/submode) polled by the FreeDV panel and apply submode /
+        // squelch / TX-text changes. No-op-safe when the codec2 native library
+        // is missing (NativeAvailable=false).
+        app.MapGet("/api/freedv/status", (FreeDvService fd) => Results.Ok(fd.Status()));
+        app.MapPut("/api/freedv/config", (FreeDvConfigRequest req, FreeDvService fd) =>
+        {
+            log.LogInformation(
+                "api.freedv.config submode={Submode} squelch={Sq} thresh={Th}",
+                req.Submode, req.SquelchEnabled, req.SnrSquelchThreshDb);
+            return Results.Ok(fd.ApplyConfig(req));
         });
 
         // TX bandpass filter — signed Hz pair (LSB negative, DSB symmetric). Per-mode

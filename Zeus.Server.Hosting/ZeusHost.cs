@@ -365,6 +365,11 @@ public static class ZeusHost
         // Per-radio frequency calibration (issue #325). Stateless coordinator —
         // owns no resources, just a SemaphoreSlim to prevent re-entry.
         builder.Services.AddSingleton<FrequencyCalibrationService>();
+        // FreeDV digital-voice modem (Codec2/freedv_api via P/Invoke). Singleton
+        // owns the one modem instance; DspPipelineService taps RX (post-demod)
+        // and TxAudioIngest taps TX (pre-WDSP), both gated on FreeDV being the
+        // active RX0 mode. No-op when the codec2 native library is absent.
+        builder.Services.AddSingleton<FreeDvService>();
         builder.Services.AddSingleton<TxService>();
         builder.Services.AddSingleton<TxAudioIngest>();
         // Resolve at startup so the MicPcmReceived subscription attaches before the

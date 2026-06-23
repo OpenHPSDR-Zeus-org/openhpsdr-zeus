@@ -56,16 +56,22 @@ namespace Zeus.Server;
 public sealed class RadioService : IDisposable
 {
     private const int DefaultHpsdrPort = 1024;
+    // Default AGC-T baseline. With slope=0 (flat leveling — see WdspDspEngine
+    // ApplyAgcCore) the AGC knee sits at out_target/max_gain; max_gain = 10^(top/20).
+    // At 90 dB the knee sinks ~13 dB into the noise floor, so the AGC normalizes
+    // the noise itself and pumps it up in speech gaps (choppy RX). 80 keeps the
+    // knee above the noise while still normalizing real signals to one loudness.
+    // The slider ceiling stays 90 (MaxAgcTopDb) as headroom for weak bands.
     internal const double DefaultAgcTopDb = 80.0;
     // Operator AGC-T baseline range. Below ~30 dB the RX audio is effectively
-    // muted and above ~80 dB it is the loudest the AGC will drive; the old
-    // -20..120 span (mirroring the raw Thetis slider) exposed a large dead
+    // muted and 90 dB is the loudest the AGC will drive; the
+    // old -20..120 span (mirroring the raw Thetis slider) exposed a large dead
     // region the operator never used. The slider is linear across this window.
     // NOTE: this bounds only the manual baseline (AgcTopDb). Auto-AGC's offset
     // (AgcOffsetDb) and the effective value it pushes to WDSP are NOT bounded
     // by this — see AgcMinEffectiveAgcT / AgcMaxEffectiveAgcT.
     internal const double MinAgcTopDb = 30.0;
-    internal const double MaxAgcTopDb = 80.0;
+    internal const double MaxAgcTopDb = 90.0;
 
     private readonly object _sync = new();
     private readonly ILoggerFactory _loggerFactory;
@@ -161,6 +167,41 @@ public sealed class RadioService : IDisposable
         var a = new ExtraReceiver[Zeus.Contracts.WireContract.MaxReceivers];
         for (int i = 2; i < a.Length; i++) a[i] = new ExtraReceiver();
         return a;
+    }
+
+    // Per-receiver audio audible/mute, authoritative for the hero-rx-audio-switch
+    // mixer across ALL receivers (RX1..RXN). Index 0 = RX1, etc. RX1 is the audio
+    // clock-master, so muting it removes it from the mix but it keeps clocking the
+    // output ring (DspPipelineService.Tick). The legacy Rx2AudioMode tri-state is
+    // a projection of _audible[0]/_audible[1] (see DeriveRx2AudioMode); RX3+
+    // audibility is session-only (not persisted), defaulting audible. Guarded by
+    // _sync.
+    private readonly bool[] _audible = CreateAudible();
+    private static bool[] CreateAudible()
+    {
+        var a = new bool[Zeus.Contracts.WireContract.MaxReceivers];
+        for (int i = 0; i < a.Length; i++) a[i] = true;
+        return a;
+    }
+
+    // Tri-state legacy field ⇆ the two RX1/RX2 audible bits. (false,false) — both
+    // muted — has no legacy representation; project it as Rx1 so a non-migrated
+    // client shows a sane mode (the mixer-aware UI reads ReceiverDto.Audible).
+    private static Zeus.Contracts.Rx2AudioMode DeriveRx2AudioMode(bool rx1, bool rx2) =>
+        (rx1, rx2) switch
+        {
+            (true, true) => Zeus.Contracts.Rx2AudioMode.Both,
+            (true, false) => Zeus.Contracts.Rx2AudioMode.Rx1,
+            (false, true) => Zeus.Contracts.Rx2AudioMode.Rx2,
+            _ => Zeus.Contracts.Rx2AudioMode.Rx1,
+        };
+
+    // Caller holds _sync. Mirror a legacy Rx2AudioMode into the RX1/RX2 audible
+    // bits so the mixer and the tri-state never disagree.
+    private void SyncAudibleFromRx2Mode(Zeus.Contracts.Rx2AudioMode mode)
+    {
+        _audible[0] = mode != Zeus.Contracts.Rx2AudioMode.Rx2;
+        _audible[1] = mode != Zeus.Contracts.Rx2AudioMode.Rx1;
     }
 
     // Latched MOX bit — populated via SetMox so the auto-ATT loop can pause
@@ -550,6 +591,10 @@ public sealed class RadioService : IDisposable
             CwPitchHz: CwOffset.CwPitchHz,
             CtunEnabled: rsSnap?.CtunEnabled ?? false,
             PreampOn: rsSnap?.PreampOn ?? false);
+
+        // Seed the RX1/RX2 audible bits from the persisted tri-state so the
+        // mixer and the legacy Rx2AudioMode agree from the first projection.
+        SyncAudibleFromRx2Mode(_state.Rx2AudioMode);
 
         // Kick off the debounce flush timer. Fires every 1 s; only writes to
         // LiteDB when _stateDirty is set (i.e., at least one Mutate() has fired
@@ -950,7 +995,7 @@ public sealed class RadioService : IDisposable
     {
         long clamped = Math.Clamp(hz, 0L, 60_000_000L);
         long previousTx;
-        lock (_sync) previousTx = TxFrequencyHz(_state);
+        lock (_sync) previousTx = TxFrequencyHzLocked(_state);
         Mutate(s => s with { VfoBHz = clamped });
         if (BandUtils.FreqToBand(previousTx) != BandUtils.FreqToBand(TxFrequencyHz(Snapshot())))
         {
@@ -991,8 +1036,14 @@ public sealed class RadioService : IDisposable
         RxMode? mode = null,
         int? filterLowHz = null,
         int? filterHighHz = null,
-        double? afGainDb = null)
+        double? afGainDb = null,
+        bool? audible = null)
     {
+        // Per-RX listen/mute (hero-rx-audio-switch) applies to every receiver
+        // (RX1..RXN) independently of the VFO/filter fields, so handle it up front
+        // before the RX1/RX2 delegation below routes those away.
+        if (audible is bool aud) SetReceiverAudible(index, aud);
+
         if (index == 0)
             return vfoHz is long v0 ? SetVfo(v0) : Snapshot();
         if (index == 1)
@@ -1022,8 +1073,41 @@ public sealed class RadioService : IDisposable
         }
         // Re-project + broadcast (StateChanged → DspPipelineService opens channels
         // and pushes SetExtraReceivers/SetExtraReceiverFreqHz to the radio).
-        // Enabling an extra DDC requires RX2 (no DDC gap), so turn it on.
-        Mutate(s => enabling && !s.Rx2Enabled ? s with { Rx2Enabled = true } : s);
+        // Enabling an extra DDC requires RX2 (no DDC gap), so turn it on. If the
+        // disable cascade just removed the receiver the operator was transmitting
+        // on, fall the TX target back to RX1 (never key a receiver that stopped
+        // streaming).
+        Mutate(s =>
+        {
+            var next = enabling && !s.Rx2Enabled ? s with { Rx2Enabled = true } : s;
+            if (next.TxReceiverIndex >= 2 &&
+                (next.TxReceiverIndex >= _extraReceivers.Length
+                 || _extraReceivers[next.TxReceiverIndex] is not { Enabled: true }))
+            {
+                next = next with { TxReceiverIndex = 0, TxVfo = TxVfo.A };
+            }
+            return next;
+        });
+        return Snapshot();
+    }
+
+    /// <summary>Per-RX listen/mute for the hero-rx-audio-switch mixer. Index
+    /// 0 = RX1 (the audio clock-master — muting drops it from the mix but it
+    /// keeps clocking the output ring), 1 = RX2, ≥ 2 = an extra DDC. Toggling
+    /// RX1/RX2 keeps the legacy <see cref="StateDto.Rx2AudioMode"/> tri-state in
+    /// lockstep so non-migrated clients stay consistent.</summary>
+    public StateDto SetReceiverAudible(int index, bool audible)
+    {
+        if (index < 0 || index >= _audible.Length)
+            throw new ArgumentOutOfRangeException(
+                nameof(index), index, $"receiver index out of range (0..{_audible.Length - 1})");
+        Mutate(s =>
+        {
+            _audible[index] = audible;
+            return index <= 1
+                ? s with { Rx2AudioMode = DeriveRx2AudioMode(_audible[0], _audible[1]) }
+                : s;
+        });
         return Snapshot();
     }
 
@@ -1031,7 +1115,7 @@ public sealed class RadioService : IDisposable
     {
         ArgumentNullException.ThrowIfNull(req);
         long previousTx;
-        lock (_sync) previousTx = TxFrequencyHz(_state);
+        lock (_sync) previousTx = TxFrequencyHzLocked(_state);
         Mutate(s =>
         {
             long nextVfoB = req.VfoBHz.HasValue
@@ -1040,6 +1124,9 @@ public sealed class RadioService : IDisposable
                     ? s.VfoBHz
                     : s.VfoHz;
             var nextMode = req.AudioMode ?? s.Rx2AudioMode;
+            // Legacy tri-state setter → keep the per-RX audible bits it maps in
+            // sync so the mixer and Rx2AudioMode never disagree.
+            if (req.AudioMode is { } m) SyncAudibleFromRx2Mode(m);
             double nextGain = req.AfGainDb.HasValue
                 ? Math.Clamp(req.AfGainDb.Value, -50.0, 20.0)
                 : s.Rx2AfGainDb;
@@ -1063,9 +1150,29 @@ public sealed class RadioService : IDisposable
     {
         if (!Enum.IsDefined(txVfo))
             throw new ArgumentOutOfRangeException(nameof(txVfo), txVfo, "Unknown TX VFO");
+        // Legacy A/B endpoint — funnel through the index-based setter so TxVfo and
+        // TxReceiverIndex never diverge.
+        return SetTxReceiver(txVfo == TxVfo.B ? 1 : 0);
+    }
+
+    /// <summary>Select the transmit target by receiver index (0 = RX1/VFO A,
+    /// 1 = RX2/VFO B, ≥ 2 = an extra DDC). The independent TX DUC and CW/CTUN LO
+    /// alignment read <see cref="TxFrequencyHz"/>, so the carrier moves to the
+    /// chosen receiver's VFO. An out-of-range or not-exposed index clamps to RX1
+    /// (never silently transmit on a receiver the operator can't see).</summary>
+    public StateDto SetTxReceiver(int index)
+    {
         long previousTx;
-        lock (_sync) previousTx = TxFrequencyHz(_state);
-        Mutate(s => s.TxVfo == txVfo ? s : s with { TxVfo = txVfo });
+        lock (_sync)
+        {
+            index = ClampTxReceiverIndexUnderLock(index);
+            previousTx = TxFrequencyHzLocked(_state);
+        }
+        // TxVfo stays as the legacy A/B projection (index 1 → B, else A) so
+        // pre-multi-DDC consumers keep working; TxReceiverIndex is authoritative.
+        Mutate(s => s.TxReceiverIndex == index
+            ? s
+            : s with { TxReceiverIndex = index, TxVfo = index == 1 ? TxVfo.B : TxVfo.A });
         var snap = Snapshot();
         if (BandUtils.FreqToBand(previousTx) != BandUtils.FreqToBand(TxFrequencyHz(snap)))
         {
@@ -1074,8 +1181,37 @@ public sealed class RadioService : IDisposable
         return snap;
     }
 
-    public static long TxFrequencyHz(StateDto state) =>
-        state.TxVfo == TxVfo.B ? state.VfoBHz : state.VfoHz;
+    // Caller holds _sync. RX1/RX2 are always valid TX targets; an extra DDC
+    // (≥ 2) is valid only while it is exposed/enabled — otherwise fall back to
+    // RX1 so TX never points at a receiver that isn't streaming.
+    private int ClampTxReceiverIndexUnderLock(int index)
+    {
+        if (index <= 0 || index == 1) return index < 0 ? 0 : index;
+        if (index >= _extraReceivers.Length) return 0;
+        return _extraReceivers[index] is { Enabled: true } ? index : 0;
+    }
+
+    // Authoritative TX carrier frequency for the selected TX target. Index 0 =
+    // RX1 (VFO A), 1 = RX2 (VFO B), ≥ 2 = an extra DDC read from the projected
+    // Receivers[] array. Use this static form on a SNAPSHOT (Receivers
+    // populated); internal callers holding _sync on the un-projected _state must
+    // use TxFrequencyHzLocked, which resolves ≥ 2 from _extraReceivers.
+    public static long TxFrequencyHz(StateDto state) => state.TxReceiverIndex switch
+    {
+        <= 0 => state.VfoHz,
+        1 => state.VfoBHz,
+        int i => state.Receivers is { } rs && i < rs.Count ? rs[i].VfoHz : state.VfoHz,
+    };
+
+    // Caller holds _sync. Like TxFrequencyHz but resolves an extra-DDC TX target
+    // (index ≥ 2) from _extraReceivers, which the internal _state can't carry
+    // (its Receivers list is null until ProjectReceivers runs at Snapshot time).
+    private long TxFrequencyHzLocked(StateDto state) => state.TxReceiverIndex switch
+    {
+        <= 0 => state.VfoHz,
+        1 => state.VfoBHz,
+        int i => i < _extraReceivers.Length && _extraReceivers[i] is { } e ? e.VfoHz : state.VfoHz,
+    };
 
     public static long TxEffectiveLoHz(StateDto state) =>
         CwOffset.EffectiveLoHz(state.Mode, TxFrequencyHz(state));
@@ -1087,7 +1223,7 @@ public sealed class RadioService : IDisposable
         RxMode mode = RxMode.USB;
         Mutate(s =>
         {
-            previousTx = TxFrequencyHz(s);
+            previousTx = TxFrequencyHzLocked(s);
             newA = Math.Clamp(s.VfoBHz, 0L, 60_000_000L);
             mode = s.Mode;
             return s with
@@ -1240,7 +1376,7 @@ public sealed class RadioService : IDisposable
     // Caller must hold _sync.
     private void RememberFrozenLoUnderLock()
     {
-        if ((_state.CtunEnabled || _state.TxVfo == TxVfo.B) && _ctunPreTxLoHz == long.MinValue)
+        if ((_state.CtunEnabled || _state.TxReceiverIndex >= 1) && _ctunPreTxLoHz == long.MinValue)
             _ctunPreTxLoHz = _state.RadioLoHz;
     }
 
@@ -1251,7 +1387,7 @@ public sealed class RadioService : IDisposable
         long currentLo;
         lock (_sync)
         {
-            vfo = TxFrequencyHz(_state);
+            vfo = TxFrequencyHzLocked(_state);
             mode = _state.Mode;
             currentLo = _state.RadioLoHz;
             RememberFrozenLoUnderLock();
@@ -1290,11 +1426,11 @@ public sealed class RadioService : IDisposable
             // the tune carrier showed on BOTH receivers (the two-carrier bug).
             // Skip the drag for this case; CTUN and P1 split still drag (P1 has
             // no independent DUC, and CTUN must move the shared LO).
-            if (_state.TxVfo == TxVfo.B && _state.Rx2Enabled
+            if (_state.TxReceiverIndex >= 1 && _state.Rx2Enabled
                 && ConnectedBoardKind == HpsdrBoardKind.OrionMkII)
                 return false;
-            if (!_state.CtunEnabled && _state.TxVfo != TxVfo.B) return false;
-            vfo = TxFrequencyHz(_state);
+            if (!_state.CtunEnabled && _state.TxReceiverIndex < 1) return false;
+            vfo = TxFrequencyHzLocked(_state);
             mode = _state.Mode;
             currentLo = _state.RadioLoHz;
             RememberFrozenLoUnderLock();
@@ -2627,9 +2763,9 @@ public sealed class RadioService : IDisposable
         => DriveByteMath.ComputeFullByte(drivePct, paGainDb, maxWatts);
 
     // "AGC Top" slider — max post-AGC gain in dB. Clamped to the operator
-    // baseline range (MinAgcTopDb..MaxAgcTopDb = 30..80); below 30 the audio
-    // is effectively muted and above 80 it's the loudest the AGC drives, so the
-    // wider raw-Thetis span was dead travel. This clamp is authoritative for
+    // baseline range (MinAgcTopDb..MaxAgcTopDb = 30..90); below 30 the audio
+    // is effectively muted and 90 is the Thetis default / loudest the AGC
+    // drives, so the wider raw-Thetis span was dead travel. This clamp is authoritative for
     // BOTH the REST /api/agcGain endpoint and the TCI agc_gain command.
     // DspPipelineService picks this up through the StateChanged event and
     // forwards it to the active engine.
@@ -3178,13 +3314,15 @@ public sealed class RadioService : IDisposable
                 VfoHz: s.VfoHz, Mode: s.Mode,
                 FilterLowHz: s.FilterLowHz, FilterHighHz: s.FilterHighHz,
                 FilterPresetName: s.FilterPresetName,
-                AfGainDb: s.RxAfGainDb, SampleRateHz: s.SampleRate),
+                AfGainDb: s.RxAfGainDb, SampleRateHz: s.SampleRate,
+                Audible: _audible[0]),
             new ReceiverDto(
                 Index: 1, Enabled: s.Rx2Enabled, AdcSource: 0,
                 VfoHz: s.VfoBHz, Mode: s.ModeB,
                 FilterLowHz: s.FilterLowHzB, FilterHighHz: s.FilterHighHzB,
                 FilterPresetName: s.FilterPresetNameB,
-                AfGainDb: s.Rx2AfGainDb, SampleRateHz: s.SampleRate),
+                AfGainDb: s.Rx2AfGainDb, SampleRateHz: s.SampleRate,
+                Audible: _audible[1]),
         };
         // Extra DDC receivers (RX3+). Appended contiguously while enabled — the
         // P2 multi-DDC path requires no DDC gaps, so the first disabled slot
@@ -3198,7 +3336,8 @@ public sealed class RadioService : IDisposable
                 VfoHz: e.VfoHz, Mode: e.Mode,
                 FilterLowHz: e.FilterLowHz, FilterHighHz: e.FilterHighHz,
                 FilterPresetName: e.FilterPresetName,
-                AfGainDb: e.AfGainDb, SampleRateHz: s.SampleRate));
+                AfGainDb: e.AfGainDb, SampleRateHz: s.SampleRate,
+                Audible: _audible[i]));
         }
         return list;
     }

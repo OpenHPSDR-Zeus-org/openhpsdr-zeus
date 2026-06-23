@@ -43,9 +43,28 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+using System.Net;
+
 namespace Zeus.Protocol2.Discovery;
 
 public interface IRadioDiscovery
 {
     Task<IReadOnlyList<DiscoveredRadio>> DiscoverAsync(TimeSpan timeout, CancellationToken ct = default);
+
+    /// <summary>
+    /// Targeted <em>unicast</em> discovery probe to a single radio IP. Unlike
+    /// <see cref="DiscoverAsync"/> this does not broadcast — it asks one radio
+    /// "are you there, and are you busy?" and returns the parsed reply (whose
+    /// <see cref="DiscoveryDetails.Busy"/> flag is set when another controller
+    /// already owns the radio), or <c>null</c> if the radio did not answer
+    /// within <paramref name="timeout"/>.
+    ///
+    /// <para>Used as a pre-connect ownership check: connecting Zeus as a SECOND
+    /// master to a radio another controller is already driving (e.g. a
+    /// co-located saturn-go / p2app stack, or another Zeus/Thetis client) makes
+    /// the two controllers fight over the band/antenna/T-R relay matrix, which
+    /// chatters the relays and can brown out the radio. Honour Busy and refuse
+    /// before opening the relay-bearing high-priority stream.</para>
+    /// </summary>
+    Task<DiscoveredRadio?> ProbeAsync(IPAddress radioIp, TimeSpan timeout, CancellationToken ct = default);
 }

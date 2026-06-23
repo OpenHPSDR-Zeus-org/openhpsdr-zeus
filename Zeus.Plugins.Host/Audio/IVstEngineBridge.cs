@@ -20,6 +20,19 @@ internal interface IVstEngineBridge : IDisposable
     /// <summary>Blocks that fell through to passthrough (timeout / stale-seq).</summary>
     long DegradedBlocks { get; }
 
+    /// <summary>
+    /// Engine-written lifecycle state from the SHM header (0=init, 1=running,
+    /// 2=draining). Diagnostics only — read off the realtime thread. Reads 0 when
+    /// the engine has never written it (or the bridge is disposed).
+    /// </summary>
+    uint EngineState { get; }
+
+    /// <summary>
+    /// Engine-written flags from the SHM header (bit0 = bypassed / empty chain).
+    /// Diagnostics only — read off the realtime thread.
+    /// </summary>
+    uint EngineFlags { get; }
+
     /// <summary>Realtime tap. Returns true only when output came from the engine.</summary>
     bool Process(ReadOnlySpan<float> input, Span<float> output, AudioBlockContext ctx);
 

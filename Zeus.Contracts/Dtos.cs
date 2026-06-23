@@ -51,6 +51,12 @@ namespace Zeus.Contracts;
 public enum RxMode : byte
 {
     LSB, USB, CWL, CWU, AM, FM, SAM, DSB, DIGL, DIGU,
+    // FreeDV digital voice (Codec2 / freedv_api). Zeus-level mode only — it
+    // is NOT a WDSP demod mode. At the WDSP layer FreeDV runs as USB; the
+    // FreeDV modem is inserted as a streaming filter in the RX/TX audio path
+    // (see FreeDvService). Append-only: byte value 10 is fixed for prefs
+    // persistence — never reorder this enum.
+    FreeDv,
 }
 
 // PureSignal feedback antenna source. On G2/MkII the wire-format diff
@@ -868,7 +874,14 @@ public sealed record ReceiverDto(
     int FilterHighHz,
     string? FilterPresetName,
     double AfGainDb,
-    int SampleRateHz);
+    int SampleRateHz,
+    // Whether this receiver is mixed into the monitor audio output. The
+    // per-RX listen/mute mixer (hero-rx-audio-switch) drives this; RX1 is the
+    // audio clock-master so muting it removes it from the mix but it keeps
+    // clocking the output ring. Projected from RadioService._audible[]; the
+    // legacy Rx2AudioMode tri-state is derived from audible[0]/audible[1].
+    // Defaults true so a pre-mixer payload hydrates everything audible.
+    bool Audible = true);
 
 public sealed record StateDto(
     ConnectionStatus Status,
@@ -878,7 +891,7 @@ public sealed record StateDto(
     int FilterLowHz,
     int FilterHighHz,
     int SampleRate,
-    double AgcTopDb = 80.0,
+    double AgcTopDb = 90.0,
     // AGC mode + custom params (issue: DSP controls Thetis parity §4). Nullable
     // so legacy state frames (no Agc field) deserialize unchanged; null at the
     // engine seam means "use the Med canned profile". Persisted globally via
@@ -1149,7 +1162,14 @@ public sealed record StateDto(
 
     // DDC / receiver ceiling for this build (WireContract.MaxReceivers). The
     // multi-DDC UI gates the "exposed receivers" control against this.
-    int MaxReceivers = WireContract.MaxReceivers);
+    int MaxReceivers = WireContract.MaxReceivers,
+
+    // Authoritative TX target as a receiver index (0 = RX1/VFO A, 1 = RX2/VFO B,
+    // ≥ 2 = an extra DDC). Generalises the legacy A/B-only TxVfo: TxVfo is kept
+    // as a back-compat projection (index == 1 ? B : A) and RadioService.
+    // TxFrequencyHz now resolves the carrier frequency from this index, so the
+    // independent TX DUC and CW/CTUN LO alignment transmit on any receiver's VFO.
+    int TxReceiverIndex = 0);
 
 /// <summary>Canonical CW constants shared between backend and wire DTOs.
 /// Single source of truth — CwOffset (server-side) and StateDto both
@@ -1177,7 +1197,16 @@ public sealed record ConnectRequest(
     // server uses it as the connected board kind instead of the historical
     // "P2 active ⇒ assume OrionMkII" fallback. Null/omitted = legacy
     // behaviour. Issue #171.
-    byte? BoardId = null);
+    byte? BoardId = null,
+    // Operator opt-in to take over a radio another controller is already
+    // driving. /api/connect/p2 normally refuses to become a SECOND master on a
+    // radio whose discovery reply reports Busy — connecting alongside another
+    // controller makes the band/antenna/T-R relay matrix chatter and can brown
+    // out the radio (observed on a co-located Saturn all-in-one running
+    // saturn-go + p2app). The takeover flow sends a reclaim stop first and sets
+    // this so the post-reclaim re-connect isn't re-blocked by the busy guard
+    // while the radio is still settling. Default false = guard enforced.
+    bool Force = false);
 
 public sealed record VfoSetRequest(long Hz, int Receiver = 0);
 
@@ -1212,7 +1241,9 @@ public sealed record ReceiverSetRequest(
     RxMode? Mode = null,
     int? FilterLowHz = null,
     int? FilterHighHz = null,
-    double? AfGainDb = null);
+    double? AfGainDb = null,
+    // Per-RX listen/mute (hero-rx-audio-switch). Null leaves it unchanged.
+    bool? Audible = null);
 
 /// <summary>Operator settings for the POTA/SOTA Spots feature. Persisted in
 /// zeus-prefs.db (<c>SpotsSettingsStore</c>) and shared with the frontend.
@@ -1406,6 +1437,11 @@ public sealed record AttenuatorSetRequest(int Db);
 public sealed record MoxSetRequest(bool On);
 
 public sealed record TxVfoSetRequest(TxVfo TxVfo);
+
+/// <summary>Body of <c>POST /api/tx/receiver</c> — select the transmit target by
+/// receiver index (0 = RX1, 1 = RX2, ≥ 2 = an extra DDC). Generalises
+/// <see cref="TxVfoSetRequest"/> beyond the A/B pair.</summary>
+public sealed record TxReceiverSetRequest(int Index);
 
 public sealed record DriveSetRequest(int Percent);
 

@@ -594,13 +594,24 @@ export class ChatRoom extends DurableObject<Env> {
   /** Public roster as seen by `viewer`: freq only for friends whose eye is open. */
   private rosterFor(viewer: string): Operator[] {
     const fset = this.friends.get(viewer);
-    const seen = new Set<string>();
-    const out: Operator[] = [];
+    // Collapse the (possibly several) sockets per callsign to the best one before
+    // building the roster. A reconnect or network blip can leave a stale or
+    // not-yet-helloed duplicate socket in getWebSockets() for a while; the
+    // verified callsign is stamped on the socket before hello arrives, so such a
+    // socket has a callsign but no freq. A naive first-seen dedup let that bare
+    // socket shadow the live connection and strip the operator's freq for
+    // everyone — intermittently, per-operator, and persisting until the stale
+    // socket finally closed. Prefer the socket that has completed hello (carries
+    // a freq), then the most recently connected, so live presence always wins.
+    const best = new Map<string, Attachment>();
     for (const ws of this.ctx.getWebSockets()) {
       const att = ws.deserializeAttachment() as Attachment | null;
       if (!att || !att.callsign) continue;
-      if (seen.has(att.callsign)) continue;
-      seen.add(att.callsign);
+      const cur = best.get(att.callsign);
+      if (!cur || attRank(att) > attRank(cur)) best.set(att.callsign, att);
+    }
+    const out: Operator[] = [];
+    for (const att of best.values()) {
       const canSeeFreq =
         att.callsign === viewer || (att.freqPublic !== false && (fset?.has(att.callsign) ?? false));
       out.push(toOperator(att, canSeeFreq));
@@ -632,6 +643,18 @@ function removeFrom(map: Map<string, Set<string>>, key: string, value: string): 
   if (!set) return;
   set.delete(value);
   if (set.size === 0) map.delete(key);
+}
+
+/**
+ * Ranks a connection's attachment so the live socket wins when an operator has
+ * more than one (reconnect overlap, lingering half-closed sockets). A socket
+ * that has completed hello carries a freq field; prefer it over a bare/initial
+ * attachment (callsign stamped, no presence yet), then break ties by most-recent
+ * connection (`since`). Used by rosterFor() to dedup multiple sockets per call.
+ */
+function attRank(a: Attachment): number {
+  const helloed = a.freq !== undefined ? 1 : 0;
+  return helloed * 1e15 + (a.since ?? 0);
 }
 
 function toOperator(a: Attachment, includeFreq = true): Operator {

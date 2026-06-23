@@ -1072,6 +1072,10 @@ public class DspPipelineService : BackgroundService,
     // to register a stub. See CwSidetoneSource for the keying contract.
     private readonly CwSidetoneSource? _sidetone;
     private readonly FrontendDspSceneDiagnosticsService? _frontendDspScene;
+    // FreeDV digital-voice modem coordinator. Null in test constructions.
+    // When FreeDV is the active RX0 mode, the post-demod insert below replaces
+    // the received modem audio with decoded speech.
+    private readonly FreeDvService? _freeDv;
 
     public DspPipelineService(
         RadioService radio,
@@ -1081,10 +1085,12 @@ public class DspPipelineService : BackgroundService,
         CwSidetoneSource? sidetone = null,
         FrontendDspSceneDiagnosticsService? frontendDspScene = null,
         DisplaySettingsStore? displaySettings = null,
+        FreeDvService? freeDv = null,
         Func<TxAudioIngest?>? txIngestFactory = null)
     {
         _radio = radio;
         _hub = hub;
+        _freeDv = freeDv;
         // Materialise once at construction so the per-tick fan-out is an
         // array-index loop (no enumerator allocation, no LINQ on the hot path).
         _audioSinks = audioSinks.ToArray();
@@ -3695,6 +3701,15 @@ public class DspPipelineService : BackgroundService,
             ? s.Rx2Enabled
             : rxIndex >= 2 && s.Receivers is { } rs && rxIndex < rs.Count && rs[rxIndex].Enabled;
 
+    // Whether receiver <paramref name="rxIndex"/> is mixed into the monitor audio
+    // output (per-RX listen/mute mixer). Reads the projected ReceiverDto.Audible;
+    // when the array is absent (pre-projection seed) default audible so the
+    // historical RX1-only / Both behaviour is preserved.
+    private static bool ReceiverAudible(int rxIndex, StateDto s) =>
+        s.Receivers is { } rs && rxIndex >= 0 && rxIndex < rs.Count
+            ? rs[rxIndex].Audible
+            : true;
+
     // Per-secondary-receiver tuning params. RX2 reads the flat RX2/VFO-B fields
     // (byte-exact); RX3+ read the per-receiver StateDto.Receivers[] entry.
     private static (RxMode mode, long vfoHz, int filterLow, int filterHigh, double afGainDb)
@@ -5194,14 +5209,17 @@ public class DspPipelineService : BackgroundService,
         // tick so none can back up: RX3+ used to be computed-and-discarded, so
         // their WDSP audio rings overran and tripped the rx-ingest "audio
         // consumer behind" selfcheck warn (IQ ingest itself stays lossless).
-        // What we do with the drained audio follows Rx2AudioMode, generalised
-        // across N receivers:
-        //   Rx1  → secondaries drained & discarded (RX1 only).
-        //   Rx2  → RX2 drained fully and output; RX3+ drained & discarded.
-        //   Both → RX1 + every enabled secondary mixed (each clocked to RX1).
-        var rxAudioMode = state.Rx2AudioMode;
+        // The per-RX listen/mute mixer (hero-rx-audio-switch) decides which
+        // receivers reach the monitor output via ReceiverDto.Audible. RX1
+        // (index 0) is always the audio clock-master, so muting it drops it from
+        // the mix but it keeps clocking the output ring:
+        //   audible secondary → read ≤ rx1Count and mixed (remainder buffered).
+        //   muted / disabled  → drained fully and discarded so the ring can't
+        //                       back up.
+        // Reading at most rx1Count per secondary keeps the mixed stream at the RX
+        // sample rate; draining fully + mixing max() over-feeds the sink (#787).
+        bool rx1Audible = ReceiverAudible(0, state);
         int mixSliceCount = 0;
-        int rx2OnlyCount = 0;
         for (int ri = 1; ri < MaxReceivers; ri++)
         {
             if (!SecondaryReceiverEnabled(ri, state)) continue;
@@ -5209,45 +5227,28 @@ public class DspPipelineService : BackgroundService,
             int secChan = Volatile.Read(ref sec.ChannelId);
             if (secChan < 0) continue;
 
-            if (rxAudioMode == Rx2AudioMode.Both)
+            if (ReceiverAudible(ri, state))
             {
-                // RX1 is the audio clock-master when receivers are mixed: read at
-                // most rx1Count samples from each secondary so the mixed stream
-                // is fed at exactly the RX sample rate. Draining fully and mixing
-                // max() over-feeds the sink — per-tick counts jitter
-                // independently, so E[max] exceeds the true rate (~5% on a G2),
-                // saturating the output ring → overrun → dual-RX clicking (#787).
-                // The unread remainder stays buffered for the next tick, so no
-                // secondary audio is dropped. With RX1 silent (rx1Count==0) read
-                // nothing this tick, matching the original RX2 Both behaviour.
                 int want = Math.Min(audioSampleCount, sec.AudioBuf.Length);
                 int n = want > 0 ? engine.ReadAudio(secChan, sec.AudioBuf.AsSpan(0, want)) : 0;
                 _mixSlices[mixSliceCount++] = new RxAudioSlice(sec.AudioBuf, n);
             }
-            else if (rxAudioMode == Rx2AudioMode.Rx2 && ri == 1)
-            {
-                // RX2 is the audio master in RX2-only mode: drain its ring fully.
-                rx2OnlyCount = engine.ReadAudio(secChan, sec.AudioBuf.AsSpan());
-            }
             else
             {
-                // Not contributing to the output — drain fully and discard so the
-                // ring can't back up.
                 engine.ReadAudio(secChan, sec.AudioBuf.AsSpan());
             }
         }
 
-        if (rxAudioMode == Rx2AudioMode.Both)
+        // Mix the audible contributors. When RX1 is muted we pass rx1Count=0 so
+        // MixRxAudioN averages only the secondary slices into the output buffer;
+        // with no audible contributor at all the result is silence (count 0).
+        // RX1 audible with no audible secondary leaves audioBuf untouched (RX1
+        // already read into it above).
+        if (mixSliceCount > 0 || !rx1Audible)
         {
-            audioSampleCount = MixRxAudioN(audioBuf, audioSampleCount, _mixSlices.AsSpan(0, mixSliceCount));
+            audioSampleCount = MixRxAudioN(
+                audioBuf, rx1Audible ? audioSampleCount : 0, _mixSlices.AsSpan(0, mixSliceCount));
         }
-        else if (rxAudioMode == Rx2AudioMode.Rx2 && rx2OnlyCount > 0)
-        {
-            int n = Math.Min(audioBuf.Length, rx2OnlyCount);
-            _secondaryRx[1].AudioBuf.AsSpan(0, n).CopyTo(audioBuf);
-            audioSampleCount = n;
-        }
-        // Rx1 (default): audioSampleCount unchanged — RX1 only.
         if (audioSampleCount > 0)
         {
             SanitizeAudioBuffer(audioBuf.AsSpan(0, audioSampleCount));
@@ -5303,6 +5304,19 @@ public class DspPipelineService : BackgroundService,
                 // shapes received audio without distorting the clean local
                 // sidetone. Null handler (no RX plugin attached) is the common
                 // case and a no-op — the RX path stays bit-identical.
+                // FreeDV digital-voice insert (RX0 only). The radio runs USB
+                // underneath, so audioBuf currently holds the received FreeDV
+                // modem signal; when FreeDV is the active mode the modem
+                // demodulates+decodes it back to speech in place (same sample
+                // count, internally buffered, silence until sync). Runs BEFORE
+                // the RX audio plugin + squelch so those shape decoded speech.
+                if (_freeDv is not null)
+                {
+                    _freeDv.SyncMode(state.Mode);
+                    if (_freeDv.Active && audioSampleCount > 0)
+                        _freeDv.ProcessRx(audioBuf.AsSpan(0, audioSampleCount));
+                }
+
                 var rxAudioHandler = _rxAudioPluginHandler;
                 if (rxAudioHandler is not null && audioSampleCount > 0)
                     rxAudioHandler(audioBuf.AsSpan(0, audioSampleCount), audioSampleCount, AudioOutputRateHz);
@@ -5312,13 +5326,17 @@ public class DspPipelineService : BackgroundService,
                     squelch,
                     _adaptiveSquelch);
 
-                // Final receive loudness guard. WDSP AGC and supported NR have
-                // already run by this point (and any RX audio plugin has had
-                // its shot), so weak cleaned audio can be lifted without
-                // letting a sudden strong signal blast the speaker.
-                ApplyRxAudioLeveler(
-                    audioBuf.AsSpan(0, audioSampleCount),
-                    ref _rxAudioLeveler);
+                // RX loudness normalization is WDSP's AGC alone — exactly as in
+                // Thetis, where the demod->AGC->AF-panel-gain chain is the only
+                // gain path and there is NO post-demod leveler. The former
+                // always-on ApplyRxAudioLeveler stage (which Thetis lacks) was a
+                // SECOND adaptive AGC running in series with WDSP's; the two
+                // chased each other and produced pumping, weak-signal crackle and
+                // inconsistent loudness ("audio sounds like crap"). WDSP AGC
+                // (attack 2 ms, mode-aware hang/decay, max-gain top) already
+                // normalizes perceived volume across signal strengths; the hard
+                // LimitRxAudioBuffer clip below remains the only safety ceiling,
+                // matching Thetis's output clamp.
 
                 // CW sidetone is mixed (+=) into the RX block so every
                 // downstream sink — browser WS, native audio, TCI audio

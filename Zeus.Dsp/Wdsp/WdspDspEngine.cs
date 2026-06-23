@@ -232,8 +232,10 @@ public sealed class WdspDspEngine : IDspEngine
         public int FilterLowAbsHz = 150;
         public int FilterHighAbsHz = 2850;
         public RxaMode CurrentMode = RxaMode.USB;
-        // Thetis "AGC Top" max-gain setting in dB. 80 matches the Thetis
-        // AGC_MEDIUM default; the /api/agcGain endpoint can override at runtime.
+        // "AGC Top" max-gain setting in dB. With slope=0 (flat leveling, see
+        // ApplyAgcCore) 90 dB drops the AGC knee into the noise floor and pumps
+        // it up in speech gaps (choppy RX); 80 keeps the knee above the noise.
+        // The /api/agcGain endpoint can override at runtime up to 90.
         public double AgcTopDb = 80.0;
         // AGC mode last applied via SetAgc / ApplyAgcDefaults. MED matches the
         // open-time default; surfaced so callers / tests can read back the mode.
@@ -3483,31 +3485,47 @@ public sealed class WdspDspEngine : IDspEngine
     private static void ApplyAgcDefaults(int id)
     {
         ApplyAgcCore(id, new AgcConfig(AgcMode.Med));
-        NativeMethods.SetRXAAGCTop(id, 80.0);            // max gain, dB
+        NativeMethods.SetRXAAGCTop(id, 80.0);            // max gain, dB (keeps AGC knee above noise floor at slope=0)
     }
 
-    // Canned-mode presets (Thetis console.cs:27960+; design §4.4). Hang/Decay in
-    // ms, HangThreshold 0..100. Custom returns the Med baseline so a null custom
-    // field falls back somewhere sane.
+    // Canned-mode presets. Hang/Decay in ms. LONG/SLOW/FAST mirror Thetis
+    // console.cs:27958-28024 (= the native SetRXAAGCMode canned values in
+    // wcpAGC.c:354-382) verbatim.
+    //
+    // MED is a deliberate Zeus divergence: stock WDSP MED ships hangtime=0, so
+    // with our flat slope=0 leveling (ApplyAgcCore) the gain recovers over the
+    // 250 ms decay in every speech gap and pumps the noise floor up between
+    // words — audibly choppy RX. We give MED a 250 ms hang to bridge inter-
+    // syllable/word gaps so the gain holds steady through a QSO instead of
+    // pumping. The hang only engages when hang_backaverage > hang_level, and
+    // hang_level = 0.637·max_input at HangThreshold 100 — i.e. only near
+    // full-scale. So MED also drops to HangThreshold 0 (like LONG/SLOW), which
+    // lowers hang_level to ~0.637·min_volts so the hang engages across the
+    // normal signal range. This realises the project's "constant loudness, no
+    // pumping" AGC requirement on the default mode. FAST stays hang-free (snappy
+    // by design). Custom returns the Med baseline so a null custom field falls
+    // back somewhere sane.
     private static (int HangMs, int DecayMs, int HangThreshold) AgcPreset(AgcMode mode) => mode switch
     {
-        AgcMode.Long => (2000, 2000, 100),
-        AgcMode.Slow => (1000, 500, 100),
-        AgcMode.Med => (0, 250, 100),
+        AgcMode.Long => (2000, 2000, 0),
+        AgcMode.Slow => (1000, 500, 0),
+        AgcMode.Med => (250, 250, 0),
         AgcMode.Fast => (0, 50, 100),
-        AgcMode.Fixed => (0, 250, 100),
-        _ => (0, 250, 100),
+        AgcMode.Fixed => (250, 250, 0),
+        _ => (250, 250, 0),
     };
 
     // Pushes the AGC mode + custom/fixed params to WDSP. Shared by ApplyAgcDefaults
     // (channel open, before the ChannelState is registered) and SetAgc (runtime),
     // so both paths produce identical WDSP state. Does NOT touch SetRXAAGCTop —
-    // the max-gain has its own path. Attack is bound to the Thetis-default 2
-    // (decay serves as rise-time; Thetis doesn't wire attack to the UI — §4.5).
+    // the max-gain has its own path. Attack is the WDSP create-time default of
+    // 1 ms (RXA.c: tau_attack = 0.001): Thetis NEVER calls SetRXAAGCAttack, so it
+    // runs every mode at the 1 ms default — its "Attack 2ms" UI tooltip is label
+    // text the code never applies. We set it explicitly to 1 to match exactly.
     private static void ApplyAgcCore(int id, AgcConfig cfg)
     {
         NativeMethods.SetRXAAGCMode(id, (int)cfg.Mode);
-        NativeMethods.SetRXAAGCAttack(id, 2);
+        NativeMethods.SetRXAAGCAttack(id, 1);
 
         int hangMs, decayMs, hangThreshold;
         if (cfg.Mode == AgcMode.Custom)
@@ -3524,9 +3542,13 @@ public sealed class WdspDspEngine : IDspEngine
         NativeMethods.SetRXAAGCDecay(id, decayMs);
         NativeMethods.SetRXAAGCHangThreshold(id, hangThreshold);
 
-        // WDSP wants slope ×10 (Thetis setup.cs:9088). Custom uses the operator
-        // slope; every canned mode uses the Thetis MED slope (35) verbatim.
-        int slope = cfg.Mode == AgcMode.Custom ? (cfg.Slope ?? 0) * 10 : 35;
+        // Thetis's default slope is 0 (radio.cs:1110 rx_agc_slope; the
+        // udDSPAGCSlope UI default is 0) and the canned-mode switch never sets
+        // it, so every non-custom mode runs at slope 0 — a flat-output AGC that
+        // holds all signals at the same loudness. Custom applies the operator
+        // slope ×10 (Thetis setup.cs:9088). The old hard-coded 35 made every
+        // mode let stronger signals stay louder, which is NOT Thetis behaviour.
+        int slope = cfg.Mode == AgcMode.Custom ? (cfg.Slope ?? 0) * 10 : 0;
         NativeMethods.SetRXAAGCSlope(id, slope);
 
         if (cfg.Mode == AgcMode.Fixed)

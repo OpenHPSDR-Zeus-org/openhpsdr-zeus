@@ -129,7 +129,19 @@ public sealed class AudioProcessingModeService : IHostedService
         {
             if (!e.TryGetProperty("event", out var evt)
                 || evt.ValueKind != System.Text.Json.JsonValueKind.String) return;
-            if (evt.GetString() != "chain") return;
+            var name = evt.GetString();
+            // Engine-reported faults (plugin load failures, processing errors). These
+            // were previously dropped — surface them so a wedge that the seq-based
+            // health model can't see (engine alive but output dead) leaves a trail.
+            if (name is "error" or "warning")
+            {
+                var msg = e.TryGetProperty("message", out var m)
+                    && m.ValueKind == System.Text.Json.JsonValueKind.String
+                        ? m.GetString() : null;
+                _log.LogWarning("VST engine {Kind}: {Message}", name, msg ?? "(no message)");
+                return;
+            }
+            if (name != "chain") return;
             if (!e.TryGetProperty("plugins", out var plugins)
                 || plugins.ValueKind != System.Text.Json.JsonValueKind.Array) return;
 

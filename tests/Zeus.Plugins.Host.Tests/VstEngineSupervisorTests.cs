@@ -121,6 +121,8 @@ public class VstEngineSupervisorTests
         public bool EngineReady { get; set; }
         public int WaitBudgetMs { get; set; }
         public int ResetCount { get; private set; }
+        public uint EngineState { get; set; }
+        public uint EngineFlags { get; set; }
 
         /// <summary>
         /// When > 0, every read of <see cref="DegradedBlocks"/> advances the counter

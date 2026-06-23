@@ -52,6 +52,7 @@ import { AzimuthPanel } from './panels/AzimuthPanel';
 import { RotatorCompassPanel } from './panels/RotatorCompassPanel';
 import { RotatorDialPanel } from './panels/RotatorDialPanel';
 import { DspFlexPanel } from './panels/DspFlexPanel';
+import { FreeDvPanel } from './panels/FreeDvPanel';
 import { CwPanel } from './panels/CwPanel';
 import { DeepCwDecoderPanel } from '../plugins/deepcw/DeepCwDecoderPanel';
 import { LogbookPanel } from './panels/LogbookPanel';
@@ -258,6 +259,16 @@ export const PANELS: Record<string, PanelDef> = {
     maxW: 6,
     minW: 4,
     minH: 6,
+  },
+  freedv: {
+    id: 'freedv',
+    name: 'FreeDV',
+    category: 'dsp',
+    tags: ['freedv', 'digital', 'voice', 'modem'],
+    component: FreeDvPanel,
+    maxW: 6,
+    minW: 4,
+    minH: 8,
   },
   cw: {
     id: 'cw',
