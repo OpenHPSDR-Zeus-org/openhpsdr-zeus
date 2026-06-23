@@ -16,8 +16,8 @@
 // Coordinates are in the 24-column × 48-row (schema-v8) grid. Total height =
 // WORKSPACE_TARGET_ROWS (48). The top-left row pairs the Bandwidth Filter
 // (mini-pan only) with the split-out Filter Presets panel; the
-// panadapter hero fills the rest of the left column, and the right column
-// stacks vfo / smeter / tx / txmeters / dsp.
+// panadapter hero fills most of the left column with a Chat strip docked
+// beneath it, and the right column stacks vfo / smeter / tx / txmeters / dsp.
 //
 // ASCII sanity check (columns 0..23):
 //
@@ -28,13 +28,13 @@
 //   │                                               ├─────────────┤  y=11
 //   │                                               │   smeter    │
 //   │                                               │   (h=5)     │  y=16
-//   │                                               ├─────────────┤
-//   │            hero (0..17, h=38)                 │     tx      │
+//   │            hero (0..17, h=30)                 ├─────────────┤
+//   │                                               │     tx      │
 //   │                                               │   (h=10)    │
 //   │                                               ├─────────────┤  y=26
 //   │                                               │  txmeters   │
-//   │                                               │   (h=12)    │
-//   │                                               ├─────────────┤  y=38
+//   ├───────────────────────────────────────────────┤   (h=12)    │
+//   │            chat (0..17, h=8)                  ├─────────────┤  y=38
 //   │                                               │     dsp     │
 //   └───────────────────────────────────────────────┴─────────────┘  y=48
 
@@ -48,7 +48,8 @@ export const DEFAULT_WORKSPACE_LAYOUT: WorkspaceLayout = {
     // losing operator overrides.
     { uid: 'tile-filter',        panelId: 'filter',        x: 0,  y: 0,  w: 12, h: 10 },
     { uid: 'tile-filterpresets', panelId: 'filterpresets', x: 12, y: 0,  w: 6,  h: 10 },
-    { uid: 'tile-hero',          panelId: 'hero',          x: 0,  y: 10, w: 18, h: 38 },
+    { uid: 'tile-hero',          panelId: 'hero',          x: 0,  y: 10, w: 18, h: 30 },
+    { uid: 'tile-chat',          panelId: 'chat',          x: 0,  y: 40, w: 18, h: 8  },
     { uid: 'tile-vfo',           panelId: 'vfo',           x: 18, y: 0,  w: 6,  h: 11 },
     { uid: 'tile-smeter',        panelId: 'smeter',        x: 18, y: 11, w: 6,  h: 5 },
     { uid: 'tile-tx',            panelId: 'tx',            x: 18, y: 16, w: 6,  h: 10 },
