@@ -70,11 +70,12 @@ This path is independent of `G2FrontPanelService` and already complete:
   **Hardware PTT → MOX** opt-in toggle (`PttSettingsStore`, persisted), and the
   hang readout.
 
-The enable gate **defaults OFF** (opt-in) — unlike Thetis, where the footswitch
-always keys. This is the deliberate floating-connector PTT-hang guard: a fresh
-install leaves the footswitch inert until the operator enables it in Radio
-Settings. A persisted ON flag only *arms* the gate across restarts; it never
-auto-keys (promotion is edge-triggered, never on connect).
+The enable gate **defaults ON** (Thetis-faithful): the footswitch keys MOX out
+of the box. This is safe because promotion is **edge-triggered** — arming the
+gate never auto-keys on connect or restart; the radio only transmits on a real
+footswitch edge. An operator who wants UI-only keying turns the gate OFF in
+Radio Settings, and that choice persists. The `feat/hardware-ptt-works-e2e`
+change flipped this default from the original opt-in OFF.
 
 **User I/O (J16 / accessory lines)** is decoded read-only: the P2 hi-priority
 user ADCs (`UserAdc0..3`) and digital input byte are surfaced at
