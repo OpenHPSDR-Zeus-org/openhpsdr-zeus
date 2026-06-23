@@ -1222,7 +1222,24 @@ int32_t zvst_unload(zvst_handle_t handle) {
     // component teardown() below sees controller == null and won't double-free.
     if (p->editor_thread_running.load()) {
         post_editor_cmd(*p, 3, 0);
-        if (p->editor_thread.joinable()) p->editor_thread.join();
+        // Wait (bounded) for the editor thread to retire on its own. If a plug-in
+        // wedged it -- e.g. view->removed() never returns on this thread -- a plain
+        // join() would hang the host forever, so we never join unconditionally.
+        // Detach + leak instead: memory-safe, never blocks the server. Mirrors the
+        // Windows ui_thread guard above.
+        for (int i = 0; i < 500 && p->editor_thread_running.load(); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (p->editor_thread.joinable()) {
+            if (!p->editor_thread_running.load()) {
+                p->editor_thread.join();
+            } else {
+                // Editor thread still wedged in the plug-in. It references *p, so
+                // freeing p would be use-after-free -- detach + leak. Rare,
+                // memory-safe, never blocks the host.
+                p->editor_thread.detach();
+                return ZVST_OK;
+            }
+        }
     }
     if (p->cmd_pipe[0] >= 0) { close(p->cmd_pipe[0]); close(p->cmd_pipe[1]); }
     teardown(*p);
