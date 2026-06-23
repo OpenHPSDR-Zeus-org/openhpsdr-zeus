@@ -1257,6 +1257,32 @@ public static class ZeusEndpoints
             return Results.Ok(fd.ApplyConfig(req));
         });
 
+        // FreeDV codec2 library install. codec2 can't be built on an operator's
+        // machine, so when the bundled binary is missing this fetches the prebuilt
+        // lib Zeus committed for the running platform from the repo and stages it,
+        // reloading the modem live (see FreeDvNativeInstaller). GET reports install
+        // progress + whether codec2 is already present; POST starts a background
+        // download (idempotent — no-op if already installed/running). The panel
+        // polls GET until phase is "done" / "failed".
+        static object FreeDvInstallDto(FreeDvNativeInstaller installer)
+        {
+            var s = installer.Current;
+            return new
+            {
+                phase = s.Phase.ToString().ToLowerInvariant(),
+                percent = s.Percent,
+                message = s.Message,
+                installed = installer.Installed,
+            };
+        }
+        app.MapGet("/api/freedv/install", (FreeDvNativeInstaller installer) =>
+            Results.Ok(FreeDvInstallDto(installer)));
+        app.MapPost("/api/freedv/install", (FreeDvNativeInstaller installer) =>
+        {
+            installer.Start();
+            return Results.Ok(FreeDvInstallDto(installer));
+        });
+
         // TX bandpass filter — signed Hz pair (LSB negative, DSB symmetric). Per-mode
         // family memory is managed in RadioService, identical shape to the RX filter.
         // Operator-editable via Settings → TX Filter panel.
@@ -1264,6 +1290,26 @@ public static class ZeusEndpoints
         {
             log.LogInformation("api.tx-filter low={L} high={H}", req.LowHz, req.HighHz);
             return r.SetTxFilter(req.LowHz, req.HighHz);
+        });
+
+        // SSB bandpass "rectangularity" — issue #871. RX and TX are independent
+        // selectors; each pushes the chosen WDSP fir.c window code (0 = soft /
+        // Blackman-Harris 4-term, 1 = sharp / BH 7-term) into the live engine and
+        // persists to DspSettingsStore.
+        app.MapPost("/api/rx/filter-window", (BandpassWindowSetRequest req, RadioService r) =>
+        {
+            if (!Enum.IsDefined(req.Window))
+                return Results.BadRequest(new { error = $"unknown BandpassWindow {req.Window}" });
+            log.LogInformation("api.rx.filterWindow window={Window}", req.Window);
+            return Results.Ok(r.SetRxBandpassWindow(req.Window));
+        });
+
+        app.MapPost("/api/tx/filter-window", (BandpassWindowSetRequest req, RadioService r) =>
+        {
+            if (!Enum.IsDefined(req.Window))
+                return Results.BadRequest(new { error = $"unknown BandpassWindow {req.Window}" });
+            log.LogInformation("api.tx.filterWindow window={Window}", req.Window);
+            return Results.Ok(r.SetTxBandpassWindow(req.Window));
         });
 
         // Filter preset endpoints (PRD §5.2). These are the preferred filter surface;

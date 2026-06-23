@@ -369,6 +369,59 @@ public sealed class DspSettingsStore : IDisposable
         e.TxCompressorGainDb = c.CompressorGainDb;
     }
 
+    // SSB bandpass "rectangularity" — operator-selectable WDSP FIR window (issue
+    // #871). Null on legacy rows / never-written → caller falls back to
+    // BandpassWindow.Sharp, the current hardcoded WDSP default at
+    // OpenChannel/OpenTxChannel time, so a fresh install hears no behaviour
+    // change. RX and TX are stored independently.
+    public BandpassWindow? GetRxFilterWindow(string profileId = "default")
+    {
+        var e = _entries.FindOne(x => x.ProfileId == profileId);
+        return e?.RxFilterWindow;
+    }
+
+    public BandpassWindow? GetTxFilterWindow(string profileId = "default")
+    {
+        var e = _entries.FindOne(x => x.ProfileId == profileId);
+        return e?.TxFilterWindow;
+    }
+
+    public void SetRxFilterWindow(BandpassWindow window, string profileId = "default")
+        => UpsertFilterWindow(rx: window, tx: null, profileId);
+
+    public void SetTxFilterWindow(BandpassWindow window, string profileId = "default")
+        => UpsertFilterWindow(rx: null, tx: window, profileId);
+
+    private void UpsertFilterWindow(BandpassWindow? rx, BandpassWindow? tx, string profileId)
+    {
+        var existing = _entries.FindOne(x => x.ProfileId == profileId);
+        if (existing is null)
+        {
+            var nrSeed = new NrConfig();
+            existing = new DspSettingsEntry
+            {
+                ProfileId = profileId,
+                NrMode = nrSeed.NrMode,
+                AnfEnabled = nrSeed.AnfEnabled,
+                SnbEnabled = nrSeed.SnbEnabled,
+                NbpNotchesEnabled = nrSeed.NbpNotchesEnabled,
+                NbMode = nrSeed.NbMode,
+                NbThreshold = nrSeed.NbThreshold,
+                RxFilterWindow = rx,
+                TxFilterWindow = tx,
+                UpdatedUtc = DateTime.UtcNow,
+            };
+            _entries.Insert(existing);
+        }
+        else
+        {
+            if (rx.HasValue) existing.RxFilterWindow = rx.Value;
+            if (tx.HasValue) existing.TxFilterWindow = tx.Value;
+            existing.UpdatedUtc = DateTime.UtcNow;
+            _entries.Update(existing);
+        }
+    }
+
     public CfcConfig? GetCfc(string profileId = "default")
     {
         var e = _entries.FindOne(x => x.ProfileId == profileId);
@@ -617,5 +670,11 @@ public sealed class DspSettingsEntry
     public int? TxLevelerDecayMs { get; set; }
     public bool? TxCompressorEnabled { get; set; }
     public double? TxCompressorGainDb { get; set; }
+    // SSB bandpass "rectangularity" — operator-selectable WDSP FIR window
+    // (issue #871). Null on legacy rows → RadioService falls back to
+    // BandpassWindow.Sharp on hydration, matching the current hardcoded WDSP
+    // default at OpenChannel/OpenTxChannel time. Stored as the byte enum value.
+    public BandpassWindow? RxFilterWindow { get; set; }
+    public BandpassWindow? TxFilterWindow { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

@@ -370,6 +370,18 @@ public static class ZeusHost
         // and TxAudioIngest taps TX (pre-WDSP), both gated on FreeDV being the
         // active RX0 mode. No-op when the codec2 native library is absent.
         builder.Services.AddSingleton<FreeDvService>();
+        // FreeDvNativeInstaller — the in-app "Install FreeDV" downloader. codec2
+        // can't be built on a stock operator machine, so when the bundled binary
+        // is missing (older build / unshipped platform) this fetches the prebuilt
+        // lib Zeus committed for the running platform straight from the repo and
+        // stages it at the managed path, then reloads the modem live. The named
+        // HttpClient carries a User-Agent and a generous timeout.
+        builder.Services.AddHttpClient("ZeusFreeDvNative", c =>
+        {
+            c.Timeout = TimeSpan.FromMinutes(5);
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("OpenHPSDR-Zeus");
+        });
+        builder.Services.AddSingleton<FreeDvNativeInstaller>();
         builder.Services.AddSingleton<TxService>();
         builder.Services.AddSingleton<TxAudioIngest>();
         // Resolve at startup so the MicPcmReceived subscription attaches before the

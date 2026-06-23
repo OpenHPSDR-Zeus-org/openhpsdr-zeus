@@ -21,18 +21,46 @@ namespace Zeus.Server;
 
 public sealed class FreeDvService : IDisposable
 {
-    private readonly FreeDvModem _modem;
+    private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<FreeDvService> _log;
+    private FreeDvModem _modem;
     private volatile string? _txText;
 
     public FreeDvService(ILoggerFactory loggerFactory)
     {
+        _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<FreeDvService>();
         _modem = new FreeDvModem(loggerFactory.CreateLogger<FreeDvModem>());
     }
 
     /// <summary>True when FreeDV is engaged and the modem is processing audio.</summary>
     public bool Active => _modem.Active;
+
+    /// <summary>True when the codec2 native library is loadable and FreeDV can run.</summary>
+    public bool NativeAvailable => _modem.NativeAvailable;
+
+    /// <summary>
+    /// Re-evaluate codec2 availability after the in-app installer stages a new
+    /// binary, swapping in a fresh modem so <see cref="NativeAvailable"/> can
+    /// flip true without restarting the host. The operator's submode + squelch
+    /// selection carries over. Safe against the DSP hot path: the swap is a
+    /// single reference assignment, and the retired modem only ever passes audio
+    /// through once disposed. Returns the post-reload availability.
+    /// </summary>
+    public bool ReloadNative()
+    {
+        FreeDvNativeLoader.ResetProbe();
+        var fresh = new FreeDvModem(_loggerFactory.CreateLogger<FreeDvModem>());
+        fresh.SetSubmode(_modem.Submode);
+        fresh.SetSquelch(_modem.SquelchEnabled, _modem.SnrSquelchThreshDb);
+        var old = _modem;
+        _modem = fresh;
+        old.Dispose();
+        _log.LogInformation(
+            "FreeDV: native reload — codec2 {State}",
+            fresh.NativeAvailable ? "available" : "still unavailable");
+        return fresh.NativeAvailable;
+    }
 
     /// <summary>
     /// Reconcile the modem's active state with the live RX0 mode. Called from

@@ -19,6 +19,7 @@ import { AgcSettingsSection } from './AgcSettingsSection';
 import { AdcProtectionSettingsSection } from './AdcProtectionSettingsSection';
 import { BandwidthSettingsSection } from './BandwidthSettingsSection';
 import { DspFilterArchitectureSection } from './DspFilterArchitectureSection';
+import { FilterShapeSettingsSection } from './FilterShapeSettingsSection';
 import { SquelchSettingsSection } from './SquelchSettingsSection';
 import { SignalIntelligenceSettingsSection } from './SignalIntelligenceSettingsSection';
 import { SmartNrSettingsSection } from './SmartNrSettingsSection';
@@ -44,6 +45,13 @@ export function DspSettingsPanel() {
           <span className="ps-card-hint">buffers / taps / window / cache</span>
         </h4>
         <DspFilterArchitectureSection />
+      </div>
+      <div className="ps-card">
+        <h4>
+          SSB Filter Shape
+          <span className="ps-card-hint">RX / TX shoulder rectangularity (#871)</span>
+        </h4>
+        <FilterShapeSettingsSection />
       </div>
       <div className="ps-card">
         <h4>

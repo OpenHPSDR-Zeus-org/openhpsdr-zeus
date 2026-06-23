@@ -206,6 +206,7 @@ public sealed class RadioService : IDisposable
     private DateTimeOffset? _lastAdcTelemetryUtc;
     private AdcProtectionConfig _adcProtection = new();
     private long _lastTickMs = long.MinValue;
+    private long _lastOverloadMs = long.MinValue;   // wall-clock of the last overload window (release hold-off)
     private int _lastAppliedEffectiveDb = -1;   // so the first send always fires
 
     // Auto-AGC control-loop state. Tracks the band noise floor and places the
@@ -396,6 +397,14 @@ public sealed class RadioService : IDisposable
         // TxLevelingConfig defaults so first-connect behaviour is unchanged
         // (Thetis §6.1-6.3). The Leveler max-gain stays on LevelerMaxGainDb.
         var persistedTxLeveling = _dspSettingsStore.GetTxLeveling() ?? new TxLevelingConfig();
+        // SSB bandpass "rectangularity" (issue #871). Null on a fresh install
+        // falls back to BandpassWindow.Normal, which resolves to the WDSP
+        // open-time tap count (nc = max(2048, dsp_size)), so first-connect audio
+        // is byte-identical to pre-#871 builds. A pre-#871 persisted row stored
+        // the old two-value "Sharp" as byte 1, which now deserialises to Normal
+        // (same byte) — also today's behaviour. RX and TX are independent.
+        var persistedRxFilterWindow = _dspSettingsStore.GetRxFilterWindow() ?? BandpassWindow.Normal;
+        var persistedTxFilterWindow = _dspSettingsStore.GetTxFilterWindow() ?? BandpassWindow.Normal;
 
         // TX Audio Profile startup overlay. If the operator has a "last loaded"
         // unified TX Audio Profile, its scalar/config values overlay the
@@ -463,7 +472,8 @@ public sealed class RadioService : IDisposable
             ReleaseStepDb: rsSnap?.AdcProtectionReleaseStepDb ?? 1,
             MaxOffsetDb: rsSnap?.AdcProtectionMaxOffsetDb ?? 31,
             WarningThreshold: rsSnap?.AdcProtectionWarningThreshold ?? 3,
-            MagnitudeSoftLimit: rsSnap?.AdcProtectionMagnitudeSoftLimit ?? 0));
+            MagnitudeSoftLimit: rsSnap?.AdcProtectionMagnitudeSoftLimit ?? 0,
+            ReleaseHoldMs: rsSnap?.AdcProtectionReleaseHoldMs ?? 2000));
 
         // Restore per-mode-family filter memory from snapshot if available so
         // an AM→USB mode-switch at startup recalls the last SSB width, not the
@@ -520,6 +530,8 @@ public sealed class RadioService : IDisposable
             FilterAdvancedPaneOpen: filterPresetStore?.GetAdvancedPaneOpen() ?? false,
             TxFilterLowHz: overlayTxFilterLow ?? rsSnap?.TxFilterLowHz ?? 150,
             TxFilterHighHz: overlayTxFilterHigh ?? rsSnap?.TxFilterHighHz ?? 2850,
+            RxFilterWindow: persistedRxFilterWindow,
+            TxFilterWindow: persistedTxFilterWindow,
             RxAfGainDb: rsSnap?.RxAfGainDb ?? 0.0,
             // 0 dB unity matches the engine's TXA fresh-open default; legacy
             // rows missing the field hydrate to that same default. A last-loaded
@@ -845,6 +857,7 @@ public sealed class RadioService : IDisposable
             _adcOverloadLevel = 0;
             _overloadSeenInWindow = false;
             _lastTickMs = long.MinValue;
+            _lastOverloadMs = long.MinValue;
             _lastAppliedEffectiveDb = -1;
         }
         StateChanged?.Invoke(Snapshot());
@@ -1958,6 +1971,7 @@ public sealed class RadioService : IDisposable
                 _attOffsetDb = 0;
                 _adcOverloadLevel = 0;
                 _overloadSeenInWindow = false;
+                _lastOverloadMs = long.MinValue;
                 _state = _state with { AttOffsetDb = 0, AdcOverloadWarning = false };
                 int baseline = _atten.ClampedDb;
                 if (_lastAppliedEffectiveDb != baseline)
@@ -2002,7 +2016,8 @@ public sealed class RadioService : IDisposable
                 ReleaseStepDb: req.ReleaseStepDb ?? _adcProtection.ReleaseStepDb,
                 MaxOffsetDb: req.MaxOffsetDb ?? _adcProtection.MaxOffsetDb,
                 WarningThreshold: req.WarningThreshold ?? _adcProtection.WarningThreshold,
-                MagnitudeSoftLimit: req.MagnitudeSoftLimit ?? _adcProtection.MagnitudeSoftLimit));
+                MagnitudeSoftLimit: req.MagnitudeSoftLimit ?? _adcProtection.MagnitudeSoftLimit,
+                ReleaseHoldMs: req.ReleaseHoldMs ?? _adcProtection.ReleaseHoldMs));
 
             if (next != _adcProtection)
             {
@@ -2023,6 +2038,7 @@ public sealed class RadioService : IDisposable
                 _attOffsetDb = 0;
                 _adcOverloadLevel = 0;
                 _overloadSeenInWindow = false;
+                _lastOverloadMs = long.MinValue;
                 if (_state.AttOffsetDb != 0 || _state.AdcOverloadWarning)
                 {
                     _state = _state with { AttOffsetDb = 0, AdcOverloadWarning = false };
@@ -2083,8 +2099,11 @@ public sealed class RadioService : IDisposable
         AttackStepDb = Math.Clamp(config.AttackStepDb, 1, 6),
         ReleaseStepDb = Math.Clamp(config.ReleaseStepDb, 1, 6),
         MaxOffsetDb = Math.Clamp(config.MaxOffsetDb, HpsdrAtten.MinDb, HpsdrAtten.MaxDb),
-        WarningThreshold = Math.Clamp(config.WarningThreshold, 0, 5),
+        // The overload counter caps at 5, so the gate (level > threshold) must
+        // stay reachable — clamp to 4 so it can never silently disable the ramp.
+        WarningThreshold = Math.Clamp(config.WarningThreshold, 0, 4),
         MagnitudeSoftLimit = Math.Clamp(config.MagnitudeSoftLimit, 0, ushort.MaxValue),
+        ReleaseHoldMs = Math.Clamp(config.ReleaseHoldMs, 0, 10_000),
     };
 
     public StateDto SetAutoAgc(bool enabled)
@@ -2962,6 +2981,24 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
+    // SSB bandpass "rectangularity" — issue #871. Independent RX and TX
+    // selectors push the operator's chosen WDSP FIR window (Soft = BH 4-term,
+    // Sharp = BH 7-term) through DspPipelineService's _appliedRx/TxBandpassWindow
+    // latch and persist to DspSettingsStore so the choice survives a restart.
+    public StateDto SetRxBandpassWindow(BandpassWindow window)
+    {
+        Mutate(s => s with { RxFilterWindow = window });
+        _dspSettingsStore.SetRxFilterWindow(window);
+        return Snapshot();
+    }
+
+    public StateDto SetTxBandpassWindow(BandpassWindow window)
+    {
+        Mutate(s => s with { TxFilterWindow = window });
+        _dspSettingsStore.SetTxFilterWindow(window);
+        return Snapshot();
+    }
+
     // Replace the full manual-notch set. The client posts the whole list on
     // every change (and on connect), so there's nothing to merge — store it and
     // raise NotchesChanged for DspPipelineService to push to the engine. Notch
@@ -3441,6 +3478,7 @@ public sealed class RadioService : IDisposable
                 AdcProtectionMaxOffsetDb = adcProtection.MaxOffsetDb,
                 AdcProtectionWarningThreshold = adcProtection.WarningThreshold,
                 AdcProtectionMagnitudeSoftLimit = adcProtection.MagnitudeSoftLimit,
+                AdcProtectionReleaseHoldMs = adcProtection.ReleaseHoldMs,
                 AttenDb = snap.AttenDb,
                 AutoAgcEnabled = snap.AutoAgcEnabled,
                 PreampOn = snap.PreampOn,
@@ -3512,6 +3550,7 @@ public sealed class RadioService : IDisposable
             _adcOverloadLevel = 0;
             _overloadSeenInWindow = false;
             _lastTickMs = long.MinValue;
+            _lastOverloadMs = long.MinValue;
             _lastAppliedEffectiveDb = -1;
             _lastAdcOverloadBits = 0;
             _lastAdc0MaxMagnitude = null;
@@ -3552,6 +3591,7 @@ public sealed class RadioService : IDisposable
             _adcOverloadLevel = 0;
             _overloadSeenInWindow = false;
             _lastTickMs = long.MinValue;
+            _lastOverloadMs = long.MinValue;
             _lastAppliedEffectiveDb = -1;
         }
         if (previous is not null) previous.TelemetryReceived -= OnP2Telemetry;
@@ -3732,15 +3772,32 @@ public sealed class RadioService : IDisposable
 
             if (seen)
             {
-                if (_attOffsetDb < cfg.MaxOffsetDb)
+                _lastOverloadMs = nowMs;
+                // Thetis counts +1 per overload poll (console.cs:22107), capped
+                // at 5, and decays -1 per clean poll. _adcOverloadLevel mirrors
+                // that counter exactly so the gate below matches its >3 timing.
+                _adcOverloadLevel = Math.Min(5, _adcOverloadLevel + 1);
+
+                // Gate the ramp on a *sustained* overload — Thetis only touches
+                // the attenuator once _adc_overload_level[i] > 3 (console.cs:
+                // 21518), the same threshold that turns the lamp red. A single
+                // transient spike no longer pulls in attenuation.
+                if (_adcOverloadLevel > cfg.WarningThreshold && _attOffsetDb < cfg.MaxOffsetDb)
                     _attOffsetDb = Math.Min(cfg.MaxOffsetDb, _attOffsetDb + cfg.AttackStepDb);
-                _adcOverloadLevel = Math.Min(5, _adcOverloadLevel + 2);
             }
             else
             {
-                if (_attOffsetDb > 0)
-                    _attOffsetDb = Math.Max(0, _attOffsetDb - cfg.ReleaseStepDb);
                 if (_adcOverloadLevel > 0) _adcOverloadLevel--;
+
+                // Hold the applied attenuation for ReleaseHoldMs after the last
+                // overload before unwinding — Thetis' nudAutoAttHold delay
+                // (console.cs:21569). This stops the offset pumping up and down
+                // on a signal that hovers right at the ADC ceiling. The level
+                // counter still decays above so the lamp clears on schedule.
+                bool holdElapsed = _lastOverloadMs == long.MinValue
+                    || (nowMs - _lastOverloadMs) >= cfg.ReleaseHoldMs;
+                if (holdElapsed && _attOffsetDb > 0)
+                    _attOffsetDb = Math.Max(0, _attOffsetDb - cfg.ReleaseStepDb);
             }
 
             int effective = Math.Clamp(_atten.ClampedDb + _attOffsetDb, HpsdrAtten.MinDb, HpsdrAtten.MaxDb);

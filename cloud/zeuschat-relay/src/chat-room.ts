@@ -49,6 +49,19 @@ interface RoomMeta {
 const MSG_RATE_LIMIT = 6;
 const RL_WINDOW_MS = 5000;
 
+/**
+ * While operators are connected, rebuild + rebroadcast the roster this often as a
+ * safety net. A freq-strip bug (a hibernation race that broadcasts an unloaded
+ * friend graph, or a stale socket that briefly shadows a live one) used to leave
+ * a friend's frequency dead for everyone until that operator's backend happened
+ * to reconnect — reopening the panel never helped, because the relay kept sending
+ * the same stripped roster. Periodically rebuilding the roster from current
+ * attachments + the loaded graph bounds any such regression to one interval
+ * instead of "dead until reconnect". Only armed while sockets are live, so an
+ * empty room still hibernates.
+ */
+const ROSTER_HEAL_INTERVAL_MS = 120_000;
+
 function norm(callsign: string): string {
   return callsign.trim().toUpperCase();
 }
@@ -263,17 +276,36 @@ export class ChatRoom extends DurableObject<Env> {
     this.broadcastRoster();
   }
 
-  /** Scheduled retention sweep: public room hourly, private rooms/DMs daily. */
+  /**
+   * Scheduled tick: a self-healing roster rebroadcast while operators are
+   * connected, plus the retention sweep (public room hourly, private rooms/DMs
+   * daily). The heal cadence fires this far more often than PRUNE_INTERVAL_MS,
+   * so the actual prune is gated on a persisted timestamp.
+   */
   override async alarm(): Promise<void> {
+    await this.ensureLoaded();
     const now = Date.now();
-    const all = await this.ctx.storage.list<Msg>({ prefix: 'm:' });
-    const dead: string[] = [];
-    for (const [key, m] of all) {
-      const cutoff = m.room === PUBLIC_ROOM ? PUBLIC_RETENTION_MS : PRIVATE_RETENTION_MS;
-      if (now - m.ts > cutoff) dead.push(key);
+
+    const lastPrune = (await this.ctx.storage.get<number>('lastPrune')) ?? 0;
+    if (now - lastPrune >= PRUNE_INTERVAL_MS) {
+      const all = await this.ctx.storage.list<Msg>({ prefix: 'm:' });
+      const dead: string[] = [];
+      for (const [key, m] of all) {
+        const cutoff = m.room === PUBLIC_ROOM ? PUBLIC_RETENTION_MS : PRIVATE_RETENTION_MS;
+        if (now - m.ts > cutoff) dead.push(key);
+      }
+      if (dead.length) await this.ctx.storage.delete(dead);
+      await this.ctx.storage.put('lastPrune', now);
     }
-    if (dead.length) await this.ctx.storage.delete(dead);
-    await this.ctx.storage.setAlarm(now + PRUNE_INTERVAL_MS);
+
+    // Self-heal: rebuild every connected operator's roster from current
+    // attachments + the loaded friend graph, so a transient freq-strip cannot
+    // outlive one interval. Skipped (and the fast cadence stood down) when no one
+    // is connected, letting the DO hibernate.
+    const connected = this.ctx.getWebSockets().length > 0;
+    if (connected) this.broadcastRoster();
+
+    await this.ctx.storage.setAlarm(now + (connected ? ROSTER_HEAL_INTERVAL_MS : PRUNE_INTERVAL_MS));
   }
 
   // --- persistence load ------------------------------------------------------
@@ -309,8 +341,11 @@ export class ChatRoom extends DurableObject<Env> {
     const bans = await this.ctx.storage.list<number>({ prefix: 'ban:' });
     for (const key of bans.keys()) this.bans.add(key.slice(4));
 
+    // Arm the self-heal/prune tick. ensureLoaded() only runs when an event woke
+    // the DO (a socket is live), so schedule the fast heal cadence; alarm() steps
+    // back down to the slow prune cadence once the room empties.
     if ((await this.ctx.storage.getAlarm()) === null) {
-      await this.ctx.storage.setAlarm(Date.now() + PRUNE_INTERVAL_MS);
+      await this.ctx.storage.setAlarm(Date.now() + ROSTER_HEAL_INTERVAL_MS);
     }
     this.loaded = true;
   }
@@ -594,15 +629,27 @@ export class ChatRoom extends DurableObject<Env> {
   /** Public roster as seen by `viewer`: freq only for friends whose eye is open. */
   private rosterFor(viewer: string): Operator[] {
     const fset = this.friends.get(viewer);
-    const seen = new Set<string>();
-    const out: Operator[] = [];
+    // Collapse the (possibly several) sockets per callsign to the best one before
+    // building the roster. A reconnect or network blip can leave a stale or
+    // not-yet-helloed duplicate socket in getWebSockets() for a while; the
+    // verified callsign is stamped on the socket before hello arrives, so such a
+    // socket has a callsign but no freq. A naive first-seen dedup let that bare
+    // socket shadow the live connection and strip the operator's freq for
+    // everyone — intermittently, per-operator, and persisting until the stale
+    // socket finally closed. Prefer the socket that has completed hello (carries
+    // a freq), then the most recently connected, so live presence always wins.
+    const best = new Map<string, Attachment>();
     for (const ws of this.ctx.getWebSockets()) {
       const att = ws.deserializeAttachment() as Attachment | null;
       if (!att || !att.callsign) continue;
-      if (seen.has(att.callsign)) continue;
-      seen.add(att.callsign);
+      const cur = best.get(att.callsign);
+      if (!cur || attRank(att) > attRank(cur)) best.set(att.callsign, att);
+    }
+    const out: Operator[] = [];
+    for (const att of best.values()) {
       const canSeeFreq =
-        att.callsign === viewer || (att.freqPublic !== false && (fset?.has(att.callsign) ?? false));
+        att.callsign === viewer ||
+        (att.freqPublic !== false && (fset?.has(att.callsign) ?? false));
       out.push(toOperator(att, canSeeFreq));
     }
     out.sort((a, b) => a.callsign.localeCompare(b.callsign));
@@ -632,6 +679,18 @@ function removeFrom(map: Map<string, Set<string>>, key: string, value: string): 
   if (!set) return;
   set.delete(value);
   if (set.size === 0) map.delete(key);
+}
+
+/**
+ * Ranks a connection's attachment so the live socket wins when an operator has
+ * more than one (reconnect overlap, lingering half-closed sockets). A socket
+ * that has completed hello carries a freq field; prefer it over a bare/initial
+ * attachment (callsign stamped, no presence yet), then break ties by most-recent
+ * connection (`since`). Used by rosterFor() to dedup multiple sockets per call.
+ */
+function attRank(a: Attachment): number {
+  const helloed = a.freq !== undefined ? 1 : 0;
+  return helloed * 1e15 + (a.since ?? 0);
 }
 
 function toOperator(a: Attachment, includeFreq = true): Operator {
