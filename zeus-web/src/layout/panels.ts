@@ -226,14 +226,17 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'vfo',
     tags: ['frequency', 'vfo', 'tuning'],
     component: VfoPanel,
-    // The VFO lane grid uses minmax(0,1fr) for the digit column and fills via
-    // height:100%, so it needs a DEFINITE box — auto-measure's max-content would
-    // collapse the 1fr digit column to zero (blank panel, "4 blank tabs"). An
-    // explicit design size ≈ the default 6×14 tile footprint scales the digits
-    // uniformly as the tile grows while staying ~1:1 at the default layout.
-    // Bench-tune designW/designH if the nominal zoom looks off.
+    // The VFO detail card's frequency readout (.freq-display) is a
+    // container-query box (container-type:size + 9cqw digits), so it needs a
+    // DEFINITE box from an ancestor — auto-measure's max-content would collapse
+    // it (blank panel). An explicit design size lets ScaleToFitTile pin that box
+    // and scale the chip-rail + detail master layout uniformly as the tile
+    // grows. designH must cover the full master-detail stack (rail + head +
+    // readout + actions + tools ≈ 290px); the old 210 was sized for the retired
+    // compact dual-VFO grid and clipped the new layout's lower controls, leaving
+    // only the chip rail visible/scrolling. Bench-tune if the nominal zoom is off.
     designW: 340,
-    designH: 210,
+    designH: 290,
     minW: 4,
     minH: 6,
   },

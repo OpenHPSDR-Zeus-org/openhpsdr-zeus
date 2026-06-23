@@ -130,7 +130,7 @@ export function FreeDvPanel() {
   // Library missing — offer the one-click install instead of dead controls.
   if (status && !status.nativeAvailable) {
     return (
-      <div className="dsp-cfg" style={{ gap: 8 }}>
+      <div className="dsp-cfg" style={{ gap: 8, padding: '10px 12px', overflowY: 'auto' }}>
         <FreeDvHeader status={status} reachable={reachable} inFreeDvMode={inFreeDvMode} />
         <div
           className="label-xs"
@@ -155,7 +155,7 @@ export function FreeDvPanel() {
   // panel calm and explanatory rather than crashing or showing dead controls.
   if (!status) {
     return (
-      <div className="dsp-cfg" style={{ gap: 8 }}>
+      <div className="dsp-cfg" style={{ gap: 8, padding: '10px 12px', overflowY: 'auto' }}>
         <FreeDvHeader status={null} reachable={reachable} inFreeDvMode={inFreeDvMode} />
         <div
           className="label-xs"
@@ -179,7 +179,7 @@ export function FreeDvPanel() {
   const snrThreshDisabled = ctrlsDisabled || !status.squelchEnabled;
 
   return (
-    <div className="dsp-cfg" style={{ gap: 8 }}>
+    <div className="dsp-cfg" style={{ gap: 8, padding: '10px 12px', overflowY: 'auto' }}>
       <FreeDvHeader status={status} reachable={reachable} inFreeDvMode={inFreeDvMode} />
 
       {/* SYNC lamp + SNR readout. */}

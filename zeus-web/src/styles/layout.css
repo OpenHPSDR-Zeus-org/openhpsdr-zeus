@@ -508,19 +508,36 @@
   display: inline-flex;
   flex: 0 0 24px;
   width: 24px;
-  height: 28px;
-  min-height: 28px;
+  /* Match the strip buttons (.btn.sm = 27px min-height) so the arrows are
+     the same height as the MODE / BAND / STEP buttons they scroll. */
+  height: 27px;
+  min-height: 27px;
   padding: 0;
   align-self: center;
+  /* The strip buttons live inside a .ctrl-group whose 9px label + 3px gap
+     sit ABOVE the button row, pushing the buttons ~6px below the bar's
+     vertical centre. The arrows have no label, so an asymmetric top margin
+     equal to (label + gap) shifts their centred margin-box down by half that
+     — landing the arrow centre exactly on the strip button row. */
+  margin-top: calc(9px + 3px);
 }
 .topbar .topbar-scroll-btn[hidden] {
   display: none;
 }
 .topbar .topbar-scroll-btn svg {
   pointer-events: none;
+  /* Brighter than the strip buttons' --fg-1 glyphs so the white chevron
+     reads clearly against the near-black panel. This selector (.topbar +
+     .topbar-scroll-btn + svg) outranks `.topbar .btn { color: --fg-1 }`,
+     so it wins regardless of source order. */
+  color: var(--fg-0);
 }
 .topbar .topbar-scroll-btn:disabled {
-  opacity: 0.32;
+  /* When a direction has nothing left to scroll, hide the arrow glyph but
+     KEEP its 24px column reserved (visibility, not opacity/display) so the
+     strip's edge button never slides into the arrow's space. The arrow can
+     therefore never appear to cover a button at any window width. */
+  visibility: hidden;
   cursor: default;
 }
 .topbar .btn {
