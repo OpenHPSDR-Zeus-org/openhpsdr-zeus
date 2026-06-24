@@ -47,6 +47,7 @@ import {
   chatUnban,
   chatClearRoom,
   chatBroadcast,
+  chatListBans,
   normalizeStatus,
   normalizeOperator,
   normalizeMessage,
@@ -93,7 +94,8 @@ export type ChatEnvelope =
   | { kind: 'rooms'; rooms: unknown }
   | { kind: 'banned'; message?: unknown }
   | { kind: 'cleared'; room?: unknown }
-  | { kind: 'notice'; from?: unknown; text?: unknown; ts?: unknown };
+  | { kind: 'notice'; from?: unknown; text?: unknown; ts?: unknown }
+  | { kind: 'bans'; bans?: unknown };
 
 /** A one-off global announcement pushed by an admin (shown as a banner). */
 export type ChatAnnouncement = { from: string; text: string; ts: number };
@@ -125,6 +127,10 @@ export type ChatStoreState = {
   // The latest global admin announcement, shown as a dismissible banner.
   announcement: ChatAnnouncement | null;
 
+  // Currently-banned callsigns (admins only; relay-authoritative). Pushed on
+  // connect, on every ban/unban, and in reply to listBans().
+  bannedUsers: string[];
+
   refreshStatus: () => Promise<void>;
   setEnabled: (enabled: boolean) => Promise<void>;
   /** Report whether the Chat panel is currently displayed (gates presence). */
@@ -150,6 +156,8 @@ export type ChatStoreState = {
   removeMember: (room: string, callsign: string) => Promise<void>;
   ban: (callsign: string) => Promise<void>;
   unban: (callsign: string) => Promise<void>;
+  /** Refresh the ban list from the relay (admins only). */
+  listBans: () => Promise<void>;
   clearRoom: (room?: string) => Promise<void>;
   broadcast: (text: string) => Promise<void>;
   dismissAnnouncement: () => void;
@@ -215,6 +223,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
   incomingRequests: [],
   outgoingRequests: [],
   announcement: null,
+  bannedUsers: [],
 
   refreshStatus: async () => {
     try {
@@ -381,6 +390,9 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
   unban: async (callsign) => {
     try { await chatUnban(callsign); } catch (err) { set({ relayError: errMsg(err) }); }
   },
+  listBans: async () => {
+    try { await chatListBans(); } catch (err) { set({ relayError: errMsg(err) }); }
+  },
   clearRoom: async (room) => {
     try { await chatClearRoom(room); } catch (err) { set({ relayError: errMsg(err) }); }
   },
@@ -456,6 +468,16 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
         const from = typeof envelope.from === 'string' ? envelope.from : '';
         const ts = typeof envelope.ts === 'number' && Number.isFinite(envelope.ts) ? envelope.ts : Date.now();
         set({ announcement: { from, text, ts } });
+        return;
+      }
+      case 'bans': {
+        const bans = Array.isArray(envelope.bans)
+          ? envelope.bans
+              .filter((b): b is string => typeof b === 'string' && b.length > 0)
+              .map((b) => b.toUpperCase())
+              .sort()
+          : [];
+        set({ bannedUsers: bans });
         return;
       }
       default:

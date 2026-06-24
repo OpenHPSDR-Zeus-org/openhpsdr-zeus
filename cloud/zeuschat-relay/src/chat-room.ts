@@ -172,6 +172,7 @@ export class ChatRoom extends DurableObject<Env> {
         this.notify(callsign); // friend graph
         this.send(ws, { t: 'rooms', rooms: this.roomsFor(callsign) });
         await this.sendHistory(ws, callsign, PUBLIC_ROOM); // instant public scrollback
+        if (this.admins.has(callsign)) this.sendBans(ws); // admins get the ban list up front
         return;
       }
 
@@ -260,6 +261,9 @@ export class ChatRoom extends DurableObject<Env> {
         return;
       case 'admin_broadcast':
         if (this.isAdmin(me)) this.broadcastNotice(me, (msg.text ?? '').slice(0, MAX_MESSAGE_LEN));
+        return;
+      case 'admin_list_bans':
+        if (this.isAdmin(me)) this.sendBans(ws);
         return;
 
       case 'ping':
@@ -511,6 +515,20 @@ export class ChatRoom extends DurableObject<Env> {
     return !!callsign && this.admins.has(callsign);
   }
 
+  /** Send the current ban list to a single admin socket. */
+  private sendBans(ws: WebSocket): void {
+    this.send(ws, { t: 'bans', bans: [...this.bans].sort() });
+  }
+
+  /** Push the current ban list to every connected admin (after a ban/unban). */
+  private broadcastBans(): void {
+    const bans = [...this.bans].sort();
+    for (const ws of this.ctx.getWebSockets()) {
+      const att = ws.deserializeAttachment() as Attachment | null;
+      if (att?.callsign && this.admins.has(att.callsign)) this.send(ws, { t: 'bans', bans });
+    }
+  }
+
   private async banUser(admin: string, callsign: string): Promise<void> {
     if (!callsign || this.admins.has(callsign)) return; // never ban an admin
     this.bans.add(callsign);
@@ -524,12 +542,14 @@ export class ChatRoom extends DurableObject<Env> {
       }
     }
     this.broadcastRoster();
+    this.broadcastBans();
   }
 
   private async unbanUser(callsign: string): Promise<void> {
     if (!callsign || !this.bans.has(callsign)) return;
     this.bans.delete(callsign);
     await this.ctx.storage.delete(`ban:${callsign}`);
+    this.broadcastBans();
   }
 
   // --- friendship graph ------------------------------------------------------

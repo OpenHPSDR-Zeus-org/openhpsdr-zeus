@@ -309,3 +309,6 @@ export const chatClearRoom = (room?: string, signal?: AbortSignal) =>
 /** Admin: broadcast a one-off global announcement to every connected operator. */
 export const chatBroadcast = (text: string, signal?: AbortSignal) =>
   postOk('/api/chat/admin/broadcast', { text }, signal);
+/** Admin: request the current ban list (relay replies with a `bans` push frame). */
+export const chatListBans = (signal?: AbortSignal) =>
+  postOk('/api/chat/admin/bans', {}, signal);

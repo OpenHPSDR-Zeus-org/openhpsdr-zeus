@@ -1129,6 +1129,95 @@ function AdminAction({
 }
 
 /**
+ * The unban surface: a live list of every currently-banned callsign (relay-
+ * authoritative, persisted across relay restarts). Each row lifts that ban; the
+ * relay echoes the updated list back so the dialog updates in place and stays
+ * open for unbanning several at once.
+ */
+function BanListDialog({
+  bans,
+  onUnban,
+  onClose,
+}: {
+  bans: string[];
+  onUnban: (callsign: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <ConfirmDialog
+      title="Banned operators"
+      confirmLabel="Done"
+      cancelLabel="Close"
+      intent="primary"
+      onConfirm={onClose}
+      onCancel={onClose}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 248 }}>
+        <div style={{ fontSize: 11, color: 'var(--fg-3)', lineHeight: 1.4 }}>
+          Bans are stored on the relay and persist across restarts. Lift one to let
+          that callsign reconnect to ZeusChat.
+        </div>
+        {bans.length === 0 ? (
+          <div
+            style={{
+              padding: '12px 8px',
+              textAlign: 'center',
+              fontSize: 12,
+              color: 'var(--fg-3)',
+              border: '1px dashed var(--line)',
+              borderRadius: 'var(--r-sm)',
+            }}
+          >
+            No operators are currently banned.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 260, overflowY: 'auto' }}>
+            {bans.map((call) => (
+              <div
+                key={call}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '5px 8px',
+                  borderRadius: 'var(--r-sm)',
+                  background: 'var(--bg-2)',
+                  border: '1px solid var(--line)',
+                }}
+              >
+                <span
+                  className="mono"
+                  style={{
+                    flex: 1,
+                    fontWeight: 700,
+                    fontSize: 12.5,
+                    color: 'var(--fg-0)',
+                    letterSpacing: '0.04em',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {call}
+                </span>
+                <button
+                  type="button"
+                  className="btn sm"
+                  onClick={() => onUnban(call)}
+                  title={`Unban ${call}`}
+                  style={{ flexShrink: 0, color: 'var(--power)', borderColor: 'var(--power)' }}
+                >
+                  Unban
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </ConfirmDialog>
+  );
+}
+
+/**
  * Collapsible strip of network-wide moderator tools, shown only to operators the
  * relay flagged as admins (N9WAR / KB2UKA). Gathers the actions that aren't tied
  * to a single roster row or room: global announcement, clear the public lobby,
@@ -1140,7 +1229,17 @@ function AdminConsole() {
   const broadcast = useChatStore((s) => s.broadcast);
   const clearRoom = useChatStore((s) => s.clearRoom);
   const unban = useChatStore((s) => s.unban);
+  const listBans = useChatStore((s) => s.listBans);
+  const bannedUsers = useChatStore((s) => s.bannedUsers);
   const ownCall = useChatStore((s) => s.callsign);
+
+  // Refresh the ban list whenever the console is opened, so the count + list are
+  // current without waiting for the next ban/unban push.
+  useEffect(() => {
+    if (open) void listBans();
+  }, [open, listBans]);
+
+  const banCount = bannedUsers.length;
 
   return (
     <div
@@ -1218,9 +1317,16 @@ function AdminConsole() {
           <AdminAction
             icon={<UnbanIcon />}
             title="Unban operator"
-            description="Lift a ban so a callsign can reconnect to ZeusChat."
-            actionLabel="Unban…"
-            onClick={() => setDialog('unban')}
+            description={
+              banCount === 0
+                ? 'No operators are currently banned.'
+                : `${banCount} operator${banCount === 1 ? '' : 's'} banned — open the list to lift a ban.`
+            }
+            actionLabel="Manage"
+            onClick={() => {
+              void listBans();
+              setDialog('unban');
+            }}
           />
           <AdminAction
             icon={<ClearIcon />}
@@ -1247,16 +1353,10 @@ function AdminConsole() {
         />
       )}
       {dialog === 'unban' && (
-        <PromptDialog
-          title="Unban operator"
-          label="Callsign"
-          placeholder="e.g. N0CALL"
-          confirmLabel="Unban"
-          onSubmit={(v) => {
-            void unban(v.toUpperCase());
-            setDialog(null);
-          }}
-          onCancel={() => setDialog(null)}
+        <BanListDialog
+          bans={bannedUsers}
+          onUnban={(call) => void unban(call)}
+          onClose={() => setDialog(null)}
         />
       )}
       {dialog === 'clear' && (
