@@ -41,6 +41,8 @@ function resetStores() {
     vfoBHz: 7_200_000,
     rx2Enabled: true,
     rxFocus: 'B',
+    focusedRxIndex: 1,
+    selectedRxIndices: [1],
     mode: 'USB',
     modeB: 'LSB',
     filterLowHzB: -2850,
@@ -85,7 +87,7 @@ describe('BandFavorites', () => {
     });
 
     expect(fortyMeters).toBeTruthy();
-    expect(setVfoB).toHaveBeenCalledWith(7_074_000);
+    expect(setVfoB).toHaveBeenCalledWith(7_074_000, undefined);
     expect(setVfo).not.toHaveBeenCalled();
     expect(setMode).not.toHaveBeenCalled();
     expect(useConnectionStore.getState().vfoBHz).toBe(7_074_000);
@@ -144,7 +146,7 @@ describe('BandFavorites', () => {
 
     expect(twentyMeters).toBeTruthy();
     expect(setMode).toHaveBeenCalledWith('DIGU', undefined, 'B');
-    expect(setVfoB).toHaveBeenCalledWith(14_074_000);
+    expect(setVfoB).toHaveBeenCalledWith(14_074_000, undefined);
     expect(setVfo).not.toHaveBeenCalled();
     expect(useConnectionStore.getState().mode).toBe('USB');
     expect(useConnectionStore.getState().modeB).toBe('DIGU');

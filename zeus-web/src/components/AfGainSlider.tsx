@@ -44,8 +44,8 @@
 // License for details.
 
 import { useCallback, useState } from 'react';
-import { setRx2, setRxAfGain, type TxVfo } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { getReceiverAfGainDb, postReceiverAfGain } from '../state/receiver-state';
 import { useLiveSlider } from '../hooks/useLiveSlider';
 
 // Master RX AF gain in dB. Drives WDSP's SetRXAPanelGain1(linear) server-side
@@ -58,14 +58,13 @@ const MIN = -50;
 const MAX = 20;
 
 export function AfGainSlider() {
-  const serverAf = useConnectionStore((s) => s.rxAfGainDb);
-  const serverAfB = useConnectionStore((s) => s.rx2AfGainDb);
-  const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
-  const rxFocus = useConnectionStore((s) => s.rxFocus);
+  // Follow the focused receiver (0=RX1, 1=RX2, >=2=RX3+) so the AF slider is the
+  // volume of whichever receiver the operator is working in — the A/B model
+  // generalised to any DDC.
+  const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
+  const activeAf = useConnectionStore((s) => getReceiverAfGainDb(s, focusedRxIndex));
   const connected = useConnectionStore((s) => s.status === 'Connected');
   const applyState = useConnectionStore((s) => s.applyState);
-  const activeReceiver: TxVfo = rxFocus === 'B' && rx2Enabled ? 'B' : 'A';
-  const activeAf = activeReceiver === 'B' ? serverAfB : serverAf;
 
   const [dragValue, setDragValue] = useState<number | null>(null);
   const value = dragValue ?? activeAf;
@@ -76,17 +75,22 @@ export function AfGainSlider() {
   // capping the wire rate to one POST per paint.
   const liveSlider = useLiveSlider<number>({
     send: useCallback(
-      (v: number, signal: AbortSignal) =>
-        (activeReceiver === 'B'
-          ? setRx2({ afGainDb: v }, signal)
-          : setRxAfGain(v, signal))
-          .then((next) => {
-            if (!signal.aborted) applyState(next);
-          })
+      (v: number, signal: AbortSignal) => {
+        // Ganged: stream AF to every selected receiver; reconcile from focused.
+        const { selectedRxIndices, focusedRxIndex: focused } = useConnectionStore.getState();
+        return Promise.all(
+          selectedRxIndices.map((idx) =>
+            postReceiverAfGain(idx, v, signal).then((next) => {
+              if (idx === focused && !signal.aborted) applyState(next);
+            }),
+          ),
+        )
+          .then(() => {})
           .catch(() => {
             /* next poll will reconcile; don't noisily log on abort */
-          }),
-      [activeReceiver, applyState],
+          });
+      },
+      [applyState],
     ),
   });
 

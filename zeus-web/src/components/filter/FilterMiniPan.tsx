@@ -1934,7 +1934,7 @@ function FilterMiniPanSurface({
     <div className={`filter-minipan-wrap ${split ? 'filter-minipan-wrap--split' : ''}`}>
       {showReceiverLabel && (
         <div className={`filter-minipan-vfo-tag mono ${receiver === 'B' ? 'is-rx2' : 'is-rx1'}`}>
-          {receiver === 'B' ? 'RX2 · VFO B' : 'RX1 · VFO A'}
+          {receiver === 'B' ? 'RX2' : 'RX1'}
         </div>
       )}
       <canvas

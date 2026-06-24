@@ -756,7 +756,7 @@ public sealed class RadioService : IDisposable
         get { lock (_sync) return _activeClient is not null || _p2Active; }
     }
 
-    public StateDto Snapshot() { lock (_sync) return _state with { Receivers = ProjectReceivers(_state) }; }
+    public StateDto Snapshot() { lock (_sync) return _state with { Receivers = ProjectReceivers(_state), MaxReceivers = EffectiveMaxReceivers }; }
 
     /// <summary>Current operator preamp toggle. PreampOn isn't on the
     /// StateDto wire format, so DspPipelineService reads it directly when
@@ -1061,12 +1061,39 @@ public sealed class RadioService : IDisposable
         RxMode? mode = null,
         int? filterLowHz = null,
         int? filterHighHz = null,
-        double? afGainDb = null)
+        double? afGainDb = null,
+        string? filterPresetName = null)
     {
-        if (index == 0)
-            return vfoHz is long v0 ? SetVfo(v0) : Snapshot();
-        if (index == 1)
-            return SetRx2(new Rx2SetRequest(Enabled: enabled, VfoBHz: vfoHz, AfGainDb: afGainDb));
+        // RX1 (0) and RX2 (1) live on the flat StateDto fields, but the uniform
+        // numeric model means /api/receivers/{index} must drive every receiver.
+        // Route each supplied field to its canonical RX1/RX2 setter so all their
+        // side effects (TX recompute, band-mode memory, filter preset memory)
+        // still fire. The legacy A/B endpoints (/api/mode, /api/filter, /api/rx2)
+        // remain as thin aliases onto the same setters.
+        if (index == 0 || index == 1)
+        {
+            var receiver = index == 1 ? TxVfo.B : TxVfo.A;
+            if (index == 1 && enabled is bool en1)
+                SetRx2(new Rx2SetRequest(Enabled: en1));
+            if (vfoHz is long v)
+            {
+                if (index == 1) SetVfoB(v); else SetVfo(v);
+            }
+            if (mode is RxMode m) SetMode(m, receiver);
+            if (filterLowHz is not null || filterHighHz is not null || filterPresetName is not null)
+            {
+                var cur = Snapshot();
+                int lo = filterLowHz ?? (index == 1 ? cur.FilterLowHzB : cur.FilterLowHz);
+                int hi = filterHighHz ?? (index == 1 ? cur.FilterHighHzB : cur.FilterHighHz);
+                SetFilter(lo, hi, filterPresetName, receiver);
+            }
+            if (afGainDb is double af)
+            {
+                if (index == 1) SetRx2(new Rx2SetRequest(AfGainDb: af));
+                else SetRxAfGain(af);
+            }
+            return Snapshot();
+        }
         if (index < 2 || index >= _extraReceivers.Length)
             throw new ArgumentOutOfRangeException(
                 nameof(index), index, $"receiver index out of range (0..{_extraReceivers.Length - 1})");
@@ -1080,6 +1107,7 @@ public sealed class RadioService : IDisposable
             if (mode is RxMode m) e.Mode = m;
             if (filterLowHz is int fl) e.FilterLowHz = fl;
             if (filterHighHz is int fh) e.FilterHighHz = fh;
+            if (filterPresetName is string fp) e.FilterPresetName = fp;
             if (afGainDb is double af) e.AfGainDb = Math.Clamp(af, -50.0, 20.0);
             if (enabled is bool en)
             {
@@ -3580,7 +3608,7 @@ public sealed class RadioService : IDisposable
             // fields on every mutation so StateChanged subscribers and the
             // SignalR broadcast always carry an up-to-date Receivers[] (wire
             // v2). Pure function of the flat fields — cheap (1–2 elements).
-            next = next with { Receivers = ProjectReceivers(next) };
+            next = next with { Receivers = ProjectReceivers(next), MaxReceivers = EffectiveMaxReceivers };
             _state = next;
         }
         _stateDirty = true;
@@ -3860,6 +3888,29 @@ public sealed class RadioService : IDisposable
             var connected = ConnectedBoardKind;
             if (connected != HpsdrBoardKind.Unknown) return connected;
             return _preferredRadioStore?.Get() ?? HpsdrBoardKind.Unknown;
+        }
+    }
+
+    // Board-aware count of user-visible receivers the connected radio can
+    // actually expose, advertised to the frontend via StateDto.MaxReceivers so
+    // the Receivers menu renders exactly the reachable slots. On Protocol-2 the
+    // standard DDC enable byte addresses DDC0..DDC7 (MaxRxDdc = 8), but
+    // Orion-family boards reserve the first RxBaseDdc slots (DDC0/1) for the
+    // PureSignal feedback pair, leaving user RX = MaxRxDdc - RxBaseDdc(board):
+    // 8 on Hermes-class, 6 on G2/Orion. Off P2 (Protocol-1 or disconnected) we
+    // keep the flat wire ceiling — P1 multi-RX board-awareness is a separate
+    // concern and changing it here would be an untested regression on HL2 etc.
+    public int EffectiveMaxReceivers
+    {
+        get
+        {
+            lock (_sync)
+            {
+                if (_p2Active)
+                    return Zeus.Protocol2.Protocol2Client.MaxRxDdc
+                         - Zeus.Protocol2.Protocol2Client.RxBaseDdc(ConnectedBoardKind);
+                return Zeus.Contracts.WireContract.MaxReceivers;
+            }
         }
     }
 

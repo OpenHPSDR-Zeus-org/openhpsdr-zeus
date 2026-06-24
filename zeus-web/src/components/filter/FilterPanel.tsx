@@ -14,34 +14,35 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from 'react-dom';
 import { useConnectionStore } from '../../state/connection-store';
 import {
-  setFilter,
   getFilterPresets,
   type FilterPresetDto,
-  type TxVfo,
 } from '../../api/client';
+import {
+  gangedReceiverAction,
+  getReceiverFilterHighHz,
+  getReceiverFilterLowHz,
+  getReceiverFilterPresetName,
+  getReceiverMode,
+  optimisticSetReceiverFilter,
+  optimisticSetReceiverPreset,
+  postReceiverFilter,
+} from '../../state/receiver-state';
 import { useFilterFavoritesStore, useFavoritesForMode } from '../../state/filter-favorites-store';
 import { FILTER_DRAG_MIME } from './filterRibbonShared';
 import { getPresetsForMode } from './filterPresets';
 
 export function FilterPanel() {
-  const mode = useConnectionStore((s) => s.mode);
-  const modeB = useConnectionStore((s) => s.modeB);
-  const filterPresetName = useConnectionStore((s) => s.filterPresetName);
-  const filterPresetNameB = useConnectionStore((s) => s.filterPresetNameB);
-  const filterLow = useConnectionStore((s) => s.filterLowHz);
-  const filterHigh = useConnectionStore((s) => s.filterHighHz);
-  const filterLowB = useConnectionStore((s) => s.filterLowHzB);
-  const filterHighB = useConnectionStore((s) => s.filterHighHzB);
-  const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
-  const rxFocus = useConnectionStore((s) => s.rxFocus);
-  const applyState = useConnectionStore((s) => s.applyState);
+  // Follow the focused receiver (0=RX1, 1=RX2, >=2=RX3+) so the filter strip
+  // edits whichever receiver the operator is working in.
+  const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
+  const activeMode = useConnectionStore((s) => getReceiverMode(s, focusedRxIndex));
+  const activeFilterPresetName = useConnectionStore((s) =>
+    getReceiverFilterPresetName(s, focusedRxIndex),
+  );
+  const activeFilterLow = useConnectionStore((s) => getReceiverFilterLowHz(s, focusedRxIndex));
+  const activeFilterHigh = useConnectionStore((s) => getReceiverFilterHighHz(s, focusedRxIndex));
   const loadFavorites = useFilterFavoritesStore((s) => s.load);
   const updateFavorites = useFilterFavoritesStore((s) => s.update);
-  const activeReceiver: TxVfo = rxFocus === 'B' && rx2Enabled ? 'B' : 'A';
-  const activeMode = activeReceiver === 'B' ? modeB : mode;
-  const activeFilterPresetName = activeReceiver === 'B' ? filterPresetNameB : filterPresetName;
-  const activeFilterLow = activeReceiver === 'B' ? filterLowB : filterLow;
-  const activeFilterHigh = activeReceiver === 'B' ? filterHighB : filterHigh;
   const favoriteSlotNames = useFavoritesForMode(activeMode);
 
   // Seed from the local Thetis preset table so labels render correctly on
@@ -92,24 +93,15 @@ export function FilterPanel() {
 
   const selectPreset = useCallback(
     (slot: FilterPresetDto) => {
-      useConnectionStore.setState({
-        ...(activeReceiver === 'B'
-          ? {
-              filterLowHzB: slot.lowHz,
-              filterHighHzB: slot.highHz,
-              filterPresetNameB: slot.slotName,
-            }
-          : {
-              filterLowHz: slot.lowHz,
-              filterHighHz: slot.highHz,
-              filterPresetName: slot.slotName,
-            }),
+      gangedReceiverAction({
+        optimistic: (k) => {
+          optimisticSetReceiverFilter(k, slot.lowHz, slot.highHz);
+          optimisticSetReceiverPreset(k, slot.slotName);
+        },
+        post: (k) => postReceiverFilter(k, slot.lowHz, slot.highHz, slot.slotName),
       });
-      setFilter(slot.lowHz, slot.highHz, slot.slotName, undefined, activeReceiver)
-        .then(applyState)
-        .catch(() => { /* next state poll reconciles */ });
     },
-    [activeReceiver, applyState],
+    [],
   );
 
   // Close popover on outside click or Escape. Treats clicks inside either

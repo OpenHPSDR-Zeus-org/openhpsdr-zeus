@@ -1464,6 +1464,13 @@
   background: linear-gradient(180deg, var(--accent-bright), var(--accent));
   box-shadow: 0 0 12px rgba(78,166,255,0.26);
 }
+/* Multi-selected but not focused: a receiver that ganged controls also act on.
+ * Subtler than .is-active (the focused/primary) — accent tint + inset outline. */
+.hero-rx-audio-switch__key.is-selected {
+  color: var(--fg-0);
+  background: rgba(78,166,255,0.12);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
 
 /* RX audio mixer — small header trigger + movable popout (replaces the inline
  * switch so any number of DDC receivers fit without crowding the header). */
@@ -2245,6 +2252,12 @@
 .vfo-chip.is-active::before {
   background: var(--vfo-filter-color, var(--accent));
   box-shadow: 0 0 10px color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 70%, transparent);
+}
+/* Multi-selected but not focused: a ganged-control target. Subtler than
+ * .is-active (the focused primary) — a dim receiver-colour outline. */
+.vfo-chip.is-selected {
+  border-color: color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 38%, transparent);
+  background: color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 7%, transparent);
 }
 .vfo-chip.is-muted { opacity: 0.55; }
 .vfo-chip.is-tx { border-color: color-mix(in srgb, var(--tx) 55%, transparent); }
