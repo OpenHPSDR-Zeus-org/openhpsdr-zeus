@@ -400,8 +400,9 @@ export function WaterfallHeightfield({
     const schedule = () => requestDrawBusFrame(update);
     const unsubVc = vc.subscribe(schedule);
     const unsubConn = useConnectionStore.subscribe((s, prev) => {
-      // RX3+ VFOs live in the receivers[] array, not the *B fields.
-      if (s.vfoHz !== prev.vfoHz || s.vfoBHz !== prev.vfoBHz || s.receivers !== prev.receivers) schedule();
+      // RX1 is the flat primary VFO; every secondary (RX2 = index 1, RX3+) lives
+      // in the receivers[] array.
+      if (s.vfoHz !== prev.vfoHz || s.receivers !== prev.receivers) schedule();
     });
     const unsubFrame = useDisplayStore.subscribe((s, prev) => {
       if (selectDisplaySlice(s, receiver).lastSeq !== selectDisplaySlice(prev, receiver).lastSeq) schedule();

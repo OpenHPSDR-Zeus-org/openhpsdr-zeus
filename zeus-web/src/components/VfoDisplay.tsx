@@ -52,8 +52,13 @@ import {
   useRef,
   useState,
 } from 'react';
-import { fetchState, setReceiver, setVfo, setVfoB } from '../api/client';
+import { fetchState } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import {
+  getReceiverVfoHz,
+  optimisticSetReceiverVfo,
+  postReceiverVfo,
+} from '../state/receiver-state';
 import { receiverColorByIndex, type SpectrumReceiverId } from './spectrumReceiverColor';
 
 const MAX_HZ = 60_000_000;
@@ -123,20 +128,12 @@ function resolveTargetIndex(receiver: ReceiverId, rxIndex?: number): number {
 }
 
 function readReceiverVfo(targetIndex: number): number {
-  const s = useConnectionStore.getState();
-  if (targetIndex === 0) return s.vfoHz;
-  if (targetIndex === 1) return s.vfoBHz;
-  return s.receivers.find((r) => r.index === targetIndex)?.vfoHz ?? 0;
+  return getReceiverVfoHz(useConnectionStore.getState(), targetIndex);
 }
 
 // Optimistic store patch so the digits track the wheel before the POST lands.
 function patchReceiverVfo(targetIndex: number, hz: number) {
-  if (targetIndex === 0) useConnectionStore.setState({ vfoHz: hz });
-  else if (targetIndex === 1) useConnectionStore.setState({ vfoBHz: hz });
-  else
-    useConnectionStore.setState((s) => ({
-      receivers: s.receivers.map((r) => (r.index === targetIndex ? { ...r, vfoHz: hz } : r)),
-    }));
+  optimisticSetReceiverVfo(targetIndex, hz);
 }
 
 export function VfoDisplay({
@@ -147,19 +144,10 @@ export function VfoDisplay({
 }: VfoDisplayProps = {}) {
   const targetIndex = resolveTargetIndex(receiver, rxIndex);
   const resolvedLabel = label ?? `RX${targetIndex + 1}`;
-  const vfoHz = useConnectionStore((s) =>
-    targetIndex === 0
-      ? s.vfoHz
-      : targetIndex === 1
-      ? s.vfoBHz
-      : s.receivers.find((r) => r.index === targetIndex)?.vfoHz ?? 0,
-  );
+  const vfoHz = useConnectionStore((s) => getReceiverVfoHz(s, targetIndex));
   const applyState = useConnectionStore((s) => s.applyState);
   const postVfo = useCallback(
-    (hz: number, signal?: AbortSignal) =>
-      targetIndex >= 2
-        ? setReceiver(targetIndex, { vfoHz: hz }, signal)
-        : (targetIndex === 1 ? setVfoB : setVfo)(hz, signal),
+    (hz: number, signal?: AbortSignal) => postReceiverVfo(targetIndex, hz, signal),
     [targetIndex],
   );
   const receiverFilterColor = receiverColorByIndex(targetIndex);

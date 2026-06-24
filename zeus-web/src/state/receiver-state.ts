@@ -206,6 +206,18 @@ export function optimisticSetReceiverMode(key: ReceiverKey, mode: RxMode): void 
   }
 }
 
+export function optimisticSetReceiverAfGain(key: ReceiverKey, db: number): void {
+  const idx = rxIndexOf(key);
+  if (idx === 0) {
+    useConnectionStore.setState({ rxAfGainDb: db });
+  } else {
+    useConnectionStore.setState((s) => ({
+      receivers: patchReceiverEntry(s.receivers, idx, { afGainDb: db }),
+      ...(idx === 1 ? { rx2AfGainDb: db } : {}),
+    }));
+  }
+}
+
 export function optimisticSetReceiverPreset(key: ReceiverKey, slot: string): void {
   const idx = rxIndexOf(key);
   if (idx === 0) {

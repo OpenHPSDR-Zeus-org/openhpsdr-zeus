@@ -98,6 +98,7 @@ import { setAudioHostMode } from './audio/host-mode';
 import { useMicUplink } from './audio/use-mic-uplink';
 import { fetchState, fetchUpdateStatus, type RepoUpdateStatus } from './api/client';
 import { useConnectionStore } from './state/connection-store';
+import { getReceiverMode } from './state/receiver-state';
 import { useRadioStore } from './state/radio-store';
 import { useQrzStore } from './state/qrz-store';
 import { useRotatorStore } from './state/rotator-store';
@@ -154,7 +155,7 @@ export default function App() {
   const status = useConnectionStore((s) => s.status);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const mode = useConnectionStore((s) => s.mode);
-  const modeB = useConnectionStore((s) => s.modeB);
+  const modeB = useConnectionStore((s) => getReceiverMode(s, 1));
   const preampOn = useConnectionStore((s) => s.preampOn);
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
@@ -356,7 +357,7 @@ export default function App() {
 
   useEffect(() => {
     return useConnectionStore.subscribe((state, prev) => {
-      if (state.mode !== prev.mode || state.modeB !== prev.modeB) getAudioClient().reset();
+      if (state.mode !== prev.mode || getReceiverMode(state, 1) !== getReceiverMode(prev, 1)) getAudioClient().reset();
     });
   }, []);
 

@@ -206,11 +206,9 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
         visible &&
         (s.filterLowHz !== prev.filterLowHz ||
           s.filterHighHz !== prev.filterHighHz ||
-          s.filterLowHzB !== prev.filterLowHzB ||
-          s.filterHighHzB !== prev.filterHighHzB ||
           s.mode !== prev.mode ||
-          s.modeB !== prev.modeB ||
-          // RX3+ filter/mode live in the receivers[] array, not the *B fields.
+          // RX1 is the flat primary; every secondary (RX2 = index 1, RX3+) lives
+          // in the receivers[] array — its reference changes on any filter/mode edit.
           s.receivers !== prev.receivers)
       ) {
         schedule();
