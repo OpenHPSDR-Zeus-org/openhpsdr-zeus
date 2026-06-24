@@ -18,6 +18,7 @@ import {
   type FilterPresetDto,
 } from '../../api/client';
 import {
+  gangedReceiverAction,
   getReceiverFilterHighHz,
   getReceiverFilterLowHz,
   getReceiverFilterPresetName,
@@ -40,7 +41,6 @@ export function FilterPanel() {
   );
   const activeFilterLow = useConnectionStore((s) => getReceiverFilterLowHz(s, focusedRxIndex));
   const activeFilterHigh = useConnectionStore((s) => getReceiverFilterHighHz(s, focusedRxIndex));
-  const applyState = useConnectionStore((s) => s.applyState);
   const loadFavorites = useFilterFavoritesStore((s) => s.load);
   const updateFavorites = useFilterFavoritesStore((s) => s.update);
   const favoriteSlotNames = useFavoritesForMode(activeMode);
@@ -93,13 +93,15 @@ export function FilterPanel() {
 
   const selectPreset = useCallback(
     (slot: FilterPresetDto) => {
-      optimisticSetReceiverFilter(focusedRxIndex, slot.lowHz, slot.highHz);
-      optimisticSetReceiverPreset(focusedRxIndex, slot.slotName);
-      postReceiverFilter(focusedRxIndex, slot.lowHz, slot.highHz, slot.slotName)
-        .then(applyState)
-        .catch(() => { /* next state poll reconciles */ });
+      gangedReceiverAction({
+        optimistic: (k) => {
+          optimisticSetReceiverFilter(k, slot.lowHz, slot.highHz);
+          optimisticSetReceiverPreset(k, slot.slotName);
+        },
+        post: (k) => postReceiverFilter(k, slot.lowHz, slot.highHz, slot.slotName),
+      });
     },
-    [focusedRxIndex, applyState],
+    [],
   );
 
   // Close popover on outside click or Escape. Treats clicks inside either

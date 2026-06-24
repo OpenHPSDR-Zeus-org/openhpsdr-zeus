@@ -68,6 +68,8 @@ export function VfoPanel() {
   const txReceiverIndex = useConnectionStore((s) => s.txReceiverIndex);
   const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
   const setFocusedRxIndex = useConnectionStore((s) => s.setFocusedRxIndex);
+  const selectedRxIndices = useConnectionStore((s) => s.selectedRxIndices);
+  const toggleRxSelection = useConnectionStore((s) => s.toggleRxSelection);
 
   const patchRx2 = (req: {
     enabled?: boolean;
@@ -161,18 +163,21 @@ export function VfoPanel() {
           const muted = !audibleOf(l.index);
           const isTx = txReceiverIndex === l.index;
           const isActive = l.index === active.index;
+          const isSelected = selectedRxIndices.includes(l.index);
           return (
             <button
               key={l.index}
               type="button"
               role="tab"
               aria-selected={isActive}
-              className={`vfo-chip ${isActive ? 'is-active' : ''} ${isTx ? 'is-tx' : ''} ${
-                muted ? 'is-muted' : ''
-              }`}
+              className={`vfo-chip ${isActive ? 'is-active' : ''} ${
+                isSelected && !isActive ? 'is-selected' : ''
+              } ${isTx ? 'is-tx' : ''} ${muted ? 'is-muted' : ''}`}
               style={{ '--vfo-filter-color': receiverColorByIndex(l.index) } as CSSProperties}
-              onClick={() => setFocusedRxIndex(l.index)}
-              title={`${l.index === 0 ? 'RX1 / VFO A' : l.index === 1 ? 'RX2 / VFO B' : `RX${l.index + 1}`}${
+              onClick={(e) =>
+                e.ctrlKey || e.metaKey ? toggleRxSelection(l.index) : setFocusedRxIndex(l.index)
+              }
+              title={`RX${l.index + 1}: click to focus, Ctrl/⌘-click to multi-select${
                 isTx ? ' · transmitting here' : ''
               }${muted ? ' · muted' : ''}`}
             >

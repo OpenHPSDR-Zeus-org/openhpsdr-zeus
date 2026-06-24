@@ -88,6 +88,11 @@ export type ConnectionState = {
   // (0=RX1..). Drives the VFO-lane / hero highlight across all DDCs; rxFocus
   // stays the A/B stitched-view focus and mirrors this for indices 0/1.
   focusedRxIndex: number;
+  // Receivers the operator has multi-selected for ganged control. Toolbar
+  // actions (mode/filter/band/AF) apply to EVERY index here; focusedRxIndex is
+  // the primary whose values the controls display, and is always a member.
+  // Plain focus selects a single receiver; Ctrl/Cmd-click toggles membership.
+  selectedRxIndices: number[];
   mode: RxMode;
   modeB: RxMode;
   filterLowHz: number;
@@ -176,6 +181,8 @@ export type ConnectionState = {
   setTxLeveling: (txLeveling: TxLevelingConfigDto) => void;
   setRxFocus: (rxFocus: TxVfo) => void;
   setFocusedRxIndex: (index: number) => void;
+  setSelectedRxIndices: (indices: number[]) => void;
+  toggleRxSelection: (index: number) => void;
   setZoomLevel: (level: ZoomLevel) => void;
   setLastConnectedEndpoint: (ep: string | null) => void;
   setWisdomPhase: (phase: WisdomPhase) => void;
@@ -215,6 +222,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   txReceiverIndex: 0,
   rxFocus: 'A',
   focusedRxIndex: 0,
+  selectedRxIndices: [0],
   mode: 'USB',
   modeB: 'USB',
   filterLowHz: 150,
@@ -283,8 +291,9 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
         txVfo: s.txVfo,
         txReceiverIndex: s.txReceiverIndex ?? prev.txReceiverIndex,
         rxFocus: s.rx2Enabled ? prev.rxFocus : 'A',
-        // UI-only focus — preserved across server state reconciles.
+        // UI-only focus + selection — preserved across server state reconciles.
         focusedRxIndex: prev.focusedRxIndex,
+        selectedRxIndices: prev.selectedRxIndices,
         mode: s.mode,
         modeB: s.modeB,
         filterLowHz: s.filterLowHz,
@@ -329,14 +338,45 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   setSquelch: (squelch) => set({ squelch }),
   setTxLeveling: (txLeveling) => set({ txLeveling }),
   setRxFocus: (rxFocus) => set({ rxFocus }),
-  // Focus a receiver in the multi-DDC panels. Mirror into rxFocus for the
-  // RX1/RX2 stitched view so the existing A/B focus stays consistent.
+  // Focus a receiver in the multi-DDC panels. Plain focus collapses the
+  // selection to just this receiver. Mirror into rxFocus for the RX1/RX2
+  // stitched view so the existing A/B focus stays consistent (rxFocus is
+  // retired in a later phase of the numeric-receiver migration).
   setFocusedRxIndex: (focusedRxIndex) =>
     set(
       focusedRxIndex <= 1
-        ? { focusedRxIndex, rxFocus: focusedRxIndex === 1 ? 'B' : 'A' }
-        : { focusedRxIndex },
+        ? { focusedRxIndex, selectedRxIndices: [focusedRxIndex], rxFocus: focusedRxIndex === 1 ? 'B' : 'A' }
+        : { focusedRxIndex, selectedRxIndices: [focusedRxIndex] },
     ),
+  // Replace the multi-selection wholesale. Keeps focus on the same receiver if
+  // it survives, else focuses the lowest selected; never leaves it empty.
+  setSelectedRxIndices: (indices) =>
+    set((s) => {
+      const selectedRxIndices = indices.length ? [...indices].sort((a, b) => a - b) : [0];
+      const focusedRxIndex = selectedRxIndices.includes(s.focusedRxIndex)
+        ? s.focusedRxIndex
+        : selectedRxIndices[0] ?? 0;
+      return focusedRxIndex <= 1
+        ? { selectedRxIndices, focusedRxIndex, rxFocus: focusedRxIndex === 1 ? 'B' : 'A' }
+        : { selectedRxIndices, focusedRxIndex };
+    }),
+  // Ctrl/Cmd-click toggle: add (and focus) or remove a receiver from the
+  // selection. Removing the last one is a no-op — the control target is never
+  // empty. Removing the focused one moves focus to the lowest remaining.
+  toggleRxSelection: (index) =>
+    set((s) => {
+      const has = s.selectedRxIndices.includes(index);
+      if (has && s.selectedRxIndices.length === 1) return s;
+      const selectedRxIndices = has
+        ? s.selectedRxIndices.filter((i) => i !== index)
+        : [...s.selectedRxIndices, index].sort((a, b) => a - b);
+      const focusedRxIndex = has
+        ? (index === s.focusedRxIndex ? selectedRxIndices[0] ?? 0 : s.focusedRxIndex)
+        : index;
+      return focusedRxIndex <= 1
+        ? { selectedRxIndices, focusedRxIndex, rxFocus: focusedRxIndex === 1 ? 'B' : 'A' }
+        : { selectedRxIndices, focusedRxIndex };
+    }),
   setZoomLevel: (zoomLevel) => set({ zoomLevel }),
   setLastConnectedEndpoint: (lastConnectedEndpoint) =>
     set({ lastConnectedEndpoint }),

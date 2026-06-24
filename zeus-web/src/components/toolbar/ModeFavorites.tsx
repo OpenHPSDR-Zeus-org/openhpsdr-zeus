@@ -8,6 +8,7 @@ import { useCallback } from 'react';
 import { type RxMode } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
 import {
+  gangedReceiverAction,
   getReceiverMode,
   optimisticSetReceiverMode,
   postReceiverMode,
@@ -33,29 +34,21 @@ export function ModeFavorites() {
   // Follow the focused receiver (0=RX1, 1=RX2, >=2=RX3+) so the favorite mode
   // buttons drive whichever receiver the operator is working in.
   const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
-  const applyState = useConnectionStore((s) => s.applyState);
   const activeMode = useConnectionStore((s) => getReceiverMode(s, focusedRxIndex));
 
   const onSelect = useCallback(
     (key: string) => {
       const m = key as RxMode;
       if (m === activeMode) return;
-      optimisticSetReceiverMode(focusedRxIndex, m);
+      gangedReceiverAction({
+        optimistic: (k) => optimisticSetReceiverMode(k, m),
+        post: (k) => postReceiverMode(k, m),
+      });
       if (focusedRxIndex <= 1) {
         saveReceiverBandModeMemory(focusedRxIndex === 1 ? 'B' : 'A', m);
       }
-      postReceiverMode(focusedRxIndex, m)
-        .then((state) => {
-          applyState(state);
-          if (focusedRxIndex <= 1) {
-            saveReceiverBandModeMemory(focusedRxIndex === 1 ? 'B' : 'A', undefined, state);
-          }
-        })
-        .catch(() => {
-          /* next state poll reconciles */
-        });
     },
-    [focusedRxIndex, activeMode, applyState],
+    [focusedRxIndex, activeMode],
   );
 
   return (

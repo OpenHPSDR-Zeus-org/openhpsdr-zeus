@@ -33,6 +33,7 @@ import {
   type RxMode,
 } from '../../api/client';
 import {
+  gangedReceiverAction,
   getReceiverFilterHighHz,
   getReceiverFilterLowHz,
   getReceiverFilterPresetName,
@@ -114,7 +115,6 @@ export function FilterRibbon({
     getReceiverFilterPresetName(s, focusedRxIndex),
   );
   const open = useConnectionStore((s) => s.filterAdvancedPaneOpen);
-  const applyState = useConnectionStore((s) => s.applyState);
   const favoriteSlotNames = useFavoritesForMode(activeMode);
   const [serverPresets, setServerPresets] = useState<FilterPresetDto[] | null>(null);
   const [dragSlot, setDragSlot] = useState<string | null>(null);
@@ -142,12 +142,14 @@ export function FilterRibbon({
   }, [presets]);
 
   const selectPreset = useCallback((slot: FilterPresetSlot) => {
-    optimisticSetReceiverFilter(focusedRxIndex, slot.lowHz, slot.highHz);
-    optimisticSetReceiverPreset(focusedRxIndex, slot.slotName);
-    postReceiverFilter(focusedRxIndex, slot.lowHz, slot.highHz, slot.slotName)
-      .then(applyState)
-      .catch(() => {});
-  }, [focusedRxIndex, applyState]);
+    gangedReceiverAction({
+      optimistic: (k) => {
+        optimisticSetReceiverFilter(k, slot.lowHz, slot.highHz);
+        optimisticSetReceiverPreset(k, slot.slotName);
+      },
+      post: (k) => postReceiverFilter(k, slot.lowHz, slot.highHz, slot.slotName),
+    });
+  }, []);
 
   const closeRibbon = useCallback(() => {
     useConnectionStore.setState({ filterAdvancedPaneOpen: false });
@@ -185,16 +187,21 @@ export function FilterRibbon({
     // defaults and never get overwritten — when one is active the edit falls
     // back to VAR1 (set by activeVarSlot above).
     const target = activeVarSlot;
-    optimisticSetReceiverFilter(focusedRxIndex, low, high);
-    optimisticSetReceiverPreset(focusedRxIndex, target);
+    gangedReceiverAction({
+      optimistic: (k) => {
+        optimisticSetReceiverFilter(k, low, high);
+        optimisticSetReceiverPreset(k, target);
+      },
+      post: (k) => postReceiverFilter(k, low, high, target),
+    });
     try {
-      await postReceiverFilter(focusedRxIndex, low, high, target).then(applyState);
+      // The VAR-slot override is a per-mode preset table edit (global), not a
+      // per-receiver write — record it once for the focused receiver's mode.
       await setFilterPresetOverride(activeMode, target, low, high);
-      // Refresh preset list so the VAR chip shows the new values.
       const fresh = await getFilterPresets(activeMode);
       setServerPresets(fresh);
     } catch { /* next state poll reconciles */ }
-  }, [loDraft, hiDraft, activeMode, focusedRxIndex, applyState, activeVarSlot]);
+  }, [loDraft, hiDraft, activeMode, activeVarSlot]);
 
   const onCustomKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') e.currentTarget.blur();
@@ -220,13 +227,17 @@ export function FilterRibbon({
       const newHi = currentHigh + dir * step;
       if (newHi <= currentLow + 50) return;
       const slot = currentPreset && /^VAR[12]$/.test(currentPreset) ? currentPreset : 'VAR1';
-      optimisticSetReceiverFilter(focusedRxIndex, currentLow, newHi);
-      optimisticSetReceiverPreset(focusedRxIndex, slot);
-      postReceiverFilter(focusedRxIndex, currentLow, newHi, slot).then(applyState).catch(() => {});
+      gangedReceiverAction({
+        optimistic: (k) => {
+          optimisticSetReceiverFilter(k, currentLow, newHi);
+          optimisticSetReceiverPreset(k, slot);
+        },
+        post: (k) => postReceiverFilter(k, currentLow, newHi, slot),
+      });
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [embedded, open, activeMode, focusedRxIndex, applyState, closeRibbon, section]);
+  }, [embedded, open, activeMode, focusedRxIndex, closeRibbon, section]);
 
   if (!embedded && !open) return null;
   // The mini-pan section can render before the preset table resolves; only

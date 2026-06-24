@@ -257,3 +257,36 @@ export function postReceiverMode(
   if (idx === 1) return setMode(mode, signal, 'B');
   return setReceiver(idx, { mode }, signal);
 }
+
+// ---------------------------------------------------------------------------
+// Ganged multi-select. A toolbar control (mode/filter/band/AF) acts on EVERY
+// selected receiver at once; the focused receiver is the primary whose
+// response reconciles the store. Direct per-pane manipulation (dragging a
+// passband on one receiver's panadapter) is NOT ganged — it stays on that pane.
+
+/** The receivers a ganged toolbar action targets (the live selection). */
+export function selectedReceiverKeys(): number[] {
+  return useConnectionStore.getState().selectedRxIndices;
+}
+
+/** Run a control action across every selected receiver: an optimistic store
+ *  update plus a REST post for each, reconciling the store from the focused
+ *  receiver's response (the others' responses are ignored to avoid clobbering
+ *  the focused view; the next state poll reconciles them). */
+export function gangedReceiverAction(opts: {
+  optimistic?: (key: number) => void;
+  post: (key: number) => Promise<RadioStateDto>;
+}): void {
+  const { selectedRxIndices, focusedRxIndex, applyState } = useConnectionStore.getState();
+  for (const idx of selectedRxIndices) opts.optimistic?.(idx);
+  for (const idx of selectedRxIndices) {
+    opts
+      .post(idx)
+      .then((res) => {
+        if (idx === focusedRxIndex) applyState(res);
+      })
+      .catch(() => {
+        /* next state poll reconciles */
+      });
+  }
+}

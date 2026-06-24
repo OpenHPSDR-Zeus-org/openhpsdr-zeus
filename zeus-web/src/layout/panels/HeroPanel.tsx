@@ -126,6 +126,8 @@ export function HeroPanel({
   const receivers = useConnectionStore((s) => s.receivers);
   const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
   const setFocusedRxIndex = useConnectionStore((s) => s.setFocusedRxIndex);
+  const selectedRxIndices = useConnectionStore((s) => s.selectedRxIndices);
+  const toggleRxSelection = useConnectionStore((s) => s.toggleRxSelection);
   // During TX the waterfall region shows the live transmitted spectrum
   // (WDSP TX analyzer pixels, streamed by the server while keyed).
   const keyed = useTxStore((s) => s.moxOn || s.tunOn);
@@ -485,10 +487,21 @@ export function HeroPanel({
                   type="button"
                   className={`hero-rx-audio-switch__key hero-rx-audio-switch__key--vfo ${
                     focusedRxIndex === r.index ? 'is-active' : ''
+                  } ${
+                    selectedRxIndices.includes(r.index) && focusedRxIndex !== r.index
+                      ? 'is-selected'
+                      : ''
                   }`}
-                  onClick={() => setFocusedRxIndex(r.index)}
-                  aria-pressed={focusedRxIndex === r.index}
-                  title={`Focus RX${r.index + 1} for mode, filter, band, keyboard tuning, and meters.`}
+                  // Plain click focuses (and collapses the selection to) this
+                  // receiver; Ctrl/Cmd-click toggles it in the multi-selection so
+                  // mode/filter/band/AF act on every selected receiver at once.
+                  onClick={(e) =>
+                    e.ctrlKey || e.metaKey
+                      ? toggleRxSelection(r.index)
+                      : setFocusedRxIndex(r.index)
+                  }
+                  aria-pressed={selectedRxIndices.includes(r.index)}
+                  title={`RX${r.index + 1}: click to focus, Ctrl/⌘-click to add to the multi-selection (ganged mode/filter/band/AF).`}
                 >
                   <span>{`RX${r.index + 1}`}</span>
                 </button>

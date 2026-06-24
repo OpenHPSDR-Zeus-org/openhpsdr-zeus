@@ -47,6 +47,7 @@ import { useCallback } from 'react';
 import { type RxMode } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import {
+  gangedReceiverAction,
   getReceiverMode,
   optimisticSetReceiverMode,
   postReceiverMode,
@@ -75,29 +76,23 @@ export function ModeBandwidth() {
   // same model VFO B used via rxFocus — generalised to any numeric receiver so
   // the mode row drives whichever receiver the operator is working in.
   const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
-  const applyState = useConnectionStore((s) => s.applyState);
   const activeMode = useConnectionStore((s) => getReceiverMode(s, focusedRxIndex));
 
   const selectMode = useCallback(
     (m: RxMode) => {
       if (m === activeMode) return;
-      optimisticSetReceiverMode(focusedRxIndex, m);
-      // Per-band last-mode memory is an RX1/RX2 (A/B) concept; skip for RX3+.
+      // Ganged: apply to every selected receiver; the focused one reconciles.
+      gangedReceiverAction({
+        optimistic: (k) => optimisticSetReceiverMode(k, m),
+        post: (k) => postReceiverMode(k, m),
+      });
+      // Per-band last-mode memory is an RX1/RX2 (A/B) concept; record the
+      // focused receiver's band only.
       if (focusedRxIndex <= 1) {
         saveReceiverBandModeMemory(focusedRxIndex === 1 ? 'B' : 'A', m);
       }
-      postReceiverMode(focusedRxIndex, m)
-        .then((state) => {
-          applyState(state);
-          if (focusedRxIndex <= 1) {
-            saveReceiverBandModeMemory(focusedRxIndex === 1 ? 'B' : 'A', undefined, state);
-          }
-        })
-        .catch(() => {
-          /* next state poll will reconcile */
-        });
     },
-    [focusedRxIndex, activeMode, applyState],
+    [focusedRxIndex, activeMode],
   );
 
   return (

@@ -30,6 +30,7 @@ function resetStores() {
     rx2Enabled: true,
     rxFocus: 'B',
     focusedRxIndex: 1,
+    selectedRxIndices: [1],
     mode: 'AM',
     modeB: 'USB',
   });

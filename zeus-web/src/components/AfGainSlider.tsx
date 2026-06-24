@@ -75,15 +75,22 @@ export function AfGainSlider() {
   // capping the wire rate to one POST per paint.
   const liveSlider = useLiveSlider<number>({
     send: useCallback(
-      (v: number, signal: AbortSignal) =>
-        postReceiverAfGain(focusedRxIndex, v, signal)
-          .then((next) => {
-            if (!signal.aborted) applyState(next);
-          })
+      (v: number, signal: AbortSignal) => {
+        // Ganged: stream AF to every selected receiver; reconcile from focused.
+        const { selectedRxIndices, focusedRxIndex: focused } = useConnectionStore.getState();
+        return Promise.all(
+          selectedRxIndices.map((idx) =>
+            postReceiverAfGain(idx, v, signal).then((next) => {
+              if (idx === focused && !signal.aborted) applyState(next);
+            }),
+          ),
+        )
+          .then(() => {})
           .catch(() => {
             /* next poll will reconcile; don't noisily log on abort */
-          }),
-      [focusedRxIndex, applyState],
+          });
+      },
+      [applyState],
     ),
   });
 
