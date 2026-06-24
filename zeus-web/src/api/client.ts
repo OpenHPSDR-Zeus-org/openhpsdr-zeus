@@ -6995,6 +6995,7 @@ export function setFreeDvConfig(
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         submode: req.submode ?? null,
+        autoDetect: req.autoDetect ?? null,
         squelchEnabled: req.squelchEnabled ?? null,
         snrSquelchThreshDb: req.snrSquelchThreshDb ?? null,
         txText: req.txText ?? null,
