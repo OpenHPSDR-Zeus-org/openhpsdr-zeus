@@ -1377,7 +1377,12 @@ public sealed record ReceiverSetRequest(
     RxMode? Mode = null,
     int? FilterLowHz = null,
     int? FilterHighHz = null,
-    double? AfGainDb = null);
+    double? AfGainDb = null,
+    // Named filter preset (e.g. "VAR1", "F5") this receiver's low/high cuts came
+    // from. Optimistic-only round-trip so the RX3+ passband shows the preset
+    // label the operator picked, exactly as RX2 carries FilterPresetNameB. The
+    // cuts in FilterLowHz/FilterHighHz remain authoritative for the DSP.
+    string? FilterPresetName = null);
 
 /// <summary>Operator settings for the POTA/SOTA Spots feature. Persisted in
 /// zeus-prefs.db (<c>SpotsSettingsStore</c>) and shared with the frontend.

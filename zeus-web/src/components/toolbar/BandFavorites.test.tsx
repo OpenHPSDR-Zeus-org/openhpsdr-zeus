@@ -41,6 +41,7 @@ function resetStores() {
     vfoBHz: 7_200_000,
     rx2Enabled: true,
     rxFocus: 'B',
+    focusedRxIndex: 1,
     mode: 'USB',
     modeB: 'LSB',
     filterLowHzB: -2850,

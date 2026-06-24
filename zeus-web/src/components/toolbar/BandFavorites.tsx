@@ -9,15 +9,21 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   fetchBandMemory,
   saveBandMemory,
-  setMode,
-  setVfo,
-  setVfoB,
   type BandMemoryEntry,
   type RadioStateDto,
   type RxMode,
-  type TxVfo,
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
+import {
+  getReceiverMode,
+  getReceiverVfoHz,
+  optimisticSetReceiverMode,
+  optimisticSetReceiverVfo,
+  postReceiverMode,
+  postReceiverVfo,
+  rxIndexOf,
+  type ReceiverKey,
+} from '../../state/receiver-state';
 import { viewCenterFor } from '../../state/view-center';
 import {
   BAND_MEMORY_UPDATED_EVENT,
@@ -48,21 +54,23 @@ const BAND_OPTIONS: readonly ToolbarOption[] = HF_BANDS.map((b) => ({
 
 const SAVE_DEBOUNCE_MS = 500;
 
-function withRestoredMode(state: RadioStateDto, receiver: TxVfo, mode: RxMode): RadioStateDto {
-  return receiver === 'B' ? { ...state, modeB: mode } : { ...state, mode };
+function withRestoredMode(state: RadioStateDto, receiver: ReceiverKey, mode: RxMode): RadioStateDto {
+  const idx = rxIndexOf(receiver);
+  if (idx === 0) return { ...state, mode };
+  if (idx === 1) return { ...state, modeB: mode };
+  return {
+    ...state,
+    receivers: state.receivers?.map((r) => (r.index === idx ? { ...r, mode } : r)) ?? state.receivers,
+  };
 }
 
 export function BandFavorites() {
-  const vfoHz = useConnectionStore((s) => s.vfoHz);
-  const vfoBHz = useConnectionStore((s) => s.vfoBHz);
-  const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
-  const rxFocus = useConnectionStore((s) => s.rxFocus);
-  const mode = useConnectionStore((s) => s.mode);
-  const modeB = useConnectionStore((s) => s.modeB);
+  // Follow the focused receiver (0=RX1, 1=RX2, >=2=RX3+) so band selection tunes
+  // whichever receiver the operator is working in.
+  const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
+  const activeVfoHz = useConnectionStore((s) => getReceiverVfoHz(s, focusedRxIndex));
+  const activeMode = useConnectionStore((s) => getReceiverMode(s, focusedRxIndex));
   const applyState = useConnectionStore((s) => s.applyState);
-  const activeReceiver: TxVfo = rxFocus === 'B' && rx2Enabled ? 'B' : 'A';
-  const activeVfoHz = activeReceiver === 'B' ? vfoBHz : vfoHz;
-  const activeMode = activeReceiver === 'B' ? modeB : mode;
 
   const [currentBand, setCurrentBand] = useState<string>(() => bandOf(activeVfoHz));
   const memoryRef = useRef<Map<string, BandMemoryEntry>>(new Map());
@@ -148,25 +156,19 @@ export function BandFavorites() {
       const targetHz = stored?.hz ?? band.centerHz;
       const targetMode: RxMode | null = stored?.mode ?? null;
 
-      viewCenterFor(activeReceiver).markOptimisticTune();
-      useConnectionStore.setState(
-        activeReceiver === 'B'
-          ? targetMode && targetMode !== activeMode
-            ? { vfoBHz: targetHz, modeB: targetMode }
-            : { vfoBHz: targetHz }
-          : targetMode && targetMode !== activeMode
-          ? { vfoHz: targetHz, mode: targetMode }
-          : { vfoHz: targetHz },
-      );
-      const postVfo = activeReceiver === 'B' ? setVfoB : setVfo;
+      viewCenterFor(focusedRxIndex).markOptimisticTune();
+      optimisticSetReceiverVfo(focusedRxIndex, targetHz);
+      if (targetMode && targetMode !== activeMode) {
+        optimisticSetReceiverMode(focusedRxIndex, targetMode);
+      }
 
       void (async () => {
         let modeRestored = !targetMode || targetMode === activeMode;
         if (targetMode && targetMode !== activeMode) {
           try {
             applyState(withRestoredMode(
-              await setMode(targetMode, undefined, activeReceiver),
-              activeReceiver,
+              await postReceiverMode(focusedRxIndex, targetMode),
+              focusedRxIndex,
               targetMode,
             ));
             modeRestored = true;
@@ -175,10 +177,10 @@ export function BandFavorites() {
           }
         }
         try {
-          const next = await postVfo(targetHz);
+          const next = await postReceiverVfo(focusedRxIndex, targetHz);
           applyState(
             targetMode && modeRestored
-              ? withRestoredMode(next, activeReceiver, targetMode)
+              ? withRestoredMode(next, focusedRxIndex, targetMode)
               : next,
           );
         } catch {
@@ -186,7 +188,7 @@ export function BandFavorites() {
         }
       })();
     },
-    [activeReceiver, activeMode, applyState, currentBand, flushPendingSave],
+    [focusedRxIndex, activeMode, applyState, currentBand, flushPendingSave],
   );
 
   return (

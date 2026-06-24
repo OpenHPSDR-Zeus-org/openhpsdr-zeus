@@ -5630,6 +5630,7 @@ export function setReceiver(
     filterLowHz?: number;
     filterHighHz?: number;
     afGainDb?: number;
+    filterPresetName?: string | null;
   },
   signal?: AbortSignal,
 ): Promise<RadioStateDto> {
@@ -5642,10 +5643,13 @@ export function setReceiver(
         enabled: req.enabled,
         vfoHz: req.vfoHz,
         adcSource: req.adcSource,
-        mode: req.mode,
+        // RxMode serialises as its numeric ordinal on the write path (the
+        // server has no JsonStringEnumConverter) — same encoding setMode uses.
+        mode: req.mode !== undefined ? MODE_ORDER.indexOf(req.mode) : undefined,
         filterLowHz: req.filterLowHz,
         filterHighHz: req.filterHighHz,
         afGainDb: req.afGainDb,
+        filterPresetName: req.filterPresetName,
       }),
       signal,
     },

@@ -44,8 +44,13 @@
 // License for details.
 
 import { useCallback } from 'react';
-import { setMode, type RxMode, type TxVfo } from '../api/client';
+import { type RxMode } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import {
+  getReceiverMode,
+  optimisticSetReceiverMode,
+  postReceiverMode,
+} from '../state/receiver-state';
 import { saveReceiverBandModeMemory } from '../util/band-memory';
 import { toolbarFavDragMime } from './toolbar/toolbarFavoriteDrag';
 
@@ -66,29 +71,33 @@ const MODES: readonly ModeEntry[] = [
 ];
 
 export function ModeBandwidth() {
-  const mode = useConnectionStore((s) => s.mode);
-  const modeB = useConnectionStore((s) => s.modeB);
-  const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
-  const rxFocus = useConnectionStore((s) => s.rxFocus);
+  // Follow the focused receiver across all DDCs (0=RX1, 1=RX2, >=2=RX3+), the
+  // same model VFO B used via rxFocus — generalised to any numeric receiver so
+  // the mode row drives whichever receiver the operator is working in.
+  const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
   const applyState = useConnectionStore((s) => s.applyState);
-  const activeReceiver: TxVfo = rxFocus === 'B' && rx2Enabled ? 'B' : 'A';
-  const activeMode = activeReceiver === 'B' ? modeB : mode;
+  const activeMode = useConnectionStore((s) => getReceiverMode(s, focusedRxIndex));
 
   const selectMode = useCallback(
     (m: RxMode) => {
       if (m === activeMode) return;
-      useConnectionStore.setState(activeReceiver === 'B' ? { modeB: m } : { mode: m });
-      saveReceiverBandModeMemory(activeReceiver, m);
-      setMode(m, undefined, activeReceiver)
+      optimisticSetReceiverMode(focusedRxIndex, m);
+      // Per-band last-mode memory is an RX1/RX2 (A/B) concept; skip for RX3+.
+      if (focusedRxIndex <= 1) {
+        saveReceiverBandModeMemory(focusedRxIndex === 1 ? 'B' : 'A', m);
+      }
+      postReceiverMode(focusedRxIndex, m)
         .then((state) => {
           applyState(state);
-          saveReceiverBandModeMemory(activeReceiver, undefined, state);
+          if (focusedRxIndex <= 1) {
+            saveReceiverBandModeMemory(focusedRxIndex === 1 ? 'B' : 'A', undefined, state);
+          }
         })
         .catch(() => {
           /* next state poll will reconcile */
         });
     },
-    [activeReceiver, activeMode, applyState],
+    [focusedRxIndex, activeMode, applyState],
   );
 
   return (

@@ -36,8 +36,16 @@
 // sites — this module just routes field reads/writes.
 
 import { useConnectionStore } from './connection-store';
-import type { RadioStateDto, ReceiverDto } from '../api/client';
-import { setFilter, setReceiver, setVfo, setVfoB } from '../api/client';
+import type { RadioStateDto, ReceiverDto, RxMode } from '../api/client';
+import {
+  setFilter,
+  setMode,
+  setReceiver,
+  setRx2,
+  setRxAfGain,
+  setVfo,
+  setVfoB,
+} from '../api/client';
 
 /** Receiver discriminator. Numbers are canonical (0 = RX1, 1 = RX2, >= 2 =
  *  RX3+); `'A'`/`'B'` are legacy aliases for 0/1. */
@@ -109,6 +117,13 @@ export function getReceiverVfoFromState(
   return state.receivers?.find((r) => r.index === idx)?.vfoHz ?? state.vfoHz;
 }
 
+export function getReceiverAfGainDb(state: ConnState, key: ReceiverKey): number {
+  const idx = rxIndexOf(key);
+  if (idx === 0) return state.rxAfGainDb;
+  if (idx === 1) return state.rx2AfGainDb;
+  return receiverEntry(state, idx)?.afGainDb ?? state.rxAfGainDb;
+}
+
 export function getReceiverFilterPresetName(
   state: ConnState,
   key: ReceiverKey,
@@ -156,6 +171,19 @@ export function optimisticSetReceiverFilter(
   }
 }
 
+export function optimisticSetReceiverMode(key: ReceiverKey, mode: RxMode): void {
+  const idx = rxIndexOf(key);
+  if (idx === 0) {
+    useConnectionStore.setState({ mode });
+  } else if (idx === 1) {
+    useConnectionStore.setState({ modeB: mode });
+  } else {
+    useConnectionStore.setState((s) => ({
+      receivers: s.receivers.map((r) => (r.index === idx ? { ...r, mode } : r)),
+    }));
+  }
+}
+
 export function optimisticSetReceiverPreset(key: ReceiverKey, slot: string): void {
   const idx = rxIndexOf(key);
   if (idx === 0) {
@@ -198,5 +226,34 @@ export function postReceiverFilter(
   if (idx <= 1) {
     return setFilter(lo, hi, slot, signal, idx === 1 ? 'B' : 'A');
   }
-  return setReceiver(idx, { filterLowHz: lo, filterHighHz: hi }, signal);
+  // Carry the preset label so RX3+ rounds-trips the slot name (e.g. VAR1),
+  // exactly as RX1/RX2 do via setFilter's presetName argument.
+  return setReceiver(idx, { filterLowHz: lo, filterHighHz: hi, filterPresetName: slot }, signal);
+}
+
+/** Post an AF-gain (dB) change to any receiver. RX1 → master AF, RX2 → the
+ *  rx2 setter, RX3+ → their own DDC channel. Mirrors the VFO/filter routing. */
+export function postReceiverAfGain(
+  key: ReceiverKey,
+  db: number,
+  signal?: AbortSignal,
+) {
+  const idx = rxIndexOf(key);
+  if (idx === 0) return setRxAfGain(db, signal);
+  if (idx === 1) return setRx2({ afGainDb: db }, signal);
+  return setReceiver(idx, { afGainDb: db }, signal);
+}
+
+/** Post a mode change to any receiver. RX1/RX2 funnel through the legacy
+ *  /api/mode A/B path the server special-cases; RX3+ drive their own DDC
+ *  channel via setReceiver. Mirrors postReceiverFilter's routing. */
+export function postReceiverMode(
+  key: ReceiverKey,
+  mode: RxMode,
+  signal?: AbortSignal,
+) {
+  const idx = rxIndexOf(key);
+  if (idx === 0) return setMode(mode, signal, 'A');
+  if (idx === 1) return setMode(mode, signal, 'B');
+  return setReceiver(idx, { mode }, signal);
 }

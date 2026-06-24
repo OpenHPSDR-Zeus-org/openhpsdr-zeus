@@ -29,6 +29,7 @@ function resetStores() {
     vfoBHz: 7_200_000,
     rx2Enabled: true,
     rxFocus: 'B',
+    focusedRxIndex: 1,
     mode: 'AM',
     modeB: 'USB',
   });
