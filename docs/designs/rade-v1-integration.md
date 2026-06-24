@@ -103,11 +103,49 @@ codec2" plan below is **not possible against upstream main today.**
 
 ### Revised recommendation
 RADE-into-Zeus today = fork/adopt **`radae_nopy`** as the native base and port it
-to Windows (clang-cl, exactly like the codec2 MSVC patch) + arm, OR **wait/track**
-the upstream C port (`freedv-backend`). Both are real multi-day efforts; the first
-builds on a deprecated base, the second isn't available yet. **This is a maintainer
-decision** — pick the base before any native CMake work. The original codec2-style
-"FetchContent drowe67/radae" approach is a dead end (drags in Python).
+to Windows (MinGW+autotools, like freedv-gui) + arm, OR **wait/track** the upstream
+C port (`freedv-backend`). The original codec2-style "FetchContent drowe67/radae"
+approach is a dead end (drags in Python).
+
+> **Maintainer decision (2026-06-23): adopt `radae_nopy`. "Put RADE in."**
+
+### ✅ PROVEN — radae_nopy decodes a real off-air RADE signal (2026-06-23)
+
+Built `peterbmarks/radae_nopy` in WSL Ubuntu 24.04 (cmake + autotools; Opus built
+with `--enable-osce --enable-dred` for FARGAN, then `librade.so`) and decoded the
+repo's off-air sample end-to-end:
+
+```
+sox FDV_offair.wav -r 8000 -e float -b 32 -c 1 -t raw - \
+  | real2iq | radae_rx > features.f32        # OFDM demod + sync + neural decode
+lpcnet_demo -fargan-synthesis features.f32 - \
+  | sox -t .s16 -r 16000 -c 1 - decoded.wav   # FARGAN vocoder → 16 kHz speech
+```
+
+Result: `radae_rx` reported **2717 modem frames, 2624 valid outputs, sync acquired,
+SNR ≈ 12.6 dB**; `decoded.wav` = 16 kHz mono, max amplitude 0.9999 (real speech).
+**The dependency-free C decode path works.** RADE is now an integration task, not a
+feasibility risk.
+
+Key facts confirmed from the real source/build:
+- **Weights compiled in** (`rade_enc_data.c`/`rade_dec_data.c`) — **no model file to
+  ship**. `rade_open(model_file, …)` ignores the path for weights.
+- **Two libraries**: `librade` (IQ↔features, the OFDM modem+sync+NN core; links opus)
+  AND **Opus/FARGAN** (features↔16 kHz audio). RADE's `rade_api.h` does NOT
+  encapsulate the vocoder — Zeus must call the Opus FARGAN C API (`fargan_*` /
+  `lpcnet_demo -fargan-synthesis` path) for the features→speech stage.
+- Bundled **kiss_fft** (no FFTW). C11. `RADE_PYTHON_FREE=1`. BSD-2.
+- Opus is an **autotools** ExternalProject (`autogen.sh && ./configure
+  --enable-osce --enable-dred`), patched via `src/opus-nnet.h.diff`. Windows build
+  = MinGW + autotools (freedv-gui's approach); arm = `--disable-rtcd`.
+- `rade_api.h` streaming RX: `rade_nin()` → `rade_rx(r, features_out, &has_eoo,
+  eoo_out, rx_in)` (complex `RADE_COMP` in, feature floats out), `rade_sync()`,
+  `rade_snrdB_3k_est()`. EOO frame carries an 8-char callsign
+  (`rade_rx_get_eoo_callsign`) — maps nicely to the existing FreeDV RX-text UI.
+
+> Note: `radae_nopy` is upstream-deprecated in favour of `tmiw/freedv-backend`
+> (same C port lineage). Pin radae_nopy now for the proven build; track
+> freedv-backend for the long-term base.
 
 ---
 
@@ -177,7 +215,8 @@ To build (the native phase):
 |------|------|--------|
 | 0 | Diagnose (RADE on-air, classic modes fail), scope, research API/build | ✅ done |
 | 1 | UI/contract groundwork: `RadeV1` submode, gated panel, `RadeAvailable` | ✅ done (committed) |
-| 2 | `native/radae/` vendoring: build `rade`+FARGAN cross-platform, CI binaries | ⏳ next (the hard one) |
+| 2a | Prove the dependency-free decoder (build radae_nopy, decode off-air sample) | ✅ done (WSL, 2026-06-23) |
+| 2b | `native/radae/` vendoring: build `rade`+Opus/FARGAN cross-platform (Win MinGW+autotools, arm), CI binaries | ⏳ next (the hard one) |
 | 3 | Model weights export + bundling/install | ⏳ |
 | 4 | `RadeModem` + P/Invoke + complex IO + FARGAN + 48k↔16k resample; flip `RadeAvailable` | ⏳ |
 | 5 | On-air validation vs a live RADEV1 station | ⏳ |
