@@ -275,13 +275,15 @@ describe('BandFavorites', () => {
     // RX1 + RX2 both selected, RX1 focused. A band click must retune BOTH.
     useConnectionStore.setState({
       vfoHz: 14_200_000,
-      vfoBHz: 14_200_000,
       mode: 'USB',
-      modeB: 'USB',
       rx2Enabled: true,
       focusedRxIndex: 0,
       rxFocus: 'A',
       selectedRxIndices: [0, 1],
+      receivers: [
+        rxEntry(0, { vfoHz: 14_200_000, mode: 'USB' }),
+        rxEntry(1, { vfoHz: 14_200_000, mode: 'USB' }),
+      ],
     });
 
     const { container, unmount } = render(createElement(BandFavorites));

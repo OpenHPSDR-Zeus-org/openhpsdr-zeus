@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { act, render } from '../meters/__tests__/harness';
-import { saveBandMemory, setMode, type RadioStateDto } from '../../api/client';
+import { saveBandMemory, setMode, type RadioStateDto, type ReceiverDto } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
 import { useToolbarFavoritesStore } from '../../state/toolbar-favorites-store';
 import { ModeFavorites } from './ModeFavorites';
@@ -22,7 +22,7 @@ vi.mock('../../api/client', async () => {
   };
 });
 
-function rxEntry(index: number, patch: Record<string, unknown> = {}) {
+function rxEntry(index: number, patch: Partial<ReceiverDto> = {}): ReceiverDto {
   return {
     index, enabled: true, adcSource: 0, vfoHz: 14_200_000, mode: 'USB',
     filterLowHz: 100, filterHighHz: 2800, filterPresetName: 'VAR1', afGainDb: 0,

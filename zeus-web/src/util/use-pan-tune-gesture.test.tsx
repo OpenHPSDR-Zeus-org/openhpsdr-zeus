@@ -34,7 +34,7 @@ import {
   usePanTuneGesture,
   type PanTuneGestureOptions,
 } from './use-pan-tune-gesture';
-import type { RadioStateDto } from '../api/client';
+import type { RadioStateDto, RxMode } from '../api/client';
 
 const SNAP_WIDTH = 256;
 const SNAP_HZ_PER_PX = 37;
@@ -223,7 +223,7 @@ describe('usePanTuneGesture mobile touch mode', () => {
     useConnectionStore.setState({
       status: 'Connected',
       vfoHz: 14_200_000,
-      vfoBHz: 14_200_000,
+      receivers: [rxEntry(0, 14_200_000), rxEntry(1, 14_200_000)],
       ctunEnabled: false,
       zoomLevel: 4,
     });
@@ -381,7 +381,7 @@ describe('usePanTuneGesture mobile touch mode', () => {
       mode: 'USB',
       ctunEnabled: true,
       vfoHz: 14_200_000,
-      vfoBHz: 7_200_000,
+      receivers: [rxEntry(0, 14_200_000), rxEntry(1, 7_200_000)],
     });
     useDisplayStore.setState({
       width: 200,
