@@ -49,7 +49,10 @@ import { maybeUpdateEstimator } from '../dsp/signal-estimator';
 
 const DISPLAY_INVALID_BIN_DB = -200;
 
-export type SpectrumReceiver = 'A' | 'B';
+// 'A' = RX1, 'B' = RX2, number = a 0-based receiver index >= 2 (RX3+). The
+// numeric form lets the multi-DDC surfaces key on the same type the binary
+// A/B consumers already use; 'A'/'B' resolve exactly as before.
+export type SpectrumReceiver = 'A' | 'B' | number;
 
 export type ReceiverDisplaySlice = {
   width: number;
@@ -195,6 +198,12 @@ export function selectDisplaySlice(
   receiver: SpectrumReceiver = 'A',
 ): ReceiverDisplaySlice {
   if (receiver === 'B') return state.rx2;
+  // RX3+ (numeric index >= 2): the multi-DDC slice lives in `extra[index - 2]`.
+  // Delegates to the same lookup selectDisplaySliceByRxId uses so the two
+  // accessors can never disagree. 'A' and any index <= 0 fall through.
+  if (typeof receiver === 'number' && receiver >= 2) {
+    return state.extra[receiver - 2] ?? EMPTY_DISPLAY_SLICE;
+  }
   return {
     width: state.width,
     centerHz: state.centerHz,

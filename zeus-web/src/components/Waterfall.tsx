@@ -67,11 +67,14 @@ import { NotchOverlay } from './NotchOverlay';
 import { PassbandOverlay } from './PassbandOverlay';
 import { WfDbScale } from './WfDbScale';
 import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
+import { getReceiverVfoHz, rxIndexOf, type ReceiverKey } from '../state/receiver-state';
+import { estimateRowFloorDb, reportReceiverFloorDb } from '../dsp/floor-normalization';
+import { effectiveRxWfWindow, useRxDbWindowStore } from '../state/rx-db-window-store';
 
 type WaterfallProps = {
   /** When true, noise floor fades to transparent so the QRZ-mode map shows through. */
   transparent?: boolean;
-  receiver?: 'A' | 'B';
+  receiver?: ReceiverKey;
   touchMode?: PanTuneGestureOptions['touchMode'];
   tuneReceiver?: PanTuneGestureOptions['tuneReceiver'];
   stitched?: boolean;
@@ -245,7 +248,7 @@ export function Waterfall({
 
     const redraw = () => {
       if (contextLost || !renderer) return;
-      const { wfDbMin, wfDbMax, wfTxDbMin, wfTxDbMax, waterfallScrollSpeed } =
+      const { wfTxDbMin, wfTxDbMax, waterfallScrollSpeed } =
         useDisplaySettingsStore.getState();
       const { moxOn, tunOn } = useTxStore.getState();
       const keyed = moxOn || tunOn;
@@ -262,10 +265,15 @@ export function Waterfall({
         renderer.setScrollSpeed(waterfallScrollSpeed);
         lastScrollSpeed = waterfallScrollSpeed;
       }
-      // Mirror DbScale.tsx — keyed (MOX/TUN) renders the TX waterfall
-      // window so the operator's RX noise-floor view stays put.
-      const dbMin = popOn ? 0 : keyed ? wfTxDbMin : wfDbMin;
-      const dbMax = popOn ? 1 : keyed ? wfTxDbMax : wfDbMax;
+      // Mirror DbScale.tsx — keyed (MOX/TUN) renders the TX waterfall window so
+      // the operator's RX noise-floor view stays put.
+      // Per-receiver RX window: RX1 uses the global window; every other receiver
+      // uses its own — an operator override (set by focusing it and dragging the
+      // WfDbScale), or the global window floor-normalized to RX1 so noise floors
+      // line up out of the box. Keyed/POP domains are absolute, never per-RX.
+      const rxWin = popOn || keyed ? null : effectiveRxWfWindow(rxIndexOf(receiver));
+      const dbMin = popOn ? 0 : keyed ? wfTxDbMin : rxWin!.wfDbMin;
+      const dbMax = popOn ? 1 : keyed ? wfTxDbMax : rxWin!.wfDbMax;
       renderer.setPopMode(popOn, popIntensity, reliefDepth, smoothness);
       renderer.draw(
         dbMin,
@@ -338,7 +346,7 @@ export function Waterfall({
       // planner to emit a 'reset' on the next frame so the textures re-seed,
       // and seed immediately from the last-held frame so a paused-RX restore
       // is not left blank.
-      resetFramePlan(receiver);
+      resetFramePlan(String(receiver));
       contextLost = false;
       resize();
       const st = selectDisplaySlice(useDisplayStore.getState(), receiver);
@@ -383,7 +391,7 @@ export function Waterfall({
         centerHz: slice.centerHz,
         hzPerPixel: slice.hzPerPixel,
         width: slice.width,
-        planKey: receiver,
+        planKey: String(receiver),
       });
       // Drive the shared zoom tween (view-zoom.ts) from RX1 only — zoom is a
       // single global setting, so one driver avoids RX2's resets interrupting
@@ -405,6 +413,14 @@ export function Waterfall({
         // owns the TX auto-range fit so it works on every waterfall renderer).
         if (receiver === 'A' && !useTxStore.getState().moxOn && !useTxStore.getState().tunOn) {
           useDisplaySettingsStore.getState().updateAutoRange(wfDb);
+        }
+        // Report this pane's noise floor for cross-band normalization (every
+        // receiver, RX domain only). Cheap downsampled percentile, EMA-smoothed
+        // in the registry; consumed by redraw() to align floors to the focused
+        // RX so one dB-scale slider fits every band.
+        if (!useTxStore.getState().moxOn && !useTxStore.getState().tunOn) {
+          const floorDb = estimateRowFloorDb(wfDb);
+          if (floorDb != null) reportReceiverFloorDb(rxIndexOf(receiver), floorDb);
         }
       }
       // RX only: substitute the per-bin floor-subtracted texture row so weak
@@ -445,6 +461,14 @@ export function Waterfall({
     const unsubViewZoom = viewZoom.subscribe(requestRedraw);
     const unsubConn = useConnectionStore.subscribe((state, prev) => {
       if (receiver === 'B' && state.vfoBHz !== prev.vfoBHz) requestRedraw();
+      else if (typeof receiver === 'number' && state.receivers !== prev.receivers) requestRedraw();
+    });
+
+    // Repaint when this receiver's per-RX dB window override changes (operator
+    // dragged the WfDbScale while this RX was focused).
+    const thisRxIdx = rxIndexOf(receiver);
+    const unsubRxWin = useRxDbWindowStore.subscribe((state, prev) => {
+      if (state.overrides[thisRxIdx] !== prev.overrides[thisRxIdx]) requestRedraw();
     });
 
     // Repaint on dB-range or colormap changes so the WfDbScale drag and the
@@ -523,6 +547,7 @@ export function Waterfall({
       unsubViewCenter();
       unsubViewZoom();
       unsubConn();
+      unsubRxWin();
       unsubSettings();
       unsubTx();
       unsubEnhance();
@@ -582,7 +607,7 @@ export function Waterfall({
       }
       const spanHz = s.width * s.hzPerPixel;
       const c = useConnectionStore.getState();
-      const vfoHz = receiver === 'B' ? c.vfoBHz : c.vfoHz;
+      const vfoHz = getReceiverVfoHz(c, receiver);
       // Dial offset from THIS receiver's animated target center, so the cursor
       // tracks the glide identically on both stitched halves.
       const dialOffsetHz = vc.isInitialized() ? vfoHz - vc.getTargetCenterHz() : 0;
@@ -591,7 +616,12 @@ export function Waterfall({
     const schedule = () => requestDrawBusFrame(update);
     const unsubVc = vc.subscribe(schedule);
     const unsubConn = useConnectionStore.subscribe((s, prev) => {
-      if (s.vfoHz !== prev.vfoHz || s.vfoBHz !== prev.vfoBHz) schedule();
+      if (
+        s.vfoHz !== prev.vfoHz ||
+        s.vfoBHz !== prev.vfoBHz ||
+        (typeof receiver === 'number' && s.receivers !== prev.receivers)
+      )
+        schedule();
     });
     const unsubFrame = useDisplayStore.subscribe((s, prev) => {
       if (selectDisplaySlice(s, receiver).lastSeq !== selectDisplaySlice(prev, receiver).lastSeq) schedule();

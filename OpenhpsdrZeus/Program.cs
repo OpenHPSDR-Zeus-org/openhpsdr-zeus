@@ -410,10 +410,40 @@ public partial class Program
                 // window.open to an external site is unreliable inside the Photino
                 // webview, so the frontend posts a zeus.openExternal message and the
                 // host opens it in the operator's real browser via the OS opener.
+                // The dark placeholder (see LoadRawString below) posts this once
+                // its inline script runs — which only happens after CoreWebView2 is
+                // fully live and the JS bridge is injected. THAT is the safe moment
+                // to navigate to the SPA: calling Photino_NavigateToUrl any earlier
+                // (e.g. from RegisterWindowCreatedHandler, where the native HWND
+                // exists but WebView2 has not finished initialising) dereferences an
+                // un-ready CoreWebView2 and hard-crashes the process with an access
+                // violation (0xc0000005) that no managed try/catch can trap.
+                if (msg == "zeus.spaReady")
+                {
+                    try { owner.Load(new Uri(startUrl)); }
+                    catch (Exception ex) { Console.Error.WriteLine($"window.spa.load failed: {ex.Message}"); }
+                    return;
+                }
                 if (TryReadOpenExternalRequest(msg, out var externalUrl))
                     OpenExternalUrl(externalUrl);
             })
-            .Load(new Uri(startUrl));
+            // Deliberately load a dark placeholder, NOT the SPA, as the startup
+            // content. The real SPA navigation is deferred until the placeholder's
+            // inline script posts "zeus.spaReady" (handled above) — that fires only
+            // after the frame has been resized to the saved geometry in the
+            // WindowCreated handler AND after WebView2 is genuinely ready, so the
+            // SPA's first React layout measures the final window size (no panel
+            // reflow) and the navigate can't race WebView2 init. The placeholder
+            // matches --bg-app (#0a0a0c) so the brief pre-size frame is invisible
+            // against the dark chrome instead of flashing white. The script polls
+            // for the Photino bridge because window.external may not be injected the
+            // instant the inline script first runs.
+            .LoadRawString(
+                "<!doctype html><meta name=\"color-scheme\" content=\"dark\">" +
+                "<body style=\"margin:0;height:100vh;background:#0a0a0c\">" +
+                "<script>(function(){function go(){" +
+                "if(window.external&&window.external.sendMessage){window.external.sendMessage('zeus.spaReady');}" +
+                "else{setTimeout(go,30);}}go();})();</script>");
 
         // Remember the last NORMAL (non-maximized) frame size as resize events
         // arrive. This is only needed for the maximized-at-close case: when the
@@ -460,6 +490,13 @@ public partial class Program
             {
                 Console.Error.WriteLine($"window.geometry.restore failed: {ex.Message}");
             }
+            // The SPA is NOT loaded here. Calling window.Load() from this handler
+            // navigates straight into native Photino_NavigateToUrl while WebView2
+            // is still initialising, which access-violates (0xc0000005) and kills
+            // the process before the window ever appears. The navigation is instead
+            // driven by the placeholder's "zeus.spaReady" message (see the web
+            // message handler above) — by then the frame is already resized to the
+            // saved geometry here AND WebView2 is confirmed live.
         });
 
         // Maximized and minimized are tracked separately: both must suppress

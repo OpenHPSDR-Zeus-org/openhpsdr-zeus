@@ -26,14 +26,23 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionStore } from '../../state/connection-store';
 import {
-  setFilter,
   setFilterAdvancedPaneOpen,
   setFilterPresetOverride,
   getFilterPresets,
   type FilterPresetDto,
+  type ReceiverDto,
   type RxMode,
-  type TxVfo,
 } from '../../api/client';
+import {
+  getReceiverFilterHighHz,
+  getReceiverFilterLowHz,
+  getReceiverFilterPresetName,
+  getReceiverMode,
+  optimisticSetReceiverFilter,
+  optimisticSetReceiverPreset,
+  postReceiverFilter,
+  type ReceiverKey,
+} from '../../state/receiver-state';
 import {
   getPresetsForMode,
   nudgeStepHz,
@@ -85,6 +94,23 @@ function mergePresets(mode: RxMode, server: FilterPresetDto[] | null): FilterPre
   });
 }
 
+// Resolve the FOCUSED receiver to a ReceiverKey for the filter controls.
+//   focusedRxIndex 0 → 'A' (RX1)
+//   1             → 'B' (RX2) when RX2 is live, else 'A'
+//   n >= 2        → n when that DDC exists & is enabled, else 'A'
+// Any focus that doesn't resolve to a live secondary receiver collapses to RX1,
+// so single-RX ('A') behaviour is byte-identical to before.
+function activeReceiverKey(
+  focusedRxIndex: number,
+  rx2Enabled: boolean,
+  receivers: ReceiverDto[],
+): ReceiverKey {
+  if (focusedRxIndex <= 0) return 'A';
+  if (focusedRxIndex === 1) return rx2Enabled ? 'B' : 'A';
+  const entry = receivers.find((r) => r.index === focusedRxIndex);
+  return entry?.enabled ? focusedRxIndex : 'A';
+}
+
 /** Which part of the ribbon to render. 'all' (default) is the original
  *  combined card. 'minipan' renders only the left mini-pan + hint; 'presets'
  *  renders only the right preset grid + custom row. The split lets the
@@ -97,23 +123,19 @@ export function FilterRibbon({
   embedded = false,
   section = 'all',
 }: { embedded?: boolean; section?: FilterRibbonSection } = {}) {
-  const mode = useConnectionStore((s) => s.mode);
-  const modeB = useConnectionStore((s) => s.modeB);
-  const filterLow = useConnectionStore((s) => s.filterLowHz);
-  const filterHigh = useConnectionStore((s) => s.filterHighHz);
-  const filterLowB = useConnectionStore((s) => s.filterLowHzB);
-  const filterHighB = useConnectionStore((s) => s.filterHighHzB);
-  const filterPresetName = useConnectionStore((s) => s.filterPresetName);
-  const filterPresetNameB = useConnectionStore((s) => s.filterPresetNameB);
   const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
-  const rxFocus = useConnectionStore((s) => s.rxFocus);
+  const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
+  const receivers = useConnectionStore((s) => s.receivers);
   const open = useConnectionStore((s) => s.filterAdvancedPaneOpen);
   const applyState = useConnectionStore((s) => s.applyState);
-  const activeReceiver: TxVfo = rxFocus === 'B' && rx2Enabled ? 'B' : 'A';
-  const activeMode = activeReceiver === 'B' ? modeB : mode;
-  const activeFilterLow = activeReceiver === 'B' ? filterLowB : filterLow;
-  const activeFilterHigh = activeReceiver === 'B' ? filterHighB : filterHigh;
-  const activeFilterPresetName = activeReceiver === 'B' ? filterPresetNameB : filterPresetName;
+  // The filter controls follow the FOCUSED receiver. activeKey is derived from
+  // already-selected store values, so the per-receiver getter selections below
+  // stay stable across renders.
+  const activeKey = activeReceiverKey(focusedRxIndex, rx2Enabled, receivers);
+  const activeMode = useConnectionStore((s) => getReceiverMode(s, activeKey));
+  const activeFilterLow = useConnectionStore((s) => getReceiverFilterLowHz(s, activeKey));
+  const activeFilterHigh = useConnectionStore((s) => getReceiverFilterHighHz(s, activeKey));
+  const activeFilterPresetName = useConnectionStore((s) => getReceiverFilterPresetName(s, activeKey));
   const favoriteSlotNames = useFavoritesForMode(activeMode);
   const [serverPresets, setServerPresets] = useState<FilterPresetDto[] | null>(null);
   const [dragSlot, setDragSlot] = useState<string | null>(null);
@@ -141,23 +163,12 @@ export function FilterRibbon({
   }, [presets]);
 
   const selectPreset = useCallback((slot: FilterPresetSlot) => {
-    useConnectionStore.setState({
-      ...(activeReceiver === 'B'
-        ? {
-            filterLowHzB: slot.lowHz,
-            filterHighHzB: slot.highHz,
-            filterPresetNameB: slot.slotName,
-          }
-        : {
-            filterLowHz: slot.lowHz,
-            filterHighHz: slot.highHz,
-            filterPresetName: slot.slotName,
-          }),
-    });
-    setFilter(slot.lowHz, slot.highHz, slot.slotName, undefined, activeReceiver)
+    optimisticSetReceiverFilter(activeKey, slot.lowHz, slot.highHz);
+    optimisticSetReceiverPreset(activeKey, slot.slotName);
+    postReceiverFilter(activeKey, slot.lowHz, slot.highHz, slot.slotName)
       .then(applyState)
       .catch(() => {});
-  }, [activeReceiver, applyState]);
+  }, [activeKey, applyState]);
 
   const closeRibbon = useCallback(() => {
     useConnectionStore.setState({ filterAdvancedPaneOpen: false });
@@ -195,27 +206,16 @@ export function FilterRibbon({
     // defaults and never get overwritten — when one is active the edit falls
     // back to VAR1 (set by activeVarSlot above).
     const target = activeVarSlot;
-    useConnectionStore.setState({
-      ...(activeReceiver === 'B'
-        ? {
-            filterLowHzB: low,
-            filterHighHzB: high,
-            filterPresetNameB: target,
-          }
-        : {
-            filterLowHz: low,
-            filterHighHz: high,
-            filterPresetName: target,
-          }),
-    });
+    optimisticSetReceiverFilter(activeKey, low, high);
+    optimisticSetReceiverPreset(activeKey, target);
     try {
-      await setFilter(low, high, target, undefined, activeReceiver).then(applyState);
+      await postReceiverFilter(activeKey, low, high, target).then(applyState);
       await setFilterPresetOverride(activeMode, target, low, high);
       // Refresh preset list so the VAR chip shows the new values.
       const fresh = await getFilterPresets(activeMode);
       setServerPresets(fresh);
     } catch { /* next state poll reconciles */ }
-  }, [loDraft, hiDraft, activeMode, activeReceiver, applyState, activeVarSlot]);
+  }, [loDraft, hiDraft, activeMode, activeKey, applyState, activeVarSlot]);
 
   const onCustomKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') e.currentTarget.blur();
@@ -235,22 +235,19 @@ export function FilterRibbon({
       const step = nudgeStepHz(activeMode) * (e.shiftKey ? 10 : 1);
       const dir = e.key === 'ArrowRight' ? 1 : -1;
       const s = useConnectionStore.getState();
-      const currentLow = activeReceiver === 'B' ? s.filterLowHzB : s.filterLowHz;
-      const currentHigh = activeReceiver === 'B' ? s.filterHighHzB : s.filterHighHz;
-      const currentPreset = activeReceiver === 'B' ? s.filterPresetNameB : s.filterPresetName;
+      const currentLow = getReceiverFilterLowHz(s, activeKey);
+      const currentHigh = getReceiverFilterHighHz(s, activeKey);
+      const currentPreset = getReceiverFilterPresetName(s, activeKey);
       const newHi = currentHigh + dir * step;
       if (newHi <= currentLow + 50) return;
       const slot = currentPreset && /^VAR[12]$/.test(currentPreset) ? currentPreset : 'VAR1';
-      useConnectionStore.setState(
-        activeReceiver === 'B'
-          ? { filterHighHzB: newHi, filterPresetNameB: slot }
-          : { filterHighHz: newHi, filterPresetName: slot },
-      );
-      setFilter(currentLow, newHi, slot, undefined, activeReceiver).then(applyState).catch(() => {});
+      optimisticSetReceiverFilter(activeKey, currentLow, newHi);
+      optimisticSetReceiverPreset(activeKey, slot);
+      postReceiverFilter(activeKey, currentLow, newHi, slot).then(applyState).catch(() => {});
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [embedded, open, activeMode, activeReceiver, applyState, closeRibbon, section]);
+  }, [embedded, open, activeMode, activeKey, applyState, closeRibbon, section]);
 
   if (!embedded && !open) return null;
   // The mini-pan section can render before the preset table resolves; only

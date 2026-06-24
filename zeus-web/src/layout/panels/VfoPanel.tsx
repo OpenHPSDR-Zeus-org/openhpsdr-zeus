@@ -57,6 +57,10 @@ import { bandOf } from '../../components/design/data';
 import { receiverColorByIndex } from '../../components/spectrumReceiverColor';
 import { VfoDisplay } from '../../components/VfoDisplay';
 import { useConnectionStore } from '../../state/connection-store';
+import {
+  getDesiredReceiverCount,
+  setExposedReceiverCount,
+} from '../../state/receiver-state';
 
 export function VfoPanel() {
   const applyState = useConnectionStore((s) => s.applyState);
@@ -107,10 +111,18 @@ export function VfoPanel() {
     setVfo(vfoBHz).then(applyState).catch(() => {});
   };
 
-  const toggleRx2 = () => {
-    const enabled = !rx2Enabled;
-    setFocusedRxIndex(enabled ? 1 : 0);
-    patchRx2({ enabled });
+  // MULTI RX master toggle: enable the whole multi-DDC set the operator
+  // configured in Settings → Receivers (remembered count, default 2), or
+  // collapse back to RX1 only. Replaces the old single "+ RX2" affordance.
+  const multiRxOn = rx2Enabled;
+  const toggleMultiRx = () => {
+    if (multiRxOn) {
+      setFocusedRxIndex(0);
+      setExposedReceiverCount(1);
+    } else {
+      setFocusedRxIndex(1);
+      setExposedReceiverCount(getDesiredReceiverCount());
+    }
   };
 
   // AF gain for the active receiver. RX1's level is the main RX volume (lives in
@@ -186,18 +198,21 @@ export function VfoPanel() {
             </button>
           );
         })}
-        {!rx2Enabled && (
-          <button
-            type="button"
-            className="vfo-chip vfo-chip--add"
-            onClick={toggleRx2}
-            title="Enable RX2 (second receiver)"
-            aria-label="Enable RX2"
-          >
-            <Headphones size={13} />
-            <span className="vfo-chip__band">+ RX2</span>
-          </button>
-        )}
+        <button
+          type="button"
+          className={`vfo-chip vfo-chip--add ${multiRxOn ? 'is-active' : ''}`}
+          onClick={toggleMultiRx}
+          title={
+            multiRxOn
+              ? 'Disable extra receivers (back to RX1 only)'
+              : 'Enable multiple receivers (set how many in Settings → Receivers)'
+          }
+          aria-label="Toggle multiple receivers"
+          aria-pressed={multiRxOn}
+        >
+          <Headphones size={13} />
+          <span className="vfo-chip__band">MULTI RX</span>
+        </button>
       </div>
 
       {/* Active receiver detail — the full-size tuning surface. */}
@@ -281,15 +296,15 @@ export function VfoPanel() {
             <Repeat2 size={13} />
             <span>Swap</span>
           </button>
-          {rx2Enabled && (
+          {multiRxOn && (
             <button
               type="button"
               className="vfo-tool-key"
-              onClick={toggleRx2}
-              title="Disable RX2"
+              onClick={toggleMultiRx}
+              title="Disable extra receivers (back to RX1 only)"
             >
               <Headphones size={12} />
-              <span>RX2 off</span>
+              <span>MULTI off</span>
             </button>
           )}
         </div>

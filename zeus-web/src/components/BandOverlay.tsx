@@ -18,6 +18,7 @@ import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import * as viewCenter from '../state/view-center';
+import type { ReceiverKey } from '../state/receiver-state';
 
 // Issue #846: licence-class band overlay drawn behind the spectrum trace.
 //
@@ -56,7 +57,7 @@ const STRIP_HEIGHT_FRAC = 0.18;
 const MIN_LABEL_WIDTH_PCT = 4;
 
 type BandOverlayProps = {
-  receiver?: 'A' | 'B';
+  receiver?: ReceiverKey;
 };
 
 type SegmentColors = (typeof COLORS)[keyof typeof COLORS];

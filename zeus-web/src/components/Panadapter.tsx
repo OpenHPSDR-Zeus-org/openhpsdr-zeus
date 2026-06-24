@@ -71,9 +71,10 @@ import { SpotOverlay } from './SpotOverlay';
 import { PeakMarkerOverlay } from './PeakMarkerOverlay';
 import { NotchOverlay } from './NotchOverlay';
 import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
+import { getReceiverVfoHz, type ReceiverKey } from '../state/receiver-state';
 
 type PanadapterProps = {
-  receiver?: 'A' | 'B';
+  receiver?: ReceiverKey;
   touchMode?: PanTuneGestureOptions['touchMode'];
   tuneReceiver?: PanTuneGestureOptions['tuneReceiver'];
   stitched?: boolean;
@@ -89,9 +90,7 @@ export function Panadapter({
 }: PanadapterProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const vfoHz = useConnectionStore((s) =>
-    receiver === 'B' ? s.vfoBHz : s.vfoHz,
-  );
+  const vfoHz = useConnectionStore((s) => getReceiverVfoHz(s, receiver));
   const popEnabled = useSignalEnhanceStore((s) => s.popEnabled);
   const popRenderIntensity = useSignalEnhanceStore((s) => s.popRenderIntensity);
   const moxOn = useTxStore((s) => s.moxOn);
@@ -296,7 +295,7 @@ export function Panadapter({
         centerHz: slice.centerHz,
         hzPerPixel: slice.hzPerPixel,
         width: slice.width,
-        planKey: receiver,
+        planKey: String(receiver),
       });
       const frameCenter = Number(slice.centerHz);
 
@@ -385,6 +384,7 @@ export function Panadapter({
     const unsubViewZoom = viewZoom.subscribe(requestRedraw);
     const unsubConn = useConnectionStore.subscribe((state, prev) => {
       if (receiver === 'B' && state.vfoBHz !== prev.vfoBHz) requestRedraw();
+      else if (typeof receiver === 'number' && state.receivers !== prev.receivers) requestRedraw();
     });
 
     // Repaint on dB-range / trace-color updates so auto-range and the Display
@@ -484,7 +484,12 @@ export function Panadapter({
           border: '1px solid rgba(255,255,255,0.16)',
         }}
       >
-        {receiver === 'B' ? 'RX2 · VFO B' : 'RX1 · VFO A'} · {(vfoHz / 1e6).toFixed(6)}
+        {receiver === 'B'
+          ? 'RX2 · VFO B'
+          : typeof receiver === 'number'
+          ? `RX${receiver + 1}`
+          : 'RX1 · VFO A'}{' '}
+        · {(vfoHz / 1e6).toFixed(6)}
         {stitched && foreground ? ' · FOCUS' : ''}
       </div>
       {/* Passband + hover crosshair render on BOTH halves (RX2), each tracking

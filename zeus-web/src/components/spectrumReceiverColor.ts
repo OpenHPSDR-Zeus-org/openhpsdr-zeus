@@ -2,12 +2,16 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 
-export type SpectrumReceiverId = 'A' | 'B';
+// 'A' = RX1, 'B' = RX2, number = a 0-based receiver index >= 2 (RX3+).
+export type SpectrumReceiverId = 'A' | 'B' | number;
 
 // Mirrors FilterMiniPan's passband palette: VFO A uses --accent, VFO B uses
 // --signal with the same green fallback used by the bandwidth filter panel.
+// RX3+ (numeric index) delegate to receiverColorByIndex for a distinct hue.
 export function spectrumReceiverFilterColor(receiver: SpectrumReceiverId): string {
-  return receiver === 'B' ? 'var(--signal, #25d366)' : 'var(--accent, #4a9eff)';
+  if (receiver === 'B') return 'var(--signal, #25d366)';
+  if (typeof receiver === 'number') return receiverColorByIndex(receiver);
+  return 'var(--accent, #4a9eff)';
 }
 
 // Per-receiver identity colour for the multi-DDC panels (VFO lanes, hero mixer

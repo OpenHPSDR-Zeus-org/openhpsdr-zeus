@@ -17,7 +17,7 @@
 // rooms get a warm golden glow as the signature premium cue. Hydrated on mount
 // via chat-store REST calls and kept live by 0x35 push frames.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   useChatStore,
   dmOther,
@@ -991,11 +991,148 @@ function GroupManagementStrip({
 // Admin console (relay moderators only — N9WAR / KB2UKA)
 // ---------------------------------------------------------------------------
 
+// Inline icons — kept local to the admin console so it reads as a self-contained
+// premium control surface rather than emoji-decorated buttons.
+function MegaphoneIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M2.5 6.2 11 2.8v10.4L2.5 9.8H2a1 1 0 0 1-1-1V7.2a1 1 0 0 1 1-1h.5Z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path d="M4 10v2.2a1 1 0 0 0 1 1h.6a1 1 0 0 0 1-1V10.6" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+      <path d="M13 6.2a2.4 2.4 0 0 1 0 3.6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ClearIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M2.5 4h11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M6 4V2.6a.8.8 0 0 1 .8-.8h2.4a.8.8 0 0 1 .8.8V4" stroke="currentColor" strokeWidth="1.3" />
+      <path
+        d="M4 4.6 4.6 13a1 1 0 0 0 1 .9h4.8a1 1 0 0 0 1-.9L12 4.6"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path d="M6.6 6.8v4.6M9.4 6.8v4.6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function UnbanIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M5.3 8.2 7 9.9 10.8 6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ShieldIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M8 1.6 13 3.4v4.2c0 3.2-2.1 5.6-5 6.8-2.9-1.2-5-3.6-5-6.8V3.4L8 1.6Z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path d="M5.8 8 7.4 9.6 10.4 6.2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+const ADMIN_GOLD_RING = 'inset 0 0 0 1px rgba(255,177,60,0.22), 0 0 10px rgba(255,177,60,0.07)';
+
+/**
+ * A single action in the admin console: an icon, a title, a one-line description
+ * of exactly what it does and who it touches, and the trigger button. The verbose
+ * description is deliberate — these are network-wide, irreversible actions and the
+ * operator should never have to guess at the blast radius.
+ */
+function AdminAction({
+  icon,
+  title,
+  description,
+  actionLabel,
+  danger,
+  onClick,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  actionLabel: string;
+  danger?: boolean;
+  onClick: () => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const accent = danger ? 'var(--tx)' : 'var(--power)';
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '7px 9px',
+        borderRadius: 'var(--r-sm)',
+        background: hovered ? 'var(--bg-2)' : 'var(--bg-2)',
+        border: '1px solid var(--line)',
+        boxShadow: hovered ? ADMIN_GOLD_RING : 'none',
+        transition: 'box-shadow var(--dur-fast) var(--ease-out)',
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 26,
+          height: 26,
+          flexShrink: 0,
+          borderRadius: 'var(--r-sm)',
+          background: danger ? 'var(--tx-soft)' : 'var(--power-soft)',
+          color: accent,
+        }}
+      >
+        {icon}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--fg-0)', letterSpacing: '0.02em' }}>
+          {title}
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--fg-3)', lineHeight: 1.35, marginTop: 1 }}>
+          {description}
+        </div>
+      </div>
+      <button
+        type="button"
+        className="btn sm"
+        onClick={onClick}
+        style={
+          danger
+            ? { flexShrink: 0, color: 'var(--tx)', borderColor: 'var(--tx)' }
+            : { flexShrink: 0 }
+        }
+      >
+        {actionLabel}
+      </button>
+    </div>
+  );
+}
+
 /**
  * Collapsible strip of network-wide moderator tools, shown only to operators the
- * relay flagged as admins. Gathers the actions that aren't tied to a single
- * roster row or room: global announcement, clear the public lobby, and unban.
- * Per-row ban and per-group management live with their row/tab as before.
+ * relay flagged as admins (N9WAR / KB2UKA). Gathers the actions that aren't tied
+ * to a single roster row or room: global announcement, clear the public lobby,
+ * and unban. Per-row ban and per-group management live with their row/tab.
  */
 function AdminConsole() {
   const [open, setOpen] = useState(false);
@@ -1003,9 +1140,17 @@ function AdminConsole() {
   const broadcast = useChatStore((s) => s.broadcast);
   const clearRoom = useChatStore((s) => s.clearRoom);
   const unban = useChatStore((s) => s.unban);
+  const ownCall = useChatStore((s) => s.callsign);
 
   return (
-    <div style={{ borderBottom: '1px solid var(--panel-border)', background: 'var(--bg-1)', flexShrink: 0 }}>
+    <div
+      style={{
+        borderBottom: '1px solid var(--panel-border)',
+        background: 'var(--bg-1)',
+        boxShadow: open ? 'inset 0 0 0 1px rgba(255,177,60,0.10)' : 'none',
+        flexShrink: 0,
+      }}
+    >
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -1013,38 +1158,78 @@ function AdminConsole() {
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 6,
+          gap: 7,
           width: '100%',
-          padding: '4px 10px',
+          padding: '5px 10px',
           background: 'none',
           border: 'none',
           cursor: 'pointer',
           fontSize: 9.5,
           fontWeight: 700,
-          letterSpacing: '0.10em',
+          letterSpacing: '0.12em',
           textTransform: 'uppercase',
           color: 'var(--power)',
         }}
       >
         <span style={{ fontSize: 9, opacity: 0.7 }}>{open ? '▼' : '▶'}</span>
+        <span style={{ display: 'flex', alignItems: 'center', color: 'var(--power)' }}>
+          <ShieldIcon />
+        </span>
         Admin Console
+        <span
+          style={{
+            marginLeft: 'auto',
+            padding: '1px 6px',
+            borderRadius: 'var(--r-lg)',
+            background: 'var(--power-soft)',
+            color: 'var(--power)',
+            fontSize: 8.5,
+            fontWeight: 700,
+            letterSpacing: '0.10em',
+          }}
+        >
+          MODERATOR
+        </span>
       </button>
       {open && (
-        <div style={{ padding: '0 10px 8px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          <button type="button" className="btn sm" onClick={() => setDialog('broadcast')}>
-            📢 Global message
-          </button>
-          <button type="button" className="btn sm" onClick={() => setDialog('unban')}>
-            Unban…
-          </button>
-          <button
-            type="button"
-            className="btn sm"
-            onClick={() => setDialog('clear')}
-            style={{ color: 'var(--tx)', borderColor: 'var(--tx)', marginLeft: 'auto' }}
+        <div style={{ padding: '0 10px 9px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div
+            style={{
+              fontSize: 10,
+              color: 'var(--fg-3)',
+              lineHeight: 1.4,
+              padding: '0 1px 3px',
+            }}
           >
-            Clear public chat
-          </button>
+            Network-wide moderation for the public relay. You are signed in as{' '}
+            <span className="mono" style={{ color: 'var(--accent-bright)', fontWeight: 700 }}>
+              {ownCall ?? '—'}
+            </span>
+            . These actions affect <strong style={{ color: 'var(--fg-1)' }}>every connected operator</strong>.
+          </div>
+
+          <AdminAction
+            icon={<MegaphoneIcon />}
+            title="Global message"
+            description="Broadcast a one-off announcement banner to every operator, in any room."
+            actionLabel="Compose"
+            onClick={() => setDialog('broadcast')}
+          />
+          <AdminAction
+            icon={<UnbanIcon />}
+            title="Unban operator"
+            description="Lift a ban so a callsign can reconnect to ZeusChat."
+            actionLabel="Unban…"
+            onClick={() => setDialog('unban')}
+          />
+          <AdminAction
+            icon={<ClearIcon />}
+            title="Clear public chat"
+            description="Permanently wipe the public lobby history for everyone. Cannot be undone."
+            actionLabel="Clear"
+            danger
+            onClick={() => setDialog('clear')}
+          />
         </div>
       )}
 
@@ -1495,8 +1680,11 @@ export function ChatPanel() {
             flexShrink: 0,
           }}
         >
-          <span style={{ fontSize: 13, lineHeight: 1 }} aria-hidden>
-            📢
+          <span
+            aria-hidden
+            style={{ display: 'flex', alignItems: 'center', color: 'var(--accent-bright)', marginTop: 1 }}
+          >
+            <MegaphoneIcon />
           </span>
           <div style={{ flex: 1, minWidth: 0, wordBreak: 'break-word' }}>
             {announcement.from && (

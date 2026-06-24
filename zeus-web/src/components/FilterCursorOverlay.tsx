@@ -19,6 +19,12 @@ import { useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { useConnectionStore } from '../state/connection-store';
 import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { resolvePanTuneTarget } from '../util/use-pan-tune-gesture';
+import {
+  getReceiverFilterHighHz,
+  getReceiverFilterLowHz,
+  getReceiverMode,
+  type ReceiverKey,
+} from '../state/receiver-state';
 
 // Thetis-style click-tune cursor: a vertical guide line tracks the mouse
 // across the spectrum surface and a translucent grey rectangle previews where
@@ -35,8 +41,8 @@ type FilterCursorOverlayProps = {
   /** The positioned (relative) surface to track the pointer over. */
   containerRef: RefObject<HTMLElement | null>;
   /** Which receiver's spectrum geometry + snap to preview against. Default 'A';
-   *  'B' drives the RX2 half so its hover crosshair tracks VFO B. */
-  receiver?: 'A' | 'B';
+   *  'B' drives the RX2 half (VFO B); a number drives an RX3+ DDC. */
+  receiver?: ReceiverKey;
 };
 
 // "14.074.00" — MHz with dot-grouped kHz/Hz, the readout style hams expect.
@@ -115,9 +121,9 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
       const band = bandRef.current;
       if (band) {
         if (hzPerPixel > 0 && len > 0 && rectW > 0) {
-          const filterLowHz = receiver === 'B' ? conn.filterLowHzB : conn.filterLowHz;
-          const filterHighHz = receiver === 'B' ? conn.filterHighHzB : conn.filterHighHz;
-          const mode = receiver === 'B' ? conn.modeB : conn.mode;
+          const filterLowHz = getReceiverFilterLowHz(conn, receiver);
+          const filterHighHz = getReceiverFilterHighHz(conn, receiver);
+          const mode = getReceiverMode(conn, receiver);
           const hzPerCssPx = (len * hzPerPixel) / rectW;
           const lowPx = filterLowHz / hzPerCssPx;
           const highPx = filterHighHz / hzPerCssPx;
@@ -202,7 +208,8 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
           s.filterLowHzB !== prev.filterLowHzB ||
           s.filterHighHzB !== prev.filterHighHzB ||
           s.mode !== prev.mode ||
-          s.modeB !== prev.modeB)
+          s.modeB !== prev.modeB ||
+          (typeof receiver === 'number' && s.receivers !== prev.receivers))
       ) {
         schedule();
       }

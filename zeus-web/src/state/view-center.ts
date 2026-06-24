@@ -250,13 +250,38 @@ function createViewCenter(): ViewCenterInternal {
   };
 }
 
-const rx1 = createViewCenter();
-const rx2 = createViewCenter();
+// Per-receiver view-center controllers keyed by 0-based rxIndex (RX1 = 0,
+// RX2 = 1, RX3+ = 2..). Created lazily so an N-DDC radio only spins up as many
+// tweens as it has mounted surfaces. Indices 0/1 are seeded eagerly so the
+// module-level back-compat exports bound to rx1 (and viewCenterFor('B')) are
+// stable from import time.
+const controllers = new Map<number, ViewCenterInternal>();
 
-/** The view-center instance for a receiver. RX1/VFO A and RX2/VFO B glide
- *  independently. */
-export function viewCenterFor(receiver: 'A' | 'B'): ViewCenterController {
-  return receiver === 'B' ? rx2 : rx1;
+function getOrCreate(rxIndex: number): ViewCenterInternal {
+  let vc = controllers.get(rxIndex);
+  if (!vc) {
+    vc = createViewCenter();
+    controllers.set(rxIndex, vc);
+  }
+  return vc;
+}
+
+const rx1 = getOrCreate(0);
+const rx2 = getOrCreate(1);
+
+// 'A' → 0, 'B' → 1, number → itself. Inlined locally (not imported from
+// receiver-state) to avoid a module cycle: receiver-state imports nothing from
+// here, but several receiver-state consumers import this module.
+function rxIndexOfLocal(receiver: 'A' | 'B' | number): number {
+  if (receiver === 'A') return 0;
+  if (receiver === 'B') return 1;
+  return receiver;
+}
+
+/** The view-center instance for a receiver. RX1/VFO A, RX2/VFO B, and every
+ *  extra DDC (RX3+) glide independently. */
+export function viewCenterFor(receiver: 'A' | 'B' | number): ViewCenterController {
+  return getOrCreate(rxIndexOfLocal(receiver));
 }
 
 // Back-compat module-level API — operates on the RX1 instance, so every
@@ -308,7 +333,7 @@ export const msSinceOptimisticTune = rx1.msSinceOptimisticTune;
 /** Per-receiver optimistic tune age for poll guards. RX1/VFO A and RX2/VFO B
  *  must suppress stale state independently while the operator is dragging one
  *  side of the stitched display. */
-export function msSinceOptimisticTuneFor(receiver: 'A' | 'B'): number {
+export function msSinceOptimisticTuneFor(receiver: 'A' | 'B' | number): number {
   return viewCenterFor(receiver).msSinceOptimisticTune();
 }
 /** Subscribe to RX1 view-center motion. Fires once per tween tick (display
@@ -325,8 +350,13 @@ export function _setClockForTest(clock: Clock, rafImpl: Raf, cancelImpl: CancelR
 }
 
 export function _resetForTest(): void {
-  rx1._resetForTest();
-  rx2._resetForTest();
+  // Reset every live controller, then collapse the map back to the eagerly
+  // seeded RX1/RX2 instances so the module-level rx1/rx2 references (and the
+  // back-compat exports bound to them) stay valid across a test reset.
+  for (const vc of controllers.values()) vc._resetForTest();
+  controllers.clear();
+  controllers.set(0, rx1);
+  controllers.set(1, rx2);
 }
 
 export function _isLoopRunningForTest(): boolean {

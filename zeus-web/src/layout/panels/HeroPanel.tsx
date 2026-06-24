@@ -48,8 +48,6 @@ import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent }
 import { GripVertical, Sliders, Volume2, VolumeX, X } from 'lucide-react';
 import { Panadapter } from '../../components/Panadapter';
 import { WaterfallSurface } from '../../components/WaterfallSurface';
-import { RxMonitorPane } from '../../components/RxMonitorPane';
-import { RxWaterfallPane } from '../../components/RxWaterfallPane';
 import { ZoomControl } from '../../components/ZoomControl';
 import { WaterfallSpeedControl } from '../../components/WaterfallSpeedControl';
 import { SpectrumControls } from '../../components/SpectrumControls';
@@ -305,7 +303,7 @@ export function HeroPanel({
     minHeight: 0,
     height: '100%',
     display: 'grid',
-    gridTemplateColumns: `repeat(${Math.min(spectrumPanes.length, 4)}, minmax(0, 1fr))`,
+    gridTemplateColumns: `repeat(${Math.min(spectrumPanes.length, 3)}, minmax(0, 1fr))`,
     gridAutoRows: '1fr',
     gap: 0,
     overflow: 'hidden',
@@ -333,20 +331,35 @@ export function HeroPanel({
           {heroTitle}
         </span>
         {multiRx && (
-          <button
-            ref={mixerTriggerRef}
-            type="button"
-            className={`hero-rx-mixer-trigger ${mixerOpen ? 'is-open' : ''}`}
-            onClick={toggleMixer}
+          // Centered in the drag bar: absolutely positioned at the header's
+          // horizontal midpoint so it sits dead-center regardless of the title
+          // and right-side control widths.
+          <span
+            style={{
+              position: 'absolute',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              display: 'inline-flex',
+              zIndex: 2,
+            }}
             onPointerDown={stopDrag}
             onMouseDown={stopDrag}
-            aria-pressed={mixerOpen}
-            aria-label="Receiver audio mixer"
-            title="Receiver audio mixer — hear/mute and focus each DDC"
           >
-            <Sliders size={11} />
-            <span>RX MIX</span>
-          </button>
+            <button
+              ref={mixerTriggerRef}
+              type="button"
+              className={`hero-rx-mixer-trigger ${mixerOpen ? 'is-open' : ''}`}
+              onClick={toggleMixer}
+              onPointerDown={stopDrag}
+              onMouseDown={stopDrag}
+              aria-pressed={mixerOpen}
+              aria-label="Receiver audio mixer"
+              title="Receiver audio mixer — hear/mute and focus each DDC"
+            >
+              <Sliders size={11} />
+              <span>RX MIX</span>
+            </button>
+          </span>
         )}
         <div
           className="hero-tile-controls"
@@ -569,7 +582,15 @@ export function HeroPanel({
                       tuneReceiver={p.abId}
                     />
                   ) : (
-                    <RxMonitorPane rxIndex={p.index} />
+                    // RX3+ now use the SAME interactive panadapter as RX1/RX2,
+                    // keyed on the numeric receiver index. Each is an independent
+                    // (non-stitched) pane so it gets its own crosshair, click-to-
+                    // tune, passband-drag, freq axis and dB scale.
+                    <Panadapter
+                      receiver={p.index}
+                      foreground={focusedRxIndex === p.index}
+                      tuneReceiver={p.index}
+                    />
                   )}
                 </div>
               ))}
@@ -604,7 +625,15 @@ export function HeroPanel({
                         tuneReceiver={p.abId}
                       />
                     ) : (
-                      <RxWaterfallPane rxIndex={p.index} />
+                      // RX3+ interactive waterfall — independent (non-stitched)
+                      // pane keyed on the numeric receiver index, matching the
+                      // panadapter above. Crosshair drag-tune now works here too.
+                      <WaterfallSurface
+                        receiver={p.index}
+                        transparent={bgActive}
+                        foreground={focusedRxIndex === p.index}
+                        tuneReceiver={p.index}
+                      />
                     )}
                   </div>
                 ))}

@@ -43,9 +43,10 @@ import { NotchOverlay } from './NotchOverlay';
 import { PassbandOverlay } from './PassbandOverlay';
 import { WfDbScale } from './WfDbScale';
 import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
+import { getReceiverVfoHz, type ReceiverKey } from '../state/receiver-state';
 
 type Props = {
-  receiver?: 'A' | 'B';
+  receiver?: ReceiverKey;
   /** Dev overlay: a live frame-time / fps readout. Off by default (production). */
   showStats?: boolean;
   /** Stitched dual-RX (RX2) layout — gates which overlays render and applies the
@@ -389,7 +390,7 @@ export function WaterfallHeightfield({
       }
       const spanHz = s.width * s.hzPerPixel;
       const c = useConnectionStore.getState();
-      const vfoHz = receiver === 'B' ? c.vfoBHz : c.vfoHz;
+      const vfoHz = getReceiverVfoHz(c, receiver);
       // Dial offset from THIS receiver's animated target center, so the cursor
       // tracks the glide identically on both stitched halves.
       const dialOffsetHz = vc.isInitialized() ? vfoHz - vc.getTargetCenterHz() : 0;
@@ -398,7 +399,12 @@ export function WaterfallHeightfield({
     const schedule = () => requestDrawBusFrame(update);
     const unsubVc = vc.subscribe(schedule);
     const unsubConn = useConnectionStore.subscribe((s, prev) => {
-      if (s.vfoHz !== prev.vfoHz || s.vfoBHz !== prev.vfoBHz) schedule();
+      if (
+        s.vfoHz !== prev.vfoHz ||
+        s.vfoBHz !== prev.vfoBHz ||
+        (typeof receiver === 'number' && s.receivers !== prev.receivers)
+      )
+        schedule();
     });
     const unsubFrame = useDisplayStore.subscribe((s, prev) => {
       if (selectDisplaySlice(s, receiver).lastSeq !== selectDisplaySlice(prev, receiver).lastSeq) schedule();

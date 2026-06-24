@@ -26,10 +26,10 @@ export function MultiRxMonitorStrip() {
 
   if (!connected || !isP2 || extraReceivers.length === 0) return null;
 
-  // Stitch up to 4 receivers across one row; beyond that, stack into additional
-  // rows of 4 (intuitive stacking for the last receivers). Columns are capped at
-  // the row width so each pane keeps a usable size instead of shrinking to slivers.
-  const MAX_PER_ROW = 4;
+  // Up to 3 receivers across one row; beyond that, stack into additional rows of
+  // 3 (matches the HeroPanel spectrum grid). Columns are capped at the row width
+  // so each pane keeps a usable size instead of shrinking to slivers.
+  const MAX_PER_ROW = 3;
   const columns = Math.min(extraReceivers.length, MAX_PER_ROW);
 
   return (

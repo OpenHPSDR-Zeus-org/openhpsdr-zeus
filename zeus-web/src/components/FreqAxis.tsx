@@ -49,6 +49,7 @@ import { useConnectionStore } from '../state/connection-store';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import * as viewCenter from '../state/view-center';
 import { useRulerPanGesture } from '../util/use-ruler-pan-gesture';
+import { getReceiverVfoHz, type ReceiverKey } from '../state/receiver-state';
 
 function pickStrideHz(spanHz: number, targetTicks: number): number {
   if (spanHz <= 0) return 1;
@@ -82,7 +83,7 @@ function formatMHz(hz: number, strideHz: number): string {
 // The dial-marker line tracks VfoHz, which equals centerHz outside CW and sits
 // ±cw_pitch from centre in CWU/CWL.
 type FreqAxisProps = {
-  receiver?: 'A' | 'B';
+  receiver?: ReceiverKey;
   stitched?: boolean;
 };
 
@@ -128,7 +129,7 @@ export function FreqAxis({ receiver = 'A', stitched = false }: FreqAxisProps = {
         // marker PINNED to the zero line during a glide (vfo and target
         // move in lockstep at input time) instead of leading off it and
         // easing back (operator feedback, 2026-06-12).
-        const vfoHz = receiver === 'B' ? conn.vfoBHz : conn.vfoHz;
+        const vfoHz = getReceiverVfoHz(conn, receiver);
         const dialOffsetHz = vc.isInitialized()
           ? vfoHz - vc.getTargetCenterHz()
           : vfoHz - layoutCenter;
@@ -138,7 +139,12 @@ export function FreqAxis({ receiver = 'A', stitched = false }: FreqAxisProps = {
     const schedule = () => requestDrawBusFrame(update);
     const unsubVc = vc.subscribe(schedule);
     const unsubVfo = useConnectionStore.subscribe((s, prev) => {
-      if (s.vfoHz !== prev.vfoHz || s.vfoBHz !== prev.vfoBHz) schedule();
+      if (
+        s.vfoHz !== prev.vfoHz ||
+        s.vfoBHz !== prev.vfoBHz ||
+        (typeof receiver === 'number' && s.receivers !== prev.receivers)
+      )
+        schedule();
     });
     const unsubFrame = useDisplayStore.subscribe((s, prev) => {
       if (selectDisplaySlice(s, receiver).lastSeq !== selectDisplaySlice(prev, receiver).lastSeq) schedule();
@@ -162,7 +168,7 @@ export function FreqAxis({ receiver = 'A', stitched = false }: FreqAxisProps = {
   const endHz = center + spanHz / 2;
   // Initial (pre-draw-bus) marker position; the callback refines it against
   // the animated view-center on the next frame.
-  const selectedVfoHz = receiver === 'B' ? conn.vfoBHz : conn.vfoHz;
+  const selectedVfoHz = getReceiverVfoHz(conn, receiver);
   const dialPct = ((selectedVfoHz - startHz) / spanHz) * 100;
 
   // Lay ticks out one full stride beyond each edge so a glide can't expose
