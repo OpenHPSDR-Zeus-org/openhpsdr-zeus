@@ -140,6 +140,11 @@ async function flush(): Promise<void> {
   drainRafs();
   await Promise.resolve();
   drainRafs();
+  // Step past the zoom POST debounce (ZOOM_DEBOUNCE_MS = 80) so a settled zoom
+  // gesture fires its single trailing setZoom() within the test's flush window.
+  await vi.advanceTimersByTimeAsync(100);
+  drainRafs();
+  await Promise.resolve();
 }
 
 function drainRafs(maxFrames = 1000): void {
@@ -175,6 +180,10 @@ function rx2Vfo(): number | undefined {
 describe('usePanTuneGesture mobile touch mode', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Fake only the timer functions the zoom debounce uses, so flush() can step
+    // past ZOOM_DEBOUNCE_MS deterministically. requestAnimationFrame stays under
+    // the manual stub below (drainRafs drives it), not the fake clock.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     viewCenter._resetForTest();
     rafNowMs = 0;
     nextRafHandle = 1;
@@ -253,6 +262,7 @@ describe('usePanTuneGesture mobile touch mode', () => {
       impulseRejectEnabled: true,
     });
     useSignalEnhanceStore.getState().resetSignalEnhanceTuning();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -597,6 +607,99 @@ describe('usePanTuneGesture mobile touch mode', () => {
 
     expect(setRadioLoMock).not.toHaveBeenCalled();
     expect(setVfoMock).toHaveBeenCalledWith(14_205_000, undefined);
+
+    unmount();
+  });
+
+  it('debounces a multi-step zoom drag into a single settled setZoom POST', async () => {
+    useConnectionStore.setState({ ctunEnabled: false, zoomLevel: 4 });
+
+    const { container, unmount } = render(createElement(GestureProbe, { touchMode: 'normal' }));
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+    // Six rapid zoom-out wheel notches (one nudgeZoom step each) — the
+    // optimistic store update must fire on every step so the panadapter span
+    // tracks the drag, but the server POST is deferred behind the debounce.
+    await act(async () => {
+      for (let k = 0; k < 6; k++) wheel(canvas, { deltaY: 40, shiftKey: true });
+      drainRafs();
+      await Promise.resolve();
+    });
+
+    // Optimistic store stepped all the way down (4 → 3 → … but ZOOM_MIN clamps;
+    // simply assert it moved every step before the trailing flush).
+    const optimisticLevel = useConnectionStore.getState().zoomLevel;
+    expect(setZoomMock).not.toHaveBeenCalled();
+
+    // Trailing debounce fires once with the final settled level only.
+    await act(async () => {
+      await flush();
+    });
+
+    expect(setZoomMock).toHaveBeenCalledTimes(1);
+    expect(setZoomMock).toHaveBeenCalledWith(optimisticLevel, expect.any(AbortSignal));
+
+    unmount();
+  });
+
+  it('force-flushes the settled zoom level when a pinch ends', async () => {
+    useConnectionStore.setState({ ctunEnabled: false, zoomLevel: 4 });
+
+    const { container, unmount } = render(createElement(GestureProbe, { touchMode: 'normal' }));
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+    await act(async () => {
+      // Pinch out → optimistic store tracks the spread; POST stays deferred.
+      pointer(canvas, 'pointerdown', { pointerId: 1, clientX: 100, clientY: 0 });
+      pointer(canvas, 'pointerdown', { pointerId: 2, clientX: 140, clientY: 0 });
+      pointer(canvas, 'pointermove', { pointerId: 2, clientX: 180, clientY: 0 });
+      drainRafs();
+      await Promise.resolve();
+    });
+
+    const settledLevel = useConnectionStore.getState().zoomLevel;
+    expect(setZoomMock).not.toHaveBeenCalled();
+
+    // Lifting a finger ends the pinch — the settled level commits immediately,
+    // without waiting out the trailing debounce window.
+    await act(async () => {
+      pointer(canvas, 'pointerup', { pointerId: 2, clientX: 180, clientY: 0 });
+      drainRafs();
+      await Promise.resolve();
+    });
+
+    expect(setZoomMock).toHaveBeenCalledTimes(1);
+    expect(setZoomMock).toHaveBeenCalledWith(settledLevel, expect.any(AbortSignal));
+
+    unmount();
+  });
+
+  it('supersedes an in-flight zoom POST when a newer settled level arrives', async () => {
+    useConnectionStore.setState({ ctunEnabled: false, zoomLevel: 4 });
+
+    const { container, unmount } = render(createElement(GestureProbe, { touchMode: 'normal' }));
+    const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+    // First zoom gesture settles and posts.
+    await act(async () => {
+      wheel(canvas, { deltaY: 40, shiftKey: true });
+      await flush();
+    });
+    expect(setZoomMock).toHaveBeenCalledTimes(1);
+    const firstSignal = setZoomMock.mock.calls[0]![1] as AbortSignal;
+    expect(firstSignal.aborted).toBe(false);
+
+    // A second gesture in the opposite direction settles to a new level — its
+    // flush aborts the prior in-flight request before posting the latest.
+    await act(async () => {
+      wheel(canvas, { deltaY: -40, shiftKey: true });
+      await flush();
+    });
+
+    expect(setZoomMock).toHaveBeenCalledTimes(2);
+    expect(firstSignal.aborted).toBe(true);
+    const finalLevel = useConnectionStore.getState().zoomLevel;
+    expect(setZoomMock).toHaveBeenLastCalledWith(finalLevel, expect.any(AbortSignal));
 
     unmount();
   });

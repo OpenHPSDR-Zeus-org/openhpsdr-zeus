@@ -406,6 +406,19 @@ export function usePanTuneGesture(
     // notch on a mouse wheel should be one tune/zoom step, not three.
     let wheelAccum = 0;
     let zoomInflight: AbortController | null = null;
+    // Zoom POST debounce: the optimistic store update (setZoomLevel) fires on
+    // every step so the panadapter span tracks the drag in real time, but the
+    // actual setZoom() POST is deferred behind a short trailing timer that only
+    // commits the final settled level. A single zoom drag fires nudgeZoom many
+    // times across N receivers; without this each step held state.AnalyzerLock
+    // across a native SetAnalyzer rebuild on the HTTP thread while the audio
+    // Tick blocked on the same lock — one stalled tick underran the ring and
+    // clicked. One settled POST per drag = one rebuild, so the Tick almost
+    // never collides with a lock-held reallocation.
+    const ZOOM_DEBOUNCE_MS = 80;
+    let zoomDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingZoomLevel: ZoomLevel | null = null;
+    let pendingZoomFromLevel: number | null = null;
 
     // The commanded-frequency chain: pendingHz when a POST is queued, else
     // the optimistic store value. All view-center nudges are DELTAS against
@@ -569,19 +582,27 @@ export function usePanTuneGesture(
       scheduleFlush();
     };
 
-    const nudgeZoom = (delta: number) => {
-      if (delta === 0) return;
-      const state = useConnectionStore.getState();
-      const cur = state.zoomLevel;
-      const next = clampZoom(cur + delta);
-      if (next === cur) return;
-      useConnectionStore.getState().setZoomLevel(next);
+    // Commit the latest settled zoom level to the server. CTUN recentre spans
+    // the whole drag — from the level when this debounce window opened
+    // (pendingZoomFromLevel) to the settled level — so a multi-step zoom-in
+    // recenters once, on the net change, not per intermediate step.
+    const flushZoom = () => {
+      if (zoomDebounceTimer !== null) {
+        clearTimeout(zoomDebounceTimer);
+        zoomDebounceTimer = null;
+      }
+      const next = pendingZoomLevel;
+      const from = pendingZoomFromLevel;
+      pendingZoomLevel = null;
+      pendingZoomFromLevel = null;
+      if (next == null || from == null) return;
+      if (next === from) return;
       zoomInflight?.abort();
       const ctrl = new AbortController();
       zoomInflight = ctrl;
       const centeredLoHz =
         rxIndexOf(receiver) === 0 && rxIndexOf(tuneReceiver) === 0
-          ? centerCtunForZoomIn(cur, next, ctrl.signal)
+          ? centerCtunForZoomIn(from, next, ctrl.signal)
           : null;
       setZoom(next, ctrl.signal)
         .then((s) => {
@@ -591,6 +612,23 @@ export function usePanTuneGesture(
           }
         })
         .catch(() => {});
+    };
+
+    const nudgeZoom = (delta: number) => {
+      if (delta === 0) return;
+      const state = useConnectionStore.getState();
+      const cur = state.zoomLevel;
+      const next = clampZoom(cur + delta);
+      if (next === cur) return;
+      // Optimistic store update fires every step — the panadapter span tracks
+      // the drag immediately. The server POST is deferred to flushZoom.
+      useConnectionStore.getState().setZoomLevel(next);
+      // Capture the from-level when the debounce window first opens so the CTUN
+      // recentre and the "did anything change" guard span the whole gesture.
+      if (pendingZoomFromLevel === null) pendingZoomFromLevel = cur;
+      pendingZoomLevel = next;
+      if (zoomDebounceTimer !== null) clearTimeout(zoomDebounceTimer);
+      zoomDebounceTimer = setTimeout(flushZoom, ZOOM_DEBOUNCE_MS);
     };
 
     const onPointerDown = (e: PointerEvent) => {
@@ -791,6 +829,9 @@ export function usePanTuneGesture(
           cancelPinchRaf();
           pinch = null;
           canvas.style.cursor = idleCursor();
+          // Settle the final pinch level immediately rather than waiting out
+          // the trailing debounce after the fingers lift.
+          flushZoom();
         }
         return;
       }
@@ -906,6 +947,7 @@ export function usePanTuneGesture(
       if (pendingRaf !== 0) cancelAnimationFrame(pendingRaf);
       if (pendingPanRaf !== 0) cancelAnimationFrame(pendingPanRaf);
       cancelPinchRaf();
+      if (zoomDebounceTimer !== null) clearTimeout(zoomDebounceTimer);
       pendingAbort?.abort();
       pendingPanAbort?.abort();
       zoomInflight?.abort();
