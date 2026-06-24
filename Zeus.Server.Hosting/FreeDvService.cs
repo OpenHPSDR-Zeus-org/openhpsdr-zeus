@@ -167,6 +167,16 @@ public sealed class FreeDvService : IDisposable
     /// <summary>True when auto submode detection is engaged.</summary>
     public bool AutoDetect => _autoDetect;
 
+    /// <summary>
+    /// Whether the modem counts as transmitting "now" given the last TX-block
+    /// timestamp. Auto-detect pauses scanning while this is true. The sentinel
+    /// (long.MinValue = never transmitted) is handled explicitly so the
+    /// <c>now - lastTx</c> subtraction can never overflow into a false positive
+    /// that would gate scanning off forever.
+    /// </summary>
+    internal static bool IsTxActive(long nowMs, long lastTxMs, long quietMs) =>
+        lastTxMs != long.MinValue && nowMs - lastTxMs < quietMs;
+
     // Control-loop: while auto-detect is on and the modem is receiving (active,
     // not transmitting), tick the scanner and apply any submode change it asks
     // for. Runs at a few Hz — far off the audio hot path — and is a no-op when
@@ -182,7 +192,7 @@ public sealed class FreeDvService : IDisposable
 
                 var modem = _modem; // may be swapped by ReloadNative; read once per tick
                 long now = Environment.TickCount64;
-                bool transmitting = now - Volatile.Read(ref _lastTxActivityMs) < TxQuietMs;
+                bool transmitting = IsTxActive(now, Volatile.Read(ref _lastTxActivityMs), TxQuietMs);
                 bool scanning = _autoDetect && modem.Active && modem.NativeAvailable && !transmitting;
 
                 if (!scanning) { wasScanning = false; continue; }

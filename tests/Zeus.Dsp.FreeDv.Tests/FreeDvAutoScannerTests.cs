@@ -25,7 +25,7 @@ public class FreeDvAutoScannerTests
     [Fact]
     public void Unsynced_HoldsForDwell_ThenAdvancesInOrder()
     {
-        var s = new FreeDvAutoScanner(dwellMs: 1000, reacquireMs: 2000);
+        var s = new FreeDvAutoScanner(dwellMs: 1000, lockConfirmMs: 1500, unlockMs: 4000);
         Assert.Null(s.Tick(0, synced: false, FreeDvSubmode.Mode700D));   // seeds timebase
         Assert.Null(s.Tick(999, synced: false, FreeDvSubmode.Mode700D)); // still dwelling
         Assert.Equal(FreeDvSubmode.Mode700E, s.Tick(1000, synced: false, FreeDvSubmode.Mode700D));
@@ -37,36 +37,47 @@ public class FreeDvAutoScannerTests
     [Fact]
     public void Advance_WrapsPastLastMode()
     {
-        var s = new FreeDvAutoScanner(dwellMs: 1000, reacquireMs: 2000);
+        var s = new FreeDvAutoScanner(dwellMs: 1000, lockConfirmMs: 1500, unlockMs: 4000);
         s.Tick(0, synced: false, FreeDvSubmode.Mode800XA);
         Assert.Equal(FreeDvSubmode.Mode700D, s.Tick(1000, synced: false, FreeDvSubmode.Mode800XA));
     }
 
     [Fact]
-    public void Synced_HoldsIndefinitely_NeverAdvances()
+    public void BriefSyncFlicker_DoesNotLock_AndStillAdvances()
     {
-        var s = new FreeDvAutoScanner(dwellMs: 1000, reacquireMs: 2000);
-        Assert.Null(s.Tick(0, synced: true, FreeDvSubmode.Mode700D));
-        // Far past any dwell, but locked — must not move.
-        Assert.Null(s.Tick(100_000, synced: true, FreeDvSubmode.Mode700D));
+        // The marginal-signal chatter case: a sub-lockConfirm sync blip must NOT
+        // camp the scanner, and must NOT reset the dwell — the mode still advances.
+        var s = new FreeDvAutoScanner(dwellMs: 1000, lockConfirmMs: 1500, unlockMs: 4000);
+        Assert.Null(s.Tick(0, synced: false, FreeDvSubmode.Mode700D));
+        Assert.Null(s.Tick(400, synced: true, FreeDvSubmode.Mode700D));   // flicker up (300 ms)
+        Assert.Null(s.Tick(700, synced: false, FreeDvSubmode.Mode700D));  // back to noise
+        Assert.False(s.Locked);
+        Assert.Equal(FreeDvSubmode.Mode700E, s.Tick(1000, synced: false, FreeDvSubmode.Mode700D));
     }
 
     [Fact]
-    public void AfterLock_LosesSync_HoldsThroughReacquireGrace_ThenResumes()
+    public void SustainedSync_Locks_AndCampsThroughFadesUntilUnlock()
     {
-        var s = new FreeDvAutoScanner(dwellMs: 1000, reacquireMs: 2000);
-        s.Tick(0, synced: true, FreeDvSubmode.Mode700D); // lock
-        // Sync drops; within the re-acquire grace the locked mode is held even
-        // though the dwell has long since elapsed (covers QSO overs / fades).
-        Assert.Null(s.Tick(1999, synced: false, FreeDvSubmode.Mode700D));
-        // Grace expired and dwell elapsed — resume scanning from the locked mode.
-        Assert.Equal(FreeDvSubmode.Mode700E, s.Tick(2000, synced: false, FreeDvSubmode.Mode700D));
+        var s = new FreeDvAutoScanner(dwellMs: 1000, lockConfirmMs: 1500, unlockMs: 4000);
+        Assert.Null(s.Tick(0, synced: true, FreeDvSubmode.Mode700D));
+        Assert.Null(s.Tick(1500, synced: true, FreeDvSubmode.Mode700D)); // 1.5 s continuous → lock
+        Assert.True(s.Locked);
+        // Lose sync; camped mode is held through the unlock window (overs/fades).
+        Assert.Null(s.Tick(10_000, synced: false, FreeDvSubmode.Mode700D));
+        Assert.True(s.Locked);
+        Assert.Null(s.Tick(13_999, synced: false, FreeDvSubmode.Mode700D)); // still within unlock grace
+        Assert.True(s.Locked);
+        // Continuous loss exceeds unlock → release (this tick just unlocks)…
+        Assert.Null(s.Tick(14_000, synced: false, FreeDvSubmode.Mode700D));
+        Assert.False(s.Locked);
+        // …then the resumed scan advances after a fresh dwell.
+        Assert.Equal(FreeDvSubmode.Mode700E, s.Tick(15_000, synced: false, FreeDvSubmode.Mode700D));
     }
 
     [Fact]
     public void Reset_ReseedsDwell()
     {
-        var s = new FreeDvAutoScanner(dwellMs: 1000, reacquireMs: 2000);
+        var s = new FreeDvAutoScanner(dwellMs: 1000, lockConfirmMs: 1500, unlockMs: 4000);
         s.Tick(0, synced: false, FreeDvSubmode.Mode700D);
         Assert.Equal(FreeDvSubmode.Mode700E, s.Tick(1000, synced: false, FreeDvSubmode.Mode700D));
         s.Reset(5000);

@@ -34,29 +34,44 @@ public sealed class FreeDvAutoScanner
     };
 
     private readonly FreeDvSubmode[] _order;
-    private readonly long _dwellMs;      // time given to each candidate to acquire
-    private readonly long _reacquireMs;  // grace to re-lock a known-good mode before resuming the scan
+    private readonly long _dwellMs;        // time given to each candidate to acquire while scanning
+    private readonly long _lockConfirmMs;  // continuous sync needed to declare LOCKED and stop scanning
+    private readonly long _unlockMs;       // continuous loss-of-sync needed to give up a lock and resume
 
-    private long _dwellStartMs;
-    private long _lastSyncMs;
-    private bool _everSynced;
+    // Two states: SCANNING (cycling modes by dwell) and LOCKED (camped on a mode).
+    // Transitions are debounced by *continuous* sync/loss duration so a flickering
+    // marginal signal can't make the scanner chatter between modes — that thrash
+    // reopens the modem every hop and destroys decode. We only camp after sync has
+    // held for _lockConfirmMs, and only leave after it has been lost for _unlockMs.
+    private bool _locked;
+    private bool _prevSynced;
+    private long _stateChangeMs;  // when the sync flag last flipped (start of current sync/unsync run)
+    private long _dwellStartMs;   // when the current candidate began its scan dwell
     private bool _haveTimebase;
 
     /// <param name="dwellMs">
-    /// How long to sit on each candidate submode before advancing while unsynced.
-    /// OFDM acquisition on a good signal is sub-second; 2.5 s tolerates marginal
-    /// signals without making a full 5-mode cycle feel sluggish (~12.5 s worst case).
+    /// How long to sit on each candidate while scanning (no sustained sync) before
+    /// advancing. 3 s tolerates a marginal signal's acquisition without making a
+    /// full 4-mode cycle feel sluggish.
     /// </param>
-    /// <param name="reacquireMs">
-    /// After a mode has locked and then lost sync (a QSO gap or a fade), hold it
-    /// this long before resuming the scan — overs and deep fades shouldn't bump
-    /// the operator off a mode that was demonstrably correct.
+    /// <param name="lockConfirmMs">
+    /// Continuous sync required before declaring LOCKED and halting the scan. Long
+    /// enough (1.5 s) that a brief false-sync flicker on the wrong mode never camps us.
     /// </param>
-    public FreeDvAutoScanner(long dwellMs = 2500, long reacquireMs = 4000, FreeDvSubmode[]? order = null)
+    /// <param name="unlockMs">
+    /// Continuous loss-of-sync required to give up a lock and resume scanning. Long
+    /// (8 s) so QSO overs and deep fades don't bump the operator off the right mode.
+    /// </param>
+    public FreeDvAutoScanner(
+        long dwellMs = 3000,
+        long lockConfirmMs = 1500,
+        long unlockMs = 8000,
+        FreeDvSubmode[]? order = null)
     {
         _order = order is { Length: > 0 } ? order : DefaultOrder;
         _dwellMs = dwellMs;
-        _reacquireMs = reacquireMs;
+        _lockConfirmMs = lockConfirmMs;
+        _unlockMs = unlockMs;
     }
 
     /// <summary>Submodes this scanner cycles through, in scan order.</summary>
@@ -69,11 +84,15 @@ public sealed class FreeDvAutoScanner
     /// </summary>
     public void Reset(long nowMs)
     {
+        _locked = false;
+        _prevSynced = false;
+        _stateChangeMs = nowMs;
         _dwellStartMs = nowMs;
-        _lastSyncMs = nowMs;
-        _everSynced = false;
         _haveTimebase = true;
     }
+
+    /// <summary>True once a mode has held sync long enough to be camped on.</summary>
+    public bool Locked => _locked;
 
     /// <summary>
     /// Decide whether to switch submode. Returns the submode to switch to, or
@@ -86,26 +105,40 @@ public sealed class FreeDvAutoScanner
     {
         if (!_haveTimebase) Reset(nowMs);
 
+        // Track how long we've been continuously in the current sync state.
+        if (synced != _prevSynced)
+        {
+            _prevSynced = synced;
+            _stateChangeMs = nowMs;
+        }
+        long inState = nowMs - _stateChangeMs;
+
+        if (_locked)
+        {
+            // Camped on a mode. Only give it up after sync has been lost
+            // *continuously* for the unlock window (rides out overs/fades).
+            if (!synced && inState >= _unlockMs)
+            {
+                _locked = false;
+                _dwellStartMs = nowMs; // give the resumed scan a fresh dwell here
+            }
+            return null; // never change mode while locked
+        }
+
+        // SCANNING.
         if (synced)
         {
-            // Locked — hold here indefinitely and keep the dwell window fresh so
-            // a momentary sync drop doesn't advance us on the very next tick.
-            _everSynced = true;
-            _lastSyncMs = nowMs;
-            _dwellStartMs = nowMs;
+            // Sustained sync → camp here and stop scanning. A brief flicker
+            // (inState < _lockConfirmMs) does NOT lock and does NOT reset the
+            // dwell, so it can't stall or chatter the scan.
+            if (inState >= _lockConfirmMs) _locked = true;
             return null;
         }
 
-        // Unsynced. If this mode locked recently, give it the re-acquire grace
-        // before considering a move (covers transmit overs and fades).
-        if (_everSynced && nowMs - _lastSyncMs < _reacquireMs)
-            return null;
-
-        // Scanning: stay on the current candidate until its dwell elapses.
+        // Unsynced: stay on this candidate until its dwell elapses, then advance.
         if (nowMs - _dwellStartMs < _dwellMs)
             return null;
 
-        // Advance to the next candidate (wrapping). Unknown current → start of order.
         int idx = Array.IndexOf(_order, current);
         int next = idx < 0 ? 0 : (idx + 1) % _order.Length;
         _dwellStartMs = nowMs;
