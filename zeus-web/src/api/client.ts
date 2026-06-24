@@ -68,7 +68,6 @@ export type RxMode =
   | 'DIGU'
   | 'FREEDV';
 
-export type Rx2AudioMode = 'both' | 'rx1' | 'rx2';
 export type TxVfo = 'A' | 'B';
 
 export type NrMode = 'Off' | 'Anr' | 'Emnr' | 'Sbnr' | 'Rnnr';
@@ -289,7 +288,6 @@ export type RadioStateDto = {
   // (RX2 = index 1); the client no longer carries the flat *B fields. The server
   // still accepts the legacy A/B write endpoints (setVfoB/setMode?receiver=B/…).
   rx2Enabled: boolean;
-  rx2AudioMode: Rx2AudioMode;
   txVfo: TxVfo;
   // Authoritative TX target as a receiver index (0=RX1/VFO A, 1=RX2/VFO B,
   // >=2 extra DDC). txVfo stays the legacy A/B projection. Optional until a v2
@@ -2040,7 +2038,6 @@ const MODE_ORDER: readonly RxMode[] = [
   'FREEDV',
 ];
 
-const RX2_AUDIO_MODE_ORDER: readonly Rx2AudioMode[] = ['both', 'rx1', 'rx2'];
 const NR_MODE_ORDER: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr', 'Rnnr'];
 const NB_MODE_ORDER: readonly NbMode[] = ['Off', 'Nb1', 'Nb2'];
 
@@ -2077,19 +2074,6 @@ function modeFromWire(v: unknown): RxMode | null {
 
 export function normalizeMode(v: unknown): RxMode {
   return modeFromWire(v) ?? 'USB';
-}
-
-export function normalizeRx2AudioMode(v: unknown): Rx2AudioMode {
-  if (typeof v === 'string') {
-    const lowered = v.toLowerCase();
-    return (RX2_AUDIO_MODE_ORDER as readonly string[]).includes(lowered)
-      ? (lowered as Rx2AudioMode)
-      : 'both';
-  }
-  if (typeof v === 'number' && Number.isInteger(v)) {
-    return RX2_AUDIO_MODE_ORDER[v] ?? 'both';
-  }
-  return 'both';
 }
 
 export function normalizeTxVfo(v: unknown): TxVfo {
@@ -2364,7 +2348,6 @@ export function normalizeState(raw: unknown): RadioStateDto {
     // RX2 (and RX3+) state comes from the receivers[] array below — the flat *B
     // fields the server may still send are ignored.
     rx2Enabled: typeof r.rx2Enabled === 'boolean' ? r.rx2Enabled : false,
-    rx2AudioMode: normalizeRx2AudioMode(r.rx2AudioMode),
     txVfo: normalizeTxVfo(r.txVfo),
     txReceiverIndex:
       typeof r.txReceiverIndex === 'number' ? r.txReceiverIndex : undefined,
@@ -5523,10 +5506,6 @@ export function setVfo(
   );
 }
 
-function rx2AudioModeToWire(mode: Rx2AudioMode): number {
-  return RX2_AUDIO_MODE_ORDER.indexOf(mode);
-}
-
 export function setVfoB(
   hz: number,
   signal?: AbortSignal,
@@ -5564,7 +5543,6 @@ export function setRx2(
   req: {
     enabled?: boolean;
     vfoBHz?: number;
-    audioMode?: Rx2AudioMode;
     afGainDb?: number;
   },
   signal?: AbortSignal,
@@ -5577,10 +5555,6 @@ export function setRx2(
       body: JSON.stringify({
         enabled: req.enabled,
         vfoBHz: req.vfoBHz,
-        audioMode:
-          req.audioMode === undefined
-            ? undefined
-            : rx2AudioModeToWire(req.audioMode),
         afGainDb: req.afGainDb,
       }),
       signal,

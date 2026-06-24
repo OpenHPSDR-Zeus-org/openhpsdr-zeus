@@ -87,7 +87,6 @@ import {
   normalizeNbMode,
   normalizeNr,
   normalizeNrMode,
-  normalizeRx2AudioMode,
   normalizeSquelch,
   normalizeState,
   normalizeStatus,
@@ -161,20 +160,6 @@ describe('normalizeMode', () => {
   });
 });
 
-describe('normalizeRx2AudioMode', () => {
-  it('accepts numeric and string enum values', () => {
-    expect(normalizeRx2AudioMode(0)).toBe('both');
-    expect(normalizeRx2AudioMode(1)).toBe('rx1');
-    expect(normalizeRx2AudioMode(2)).toBe('rx2');
-    expect(normalizeRx2AudioMode('Both')).toBe('both');
-    expect(normalizeRx2AudioMode('Rx2')).toBe('rx2');
-  });
-  it('falls back to both on garbage', () => {
-    expect(normalizeRx2AudioMode(42)).toBe('both');
-    expect(normalizeRx2AudioMode('nope')).toBe('both');
-  });
-});
-
 describe('normalizeTxVfo', () => {
   it('accepts numeric and string enum values', () => {
     expect(normalizeTxVfo(0)).toBe('A');
@@ -196,7 +181,6 @@ describe('normalizeState', () => {
       vfoHz: 14_200_000,
       vfoBHz: 14_250_000,
       rx2Enabled: true,
-      rx2AudioMode: 2,
       rx2AfGainDb: -3,
       txVfo: 1,
       mode: 1,
@@ -215,7 +199,6 @@ describe('normalizeState', () => {
     // RX2 (*B) fields no longer surface on RadioStateDto — they live in
     // receivers[1]. The server may still send them; normalizeState ignores them.
     expect(s.rx2Enabled).toBe(true);
-    expect(s.rx2AudioMode).toBe('rx2');
     expect(s.txVfo).toBe('B');
     expect(s.sampleRate).toBe(192_000);
     expect(s.preampOn).toBe(false);
@@ -240,7 +223,6 @@ describe('normalizeState', () => {
     expect(s.endpoint).toBe(null);
     expect(s.vfoHz).toBe(0);
     expect(s.rx2Enabled).toBe(false);
-    expect(s.rx2AudioMode).toBe('both');
     expect(s.txVfo).toBe('A');
     expect(s.mode).toBe('USB');
     expect(s.nr).toEqual(NR_CONFIG_DEFAULT);

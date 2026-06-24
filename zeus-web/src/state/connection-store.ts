@@ -55,7 +55,6 @@ import {
   type ConnectionStatus,
   type NrConfigDto,
   type RadioStateDto,
-  type Rx2AudioMode,
   type RxMode,
   type SquelchConfigDto,
   type TxVfo,
@@ -78,7 +77,6 @@ export type ConnectionState = {
   // RX2+ per-receiver state (VFO/mode/filter/AF) lives in `receivers[]` (RX2 =
   // index 1), not flat *B fields. RX1 keeps its flat primary fields below.
   rx2Enabled: boolean;
-  rx2AudioMode: Rx2AudioMode;
   txVfo: TxVfo;
   // Authoritative TX target as a receiver index (0=RX1, 1=RX2, >=2 extra DDC);
   // txVfo stays the legacy A/B projection. Driven by the VFO panel TX-select.
@@ -210,7 +208,6 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   endpoint: null,
   vfoHz: 14_200_000,
   rx2Enabled: false,
-  rx2AudioMode: 'both',
   receivers: [],
   maxReceivers: 8,
   txVfo: 'A',
@@ -266,7 +263,6 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
             ? s.vfoHz
             : prev.vfoHz,
         rx2Enabled: s.rx2Enabled,
-        rx2AudioMode: s.rx2AudioMode,
         // Secondary-receiver poll-guard: RX2 (index 1) and RX3+ live in the
         // receivers[] array. While the operator is mid-tune, a 1 Hz /api/state
         // poll generated just before the gesture would rubber-band that

@@ -76,7 +76,6 @@ function mockState(nr: NrConfigDto): RadioStateDto {
     endpoint: conn.endpoint,
     vfoHz: conn.vfoHz,
     rx2Enabled: false,
-    rx2AudioMode: 'both',
     txVfo: 'A',
     mode: conn.mode,
     filterLowHz: conn.filterLowHz,
