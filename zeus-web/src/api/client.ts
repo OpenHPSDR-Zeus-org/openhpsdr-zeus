@@ -285,24 +285,21 @@ export type RadioStateDto = {
   status: ConnectionStatus;
   endpoint: string | null;
   vfoHz: number;
-  vfoBHz: number;
+  // RX2+ per-receiver state (VFO/mode/filter/AF) is read from `receivers[]`
+  // (RX2 = index 1); the client no longer carries the flat *B fields. The server
+  // still accepts the legacy A/B write endpoints (setVfoB/setMode?receiver=B/…).
   rx2Enabled: boolean;
   rx2AudioMode: Rx2AudioMode;
-  rx2AfGainDb: number;
   txVfo: TxVfo;
   // Authoritative TX target as a receiver index (0=RX1/VFO A, 1=RX2/VFO B,
   // >=2 extra DDC). txVfo stays the legacy A/B projection. Optional until a v2
   // server reports it.
   txReceiverIndex?: number;
   mode: RxMode;
-  modeB: RxMode;
   filterLowHz: number;
   filterHighHz: number;
-  filterLowHzB: number;
-  filterHighHzB: number;
   // Null after a drag edit without a named-slot context (PRD §4.1).
   filterPresetName: string | null;
-  filterPresetNameB: string | null;
   // Advanced-filter ribbon visibility; persisted server-side.
   filterAdvancedPaneOpen: boolean;
   // TX bandpass (signed, per-sideband). Per-mode family memory on the server.
@@ -2364,41 +2361,17 @@ export function normalizeState(raw: unknown): RadioStateDto {
     status: normalizeStatus(r.status),
     endpoint: typeof r.endpoint === 'string' ? r.endpoint : null,
     vfoHz: typeof r.vfoHz === 'number' ? r.vfoHz : 0,
-    vfoBHz:
-      typeof r.vfoBHz === 'number' && r.vfoBHz > 0
-        ? r.vfoBHz
-        : typeof r.vfoHz === 'number'
-        ? r.vfoHz
-        : 0,
+    // RX2 (and RX3+) state comes from the receivers[] array below — the flat *B
+    // fields the server may still send are ignored.
     rx2Enabled: typeof r.rx2Enabled === 'boolean' ? r.rx2Enabled : false,
     rx2AudioMode: normalizeRx2AudioMode(r.rx2AudioMode),
-    rx2AfGainDb: typeof r.rx2AfGainDb === 'number' ? r.rx2AfGainDb : 0,
     txVfo: normalizeTxVfo(r.txVfo),
     txReceiverIndex:
       typeof r.txReceiverIndex === 'number' ? r.txReceiverIndex : undefined,
     mode: normalizeMode(r.mode),
-    modeB: normalizeMode(r.modeB ?? r.mode),
     filterLowHz: typeof r.filterLowHz === 'number' ? r.filterLowHz : 0,
     filterHighHz: typeof r.filterHighHz === 'number' ? r.filterHighHz : 0,
-    filterLowHzB:
-      typeof r.filterLowHzB === 'number'
-        ? r.filterLowHzB
-        : typeof r.filterLowHz === 'number'
-        ? r.filterLowHz
-        : 0,
-    filterHighHzB:
-      typeof r.filterHighHzB === 'number'
-        ? r.filterHighHzB
-        : typeof r.filterHighHz === 'number'
-        ? r.filterHighHz
-        : 0,
     filterPresetName: typeof r.filterPresetName === 'string' ? r.filterPresetName : null,
-    filterPresetNameB:
-      typeof r.filterPresetNameB === 'string'
-        ? r.filterPresetNameB
-        : typeof r.filterPresetName === 'string'
-        ? r.filterPresetName
-        : null,
     filterAdvancedPaneOpen: typeof r.filterAdvancedPaneOpen === 'boolean' ? r.filterAdvancedPaneOpen : false,
     txFilterLowHz: typeof r.txFilterLowHz === 'number' ? r.txFilterLowHz : 150,
     txFilterHighHz: typeof r.txFilterHighHz === 'number' ? r.txFilterHighHz : 2850,

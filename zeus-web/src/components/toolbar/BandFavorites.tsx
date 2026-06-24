@@ -57,7 +57,7 @@ const SAVE_DEBOUNCE_MS = 500;
 function withRestoredMode(state: RadioStateDto, receiver: ReceiverKey, mode: RxMode): RadioStateDto {
   const idx = rxIndexOf(receiver);
   if (idx === 0) return { ...state, mode };
-  if (idx === 1) return { ...state, modeB: mode };
+  // Every secondary receiver (RX2 = index 1, RX3+) lives in receivers[].
   return {
     ...state,
     receivers: state.receivers?.map((r) => (r.index === idx ? { ...r, mode } : r)) ?? state.receivers,

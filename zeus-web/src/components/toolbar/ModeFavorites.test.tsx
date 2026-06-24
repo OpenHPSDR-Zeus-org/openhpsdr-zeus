@@ -22,17 +22,30 @@ vi.mock('../../api/client', async () => {
   };
 });
 
+function rxEntry(index: number, patch: Record<string, unknown> = {}) {
+  return {
+    index, enabled: true, adcSource: 0, vfoHz: 14_200_000, mode: 'USB',
+    filterLowHz: 100, filterHighHz: 2800, filterPresetName: 'VAR1', afGainDb: 0,
+    sampleRateHz: 192_000, muted: false, ...patch,
+  };
+}
+function rx2() {
+  return useConnectionStore.getState().receivers.find((r) => r.index === 1)!;
+}
+
 function resetStores() {
   useConnectionStore.setState({
     status: 'Connected',
     vfoHz: 14_200_000,
-    vfoBHz: 7_200_000,
     rx2Enabled: true,
     rxFocus: 'B',
     focusedRxIndex: 1,
     selectedRxIndices: [1],
     mode: 'AM',
-    modeB: 'USB',
+    receivers: [
+      rxEntry(0, { vfoHz: 14_200_000, mode: 'AM' }),
+      rxEntry(1, { vfoHz: 7_200_000, mode: 'USB' }),
+    ],
   });
   useToolbarFavoritesStore.setState({
     mode: ['USB', 'LSB', 'CWU'],
@@ -59,7 +72,7 @@ describe('ModeFavorites', () => {
     expect(setMode).toHaveBeenCalledWith('LSB', undefined, 'B');
     expect(saveBandMemory).toHaveBeenCalledWith('40m', 7_200_000, 'LSB');
     expect(useConnectionStore.getState().mode).toBe('AM');
-    expect(useConnectionStore.getState().modeB).toBe('LSB');
+    expect(rx2().mode).toBe('LSB');
 
     unmount();
   });

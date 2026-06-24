@@ -160,6 +160,18 @@ function currentRadioState(overrides: Partial<RadioStateDto> = {}): RadioStateDt
   } as RadioStateDto;
 }
 
+// RX2 lives in receivers[1]. Helpers to seed and read it in tests.
+function rxEntry(index: number, vfoHz: number) {
+  return {
+    index, enabled: true, adcSource: 0, vfoHz, mode: 'USB' as RxMode,
+    filterLowHz: 100, filterHighHz: 2800, filterPresetName: 'VAR1', afGainDb: 0,
+    sampleRateHz: 192_000, muted: false,
+  };
+}
+function rx2Vfo(): number | undefined {
+  return useConnectionStore.getState().receivers.find((r) => r.index === 1)?.vfoHz;
+}
+
 describe('usePanTuneGesture mobile touch mode', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -478,7 +490,7 @@ describe('usePanTuneGesture mobile touch mode', () => {
     useConnectionStore.setState({
       ctunEnabled: false,
       vfoHz: 14_200_000,
-      vfoBHz: 7_200_000,
+      receivers: [rxEntry(0, 14_200_000), rxEntry(1, 7_200_000)],
     });
     useDisplayStore.setState({
       width: 200,
@@ -513,7 +525,7 @@ describe('usePanTuneGesture mobile touch mode', () => {
 
     expect(setVfoMock).not.toHaveBeenCalled();
     expect(setVfoBMock).toHaveBeenLastCalledWith(7_195_000, undefined);
-    expect(useConnectionStore.getState().vfoBHz).toBe(7_195_000);
+    expect(rx2Vfo()).toBe(7_195_000);
 
     unmount();
   });
@@ -593,7 +605,7 @@ describe('usePanTuneGesture mobile touch mode', () => {
     useConnectionStore.setState({
       ctunEnabled: false,
       vfoHz: 14_200_000,
-      vfoBHz: 7_200_000,
+      receivers: [rxEntry(0, 14_200_000), rxEntry(1, 7_200_000)],
     });
     useDisplayStore.setState({
       width: 200,
@@ -625,15 +637,17 @@ describe('usePanTuneGesture mobile touch mode', () => {
       await flush();
     });
 
+    // Stale poll: the server still reports RX2 at the pre-drag 7_200_000 in
+    // receivers[1]. The poll guard must keep the optimistic 7_195_000.
     useConnectionStore.getState().applyState(
       currentRadioState({
         vfoHz: 14_200_000,
-        vfoBHz: 7_200_000,
+        receivers: [rxEntry(0, 14_200_000), rxEntry(1, 7_200_000)],
       }),
       { trustVfo: false },
     );
 
-    expect(useConnectionStore.getState().vfoBHz).toBe(7_195_000);
+    expect(rx2Vfo()).toBe(7_195_000);
 
     pointer(canvas, 'pointerup', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
     unmount();

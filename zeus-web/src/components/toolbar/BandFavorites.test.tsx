@@ -22,6 +22,32 @@ function currentStateDto(): RadioStateDto {
   return useConnectionStore.getState() as unknown as RadioStateDto;
 }
 
+// RX2 now lives in receivers[1]. Helpers to seed/mutate/read it in tests.
+function rxEntry(index: number, patch: Record<string, unknown> = {}) {
+  return {
+    index,
+    enabled: true,
+    adcSource: 0,
+    vfoHz: 14_200_000,
+    mode: 'USB' as RxMode,
+    filterLowHz: 100,
+    filterHighHz: 2800,
+    filterPresetName: 'VAR1',
+    afGainDb: 0,
+    sampleRateHz: 192_000,
+    muted: false,
+    ...patch,
+  };
+}
+function setRx2(patch: Record<string, unknown>) {
+  useConnectionStore.setState((s) => ({
+    receivers: s.receivers.map((r) => (r.index === 1 ? { ...r, ...patch } : r)),
+  }));
+}
+function rx2() {
+  return useConnectionStore.getState().receivers.find((r) => r.index === 1)!;
+}
+
 vi.mock('../../api/client', async () => {
   const actual = await vi.importActual<typeof import('../../api/client')>('../../api/client');
   return {
@@ -38,16 +64,21 @@ function resetStores() {
   useConnectionStore.setState({
     status: 'Connected',
     vfoHz: 14_200_000,
-    vfoBHz: 7_200_000,
     rx2Enabled: true,
     rxFocus: 'B',
     focusedRxIndex: 1,
     selectedRxIndices: [1],
     mode: 'USB',
-    modeB: 'LSB',
-    filterLowHzB: -2850,
-    filterHighHzB: -150,
-    filterPresetNameB: 'VAR1',
+    receivers: [
+      rxEntry(0, { vfoHz: 14_200_000, mode: 'USB' }),
+      rxEntry(1, {
+        vfoHz: 7_200_000,
+        mode: 'LSB',
+        filterLowHz: -2850,
+        filterHighHz: -150,
+        filterPresetName: 'VAR1',
+      }),
+    ],
   });
   useToolbarFavoritesStore.setState({
     band: ['40m', '20m', '15m'],
@@ -90,7 +121,7 @@ describe('BandFavorites', () => {
     expect(setVfoB).toHaveBeenCalledWith(7_074_000, undefined);
     expect(setVfo).not.toHaveBeenCalled();
     expect(setMode).not.toHaveBeenCalled();
-    expect(useConnectionStore.getState().vfoBHz).toBe(7_074_000);
+    expect(rx2().vfoHz).toBe(7_074_000);
     expect(useConnectionStore.getState().vfoHz).toBe(14_200_000);
 
     unmount();
@@ -108,7 +139,7 @@ describe('BandFavorites', () => {
     vi.clearAllMocks();
 
     act(() => {
-      useConnectionStore.setState({ modeB: 'CWU' });
+      setRx2({ mode: 'CWU' });
       dispatchBandMemoryUpdated('40m', 7_200_000, 'CWU');
     });
     const twentyMeters = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
@@ -149,7 +180,7 @@ describe('BandFavorites', () => {
     expect(setVfoB).toHaveBeenCalledWith(14_074_000, undefined);
     expect(setVfo).not.toHaveBeenCalled();
     expect(useConnectionStore.getState().mode).toBe('USB');
-    expect(useConnectionStore.getState().modeB).toBe('DIGU');
+    expect(rx2().mode).toBe('DIGU');
 
     unmount();
   });
@@ -166,7 +197,7 @@ describe('BandFavorites', () => {
     vi.clearAllMocks();
 
     act(() => {
-      useConnectionStore.setState({ modeB: 'CWU' });
+      setRx2({ mode: 'CWU' });
     });
     const twentyMeters = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
       .find((button) => button.textContent === '20m');
@@ -189,12 +220,18 @@ describe('BandFavorites', () => {
       { band: '40m', hz: 7_150_000, mode: 'LSB' },
       { band: '20m', hz: 14_210_000, mode: 'USB' },
     ]);
-    vi.mocked(setVfoB).mockImplementation(async (hz) => ({
-      ...currentStateDto(),
-      vfoBHz: hz,
-      modeB: hz === 14_210_000 ? 'LSB' : currentStateDto().modeB,
-    }));
-    useConnectionStore.setState({ vfoBHz: 7_150_000, modeB: 'LSB' });
+    vi.mocked(setVfoB).mockImplementation(async (hz) => {
+      const s = currentStateDto();
+      return {
+        ...s,
+        receivers: s.receivers?.map((r) =>
+          r.index === 1
+            ? { ...r, vfoHz: hz, mode: hz === 14_210_000 ? 'LSB' : r.mode }
+            : r,
+        ),
+      };
+    });
+    setRx2({ vfoHz: 7_150_000, mode: 'LSB' });
 
     const { container, unmount } = render(createElement(BandFavorites));
     await act(async () => {
@@ -212,7 +249,7 @@ describe('BandFavorites', () => {
       await Promise.resolve();
     });
 
-    expect(useConnectionStore.getState().modeB).toBe('USB');
+    expect(rx2().mode).toBe('USB');
 
     await act(async () => {
       fortyMeters?.click();
