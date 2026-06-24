@@ -9,6 +9,9 @@ import { useCallback, useRef } from 'react';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useTxStore } from '../state/tx-store';
 import { useVfoLockStore } from '../state/vfo-lock-store';
+import { useConnectionStore } from '../state/connection-store';
+import { floorNormalizationOffsetDb } from '../dsp/floor-normalization';
+import { useRxDbWindowStore, type RxWfWindow } from '../state/rx-db-window-store';
 
 const TICK_STRIDE_DB = 10;
 
@@ -18,22 +21,50 @@ const TICK_STRIDE_DB = 10;
 // swap so the operator can drag the waterfall scale during MOX/TUN without
 // disturbing their RX waterfall view.
 export function WfDbScale() {
-  const rxDbMin = useDisplaySettingsStore((s) => s.wfDbMin);
-  const rxDbMax = useDisplaySettingsStore((s) => s.wfDbMax);
+  // The RX waterfall scale follows the FOCUSED receiver: RX1 (index 0) edits
+  // the global window; RX2+ each edit their own per-receiver window (persisted).
+  // Select the reactive deps so the slider re-renders on focus / global-window /
+  // override changes, then resolve this receiver's effective window.
+  const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
+  const globalRxMin = useDisplaySettingsStore((s) => s.wfDbMin);
+  const globalRxMax = useDisplaySettingsStore((s) => s.wfDbMax);
+  const rxOverride = useRxDbWindowStore((s) => s.overrides[focusedRxIndex]);
+  const shiftGlobalRx = useDisplaySettingsStore((s) => s.shiftWfDbRange);
+  const shiftRxWindow = useRxDbWindowStore((s) => s.shiftRxWfWindow);
   const txDbMin = useDisplaySettingsStore((s) => s.wfTxDbMin);
   const txDbMax = useDisplaySettingsStore((s) => s.wfTxDbMax);
-  const shiftRx = useDisplaySettingsStore((s) => s.shiftWfDbRange);
   const shiftTx = useDisplaySettingsStore((s) => s.shiftWfTxDbRange);
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
   const keyed = moxOn || tunOn;
 
+  // Effective RX window for the focused receiver. Index 0 = global; an explicit
+  // override wins; otherwise the global window floor-normalized to RX1.
+  let rxWin: RxWfWindow;
+  if (focusedRxIndex <= 0) {
+    rxWin = { wfDbMin: globalRxMin, wfDbMax: globalRxMax };
+  } else if (rxOverride) {
+    rxWin = rxOverride;
+  } else {
+    const off = floorNormalizationOffsetDb(focusedRxIndex, 0);
+    rxWin = { wfDbMin: globalRxMin + off, wfDbMax: globalRxMax + off };
+  }
+
+  // RX-side shift routes to the global window for RX1, else the focused RX's
+  // per-receiver window.
+  const shiftRx = useCallback(
+    (delta: number) => {
+      if (focusedRxIndex <= 0) shiftGlobalRx(delta);
+      else shiftRxWindow(focusedRxIndex, delta);
+    },
+    [focusedRxIndex, shiftGlobalRx, shiftRxWindow],
+  );
+
   // Pick the active range + shifter based on whether we're keyed. Mirrors
-  // DbScale.tsx — each side has its own waterfall Grid Min/Max so the
-  // operator can hide the silence-time TX floor without moving the RX
-  // noise-floor view.
-  const dbMin = keyed ? txDbMin : rxDbMin;
-  const dbMax = keyed ? txDbMax : rxDbMax;
+  // DbScale.tsx — keyed uses the global TX waterfall window so the operator can
+  // hide the silence-time TX floor without moving the RX noise-floor view.
+  const dbMin = keyed ? txDbMin : rxWin.wfDbMin;
+  const dbMax = keyed ? txDbMax : rxWin.wfDbMax;
   const shift = keyed ? shiftTx : shiftRx;
 
   const dragState = useRef<{

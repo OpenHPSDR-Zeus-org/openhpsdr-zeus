@@ -304,7 +304,7 @@ export function HeroPanel({
     minHeight: 0,
     height: '100%',
     display: 'grid',
-    gridTemplateColumns: `repeat(${Math.min(spectrumPanes.length, 4)}, minmax(0, 1fr))`,
+    gridTemplateColumns: `repeat(${Math.min(spectrumPanes.length, 3)}, minmax(0, 1fr))`,
     gridAutoRows: '1fr',
     gap: 0,
     overflow: 'hidden',
@@ -332,20 +332,35 @@ export function HeroPanel({
           {heroTitle}
         </span>
         {multiRx && (
-          <button
-            ref={mixerTriggerRef}
-            type="button"
-            className={`hero-rx-mixer-trigger ${mixerOpen ? 'is-open' : ''}`}
-            onClick={toggleMixer}
+          // Centered in the drag bar: absolutely positioned at the header's
+          // horizontal midpoint so it sits dead-center regardless of the title
+          // and right-side control widths.
+          <span
+            style={{
+              position: 'absolute',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              display: 'inline-flex',
+              zIndex: 2,
+            }}
             onPointerDown={stopDrag}
             onMouseDown={stopDrag}
-            aria-pressed={mixerOpen}
-            aria-label="Receiver audio mixer"
-            title="Receiver audio mixer — hear/mute and focus each DDC"
           >
-            <Sliders size={11} />
-            <span>RX MIX</span>
-          </button>
+            <button
+              ref={mixerTriggerRef}
+              type="button"
+              className={`hero-rx-mixer-trigger ${mixerOpen ? 'is-open' : ''}`}
+              onClick={toggleMixer}
+              onPointerDown={stopDrag}
+              onMouseDown={stopDrag}
+              aria-pressed={mixerOpen}
+              aria-label="Receiver audio mixer"
+              title="Receiver audio mixer — hear/mute and focus each DDC"
+            >
+              <Sliders size={11} />
+              <span>RX MIX</span>
+            </button>
+          </span>
         )}
         <div
           className="hero-tile-controls"

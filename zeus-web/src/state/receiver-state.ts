@@ -301,3 +301,67 @@ export function gangedReceiverAction(opts: {
       });
   }
 }
+
+// ---------------------------------------------------------------------------
+// Multi-RX exposed-count control. Shared by the Settings RECEIVERS panel and
+// the MULTI-RX toolbar toggle so both compose the same per-index endpoint calls
+// and honour the same practical ceiling.
+
+// Protocol ceiling is WireContract.MaxReceivers (8 DDCs), but the count that
+// actually streams on a G2/Saturn at the wide multi-DDC sample rates
+// (768/1536 kHz) is 6 — beyond that the radio's DDC throughput budget is
+// exceeded and the extra DDCs come up dead. Cap the operator-facing count here.
+export const PRACTICAL_MAX_RECEIVERS = 6;
+
+const DESIRED_COUNT_KEY = 'zeus.multiRx.desiredCount';
+
+function clampDesired(n: number): number {
+  return Math.min(Math.max(Math.round(n), 2), PRACTICAL_MAX_RECEIVERS);
+}
+
+/** The operator's chosen multi-RX count, remembered across an off toggle and
+ *  restarts so the MULTI-RX button can re-enable the same set. Default 2. */
+export function getDesiredReceiverCount(): number {
+  try {
+    const raw =
+      typeof localStorage !== 'undefined' ? localStorage.getItem(DESIRED_COUNT_KEY) : null;
+    const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
+    if (Number.isFinite(n)) return clampDesired(n);
+  } catch {
+    /* ignore */
+  }
+  return 2;
+}
+
+export function setDesiredReceiverCount(n: number): void {
+  try {
+    if (typeof localStorage !== 'undefined')
+      localStorage.setItem(DESIRED_COUNT_KEY, String(clampDesired(n)));
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Expose N contiguous receivers (RX1..RXn). Composes the per-index enable
+ * endpoint; the server's contiguity cascade enables RX2..RXn-1 / disables the
+ * rest. n>=2 also records the desired count so a later MULTI-RX re-enable
+ * restores it. n<=1 collapses back to RX1 only.
+ */
+export async function setExposedReceiverCount(target: number): Promise<void> {
+  const st = useConnectionStore.getState();
+  const effectiveMax = Math.min(st.maxReceivers, PRACTICAL_MAX_RECEIVERS);
+  const n = Math.min(Math.max(Math.round(target), 1), effectiveMax);
+  const applyState = st.applyState;
+  if (n >= 2) setDesiredReceiverCount(n);
+  try {
+    if (n <= 1) {
+      applyState(await setReceiver(1, { enabled: false }));
+      return;
+    }
+    applyState(await setReceiver(n - 1, { enabled: true }));
+    if (n < effectiveMax) applyState(await setReceiver(n, { enabled: false }));
+  } catch {
+    /* next state poll reconciles */
+  }
+}
