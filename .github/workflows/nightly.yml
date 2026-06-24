@@ -33,7 +33,16 @@ concurrency:
 jobs:
   nightly:
     name: Build + publish nightly
-    uses: ./.github/workflows/release.yml
+    # Pin the reusable workflow to @develop, NOT a local `./` path. A local path
+    # resolves release.yml at the CALLER's commit — which for a scheduled run is
+    # always the default branch (main). That loaded main's (older) build pipeline
+    # while `ref: develop` below checked out develop's SOURCE, so any build-step
+    # divergence between main and develop broke the nightly (e.g. develop's
+    # zeus-windows.iss requires MicrosoftEdgeWebview2Setup.exe but main's
+    # release.yml had no step to download it → installer compile aborted).
+    # Pinning to @develop builds develop's source with develop's pipeline, so the
+    # two stay in lockstep and the nightly self-heals as develop evolves.
+    uses: OpenHPSDR-Zeus-org/openhpsdr-zeus/.github/workflows/release.yml@develop
     with:
       mode: nightly
       ref: develop
