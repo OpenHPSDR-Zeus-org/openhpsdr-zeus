@@ -1646,6 +1646,16 @@ public sealed class RadioService : IDisposable
     private FamilyFilter _fmTxFilter = new(0, 3000);
     private FamilyFilter _cwTxFilter = new(475, 725);
 
+    // FreeDV runs USB underneath but is spec-locked to a tight bandpass around
+    // the 1500 Hz-centred modem — 700C/700D/700E, 1600 and 800XA all fit inside
+    // 300..2700 Hz. Kept in its own family slot (RX + TX) so entering/leaving
+    // FreeDV saves and restores the operator's SSB widths through the same
+    // mode-family memory every other mode uses, instead of stomping the shared
+    // SSB slot. Re-seeded to the FreeDV spec passband each session (not
+    // persisted) so the digital width can't silently drift across restarts.
+    private FamilyFilter _freeDvFilter = new(300, 2700);
+    private FamilyFilter _freeDvTxFilter = new(300, 2700);
+
     public StateDto SetMode(RxMode mode) => SetMode(mode, TxVfo.A);
 
     public StateDto SetMode(RxMode mode, TxVfo receiver)
@@ -1857,6 +1867,9 @@ public sealed class RadioService : IDisposable
                 if (targetB) _fmFilterB = slot; else _fmFilter = slot; break;
             case RxMode.CWL: case RxMode.CWU:
                 if (targetB) _cwFilterB = slot; else _cwFilter = slot; break;
+            case RxMode.FreeDv:
+                // FreeDV shares one spec slot across VFOs (no per-VFO digital width).
+                _freeDvFilter = slot; break;
         }
     }
 
@@ -1873,6 +1886,8 @@ public sealed class RadioService : IDisposable
                 _fmTxFilter = slot; break;
             case RxMode.CWL: case RxMode.CWU:
                 _cwTxFilter = slot; break;
+            case RxMode.FreeDv:
+                _freeDvTxFilter = slot; break;
         }
     }
 
@@ -1882,6 +1897,7 @@ public sealed class RadioService : IDisposable
         RxMode.AM or RxMode.SAM or RxMode.DSB => _amTxFilter,
         RxMode.FM => _fmTxFilter,
         RxMode.CWL or RxMode.CWU => _cwTxFilter,
+        RxMode.FreeDv => _freeDvTxFilter,
         _ => _ssbTxFilter,
     };
 
@@ -1891,6 +1907,7 @@ public sealed class RadioService : IDisposable
         RxMode.AM or RxMode.SAM or RxMode.DSB => _amFilter,
         RxMode.FM => _fmFilter,
         RxMode.CWL or RxMode.CWU => _cwFilter,
+        RxMode.FreeDv => _freeDvFilter,
         _ => _ssbFilter,
     };
 
@@ -1905,6 +1922,7 @@ public sealed class RadioService : IDisposable
             RxMode.AM or RxMode.SAM or RxMode.DSB => _amFilterB,
             RxMode.FM => _fmFilterB,
             RxMode.CWL or RxMode.CWU => _cwFilterB,
+            RxMode.FreeDv => _freeDvFilter,
             _ => _ssbFilterB,
         };
     }

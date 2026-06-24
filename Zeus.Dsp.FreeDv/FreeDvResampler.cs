@@ -267,3 +267,59 @@ internal sealed class FreeDvSampleRing
         Volatile.Write(ref _head, Volatile.Read(ref _tail));
     }
 }
+
+/// <summary>
+/// Lock-free single-producer/single-consumer byte ring for the FreeDV text
+/// sidechannel. The producer is the RX hot path (the codec2 txt callback fires
+/// inside freedv_rx); the consumer is the status thread draining decoded chars.
+/// Same Volatile release/acquire discipline and power-of-two wrap as
+/// <see cref="FreeDvSampleRing"/> — a byte twin so the hot-path enqueue never
+/// allocates or blocks. Oldest bytes are dropped on overflow (text is advisory).
+/// </summary>
+internal sealed class FreeDvByteRing
+{
+    private readonly byte[] _buffer;
+    private readonly int _mask;
+    private readonly int _capacity;
+    private long _head; // consumer cursor
+    private long _tail; // producer cursor
+
+    internal FreeDvByteRing(int capacityPowerOfTwo)
+    {
+        if (capacityPowerOfTwo <= 0 || (capacityPowerOfTwo & (capacityPowerOfTwo - 1)) != 0)
+            throw new ArgumentException("Capacity must be a positive power of two.", nameof(capacityPowerOfTwo));
+        _buffer = new byte[capacityPowerOfTwo];
+        _capacity = capacityPowerOfTwo;
+        _mask = capacityPowerOfTwo - 1;
+    }
+
+    /// <summary>Enqueue one byte; drop the oldest if full. Producer-side, no alloc.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void WriteByte(byte value)
+    {
+        long tail = _tail;
+        long head = Volatile.Read(ref _head);
+        if (tail - head >= _capacity)
+            Volatile.Write(ref _head, head + 1); // drop oldest to make room
+        _buffer[(int)(tail & _mask)] = value;
+        Volatile.Write(ref _tail, tail + 1);
+    }
+
+    /// <summary>Reads up to dst.Length bytes; returns the number read (0 on empty).</summary>
+    internal int Read(Span<byte> dst)
+    {
+        long head = _head;
+        long tail = Volatile.Read(ref _tail);
+        long avail = tail - head;
+        if (avail <= 0) return 0;
+        int n = dst.Length;
+        if (n > (int)avail) n = (int)avail;
+        for (int i = 0; i < n; i++)
+            dst[i] = _buffer[(int)((head + i) & _mask)];
+        Volatile.Write(ref _head, head + n);
+        return n;
+    }
+
+    /// <summary>Discards everything. Call only while quiesced (hot path gated out).</summary>
+    internal void Clear() => Volatile.Write(ref _head, Volatile.Read(ref _tail));
+}

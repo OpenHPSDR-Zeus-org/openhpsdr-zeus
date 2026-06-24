@@ -53,6 +53,7 @@ public sealed class FreeDvService : IDisposable
         var fresh = new FreeDvModem(_loggerFactory.CreateLogger<FreeDvModem>());
         fresh.SetSubmode(_modem.Submode);
         fresh.SetSquelch(_modem.SquelchEnabled, _modem.SnrSquelchThreshDb);
+        fresh.SetTxText(_txText); // carry the operator's TX callsign/text across the swap
         var old = _modem;
         _modem = fresh;
         old.Dispose();
@@ -101,9 +102,9 @@ public sealed class FreeDvService : IDisposable
         SnrSquelchThreshDb: _modem.SnrSquelchThreshDb,
         SpeechSampleRateHz: _modem.SpeechSampleRateHz,
         ModemSampleRateHz: _modem.ModemSampleRateHz,
-        // RX text sidechannel (callsign etc.) decoding is a follow-up — it needs
-        // freedv_set_callback_txt wired through the modem. Reported as null for now.
-        RxText: null,
+        // RX text sidechannel (callsign etc.) decoded from the FreeDV txt stream
+        // via freedv_set_callback_txt; null until a full line has been received.
+        RxText: _modem.RxText,
         TxText: _txText,
         LibraryVersion: _modem.LibraryVersion);
 
@@ -112,7 +113,11 @@ public sealed class FreeDvService : IDisposable
         if (req.Submode.HasValue) _modem.SetSubmode(req.Submode.Value);
         if (req.SquelchEnabled.HasValue || req.SnrSquelchThreshDb.HasValue)
             _modem.SetSquelch(req.SquelchEnabled, req.SnrSquelchThreshDb);
-        if (req.TxText is not null) _txText = req.TxText;
+        if (req.TxText is not null)
+        {
+            _txText = req.TxText;
+            _modem.SetTxText(req.TxText); // push to the modem's TX varicode callback
+        }
         return Status();
     }
 

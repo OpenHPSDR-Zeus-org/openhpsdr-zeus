@@ -73,6 +73,51 @@ public class FreeDvLoopbackTests
     }
 
     [SkippableFact]
+    public void NativeLoopback_TextSidechannel_RoundTrips()
+    {
+        using var tx = new FreeDvModem();
+        Skip.IfNot(tx.NativeAvailable, "codec2 native library not present — text loopback skipped.");
+        using var rx = new FreeDvModem();
+
+        tx.SetSubmode(FreeDvSubmode.Mode700D);
+        rx.SetSubmode(FreeDvSubmode.Mode700D);
+        rx.SetSquelch(enabled: false, threshDb: null);
+        tx.Activate();
+        rx.Activate();
+        tx.SetTxText("N9WAR");
+
+        const int blockSize = 960;   // 20 ms @ 48 kHz
+        // The txt channel is very low rate (a few bits per OFDM frame), so allow a
+        // generous window for sync acquisition + one full "N9WAR\r" to arrive.
+        const int txBlocks = 2500;   // ~50 s of transmit; the RX loop breaks early
+
+        var modemAudio = new List<float>(txBlocks * blockSize);
+        var block = new float[blockSize];
+        for (int b = 0; b < txBlocks; b++)
+        {
+            FillSpeechLike(block, b);
+            tx.ProcessTxInPlace(block);
+            modemAudio.AddRange(block);
+        }
+
+        string? rxText = null;
+        var rxBlock = new float[blockSize];
+        int total = modemAudio.Count;
+        for (int i = 0; i + blockSize <= total; i += blockSize)
+        {
+            modemAudio.CopyTo(i, rxBlock, 0, blockSize);
+            rx.ProcessRxInPlace(rxBlock);
+            rxText = rx.RxText;
+            if (rxText is not null && rxText.Contains("N9WAR")) break;
+        }
+
+        Assert.True(
+            rxText is not null && rxText.Contains("N9WAR"),
+            $"FreeDV text sidechannel did not round-trip 'N9WAR' (got: '{rxText ?? "<null>"}'). " +
+            "The freedv_set_callback_txt TX/RX wiring or varicode path is broken.");
+    }
+
+    [SkippableFact]
     public void NativeModem_ReportsExpectedSampleRates()
     {
         using var m = new FreeDvModem();
