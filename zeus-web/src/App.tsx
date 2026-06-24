@@ -50,8 +50,8 @@ import { FlexWorkspace } from './layout/FlexWorkspace';
 import { WorkspaceErrorBoundary } from './layout/WorkspaceErrorBoundary';
 import { AppErrorBoundary } from './layout/AppErrorBoundary';
 import { currentDetachedWorkspaceLayoutId } from './layout/workspace-windows';
-import { placeTileInPage } from './layout/workspace';
 import { ConfirmDialog } from './layout/ConfirmDialog';
+import { FreeDvWindow } from './components/FreeDvWindow';
 import { AfGainSlider } from './components/AfGainSlider';
 import { AgcSlider } from './components/AgcSlider';
 import { SquelchSlider } from './components/SquelchSlider';
@@ -99,6 +99,7 @@ import { useMicUplink } from './audio/use-mic-uplink';
 import { fetchState, fetchUpdateStatus, type RepoUpdateStatus } from './api/client';
 import { useConnectionStore } from './state/connection-store';
 import { getReceiverMode } from './state/receiver-state';
+import { useFreeDvWindowStore } from './state/freedv-window-store';
 import { useRadioStore } from './state/radio-store';
 import { useQrzStore } from './state/qrz-store';
 import { useRotatorStore } from './state/rotator-store';
@@ -361,22 +362,21 @@ export default function App() {
     });
   }, []);
 
-  // Selecting FreeDV mode surfaces the FreeDV panel (submode / SYNC / SNR /
+  // Selecting FreeDV mode pops the FreeDV window open (submode / SYNC / SNR /
   // TX-text sidechannel) so the operator gets immediate feedback and the modem
   // controls — without it the mode runs USB underneath with no visible change,
-  // which reads as "nothing happened". Fires on the transition into FreeDV on
-  // either VFO and is idempotent: it won't add a second tile if the panel is
-  // already in the active layout, and it won't re-add a tile the operator
-  // removed unless they switch away from FreeDV and back. We only place it when
-  // it fits the CURRENT page — never spill onto a freshly-minted page and yank
-  // the operator's console out from under them. On a full page the panel stays
-  // a manual Add-Panel action.
+  // which reads as "nothing happened". It comes up as a draggable popup overlay
+  // rather than a docked workspace tile, so engaging FreeDV never rearranges the
+  // operator's console. Fires only on the false→true edge into FreeDV on either
+  // VFO (tracked via a ref) so closing the window while still in FreeDV doesn't
+  // immediately reopen it.
+  const wasInFreeDv = useRef(false);
   useEffect(() => {
-    if (mode !== 'FREEDV' && modeB !== 'FREEDV') return;
-    const ls = useLayoutStore.getState();
-    if (ls.workspace.tiles.some((t) => t.panelId === 'freedv')) return;
-    const fits = placeTileInPage('freedv', ls.workspace.tiles, ls.viewportCols, ls.viewportRows);
-    if (fits) ls.addTile('freedv');
+    const inFreeDv = mode === 'FREEDV' || modeB === 'FREEDV';
+    if (inFreeDv && !wasInFreeDv.current) {
+      useFreeDvWindowStore.getState().open();
+    }
+    wasInFreeDv.current = inFreeDv;
   }, [mode, modeB]);
 
   useEffect(() => {
@@ -912,6 +912,7 @@ export default function App() {
           </WorkspaceErrorBoundary>
         </div>
         {disconnectedOverlay}
+        <FreeDvWindow />
       </div>
       </SpectrumWheelActionsContext.Provider>
       </WorkspaceContext.Provider>
@@ -1101,6 +1102,12 @@ export default function App() {
           state in the store is the single source of truth. */}
       <AudioSuiteWindow route="tx" />
       <AudioSuiteWindow route="rx" />
+
+      {/* FreeDV modem popup — floating overlay that opens when the operator
+          selects FreeDV mode (see the mode-transition effect above). Mounted
+          unconditionally; renders null when closed, so the store's isOpen flag
+          is the single source of truth. */}
+      <FreeDvWindow />
 
       {/* Transport — MOX/TUN + audio + mic + macro buttons on the left,
           PA/PRE chips, then the per-radio status (radio IP, rotator, QRZ)
