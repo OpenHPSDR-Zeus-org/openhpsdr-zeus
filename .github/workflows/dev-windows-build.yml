@@ -1,0 +1,112 @@
+name: Dev Windows Build
+
+# Manually-dispatched, lightweight Windows desktop build for handing a test
+# build to an operator — e.g. to confirm a fix on their machine before it ships
+# in a release.
+#
+# How it differs from release.yml (deliberately minimal):
+#   - Does NOT rebuild native WDSP / miniaudio — it uses the committed win-x64
+#     natives under Zeus.Dsp/runtimes, so the job is a few minutes, not ~30.
+#   - Does NOT build an installer. It publishes one self-contained, PORTABLE
+#     folder, zipped as a workflow artifact: download it, unzip anywhere, and
+#     run the bundled "Launch Zeus Desktop.cmd".
+#   - Does NOT bundle the Edge WebView2 runtime. The portable build assumes the
+#     test machine already has it (stock Windows 11 does). If the window never
+#     appears AND %LOCALAPPDATA%\Zeus\zeus-startup.log shows a missing-WebView2
+#     error, install it from
+#     https://developer.microsoft.com/microsoft-edge/webview2/ and relaunch.
+#
+# Run it from the Actions tab -> "Dev Windows Build" -> Run workflow, choosing
+# the branch you want to test. The artifact is "zeus-dev-win-<arch>-<shortsha>".
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: 'Target architecture'
+        type: choice
+        options:
+          - x64
+          - arm64
+        default: x64
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build portable desktop (win-${{ github.event.inputs.arch }})
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The DeepCW ONNX model is a git submodule statically imported by the web
+      # bundle; without it `npm run build` (run by the csproj BuildSpa target
+      # during publish) fails to resolve the import. Mirrors release.yml.
+      - name: Init DeepCW model submodule (frontend build dependency)
+        run: git submodule update --init zeus-web/external/deepcw-engine
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # npm is needed on PATH because OpenhpsdrZeus.csproj's BuildSpa target
+      # shells out to `npm ci` + `npm run build` before publish. The cache keys
+      # off zeus-web/package-lock.json.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: zeus-web/package-lock.json
+
+      - name: Short SHA
+        id: sha
+        shell: bash
+        run: echo "short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      # Build the SPA into Zeus.Server.Hosting/wwwroot BEFORE publish. This is
+      # load-bearing, not redundant: the Hosting csproj copies wwwroot into the
+      # publish payload via a Content glob gated on Exists(wwwroot), evaluated
+      # when MSBuild parses the project — which on a clean checkout is *before*
+      # the publish-time BuildSpa target creates wwwroot. Without this explicit
+      # pre-build the very first publish ships with NO wwwroot and the desktop
+      # window loads a blank page. Mirrors release.yml's ordering.
+      - name: Build frontend
+        working-directory: zeus-web
+        run: |
+          npm ci
+          npm run build
+
+      # Single self-contained publish. The committed win-<arch> natives flow
+      # into publish/runtimes/win-<arch>/native automatically.
+      - name: Publish self-contained desktop
+        shell: bash
+        run: |
+          dotnet publish OpenhpsdrZeus/OpenhpsdrZeus.csproj \
+            -c Release \
+            -r win-${{ github.event.inputs.arch }} \
+            --self-contained true \
+            -p:VersionPrefix=0.0.0 \
+            -p:VersionSuffix=dev.${{ steps.sha.outputs.short }} \
+            -p:DebugType=embedded \
+            -p:DebugSymbols=false
+
+      # Double-clickable launchers so the operator doesn't have to know about
+      # the --desktop / --server flags. CRLF line endings + start so no console
+      # window lingers (the exe self-detaches its console in --desktop mode).
+      - name: Add desktop + server launchers
+        shell: bash
+        run: |
+          dest="OpenhpsdrZeus/bin/Release/net10.0/win-${{ github.event.inputs.arch }}/publish"
+          printf '@echo off\r\nstart "Zeus" "%%~dp0OpenhpsdrZeus.exe" --desktop\r\n' > "$dest/Launch Zeus Desktop.cmd"
+          printf '@echo off\r\nstart "Zeus Server" "%%~dp0OpenhpsdrZeus.exe" --server\r\n' > "$dest/Launch Zeus Server.cmd"
+          ls -la "$dest"
+
+      - name: Upload portable build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeus-dev-win-${{ github.event.inputs.arch }}-${{ steps.sha.outputs.short }}
+          path: OpenhpsdrZeus/bin/Release/net10.0/win-${{ github.event.inputs.arch }}/publish/
+          if-no-files-found: error
