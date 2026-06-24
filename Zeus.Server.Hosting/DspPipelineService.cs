@@ -5060,50 +5060,31 @@ public class DspPipelineService : BackgroundService,
         engine.Dispose();
     }
 
-    internal static int SelectRxAudio(
-        Rx2AudioMode mode,
-        Span<float> rx1,
-        int rx1Count,
-        ReadOnlySpan<float> rx2,
-        int rx2Count)
-    {
-        rx1Count = Math.Clamp(rx1Count, 0, rx1.Length);
-        rx2Count = Math.Clamp(rx2Count, 0, rx2.Length);
-        return mode switch
-        {
-            Rx2AudioMode.Rx2 => rx2Count > 0 ? CopyRx2Audio(rx1, rx2, rx2Count) : rx1Count,
-            Rx2AudioMode.Both => MixRxAudioN(rx1, rx1Count, new[]
-            {
-                new RxAudioSlice(rx2.Length == 0 ? Array.Empty<float>() : rx2.ToArray(), rx2Count),
-            }),
-            _ => rx1Count,
-        };
-    }
-
-    private static int CopyRx2Audio(Span<float> output, ReadOnlySpan<float> rx2, int rx2Count)
-    {
-        int count = Math.Min(output.Length, rx2Count);
-        rx2[..count].CopyTo(output);
-        return count;
-    }
-
     // N-receiver generalisation of the old 2-RX 0.5*(rx1+rx2) mix. The output
     // block runs at the longest contributor; each output sample is the average
     // of the contributors PRESENT at that index (a contributor "present" means
     // its index is within its own sample count). The divisor is the number of
-    // streams that produced any samples — RX1 (when rx1Count>0) plus every slice
-    // with Count>0 — so a stalled stream never dilutes the others, and a single
-    // contributor passes through at full amplitude. With exactly one non-empty
-    // slice this is byte-identical to the original MixRxAudio (RX1+RX2 → /2; RX2
-    // only when rx1Count==0 → passthrough; no RX2 → rx1 untouched).
+    // streams that produced any samples — RX1 (when unmuted and rx1Count>0) plus
+    // every slice with Count>0 — so a stalled or muted stream never dilutes the
+    // others, and a single contributor passes through at full amplitude. With
+    // exactly one non-empty slice and an unmuted RX1 this is byte-identical to
+    // the original MixRxAudio (RX1+RX2 → /2; RX2 only when rx1Count==0 →
+    // passthrough; no RX2 → rx1 untouched).
+    //
+    // <paramref name="rx1Muted"/>: RX1's samples are dropped from both the sum
+    // and the divisor (the caller has already zeroed them), but rx1Count still
+    // sets the block length so the secondaries stay clocked to RX1. This lets the
+    // per-RX mute model express "RX2 only" (mute RX1) without halving RX2.
     internal static int MixRxAudioN(
         Span<float> rx1,
         int rx1Count,
-        ReadOnlySpan<RxAudioSlice> slices)
+        ReadOnlySpan<RxAudioSlice> slices,
+        bool rx1Muted = false)
     {
         rx1Count = Math.Clamp(rx1Count, 0, rx1.Length);
 
-        int contributors = rx1Count > 0 ? 1 : 0;
+        bool rx1Contributes = !rx1Muted && rx1Count > 0;
+        int contributors = rx1Contributes ? 1 : 0;
         int count = rx1Count;
         foreach (var s in slices)
         {
@@ -5117,7 +5098,7 @@ public class DspPipelineService : BackgroundService,
 
         for (int i = 0; i < count; i++)
         {
-            float sum = i < rx1Count ? rx1[i] : 0f;
+            float sum = (rx1Contributes && i < rx1Count) ? rx1[i] : 0f;
             foreach (var s in slices)
             {
                 int sc = Math.Clamp(s.Count, 0, s.Buffer.Length);
@@ -5474,18 +5455,20 @@ public class DspPipelineService : BackgroundService,
         if (IsReceiverMuted(state, 0) && audioSampleCount > 0)
             audioBuf.AsSpan(0, audioSampleCount).Clear();
 
-        // Secondary-receiver audio. Drain EVERY enabled secondary RX ring this
-        // tick so none can back up: RX3+ used to be computed-and-discarded, so
-        // their WDSP audio rings overran and tripped the rx-ingest "audio
-        // consumer behind" selfcheck warn (IQ ingest itself stays lossless).
-        // What we do with the drained audio follows Rx2AudioMode, generalised
-        // across N receivers:
-        //   Rx1  → secondaries drained & discarded (RX1 only).
-        //   Rx2  → RX2 drained fully and output; RX3+ drained & discarded.
-        //   Both → RX1 + every enabled secondary mixed (each clocked to RX1).
-        var rxAudioMode = state.Rx2AudioMode;
+        // Secondary-receiver audio. Per-receiver mute is the sole audibility
+        // control (Thetis chkMUT, the #894 model): every enabled secondary is
+        // mixed into the RX1-clocked output bus, and muting a receiver — RX1
+        // (above) or any secondary (here) — removes its contribution. This
+        // subsumes the old Rx2AudioMode (Both/RX1/RX2) routing:
+        //   hear both → nothing muted;  RX1 only → mute the secondaries;
+        //   RX2 only  → mute RX1.
+        // The legacy Rx2AudioMode field is retained for wire compatibility but no
+        // longer gates audio: its UI control was removed in #894, so a stale
+        // persisted Rx2AudioMode=Rx1/Rx2 used to strand every enabled secondary
+        // silent with no way to recover. Drain EVERY enabled secondary each tick
+        // (incl. muted) so no WDSP audio ring can back up and trip the rx-ingest
+        // "consumer behind" selfcheck (IQ ingest stays lossless regardless).
         int mixSliceCount = 0;
-        int rx2OnlyCount = 0;
         for (int ri = 1; ri < MaxReceivers; ri++)
         {
             if (!SecondaryReceiverEnabled(ri, state)) continue;
@@ -5493,51 +5476,31 @@ public class DspPipelineService : BackgroundService,
             int secChan = Volatile.Read(ref sec.ChannelId);
             if (secChan < 0) continue;
 
-            if (rxAudioMode == Rx2AudioMode.Both)
-            {
-                // RX1 is the audio clock-master when receivers are mixed: read at
-                // most rx1Count samples from each secondary so the mixed stream
-                // is fed at exactly the RX sample rate. Draining fully and mixing
-                // max() over-feeds the sink — per-tick counts jitter
-                // independently, so E[max] exceeds the true rate (~5% on a G2),
-                // saturating the output ring → overrun → dual-RX clicking (#787).
-                // The unread remainder stays buffered for the next tick, so no
-                // secondary audio is dropped. With RX1 silent (rx1Count==0) read
-                // nothing this tick, matching the original RX2 Both behaviour.
-                int want = Math.Min(audioSampleCount, sec.AudioBuf.Length);
-                int n = want > 0 ? engine.ReadAudio(secChan, sec.AudioBuf.AsSpan(0, want)) : 0;
-                // Muted secondary: drained (so its ring can't back up) but zeroed
-                // so it contributes silence to the mix.
-                if (n > 0 && IsReceiverMuted(state, ri))
-                    sec.AudioBuf.AsSpan(0, n).Clear();
-                _mixSlices[mixSliceCount++] = new RxAudioSlice(sec.AudioBuf, n);
-            }
-            else if (rxAudioMode == Rx2AudioMode.Rx2 && ri == 1)
-            {
-                // RX2 is the audio master in RX2-only mode: drain its ring fully.
-                rx2OnlyCount = engine.ReadAudio(secChan, sec.AudioBuf.AsSpan());
-                if (rx2OnlyCount > 0 && IsReceiverMuted(state, ri))
-                    sec.AudioBuf.AsSpan(0, rx2OnlyCount).Clear();
-            }
-            else
-            {
-                // Not contributing to the output — drain fully and discard so the
-                // ring can't back up.
-                engine.ReadAudio(secChan, sec.AudioBuf.AsSpan());
-            }
+            // RX1 is the audio clock-master: read at most audioSampleCount samples
+            // from each secondary so the mixed stream is fed at exactly the RX
+            // sample rate. Draining fully and mixing max() over-feeds the sink —
+            // per-tick counts jitter independently, so E[max] exceeds the true
+            // rate (~5% on a G2), saturating the output ring → overrun → dual-RX
+            // clicking (#787). The unread remainder stays buffered for the next
+            // tick, so no secondary audio is dropped. With RX1 silent
+            // (audioSampleCount==0) read nothing this tick.
+            int want = Math.Min(audioSampleCount, sec.AudioBuf.Length);
+            int n = want > 0 ? engine.ReadAudio(secChan, sec.AudioBuf.AsSpan(0, want)) : 0;
+            // A muted secondary is still drained above (so its ring can't back up)
+            // but excluded from the mix entirely — it must neither add signal nor
+            // count toward the MixRxAudioN divisor (which would attenuate the
+            // receivers you can still hear).
+            if (IsReceiverMuted(state, ri)) continue;
+            _mixSlices[mixSliceCount++] = new RxAudioSlice(sec.AudioBuf, n);
         }
 
-        if (rxAudioMode == Rx2AudioMode.Both)
-        {
-            audioSampleCount = MixRxAudioN(audioBuf, audioSampleCount, _mixSlices.AsSpan(0, mixSliceCount));
-        }
-        else if (rxAudioMode == Rx2AudioMode.Rx2 && rx2OnlyCount > 0)
-        {
-            int n = Math.Min(audioBuf.Length, rx2OnlyCount);
-            _secondaryRx[1].AudioBuf.AsSpan(0, n).CopyTo(audioBuf);
-            audioSampleCount = n;
-        }
-        // Rx1 (default): audioSampleCount unchanged — RX1 only.
+        // RX1's own samples were already zeroed above when it's muted; tell the
+        // mixer to drop RX1 from the divisor too, so an unmuted secondary plays at
+        // full amplitude (RX2-only = mute RX1). With nothing audible the mixer
+        // returns silence.
+        audioSampleCount = MixRxAudioN(
+            audioBuf, audioSampleCount, _mixSlices.AsSpan(0, mixSliceCount),
+            rx1Muted: IsReceiverMuted(state, 0));
         if (audioSampleCount > 0)
         {
             SanitizeAudioBuffer(audioBuf.AsSpan(0, audioSampleCount));

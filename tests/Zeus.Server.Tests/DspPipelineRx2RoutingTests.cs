@@ -86,36 +86,62 @@ public class DspPipelineRx2RoutingTests
     }
 
     [Fact]
-    public void SelectRxAudio_Rx2ModeWithNoRx2Samples_FallsBackToRx1()
+    public void MixRxAudioN_Rx1Muted_PlaysSecondaryAtFullAmplitude()
     {
-        float[] rx1 = [0.10f, -0.20f, 0.30f, 9.0f];
+        // "RX2 only" in the per-RX mute model = mute RX1. RX1's samples are
+        // already zeroed by the caller; rx1Muted drops it from the divisor so the
+        // single unmuted secondary passes through at full amplitude (NOT halved).
+        float[] rx1 = new float[3];                  // RX1 muted → pre-zeroed
+        float[] rx2 = [0.40f, -0.50f, 0.30f];
 
-        int count = DspPipelineService.SelectRxAudio(
-            Rx2AudioMode.Rx2,
+        int count = DspPipelineService.MixRxAudioN(
             rx1,
             rx1Count: 3,
-            rx2: [],
-            rx2Count: 0);
+            new[] { new DspPipelineService.RxAudioSlice(rx2, rx2.Length) },
+            rx1Muted: true);
 
         Assert.Equal(3, count);
-        Assert.Equal([0.10f, -0.20f, 0.30f], rx1[..count]);
+        Assert.Equal(0.40f, rx1[0], 5);
+        Assert.Equal(-0.50f, rx1[1], 5);
+        Assert.Equal(0.30f, rx1[2], 5);
     }
 
     [Fact]
-    public void SelectRxAudio_Rx2ModeWithRx2Samples_UsesRx2()
+    public void MixRxAudioN_Rx1Muted_TwoSecondaries_AveragesOnlyThem()
     {
-        float[] rx1 = [0.10f, -0.20f, 0.30f];
-        float[] rx2 = [0.40f, -0.50f];
+        // RX1 muted, two unmuted secondaries → divide by 2 (RX1 excluded).
+        float[] rx1 = new float[2];
+        float[] rx2 = [0.40f, 0.20f];
+        float[] rx3 = [0.20f, 0.40f];
 
-        int count = DspPipelineService.SelectRxAudio(
-            Rx2AudioMode.Rx2,
+        int count = DspPipelineService.MixRxAudioN(
             rx1,
-            rx1Count: rx1.Length,
-            rx2,
-            rx2Count: rx2.Length);
+            rx1Count: 2,
+            new[]
+            {
+                new DspPipelineService.RxAudioSlice(rx2, rx2.Length),
+                new DspPipelineService.RxAudioSlice(rx3, rx3.Length),
+            },
+            rx1Muted: true);
 
         Assert.Equal(2, count);
-        Assert.Equal([0.40f, -0.50f], rx1[..count]);
+        Assert.Equal(0.30f, rx1[0], 5);   // (0.40+0.20)/2 — RX1 not in divisor
+        Assert.Equal(0.30f, rx1[1], 5);   // (0.20+0.40)/2
+    }
+
+    [Fact]
+    public void MixRxAudioN_Rx1Muted_NoUnmutedReceivers_ReturnsSilence()
+    {
+        // Everything muted (RX1 muted, no contributing slices) → silence.
+        float[] rx1 = new float[3];
+
+        int count = DspPipelineService.MixRxAudioN(
+            rx1,
+            rx1Count: 3,
+            System.ReadOnlySpan<DspPipelineService.RxAudioSlice>.Empty,
+            rx1Muted: true);
+
+        Assert.Equal(0, count);
     }
 
     [Fact]
