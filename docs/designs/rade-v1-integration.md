@@ -70,7 +70,48 @@ int           rade_snrdB_3k_est(struct rade *r);
 `RADE_COMP` is a `{float real; float imag;}` pair. FARGAN synthesis is a separate
 call (Opus/LPCNet `fargan_*` API) consuming `features_out` → 16 kHz PCM.
 
-## Build — the hard part
+## ⚠ Phase 2 build investigation — VERIFIED BLOCKER (2026-06-23)
+
+A real build attempt (clone + read the actual CMake/source, toolchain present:
+cmake 4.3, gcc/MinGW, clang, Python 3.12) found that **upstream `drowe67/radae`
+`librade` cannot be vendored dependency-free.** Concretely:
+
+- `src/rade_api.c` **unconditionally** `#include <Python.h>` + `numpy/arrayobject.h`
+  (no compile guard). `rade_open()` imports Python modules `radae_txe`/`radae_rxe`
+  and instantiates PyTorch classes pointing at a `.pth` checkpoint.
+- `src/CMakeLists.txt` always `target_link_libraries(rade Python3::Python ...)`.
+- The `RADE_USE_C_ENCODER/DECODER` flags only move the **neural core** to C
+  (`rade_enc.c`/`rade_dec.c` with committed weights `rade_*_data.c`); the **OFDM
+  modem + sync still run in embedded Python** (`radae_rxe.py`). So the flags do
+  NOT yield a Python-free decoder.
+- Confirmation: even **freedv-gui's official Windows release ships an embedded
+  Python and downloads the PyTorch modules from the internet at install time.**
+
+Embedding CPython + PyTorch + a `.pth` is antithetical to Zeus's
+cross-platform/arm/Pi, dependency-free design. So the "vendor librade like
+codec2" plan below is **not possible against upstream main today.**
+
+### The only dependency-free candidates
+1. **`peterbmarks/radae_nopy`** — a *pure-C* port (no Python.h, no interpreter;
+   OFDM modem + sync + neural core all in C; weights compiled in from
+   `rade_enc_data.c`/`rade_dec_data.c`; BSD-2). **This is the viable base.** But:
+   tested Linux/macOS only (no Windows/arm), and **the repo says "no longer
+   recommended"** — FreeDV is consolidating future work into a `freedv-backend`
+   repo.
+2. **Upstream C port (`freedv-backend` / future librade V2)** — the *supported*
+   long-term path, "planned… eventually negate the need for Python." Not ready.
+
+### Revised recommendation
+RADE-into-Zeus today = fork/adopt **`radae_nopy`** as the native base and port it
+to Windows (clang-cl, exactly like the codec2 MSVC patch) + arm, OR **wait/track**
+the upstream C port (`freedv-backend`). Both are real multi-day efforts; the first
+builds on a deprecated base, the second isn't available yet. **This is a maintainer
+decision** — pick the base before any native CMake work. The original codec2-style
+"FetchContent drowe67/radae" approach is a dead end (drags in Python).
+
+---
+
+## Build — the hard part (assumes a Python-free base per the box above)
 
 The native build is the bulk of the effort and the reason this is multi-day:
 

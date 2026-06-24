@@ -2,9 +2,17 @@
 
 > **STATUS: SCAFFOLD ONLY. THE NATIVE BUILD IS NOT IMPLEMENTED YET.**
 > RADEV1 is surfaced + gated in the UI (Phase 1, landed). This directory is the
-> starting point for Phase 2 (the native build). The `CMakeLists.txt` here is a
-> **DRAFT** that does not yet produce a working `rade` library — see the blockers
-> below. Full design + plan: `docs/designs/rade-v1-integration.md`.
+> starting point for Phase 2 (the native build).
+>
+> **⚠ VERIFIED 2026-06-23 — do NOT FetchContent `drowe67/radae`.** A real build
+> investigation found upstream `librade` embeds CPython + PyTorch at runtime
+> (`rade_api.c` unconditionally includes `Python.h`; the OFDM modem/sync run in
+> Python; even freedv-gui ships embedded Python + downloads PyTorch). It cannot be
+> vendored dependency-free. The viable Python-free base is **`peterbmarks/radae_nopy`**
+> (pure C, weights compiled in, BSD-2 — but Linux/macOS only, no Windows/arm, and
+> upstream-deprecated in favour of a future `freedv-backend`). Pick the base
+> (radae_nopy now vs. waiting for the upstream C port) before writing CMake.
+> Full analysis: `docs/designs/rade-v1-integration.md` → "Phase 2 build investigation".
 
 ## What this will produce (target)
 
