@@ -30,7 +30,14 @@ public sealed class FreeDvService : IDisposable
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<FreeDvService> _log;
     private FreeDvModem _modem;
+    private RadeModem _rade;
     private volatile string? _txText;
+
+    // Single volatile the audio hot path reads to pick the active modem, so it
+    // never chains through (_modem.Submode == RadeV1 && _rade.Active). Set on the
+    // control path (engage / submode change) under the same flow that toggles the
+    // modems' active state.
+    private volatile bool _radeActive;
 
     // Auto submode detection. The scanner is a pure state machine; this service
     // ticks it on a lightweight control loop and applies its submode decisions.
@@ -49,8 +56,16 @@ public sealed class FreeDvService : IDisposable
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<FreeDvService>();
         _modem = new FreeDvModem(loggerFactory.CreateLogger<FreeDvModem>());
+        _rade = new RadeModem(loggerFactory.CreateLogger<RadeModem>());
         _scanLoop = ScanLoopAsync(_scanCts.Token);
     }
+
+    /// <summary>
+    /// True when the operator has selected the RADE V1 submode. The submode is
+    /// tracked on <see cref="_modem"/> (the single source of truth for the
+    /// selected submode, even for RADE), so RADE routing keys off it.
+    /// </summary>
+    private bool RadeSelected => _modem.Submode == FreeDvSubmode.RadeV1;
 
     /// <summary>True when FreeDV is engaged and the modem is processing audio.</summary>
     public bool Active => _modem.Active;
@@ -68,17 +83,36 @@ public sealed class FreeDvService : IDisposable
     /// </summary>
     public bool ReloadNative()
     {
+        // ResetProbe() clears BOTH the codec2 and zeus_rade probe caches, so a
+        // freshly-installed lib of either kind goes live after this reload.
         FreeDvNativeLoader.ResetProbe();
         var fresh = new FreeDvModem(_loggerFactory.CreateLogger<FreeDvModem>());
         fresh.SetSubmode(_modem.Submode);
         fresh.SetSquelch(_modem.SquelchEnabled, _modem.SnrSquelchThreshDb);
         fresh.SetTxText(_txText); // carry the operator's TX callsign/text across the swap
+
+        // Rebuild RADE too so a newly-installed zeus_rade lib re-probes and goes
+        // live. Capture engaged state BEFORE disposing the old modems (Dispose
+        // clears their active flags).
+        bool wasEngaged = _modem.Active || _rade.Active;
+        _radeActive = false;
+        var freshRade = new RadeModem(_loggerFactory.CreateLogger<RadeModem>());
+
         var old = _modem;
+        var oldRade = _rade;
         _modem = fresh;
+        _rade = freshRade;
         old.Dispose();
+        oldRade.Dispose();
+
+        // Re-engage whichever modem the selected submode calls for, if FreeDV was
+        // active before the reload.
+        if (wasEngaged) ApplyEngagedRouting();
+
         _log.LogInformation(
-            "FreeDV: native reload — codec2 {State}",
-            fresh.NativeAvailable ? "available" : "still unavailable");
+            "FreeDV: native reload — codec2 {State}, RADE {RadeState}",
+            fresh.NativeAvailable ? "available" : "still unavailable",
+            freshRade.RadeAvailable ? "available" : "still unavailable");
         return fresh.NativeAvailable;
     }
 
@@ -90,49 +124,91 @@ public sealed class FreeDvService : IDisposable
     public void SyncMode(RxMode mode)
     {
         bool want = mode == RxMode.FreeDv;
-        if (want && !_modem.Active)
+        bool engaged = _modem.Active || _rade.Active;
+        if (want && !engaged)
         {
             _log.LogInformation("FreeDV: engaging (mode=FreeDv, submode={Submode})", _modem.Submode);
-            _modem.Activate();
+            ApplyEngagedRouting();
         }
-        else if (!want && _modem.Active)
+        else if (!want && engaged)
         {
             _log.LogInformation("FreeDV: disengaging (mode={Mode})", mode);
             _modem.Deactivate();
+            _rade.Deactivate();
+            _radeActive = false;
+        }
+    }
+
+    /// <summary>
+    /// Activate whichever modem the selected submode calls for and deactivate the
+    /// other, then publish the hot-path routing flag. Call only while FreeDV is
+    /// (being) engaged. RADE selected -> _rade active, _modem idle; otherwise
+    /// _modem active, _rade idle.
+    /// </summary>
+    private void ApplyEngagedRouting()
+    {
+        if (RadeSelected)
+        {
+            _modem.Deactivate();
+            _rade.Activate();
+            _radeActive = true;
+        }
+        else
+        {
+            _rade.Deactivate();
+            _radeActive = false;
+            _modem.Activate();
         }
     }
 
     /// <summary>RX0 post-demod insert: turn received modem audio into decoded speech, in place.</summary>
-    public void ProcessRx(Span<float> block48k) => _modem.ProcessRxInPlace(block48k);
+    public void ProcessRx(Span<float> block48k)
+    {
+        if (_radeActive) _rade.ProcessRxInPlace(block48k);
+        else _modem.ProcessRxInPlace(block48k);
+    }
 
     /// <summary>TX mic insert: turn mic speech into the transmitted modem signal, in place.</summary>
     public void ProcessTx(Span<float> block48k)
     {
         // Mark TX active so auto-detect pauses scanning until the over ends.
         Volatile.Write(ref _lastTxActivityMs, Environment.TickCount64);
-        _modem.ProcessTxInPlace(block48k);
+        // RADE TX is not implemented yet — _rade.ProcessTxInPlace silences the
+        // block when active rather than transmitting raw mic on a RADE frequency.
+        if (_radeActive) _rade.ProcessTxInPlace(block48k);
+        else _modem.ProcessTxInPlace(block48k);
     }
 
     /// <summary>Drop buffered TX modem audio on a MOX falling edge so the next over starts clean.</summary>
     public void FlushTx() => _modem.FlushTx();
 
-    public FreeDvStatusDto Status() => new(
-        NativeAvailable: _modem.NativeAvailable,
-        Active: _modem.Active,
-        Submode: _modem.Submode,
-        Synced: _modem.Synced,
-        SnrDb: Math.Round(_modem.SnrDb, 1),
-        SquelchEnabled: _modem.SquelchEnabled,
-        SnrSquelchThreshDb: _modem.SnrSquelchThreshDb,
-        SpeechSampleRateHz: _modem.SpeechSampleRateHz,
-        ModemSampleRateHz: _modem.ModemSampleRateHz,
-        // RX text sidechannel (callsign etc.) decoded from the FreeDV txt stream
-        // via freedv_set_callback_txt; null until a full line has been received.
-        RxText: _modem.RxText,
-        TxText: _txText,
-        LibraryVersion: _modem.LibraryVersion,
-        AutoDetect: _autoDetect,
-        RadeAvailable: _modem.RadeAvailable);
+    public FreeDvStatusDto Status()
+    {
+        bool rade = RadeSelected;
+        return new(
+            // codec2 availability stays the FreeDvModem flag; RADE availability is
+            // the separate RadeAvailable flag below (a real probe now).
+            NativeAvailable: _modem.NativeAvailable,
+            // Sync / SNR / rates / active / version come from whichever modem the
+            // selected submode routes to. RADE has no codec2 squelch, so the
+            // squelch fields fall back to the FreeDvModem's stored selection.
+            Active: rade ? _rade.Active : _modem.Active,
+            Submode: _modem.Submode,
+            Synced: rade ? _rade.Synced : _modem.Synced,
+            SnrDb: Math.Round(rade ? _rade.SnrDb : _modem.SnrDb, 1),
+            SquelchEnabled: _modem.SquelchEnabled,
+            SnrSquelchThreshDb: _modem.SnrSquelchThreshDb,
+            SpeechSampleRateHz: rade ? _rade.SpeechSampleRateHz : _modem.SpeechSampleRateHz,
+            ModemSampleRateHz: rade ? _rade.ModemSampleRateHz : _modem.ModemSampleRateHz,
+            // RX text sidechannel (callsign etc.). FreeDV decodes it from the txt
+            // stream via freedv_set_callback_txt; RADE's EOO callsign is garbled
+            // until freedv_text is wired, so RADE reports null.
+            RxText: rade ? _rade.RxText : _modem.RxText,
+            TxText: _txText,
+            LibraryVersion: rade ? _rade.LibraryVersion : _modem.LibraryVersion,
+            AutoDetect: _autoDetect,
+            RadeAvailable: _rade.RadeAvailable);
+    }
 
     public FreeDvStatusDto ApplyConfig(FreeDvConfigRequest req)
     {
@@ -143,7 +219,13 @@ public sealed class FreeDvService : IDisposable
         {
             if (_autoDetect && (!req.AutoDetect.HasValue || !req.AutoDetect.Value))
                 _autoDetect = false;
+            // _modem stays the record of the selected submode even for RADE V1,
+            // mirroring today; RadeSelected then keys off it.
             _modem.SetSubmode(req.Submode.Value);
+            // If FreeDV is engaged, swap the active modem to match the new submode
+            // (into/out of RADE). No-op when the routing already matches.
+            bool engaged = _modem.Active || _rade.Active;
+            if (engaged) ApplyEngagedRouting();
         }
         if (req.SquelchEnabled.HasValue || req.SnrSquelchThreshDb.HasValue)
             _modem.SetSquelch(req.SquelchEnabled, req.SnrSquelchThreshDb);
@@ -223,5 +305,6 @@ public sealed class FreeDvService : IDisposable
         catch (AggregateException) { /* OperationCanceled on shutdown */ }
         _scanCts.Dispose();
         _modem.Dispose();
+        _rade.Dispose();
     }
 }
