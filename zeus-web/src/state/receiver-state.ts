@@ -356,6 +356,11 @@ export async function setExposedReceiverCount(target: number): Promise<void> {
   if (n >= 2) setDesiredReceiverCount(n);
   try {
     if (n <= 1) {
+      // Collapse to RX1 only. Disabling RX2 (index 1) routes server-side to
+      // SetRx2, which does NOT cascade the RX3+ extras off — so clear the extra
+      // run first (index 2's disable cascades RX3.. off), then RX2. Without this
+      // the extras linger as a contiguity gap (RX2 off but RX3+ still streaming).
+      await setReceiver(2, { enabled: false }).catch(() => {});
       applyState(await setReceiver(1, { enabled: false }));
       return;
     }
