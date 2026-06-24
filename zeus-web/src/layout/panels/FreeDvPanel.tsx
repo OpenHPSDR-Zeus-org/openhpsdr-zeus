@@ -294,8 +294,10 @@ export function FreeDvPanel() {
                 className={`btn sm ${cls}`}
                 title={
                   radeUnavailable
-                    ? 'RADEV1 — neural Radio Autoencoder (decoder not installed yet)'
-                    : `FreeDV ${m.label}${isCurrent && status.autoDetect && !status.synced ? ' (scanning)' : ''}`
+                    ? 'RADEV1 — neural Radio Autoencoder (native decoder not installed for this platform)'
+                    : m.rade === true
+                      ? 'RADEV1 — neural Radio Autoencoder (RX + TX, LDPC callsign)'
+                      : `FreeDV ${m.label}${isCurrent && status.autoDetect && !status.synced ? ' (scanning)' : ''}`
                 }
                 style={
                   isCurrent && status.autoDetect && !status.synced
@@ -313,9 +315,9 @@ export function FreeDvPanel() {
         </div>
       </div>
 
-      {/* RADEV1 selected but the native RADE library isn't integrated yet — be
-          explicit so the operator understands why it won't decode, instead of
-          chasing a "silent" mode the way a missing codec2 would look. */}
+      {/* RADEV1 selected but the native RADE binary isn't present for this
+          platform — be explicit so the operator understands why it won't decode,
+          instead of chasing a "silent" mode the way a missing codec2 would look. */}
       {status.submode === 'RadeV1' && !status.radeAvailable && (
         <div
           className="label-xs"
@@ -329,9 +331,9 @@ export function FreeDvPanel() {
           }}
         >
           <strong>RADEV1</strong> is FreeDV's neural (Radio Autoencoder) mode. Its
-          decoder isn't built into Zeus yet, so this mode won't produce audio.
-          Use <strong>700D / 700E / 1600</strong> for now — RADE support is in
-          progress.
+          native decoder isn't installed for this platform yet, so this mode won't
+          produce audio. Use <strong>700D / 700E / 1600</strong> here — RADE ships
+          on Windows today; other platforms follow.
         </div>
       )}
 

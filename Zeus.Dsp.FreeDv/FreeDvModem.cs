@@ -211,10 +211,9 @@ public sealed class FreeDvModem : IDisposable
     public string? LibraryVersion => _nativeAvailable ? "codec2 1.2.0 (FreeDV)" : null;
 
     /// <summary>
-    /// True when the native RADE (Radio Autoencoder) modem is available. RADE V1
-    /// is a separate native library (librade + FARGAN) not yet integrated, so this
-    /// is always false for now; <see cref="FreeDvSubmode.RadeV1"/> runs as
-    /// passthrough (no decode) until it lands. See rade-v1-integration.
+    /// Always false: this is the codec2 modem and never decodes RADE. RADE V1 is a
+    /// separate native modem handled by <see cref="RadeModem"/>; FreeDvService
+    /// surfaces RADE availability from there. Kept for API symmetry.
     /// </summary>
     public bool RadeAvailable => false;
 
@@ -406,17 +405,18 @@ public sealed class FreeDvModem : IDisposable
 
     private void OpenLocked()
     {
-        // RADE V1 is a separate native modem (librade) not yet integrated. Never
-        // route it through freedv_open — a classic decoder mis-opened on a RADE
-        // signal just emits garbage. Tear down any classic handles and run as a
-        // clean passthrough until RADE lands; the UI gates on RadeAvailable.
+        // RADE V1 is a separate native modem (RadeModem / zeus_rade). FreeDvService
+        // routes RADE audio there, NOT through this codec2 modem — a classic
+        // decoder mis-opened on a RADE signal just emits garbage. If this modem is
+        // ever asked to open at RadeV1, tear down any classic handles and run as a
+        // clean passthrough.
         if (_submode == FreeDvSubmode.RadeV1)
         {
             RetireRx(IntPtr.Zero);
             RetireTx(IntPtr.Zero);
             _synced = false;
             Volatile.Write(ref _snrDb, 0f);
-            _log?.LogInformation("FreeDV: RADE V1 selected — native RADE not yet available; passthrough (no decode).");
+            _log?.LogInformation("FreeDV: RADE V1 selected — handled by RadeModem; codec2 modem passthrough.");
             return;
         }
 

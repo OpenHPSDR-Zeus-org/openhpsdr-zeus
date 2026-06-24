@@ -97,6 +97,7 @@ public sealed class FreeDvService : IDisposable
         bool wasEngaged = _modem.Active || _rade.Active;
         _radeActive = false;
         var freshRade = new RadeModem(_loggerFactory.CreateLogger<RadeModem>());
+        freshRade.SetTxText(_txText); // carry the EOO callsign across the swap
 
         var old = _modem;
         var oldRade = _rade;
@@ -173,14 +174,20 @@ public sealed class FreeDvService : IDisposable
     {
         // Mark TX active so auto-detect pauses scanning until the over ends.
         Volatile.Write(ref _lastTxActivityMs, Environment.TickCount64);
-        // RADE TX is not implemented yet — _rade.ProcessTxInPlace silences the
-        // block when active rather than transmitting raw mic on a RADE frequency.
+        // RADE encodes mic speech to the RADE waveform (LPCNet analyzer + rade_tx);
+        // classic codec2 modes use freedv_tx. The RADE EOO callsign is set via
+        // SetTxText and decoded on RX, both proven; auto-emitting the EOO frame on
+        // un-key needs the TX tail to drain (bench-verify) so it is not auto-fired.
         if (_radeActive) _rade.ProcessTxInPlace(block48k);
         else _modem.ProcessTxInPlace(block48k);
     }
 
     /// <summary>Drop buffered TX modem audio on a MOX falling edge so the next over starts clean.</summary>
-    public void FlushTx() => _modem.FlushTx();
+    public void FlushTx()
+    {
+        if (_radeActive) _rade.FlushTx();
+        else _modem.FlushTx();
+    }
 
     public FreeDvStatusDto Status()
     {
@@ -232,7 +239,8 @@ public sealed class FreeDvService : IDisposable
         if (req.TxText is not null)
         {
             _txText = req.TxText;
-            _modem.SetTxText(req.TxText); // push to the modem's TX varicode callback
+            _modem.SetTxText(req.TxText); // codec2 TX varicode callback
+            _rade.SetTxText(req.TxText);  // RADE EOO callsign (LDPC reliable-text)
         }
         if (req.AutoDetect.HasValue && req.AutoDetect.Value != _autoDetect)
         {
