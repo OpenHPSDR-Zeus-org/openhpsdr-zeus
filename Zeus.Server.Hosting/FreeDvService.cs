@@ -10,8 +10,11 @@
 // mode (RxMode.FreeDv), and exposes the /api/freedv status/config surface.
 // The DSP pipeline taps ProcessRx (post-demod, RX0) and the TX mic-ingest
 // taps ProcessTx (pre-WDSP) — both no-ops unless FreeDV is active. The radio
-// itself runs USB underneath (WdspDspEngine.MapMode maps FreeDv -> USB), so
-// no WDSP demod mode change is needed here.
+// itself runs a real SSB demod/mod underneath, on the FreeDV band-convention
+// sideband — LSB below 10 MHz, USB at/above (RadioService.EffectiveEngineMode,
+// applied in DspPipelineService) — so the OFDM carriers share one orientation
+// with every other FreeDV station on the band. This service is sideband-agnostic:
+// it processes whatever post-demod audio the pipeline hands it.
 
 using System;
 using System.Threading;
