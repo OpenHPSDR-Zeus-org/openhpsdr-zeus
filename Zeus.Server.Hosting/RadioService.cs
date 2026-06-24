@@ -1064,10 +1064,36 @@ public sealed class RadioService : IDisposable
         double? afGainDb = null,
         string? filterPresetName = null)
     {
-        if (index == 0)
-            return vfoHz is long v0 ? SetVfo(v0) : Snapshot();
-        if (index == 1)
-            return SetRx2(new Rx2SetRequest(Enabled: enabled, VfoBHz: vfoHz, AfGainDb: afGainDb));
+        // RX1 (0) and RX2 (1) live on the flat StateDto fields, but the uniform
+        // numeric model means /api/receivers/{index} must drive every receiver.
+        // Route each supplied field to its canonical RX1/RX2 setter so all their
+        // side effects (TX recompute, band-mode memory, filter preset memory)
+        // still fire. The legacy A/B endpoints (/api/mode, /api/filter, /api/rx2)
+        // remain as thin aliases onto the same setters.
+        if (index == 0 || index == 1)
+        {
+            var receiver = index == 1 ? TxVfo.B : TxVfo.A;
+            if (index == 1 && enabled is bool en1)
+                SetRx2(new Rx2SetRequest(Enabled: en1));
+            if (vfoHz is long v)
+            {
+                if (index == 1) SetVfoB(v); else SetVfo(v);
+            }
+            if (mode is RxMode m) SetMode(m, receiver);
+            if (filterLowHz is not null || filterHighHz is not null || filterPresetName is not null)
+            {
+                var cur = Snapshot();
+                int lo = filterLowHz ?? (index == 1 ? cur.FilterLowHzB : cur.FilterLowHz);
+                int hi = filterHighHz ?? (index == 1 ? cur.FilterHighHzB : cur.FilterHighHz);
+                SetFilter(lo, hi, filterPresetName, receiver);
+            }
+            if (afGainDb is double af)
+            {
+                if (index == 1) SetRx2(new Rx2SetRequest(AfGainDb: af));
+                else SetRxAfGain(af);
+            }
+            return Snapshot();
+        }
         if (index < 2 || index >= _extraReceivers.Length)
             throw new ArgumentOutOfRangeException(
                 nameof(index), index, $"receiver index out of range (0..{_extraReceivers.Length - 1})");
