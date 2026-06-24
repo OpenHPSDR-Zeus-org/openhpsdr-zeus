@@ -56,7 +56,16 @@ import {
   useSignalEnhanceStore,
   type DetectedPeak,
 } from '../../dsp/signal-estimator';
-import { postReceiverFilter } from '../../state/receiver-state';
+import {
+  getReceiverFilterHighHz,
+  getReceiverFilterLowHz,
+  getReceiverFilterPresetName,
+  getReceiverMode,
+  getReceiverVfoHz,
+  optimisticSetReceiverFilter,
+  optimisticSetReceiverPreset,
+  postReceiverFilter,
+} from '../../state/receiver-state';
 import { formatCutOffset, formatFilterWidth, nudgeStepHz } from './filterPresets';
 import { MeterGlass } from '../meters/render/MeterGlass';
 import type { Rx2AudioMode, RxMode, TxVfo } from '../../api/client';
@@ -212,20 +221,7 @@ function parseRgb(s: string): [number, number, number] {
   return [74, 158, 255]; // --accent fallback
 }
 
-type MiniPanConnectionSnapshot = {
-  rx2Enabled: boolean;
-  rxFocus: SpectrumReceiver;
-  vfoHz: number;
-  vfoBHz: number;
-  mode: RxMode;
-  modeB: RxMode;
-  filterLowHz: number;
-  filterHighHz: number;
-  filterLowHzB: number;
-  filterHighHzB: number;
-  filterPresetName: string | null;
-  filterPresetNameB: string | null;
-};
+type ConnSnapshot = ReturnType<typeof useConnectionStore.getState>;
 
 type ActiveMiniPanFilter = {
   receiver: SpectrumReceiver;
@@ -246,36 +242,23 @@ function filterMiniPanReceivers(
   return [rxFocus];
 }
 
-function miniPanVfoHzForReceiver(c: {
-  rx2Enabled: boolean;
-  rxFocus: SpectrumReceiver;
-  vfoHz: number;
-  vfoBHz: number;
-}, receiver: SpectrumReceiver): number {
-  return receiver === 'B' ? Number(c.vfoBHz) : Number(c.vfoHz);
+// All per-receiver reads/writes go through the canonical receivers[] selectors
+// (RX2 = index 1), so the mini-pan no longer touches the flat *B fields.
+function miniPanVfoHzForReceiver(c: ConnSnapshot, receiver: SpectrumReceiver): number {
+  return getReceiverVfoHz(c, receiver);
 }
 
 function miniPanFilterForReceiver(
-  c: MiniPanConnectionSnapshot,
+  c: ConnSnapshot,
   receiver: SpectrumReceiver,
 ): ActiveMiniPanFilter {
-  if (receiver === 'B') {
-    return {
-      receiver,
-      vfoHz: Number(c.vfoBHz),
-      mode: c.modeB,
-      filterLowHz: c.filterLowHzB,
-      filterHighHz: c.filterHighHzB,
-      filterPresetName: c.filterPresetNameB,
-    };
-  }
   return {
     receiver,
-    vfoHz: Number(c.vfoHz),
-    mode: c.mode,
-    filterLowHz: c.filterLowHz,
-    filterHighHz: c.filterHighHz,
-    filterPresetName: c.filterPresetName,
+    vfoHz: getReceiverVfoHz(c, receiver),
+    mode: getReceiverMode(c, receiver),
+    filterLowHz: getReceiverFilterLowHz(c, receiver),
+    filterHighHz: getReceiverFilterHighHz(c, receiver),
+    filterPresetName: getReceiverFilterPresetName(c, receiver),
   };
 }
 
@@ -285,9 +268,9 @@ function setSelectedFilterState(
   highHz: number,
   presetName: string,
 ): void {
-  useConnectionStore.setState(receiver === 'B'
-    ? { filterLowHzB: lowHz, filterHighHzB: highHz, filterPresetNameB: presetName }
-    : { filterLowHz: lowHz, filterHighHz: highHz, filterPresetName: presetName });
+  // Dual-writes the canonical receivers[] entry and (for RX2) the flat mirror.
+  optimisticSetReceiverFilter(receiver, lowHz, highHz);
+  optimisticSetReceiverPreset(receiver, presetName);
 }
 
 function sharedNoiseFloorForReceiver(receiver: SpectrumReceiver): Float32Array | null {
@@ -1533,17 +1516,15 @@ function FilterMiniPanSurface({
       if (
         s.filterLowHz !== p.filterLowHz ||
         s.filterHighHz !== p.filterHighHz ||
-        s.filterLowHzB !== p.filterLowHzB ||
-        s.filterHighHzB !== p.filterHighHzB ||
         s.filterPresetName !== p.filterPresetName ||
-        s.filterPresetNameB !== p.filterPresetNameB ||
         s.mode !== p.mode ||
-        s.modeB !== p.modeB ||
         s.vfoHz !== p.vfoHz ||
-        s.vfoBHz !== p.vfoBHz ||
         s.cwPitchHz !== p.cwPitchHz ||
         s.rx2Enabled !== p.rx2Enabled ||
-        s.rxFocus !== p.rxFocus
+        s.rxFocus !== p.rxFocus ||
+        // RX1 is the flat primary; RX2 (index 1) filter/vfo/mode live in the
+        // receivers[] array, whose reference changes on any per-receiver edit.
+        s.receivers !== p.receivers
       ) {
         requestRedraw();
       }
@@ -1769,7 +1750,7 @@ function FilterMiniPanSurface({
 
     const snapC = useConnectionStore.getState();
     const vfo = miniPanVfoHzForReceiver(snapC, d.receiver);
-    const snapMode = d.receiver === 'B' ? snapC.modeB : snapC.mode;
+    const snapMode = getReceiverMode(snapC, d.receiver);
     const snapCwOff = snapMode === 'CWU' ? -snapC.cwPitchHz : snapMode === 'CWL' ? snapC.cwPitchHz : 0;
     const lo = vfo + snapCwOff;
     const hzPerPx = d.spanHz / d.rect.width;
