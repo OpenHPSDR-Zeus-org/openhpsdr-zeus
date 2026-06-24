@@ -56,7 +56,7 @@ import {
   useSignalEnhanceStore,
   type DetectedPeak,
 } from '../../dsp/signal-estimator';
-import { setFilter } from '../../api/client';
+import { postReceiverFilter } from '../../state/receiver-state';
 import { formatCutOffset, formatFilterWidth, nudgeStepHz } from './filterPresets';
 import { MeterGlass } from '../meters/render/MeterGlass';
 import type { Rx2AudioMode, RxMode, TxVfo } from '../../api/client';
@@ -1613,7 +1613,7 @@ function FilterMiniPanSurface({
       if (hi <= lo + 50) return;
       const slot = presetIsFixed(active.filterPresetName) || !active.filterPresetName ? 'VAR1' : active.filterPresetName;
       setSelectedFilterState(active.receiver, lo, hi, slot);
-      setFilter(lo, hi, slot, undefined, active.receiver).then(c.applyState).catch(() => {});
+      postReceiverFilter(active.receiver, lo, hi, slot).then(c.applyState).catch(() => {});
     };
     canvas.addEventListener('wheel', onWheel, { passive: false });
 
@@ -1641,7 +1641,7 @@ function FilterMiniPanSurface({
     if (!d) return;
     d.flushTimer = null;
     d.lastWriteAt = performance.now();
-    setFilter(d.pendingLo, d.pendingHi, d.activeSlot, undefined, d.receiver).catch(() => {});
+    postReceiverFilter(d.receiver, d.pendingLo, d.pendingHi, d.activeSlot).catch(() => {});
   };
 
   const schedule = () => {
@@ -1690,7 +1690,7 @@ function FilterMiniPanSurface({
     const { low, high } = fitted;
     const slot = presetIsFixed(active.filterPresetName) || !active.filterPresetName ? 'VAR1' : active.filterPresetName;
     setSelectedFilterState(active.receiver, low, high, slot);
-    setFilter(low, high, slot, undefined, active.receiver).then(c.applyState).catch(() => {});
+    postReceiverFilter(active.receiver, low, high, slot).then(c.applyState).catch(() => {});
     return true;
   };
 
@@ -1818,7 +1818,7 @@ function FilterMiniPanSurface({
     const receiver = d.receiver;
     dragRef.current = null;
     const applyState = useConnectionStore.getState().applyState;
-    setFilter(lo, hi, slot, undefined, receiver).then(applyState).catch(() => {});
+    postReceiverFilter(receiver, lo, hi, slot).then(applyState).catch(() => {});
   };
 
   const onPointerMoveHover = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -1922,7 +1922,7 @@ function FilterMiniPanSurface({
     }
     const slot = presetIsFixed(active.filterPresetName) || !active.filterPresetName ? 'VAR1' : active.filterPresetName;
     setSelectedFilterState(active.receiver, lo, hi, slot);
-    setFilter(lo, hi, slot, undefined, active.receiver).then(c.applyState).catch(() => {});
+    postReceiverFilter(active.receiver, lo, hi, slot).then(c.applyState).catch(() => {});
   };
 
   const onWidthKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {

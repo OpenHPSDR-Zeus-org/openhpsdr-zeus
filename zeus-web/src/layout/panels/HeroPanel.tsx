@@ -48,8 +48,6 @@ import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent }
 import { GripVertical, Sliders, Volume2, VolumeX, X } from 'lucide-react';
 import { Panadapter } from '../../components/Panadapter';
 import { WaterfallSurface } from '../../components/WaterfallSurface';
-import { RxMonitorPane } from '../../components/RxMonitorPane';
-import { RxWaterfallPane } from '../../components/RxWaterfallPane';
 import { ZoomControl } from '../../components/ZoomControl';
 import { WaterfallSpeedControl } from '../../components/WaterfallSpeedControl';
 import { SpectrumControls } from '../../components/SpectrumControls';
@@ -128,9 +126,6 @@ export function HeroPanel({
   const receivers = useConnectionStore((s) => s.receivers);
   const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
   const setFocusedRxIndex = useConnectionStore((s) => s.setFocusedRxIndex);
-  // A/B stitched-view foreground for the RX1/RX2 panadapter/waterfall. Kept in
-  // lockstep with focusedRxIndex by setFocusedRxIndex.
-  const rxFocus = useConnectionStore((s) => s.rxFocus);
   // During TX the waterfall region shows the live transmitted spectrum
   // (WDSP TX analyzer pixels, streamed by the server while keyed).
   const keyed = useTxStore((s) => s.moxOn || s.tunOn);
@@ -289,10 +284,12 @@ export function HeroPanel({
     window.addEventListener('pointercancel', onEnd);
   };
 
-  // Exposed receivers in DDC order — drives the multi-DDC spectrum grid. RX1
-  // always; RX2 when enabled; then each active extra DDC (RX3+).
-  const spectrumPanes: { index: number; abId?: 'A' | 'B' }[] = [{ index: 0, abId: 'A' }];
-  if (rx2Enabled) spectrumPanes.push({ index: 1, abId: 'B' });
+  // Exposed receivers in DDC order — drives the multi-DDC spectrum grid, keyed
+  // by NUMERIC receiver index (0 = RX1, 1 = RX2, >= 2 = RX3+). RX1 always; RX2
+  // when enabled; then each active extra DDC. Every pane now renders through the
+  // same Panadapter + WaterfallSurface path; only RX1+RX2 (index <= 1) stitch.
+  const spectrumPanes: { index: number }[] = [{ index: 0 }];
+  if (rx2Enabled) spectrumPanes.push({ index: 1 });
   for (const r of receivers.filter((r) => r.index >= 2 && r.enabled))
     spectrumPanes.push({ index: r.index });
   const multiRxSpectrum = spectrumPanes.length > 1;
@@ -555,22 +552,19 @@ export function HeroPanel({
           }}
         >
           {/* Panadapter region — one cell per exposed receiver, ≤4 per row, the
-              rest stacked. RX1/RX2 keep the interactive A/B panadapter; RX3+ get
-              read-only monitor traces. */}
+              rest stacked. Every pane renders the SAME interactive panadapter,
+              keyed by numeric receiver index. Only RX1+RX2 (index <= 1) stitch
+              into the shared-ADC dual view; RX3+ render standalone. */}
           {connected && (
             <div style={spectrumGridStyle}>
               {spectrumPanes.map((p) => (
                 <div key={p.index} style={{ minWidth: 0, minHeight: 0 }}>
-                  {p.abId ? (
-                    <Panadapter
-                      receiver={p.abId}
-                      stitched={multiRxSpectrum}
-                      foreground={rxFocus === p.abId}
-                      tuneReceiver={p.abId}
-                    />
-                  ) : (
-                    <RxMonitorPane rxIndex={p.index} />
-                  )}
+                  <Panadapter
+                    receiver={p.index}
+                    stitched={multiRxSpectrum && p.index <= 1}
+                    foreground={focusedRxIndex === p.index}
+                    tuneReceiver={p.index}
+                  />
                 </div>
               ))}
             </div>
@@ -595,17 +589,13 @@ export function HeroPanel({
               <div style={spectrumGridStyle}>
                 {spectrumPanes.map((p) => (
                   <div key={p.index} style={{ minWidth: 0, minHeight: 0 }}>
-                    {p.abId ? (
-                      <WaterfallSurface
-                        receiver={p.abId}
-                        transparent={bgActive}
-                        stitched={multiRxSpectrum}
-                        foreground={rxFocus === p.abId}
-                        tuneReceiver={p.abId}
-                      />
-                    ) : (
-                      <RxWaterfallPane rxIndex={p.index} />
-                    )}
+                    <WaterfallSurface
+                      receiver={p.index}
+                      transparent={bgActive}
+                      stitched={multiRxSpectrum && p.index <= 1}
+                      foreground={focusedRxIndex === p.index}
+                      tuneReceiver={p.index}
+                    />
                   </div>
                 ))}
               </div>

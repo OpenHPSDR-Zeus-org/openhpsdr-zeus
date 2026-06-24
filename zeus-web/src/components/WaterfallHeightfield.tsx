@@ -35,6 +35,7 @@ import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
+import { getReceiverVfoHz, rxIndexOf, type ReceiverKey } from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
 import * as viewZoom from '../state/view-zoom';
 import { usePanTuneGesture, type PanTuneGestureOptions } from '../util/use-pan-tune-gesture';
@@ -45,7 +46,7 @@ import { WfDbScale } from './WfDbScale';
 import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
 
 type Props = {
-  receiver?: 'A' | 'B';
+  receiver?: ReceiverKey;
   /** Dev overlay: a live frame-time / fps readout. Off by default (production). */
   showStats?: boolean;
   /** Stitched dual-RX (RX2) layout — gates which overlays render and applies the
@@ -83,6 +84,7 @@ export function WaterfallHeightfield({
   const [status, setStatus] = useState<Status>('probing');
   const [reason, setReason] = useState<string>('');
   const [stats, setStats] = useState<{ fps: number; ms: number } | null>(null);
+  const rxIndex = rxIndexOf(receiver);
   const receiverFilterColor = spectrumReceiverFilterColor(receiver);
 
   useEffect(() => {
@@ -389,7 +391,7 @@ export function WaterfallHeightfield({
       }
       const spanHz = s.width * s.hzPerPixel;
       const c = useConnectionStore.getState();
-      const vfoHz = receiver === 'B' ? c.vfoBHz : c.vfoHz;
+      const vfoHz = getReceiverVfoHz(c, receiver);
       // Dial offset from THIS receiver's animated target center, so the cursor
       // tracks the glide identically on both stitched halves.
       const dialOffsetHz = vc.isInitialized() ? vfoHz - vc.getTargetCenterHz() : 0;
@@ -398,7 +400,8 @@ export function WaterfallHeightfield({
     const schedule = () => requestDrawBusFrame(update);
     const unsubVc = vc.subscribe(schedule);
     const unsubConn = useConnectionStore.subscribe((s, prev) => {
-      if (s.vfoHz !== prev.vfoHz || s.vfoBHz !== prev.vfoBHz) schedule();
+      // RX3+ VFOs live in the receivers[] array, not the *B fields.
+      if (s.vfoHz !== prev.vfoHz || s.vfoBHz !== prev.vfoBHz || s.receivers !== prev.receivers) schedule();
     });
     const unsubFrame = useDisplayStore.subscribe((s, prev) => {
       if (selectDisplaySlice(s, receiver).lastSeq !== selectDisplaySlice(prev, receiver).lastSeq) schedule();
@@ -427,7 +430,7 @@ export function WaterfallHeightfield({
       } as CSSProperties}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
-      {status === 'ready' && (!stitched || receiver === 'A') && <WfDbScale />}
+      {status === 'ready' && (!stitched || rxIndex === 0) && <WfDbScale />}
       {/* Dial-position cursor on BOTH halves (RX2) — each tracks its own VFO so
           the stitched pair behaves like one waterfall with two live dials. */}
       {status === 'ready' && (
@@ -444,7 +447,7 @@ export function WaterfallHeightfield({
       {status === 'ready' && (
         <FilterCursorOverlay containerRef={containerRef} receiver={receiver} />
       )}
-      {status === 'ready' && receiver === 'A' && (!stitched || foreground) && (
+      {status === 'ready' && rxIndex === 0 && (!stitched || foreground) && (
         <NotchOverlay resizable containerRef={containerRef} />
       )}
       {status === 'unsupported' && (

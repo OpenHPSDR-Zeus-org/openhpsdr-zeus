@@ -18,6 +18,12 @@ import { useEffect, useRef, type RefObject } from 'react';
 import { useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { useConnectionStore } from '../state/connection-store';
 import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
+import {
+  getReceiverFilterHighHz,
+  getReceiverFilterLowHz,
+  getReceiverMode,
+  type ReceiverKey,
+} from '../state/receiver-state';
 import { resolvePanTuneTarget } from '../util/use-pan-tune-gesture';
 
 // Thetis-style click-tune cursor: a vertical guide line tracks the mouse
@@ -34,9 +40,10 @@ import { resolvePanTuneTarget } from '../util/use-pan-tune-gesture';
 type FilterCursorOverlayProps = {
   /** The positioned (relative) surface to track the pointer over. */
   containerRef: RefObject<HTMLElement | null>;
-  /** Which receiver's spectrum geometry + snap to preview against. Default 'A';
-   *  'B' drives the RX2 half so its hover crosshair tracks VFO B. */
-  receiver?: 'A' | 'B';
+  /** Which receiver's spectrum geometry + snap to preview against. Default 'A'
+   *  (RX1); any other index drives that receiver's half so its hover crosshair
+   *  tracks the matching VFO. */
+  receiver?: ReceiverKey;
 };
 
 // "14.074.00" — MHz with dot-grouped kHz/Hz, the readout style hams expect.
@@ -115,9 +122,9 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
       const band = bandRef.current;
       if (band) {
         if (hzPerPixel > 0 && len > 0 && rectW > 0) {
-          const filterLowHz = receiver === 'B' ? conn.filterLowHzB : conn.filterLowHz;
-          const filterHighHz = receiver === 'B' ? conn.filterHighHzB : conn.filterHighHz;
-          const mode = receiver === 'B' ? conn.modeB : conn.mode;
+          const filterLowHz = getReceiverFilterLowHz(conn, receiver);
+          const filterHighHz = getReceiverFilterHighHz(conn, receiver);
+          const mode = getReceiverMode(conn, receiver);
           const hzPerCssPx = (len * hzPerPixel) / rectW;
           const lowPx = filterLowHz / hzPerCssPx;
           const highPx = filterHighHz / hzPerCssPx;
@@ -202,7 +209,9 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
           s.filterLowHzB !== prev.filterLowHzB ||
           s.filterHighHzB !== prev.filterHighHzB ||
           s.mode !== prev.mode ||
-          s.modeB !== prev.modeB)
+          s.modeB !== prev.modeB ||
+          // RX3+ filter/mode live in the receivers[] array, not the *B fields.
+          s.receivers !== prev.receivers)
       ) {
         schedule();
       }
