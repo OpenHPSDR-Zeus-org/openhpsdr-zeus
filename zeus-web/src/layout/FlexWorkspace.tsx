@@ -282,15 +282,29 @@ function WorkspaceCanvas({
   // so an operator can expand a panel as far as they like and a smaller window
   // simply scrolls to the content instead of squashing or clipping it.
   //
-  // The column pixel pitch is captured ONCE — from the first valid width at the
-  // base 24-column count — and then held constant. RGL derives a column width of
+  // The column pixel pitch is captured ONCE — from a SETTLED width at the base
+  // 24-column count — and then held constant. RGL derives a column width of
   // (containerWidth - margin*(cols-1)) / cols, so we invert that to recover the
   // per-column pitch and feed RGL an exact width for `cols` columns, pinning the
   // rendered column width to baseColWidth with no sub-pixel rescale on resize.
+  //
+  // The latch must wait for the width to STOP changing, not grab the first
+  // non-zero value. During connect/mount the container can report a too-small
+  // intermediate width (notably in the Photino desktop webview) before the flex
+  // pass settles. Freezing on that transient yields a tiny baseColWidth, which
+  // inflates `cols` to fill the real window, which crams every tile (placed in
+  // columns 0..24) into a narrow strip on the left — the "panels stacked on the
+  // left" bug. So debounce: only latch a width that survives a frame without
+  // changing, so a later, larger settled width supersedes an early narrow one.
+  // (While frozenWidth is still 0 the render falls back to baseColWidth=0 →
+  // cols=24 → gridWidth=live width, which already renders correctly; the latch
+  // only fixes the pitch held constant across subsequent window resizes.)
   const [frozenWidth, setFrozenWidth] = useState(0);
   useEffect(() => {
     if (frozenWidth > 0) return;
-    if (mounted && width > 0) setFrozenWidth(width);
+    if (!mounted || !(width > 0)) return;
+    const id = window.setTimeout(() => setFrozenWidth(width), 150);
+    return () => window.clearTimeout(id);
   }, [frozenWidth, mounted, width]);
   const baseColWidth =
     frozenWidth > 0
