@@ -59,7 +59,67 @@ internal static class RadeResampler
     /// <summary>Exact interpolator output for a given input length.</summary>
     internal static int InterpolatedLength(int inputLen) => inputLen * Factor;
 
+    /// <summary>Upper bound on decimator output for a 48 kHz input block.</summary>
+    internal static int MaxDecimatedLength(int inputLen) => inputLen / Factor + 1;
+
     internal static Interpolator NewInterpolator() => new(Prototype);
+
+    internal static Decimator NewDecimator() => new(Prototype);
+
+    /// <summary>
+    /// Wideband 48 kHz -&gt; 16 kHz (3:1) FIR decimator for the RADE TX speech path
+    /// — the inverse of <see cref="Interpolator"/>. Shares the same wideband
+    /// prototype low-pass (~7.2 kHz cutoff, below the 16 kHz-output 8 kHz Nyquist)
+    /// so the LPCNet analyzer sees the full speech band, not a 3.4 kHz-rolled-off
+    /// version. Streaming, history-preserving, zero-allocation.
+    /// </summary>
+    internal sealed class Decimator
+    {
+        private readonly float[] _taps;
+        private readonly float[] _delay; // circular input history, length = taps
+        private int _head;
+        private int _phase;              // counts input samples mod Factor
+
+        internal Decimator(float[] prototype)
+        {
+            _taps = prototype;
+            _delay = new float[prototype.Length];
+        }
+
+        internal void Reset()
+        {
+            Array.Clear(_delay);
+            _head = 0;
+            _phase = 0;
+        }
+
+        /// <summary>Consumes all of <paramref name="input"/> (48 kHz); writes one
+        /// 16 kHz sample per Factor inputs to <paramref name="output"/> (size at
+        /// least MaxDecimatedLength). Returns the number of samples written.</summary>
+        internal int Process(ReadOnlySpan<float> input, Span<float> output)
+        {
+            int n = _taps.Length;
+            int outCount = 0;
+            foreach (float x in input)
+            {
+                _head = (_head + 1) % n;
+                _delay[_head] = x;
+                if (++_phase == Factor)
+                {
+                    _phase = 0;
+                    float acc = 0f;
+                    int idx = _head;
+                    for (int k = 0; k < n; k++)
+                    {
+                        acc += _taps[k] * _delay[idx];
+                        idx = (idx == 0) ? n - 1 : idx - 1;
+                    }
+                    output[outCount++] = acc;
+                }
+            }
+            return outCount;
+        }
+    }
 
     /// <summary>16 kHz -&gt; 48 kHz. Polyphase: each input sample yields Factor output samples.</summary>
     internal sealed class Interpolator

@@ -57,6 +57,12 @@ zeus.db*
 # don't need to run CMake before executing.
 native/build/
 native/build-miniaudio/
+native/build-rade/
+# RADE upstream slices (~95MB of compiled-in NN weights) — vendored on demand by
+# CI / local builds from sv1eia/Thetis-RADE; never committed. See PROVENANCE.md.
+native/radae/vendor/radae_c/
+native/radae/vendor/opus_dnn/
+native/radae/vendor/freedv_text/
 
 # Playwright-MCP accessibility snapshots and console logs — regenerated
 # on every browser-automation run; do not track.
