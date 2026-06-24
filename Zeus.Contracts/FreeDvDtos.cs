@@ -75,3 +75,38 @@ public sealed record FreeDvConfigRequest(
     double? SnrSquelchThreshDb = null,
     string? TxText = null,
     bool? AutoDetect = null);
+
+/// <summary>
+/// One live station from the FreeDV Reporter network (qso.freedv.org). The
+/// reporter aggregates stations running FreeDV-GUI / Zeus that opted into
+/// spotting; Zeus mirrors the feed read-only ("view" role) for a click-to-tune
+/// stations panel. <see cref="Sid"/> is the reporter's per-connection session id
+/// (the dictionary key, stable for the life of a station's connection).
+/// </summary>
+public sealed record FreeDvStationDto(
+    string Sid,
+    string Callsign,
+    string? GridSquare,
+    long FreqHz,
+    string Mode,
+    bool Transmitting,
+    bool RxOnly,
+    string? Message,
+    string? Version,
+    double? LastRxSnr,
+    string? LastRxCallsign,
+    string? LastRxMode,
+    string LastUpdate,     // ISO-8601 UTC, e.g. DateTime.UtcNow.ToString("o")
+    string? ConnectTime);  // ISO-8601 UTC or null
+
+/// <summary>
+/// Snapshot of the FreeDV Reporter stations channel for the Stations panel.
+/// <see cref="ConnectionState"/> mirrors the upstream Socket.IO link state
+/// ("Disconnected" | "Connecting" | "Connected" | "Reconnecting") so the panel
+/// can show a live/stale indicator; <see cref="Stations"/> is sorted by
+/// frequency ascending.
+/// </summary>
+public sealed record FreeDvStationsResponseDto(
+    string ConnectionState,
+    bool Enabled,
+    IReadOnlyList<FreeDvStationDto> Stations);

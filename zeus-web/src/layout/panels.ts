@@ -70,6 +70,7 @@ import { AnalogMeterPanel } from './panels/AnalogMeterPanel';
 import { WavRecorderPanel } from './panels/WavRecorderPanel';
 import { HamClockPanel } from './panels/HamClockPanel';
 import { SpotsPanel } from './panels/SpotsPanel';
+import { FreeDvStationsPanel } from './panels/FreeDvStationsPanel';
 import { SpaceWeatherPanel } from './panels/SpaceWeatherPanel';
 import { UrlEmbedPanel } from './panels/UrlEmbedPanel';
 import { ChatPanel } from './panels/ChatPanel';
@@ -492,6 +493,15 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'tools',
     tags: ['spots', 'pota', 'sota', 'activation', 'dx', 'cluster', 'tune', 'park', 'summit'],
     component: SpotsPanel,
+    minW: 6,
+    minH: 8,
+  },
+  freedvstations: {
+    id: 'freedvstations',
+    name: 'FreeDV Stations',
+    category: 'tools',
+    tags: ['freedv', 'stations', 'reporter', 'qso', 'spots', 'digital voice', 'tune', 'rade'],
+    component: FreeDvStationsPanel,
     minW: 6,
     minH: 8,
   },

@@ -1273,6 +1273,14 @@ public static class ZeusEndpoints
         // squelch / TX-text changes. No-op-safe when the codec2 native library
         // is missing (NativeAvailable=false).
         app.MapGet("/api/freedv/status", (FreeDvService fd) => Results.Ok(fd.Status()));
+
+        // FreeDV Reporter stations — live roster mirrored from qso.freedv.org by
+        // FreeDvReporterService (persistent read-only Socket.IO link). Returns the
+        // current snapshot (connection state + stations sorted by frequency);
+        // empty until the first bulk_update arrives. The Stations panel polls this
+        // and offers click-to-tune.
+        app.MapGet("/api/freedv/stations",
+            (FreeDvReporterService svc) => Results.Ok(svc.GetSnapshot()));
         app.MapPut("/api/freedv/config", (FreeDvConfigRequest req, FreeDvService fd) =>
         {
             log.LogInformation(
