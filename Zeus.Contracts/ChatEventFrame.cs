@@ -23,6 +23,7 @@ namespace Zeus.Contracts;
 /// {"kind":"banned","message":"..."}
 /// {"kind":"cleared","room":"lobby"}
 /// {"kind":"notice","from":"N9WAR","text":"...","ts":123}
+/// {"kind":"bans","bans":["N0CALL", ...]}
 /// </code>
 ///
 /// JSON (rather than fixed binary) because the payload is small, low-rate, and
@@ -73,6 +74,10 @@ public static class ChatEventFrame
     /// <summary>Encodes a global admin announcement into a 0x35 frame.</summary>
     public static byte[] Notice(string from, string text, long ts) =>
         Encode(new NoticeEnvelope(from, text, ts));
+
+    /// <summary>Encodes the current ban list (admins only) into a 0x35 frame.</summary>
+    public static byte[] Bans(IReadOnlyList<string> bans) =>
+        Encode(new BansEnvelope(bans));
 
     /// <summary>Serialises <paramref name="envelope"/> to UTF-8 JSON and
     /// prefixes the ChatEvent type byte.</summary>
@@ -143,5 +148,10 @@ public static class ChatEventFrame
     public sealed record NoticeEnvelope(string From, string Text, long Ts)
     {
         public string Kind => "notice";
+    }
+
+    public sealed record BansEnvelope(IReadOnlyList<string> Bans)
+    {
+        public string Kind => "bans";
     }
 }

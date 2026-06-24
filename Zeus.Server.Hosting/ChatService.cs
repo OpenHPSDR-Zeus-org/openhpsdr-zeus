@@ -251,6 +251,12 @@ public sealed class ChatService : BackgroundService
     public Task UnbanAsync(string callsign, CancellationToken ct) =>
         SendFriendActionAsync("admin_unban", "callsign", callsign, ct);
 
+    /// <summary>Admin: asks the relay for the current ban list (pushed back as a
+    /// 0x35 <c>bans</c> frame). The relay ignores this unless the caller is an
+    /// admin.</summary>
+    public Task ListBansAsync(CancellationToken ct) =>
+        SendFrameAsync(RequireSocket(), new { t = "admin_list_bans" }, ct);
+
     /// <summary>Admin: clears a room's history (defaults to the public lobby).</summary>
     public Task ClearRoomAsync(string? room, CancellationToken ct)
     {
@@ -567,6 +573,9 @@ public sealed class ChatService : BackgroundService
                         ReadString(root, "from") ?? string.Empty,
                         ReadString(root, "text") ?? string.Empty,
                         ReadLong(root, "ts") ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+                    break;
+                case "bans":
+                    _hub.BroadcastChatEvent(ChatEventFrame.Bans(ReadStringArray(root, "bans")));
                     break;
                 case "error":
                     var code = ReadString(root, "code");

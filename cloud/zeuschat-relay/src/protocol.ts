@@ -102,6 +102,8 @@ export type ClientToRelay =
   | { t: 'admin_clear_room'; room?: string }
   // Push a one-off global announcement to every connected operator.
   | { t: 'admin_broadcast'; text: string }
+  // Ask the relay for the current ban list (relay replies with a `bans` frame).
+  | { t: 'admin_list_bans' }
   // Keepalive. The relay auto-responds with {t:"pong"} without waking (see
   // setWebSocketAutoResponse in chat-room.ts) — send this EXACT string:
   // '{"t":"ping"}'.
@@ -130,6 +132,9 @@ export type RelayToClient =
   | { t: 'friends'; accepted: string[]; incoming: string[]; outgoing: string[] }
   // The operator has been banned/kicked; the socket is about to close.
   | { t: 'banned'; message: string }
+  // The current ban list, sent to admins on hello, on every ban/unban, and in
+  // response to `admin_list_bans`. Non-admins never receive this.
+  | { t: 'bans'; bans: string[] }
   // Protocol/validation error. Non-fatal unless the socket is also closed.
   | { t: 'error'; code: string; message: string }
   // Keepalive response.
