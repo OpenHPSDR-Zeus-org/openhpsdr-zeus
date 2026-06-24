@@ -6893,6 +6893,9 @@ export type FreeDvStatusDto = {
   rxText: string | null;
   txText: string | null;
   libraryVersion: string | null;
+  // Auto submode detection: while unsynced the modem cycles submodes until one
+  // locks. `submode` reflects the live (possibly scanner-chosen) mode.
+  autoDetect: boolean;
 };
 
 // PUT /api/freedv/config body — all fields optional, null = leave unchanged.
@@ -6901,6 +6904,7 @@ export type FreeDvConfigRequest = {
   squelchEnabled?: boolean;
   snrSquelchThreshDb?: number;
   txText?: string;
+  autoDetect?: boolean;
 };
 
 const FREEDV_SUBMODE_ORDER: readonly FreeDvSubmode[] = FREEDV_SUBMODES.map(
@@ -6938,6 +6942,7 @@ function normalizeFreeDvStatus(raw: unknown): FreeDvStatusDto {
     rxText: str(r.rxText),
     txText: str(r.txText),
     libraryVersion: str(r.libraryVersion),
+    autoDetect: bool(r.autoDetect),
   };
 }
 

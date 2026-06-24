@@ -222,24 +222,57 @@ export function FreeDvPanel() {
         </span>
       </div>
 
-      {/* Submode selector. */}
+      {/* Submode selector + auto-detect. AUTO scans submodes until one locks;
+          picking a specific mode asserts it and turns AUTO off (backend does the
+          same implicitly). While scanning, the active button is the mode the
+          scanner is currently trying. */}
       <div className="dsp-cfg-row">
-        <span className="dsp-cfg-label">Submode</span>
+        <span className="dsp-cfg-label">
+          Submode
+          {status.autoDetect && (
+            <span className="dsp-cfg-hint">
+              {' '}
+              {status.synced ? 'auto · locked' : 'auto · scanning…'}
+            </span>
+          )}
+        </span>
         <div className="dsp-cfg-btns">
-          {FREEDV_SUBMODES.map((m) => (
-            <button
-              key={m.value}
-              type="button"
-              disabled={ctrlsDisabled}
-              onClick={() =>
-                m.value !== status.submode && sendConfig({ submode: m.value as FreeDvSubmode })
-              }
-              className={`btn sm ${status.submode === m.value ? 'active' : ''}`}
-              title={`FreeDV ${m.label}`}
-            >
-              {m.label}
-            </button>
-          ))}
+          <button
+            type="button"
+            disabled={ctrlsDisabled}
+            aria-pressed={status.autoDetect}
+            onClick={() => sendConfig({ autoDetect: !status.autoDetect })}
+            className={`btn sm ${status.autoDetect ? 'active' : ''}`}
+            title="Auto-detect: cycle submodes until the modem locks onto the received signal"
+          >
+            AUTO
+          </button>
+          {FREEDV_SUBMODES.map((m) => {
+            const isCurrent = status.submode === m.value;
+            // When scanning, dim the 'active' look on the tried mode so AUTO is
+            // visually the engaged control, not the transient submode.
+            const cls =
+              isCurrent && (!status.autoDetect || status.synced) ? 'active' : '';
+            return (
+              <button
+                key={m.value}
+                type="button"
+                disabled={ctrlsDisabled}
+                onClick={() =>
+                  sendConfig({ submode: m.value as FreeDvSubmode, autoDetect: false })
+                }
+                className={`btn sm ${cls}`}
+                title={`FreeDV ${m.label}${isCurrent && status.autoDetect && !status.synced ? ' (scanning)' : ''}`}
+                style={
+                  isCurrent && status.autoDetect && !status.synced
+                    ? { outline: '1px dashed var(--accent)', outlineOffset: -1 }
+                    : undefined
+                }
+              >
+                {m.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
