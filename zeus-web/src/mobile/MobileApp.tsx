@@ -39,6 +39,7 @@ import { AudioToggle } from '../components/AudioToggle';
 import { BandButtons } from '../components/BandButtons';
 import { TuningStepWidget } from '../components/TuningStepWidget';
 import { AgcSlider } from '../components/AgcSlider';
+import { AfGainSlider } from '../components/AfGainSlider';
 import { DriveSlider } from '../components/DriveSlider';
 import { MicGainSlider } from '../components/MicGainSlider';
 import { TunePowerSlider } from '../components/TunePowerSlider';
@@ -761,7 +762,7 @@ function Section({
 const TOOL_META: Record<MobileToolId, { name: string; desc: string; sub: string; icon: ReactNode }> = {
   tx: {
     name: 'TX Controls',
-    desc: 'Step, AGC-T, drive, tune, mic gain',
+    desc: 'Step, AGC-T, AF, drive, tune, mic gain',
     sub: 'VFO A',
     icon: (
       <svg viewBox="0 0 24 24" aria-hidden>
@@ -926,6 +927,7 @@ function TxToolView() {
           </label>
         </div>
         <div className="m-slider-row"><AgcSlider /></div>
+        <div className="m-slider-row m-slider-row--lbl"><AfGainSlider /></div>
         <div className="m-slider-row m-slider-row--lbl"><DriveSlider /></div>
         <div className="m-slider-row m-slider-row--lbl"><TunePowerSlider /></div>
         <div className="m-slider-row m-slider-row--lbl"><MicGainSlider /></div>
