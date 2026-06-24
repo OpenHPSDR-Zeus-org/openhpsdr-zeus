@@ -274,7 +274,7 @@ export function MobileApp() {
         <MobileInstallPrompt />
         {activeTab === 'radio' ? (
           <>
-            <Section label="Frequency" meta="VFO A">
+            <Section label="Frequency" meta="RX1">
               <div className="m-vfo-grid">
                 <div className="m-vfo-wrap">
                   <VfoDisplay />
@@ -762,7 +762,7 @@ const TOOL_META: Record<MobileToolId, { name: string; desc: string; sub: string;
   tx: {
     name: 'TX Controls',
     desc: 'Step, AGC-T, drive, tune, mic gain',
-    sub: 'VFO A',
+    sub: 'RX1',
     icon: (
       <svg viewBox="0 0 24 24" aria-hidden>
         <circle cx="12" cy="12" r="3" />

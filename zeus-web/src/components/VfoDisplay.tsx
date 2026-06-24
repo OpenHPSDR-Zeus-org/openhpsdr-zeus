@@ -146,8 +146,7 @@ export function VfoDisplay({
   compact = false,
 }: VfoDisplayProps = {}) {
   const targetIndex = resolveTargetIndex(receiver, rxIndex);
-  const resolvedLabel =
-    label ?? (targetIndex === 1 ? 'VFO B' : targetIndex >= 2 ? `RX${targetIndex + 1}` : 'VFO A');
+  const resolvedLabel = label ?? `RX${targetIndex + 1}`;
   const vfoHz = useConnectionStore((s) =>
     targetIndex === 0
       ? s.vfoHz

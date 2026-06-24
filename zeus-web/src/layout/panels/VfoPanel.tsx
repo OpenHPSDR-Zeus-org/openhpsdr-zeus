@@ -148,10 +148,8 @@ export function VfoPanel() {
   const active =
     lanes.find((l) => l.index === focusedRxIndex) ??
     lanes[0] ?? { index: 0, vfoHz, abId: 'A' as const };
-  const activeTitle =
-    active.index === 0 ? 'RX1 · VFO A' : active.index === 1 ? 'RX2 · VFO B' : `RX${active.index + 1}`;
-  const activeLabel =
-    active.index === 0 ? 'VFO A' : active.index === 1 ? 'VFO B' : `RX${active.index + 1}`;
+  const activeTitle = `RX${active.index + 1}`;
+  const activeLabel = `RX${active.index + 1}`;
   const activeAudible = audibleOf(active.index);
   const activeTx = txReceiverIndex === active.index;
 
@@ -182,7 +180,7 @@ export function VfoPanel() {
               }${muted ? ' · muted' : ''}`}
             >
               <span className="vfo-chip__id">
-                {l.index === 0 ? 'A' : l.index === 1 ? 'B' : l.index + 1}
+                {l.index + 1}
                 {isTx && <span className="vfo-chip__tx">TX</span>}
                 {muted && <VolumeX size={9} />}
               </span>
@@ -255,33 +253,33 @@ export function VfoPanel() {
             </label>
           )}
         </div>
-        {/* Dual-VFO tools — copy/swap A↔B. */}
-        <div className="vfo-md__tools" role="group" aria-label="VFO copy and swap">
+        {/* Dual-VFO tools — copy/swap RX1↔RX2. */}
+        <div className="vfo-md__tools" role="group" aria-label="RX1/RX2 copy and swap">
           <button
             type="button"
             className="vfo-tool-key"
             onClick={() => patchRx2({ vfoBHz: vfoHz })}
-            title="Copy VFO A to VFO B"
+            title="Copy RX1 to RX2"
           >
             <Copy size={12} />
-            <span>A&gt;B</span>
+            <span>1&gt;2</span>
           </button>
           <button
             type="button"
             className="vfo-tool-key"
             onClick={copyBToA}
             disabled={!rx2Enabled}
-            title="Copy VFO B to VFO A"
+            title="Copy RX2 to RX1"
           >
             <Copy size={12} />
-            <span>B&gt;A</span>
+            <span>2&gt;1</span>
           </button>
           <button
             type="button"
             className="vfo-tool-key"
             onClick={() => swapVfos().then(applyState).catch(() => {})}
             disabled={!rx2Enabled}
-            title="Swap VFO A and VFO B"
+            title="Swap RX1 and RX2"
           >
             <Repeat2 size={13} />
             <span>Swap</span>
