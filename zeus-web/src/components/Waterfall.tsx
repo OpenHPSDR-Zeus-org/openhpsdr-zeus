@@ -706,7 +706,8 @@ export function Waterfall({
           Waterfall renderer unavailable
         </div>
       )}
-      {(!stitched || rxIndex === 0) && <WfDbScale />}
+      {/* One global waterfall dB scale — only RX1 (leftmost) renders it. */}
+      {rxIndex === 0 && <WfDbScale />}
       {/* Dial-position cursor on BOTH halves (RX2) — each tracks its own VFO. */}
       <div
         ref={cursorRef}

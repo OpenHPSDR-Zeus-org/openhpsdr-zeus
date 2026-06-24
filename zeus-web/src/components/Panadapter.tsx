@@ -505,7 +505,9 @@ export function Panadapter({
         </>
       )}
       <FreqAxis receiver={receiver} stitched={stitched} />
-      {(!stitched || rxIndex === 0) && <DbScale />}
+      {/* One global dB scale for the whole stack — only RX1 (leftmost) renders
+          it; every other pane (RX2 stitched half, RX3+ standalone) shares it. */}
+      {rxIndex === 0 && <DbScale />}
     </div>
   );
 }

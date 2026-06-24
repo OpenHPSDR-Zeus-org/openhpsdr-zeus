@@ -67,6 +67,7 @@ import {
   postReceiverFilter,
 } from '../../state/receiver-state';
 import { formatCutOffset, formatFilterWidth, nudgeStepHz } from './filterPresets';
+import { receiverColorByIndex } from '../spectrumReceiverColor';
 import { MeterGlass } from '../meters/render/MeterGlass';
 import type { RxMode } from '../../api/client';
 import {
@@ -221,6 +222,36 @@ function parseRgb(s: string): [number, number, number] {
   return [74, 158, 255]; // --accent fallback
 }
 
+// Resolve an `hsl(H S% L%)` token (the receiverColorByIndex output for RX3+) to
+// [r,g,b]. parseRgb can't — its numeric fallback would read H/S/L as r/g/b.
+function hslStringToRgb(s: string): [number, number, number] {
+  const m = s.match(/-?\d+(?:\.\d+)?/g);
+  if (!m || m.length < 3) return [74, 158, 255];
+  const h = ((((Number(m[0]) % 360) + 360) % 360)) / 360;
+  const sat = Math.max(0, Math.min(1, Number(m[1]) / 100));
+  const lig = Math.max(0, Math.min(1, Number(m[2]) / 100));
+  if (sat === 0) {
+    const v = Math.round(lig * 255);
+    return [v, v, v];
+  }
+  const q = lig < 0.5 ? lig * (1 + sat) : lig + sat - lig * sat;
+  const p = 2 * lig - q;
+  const hue2 = (t2: number) => {
+    let t = t2;
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  return [
+    Math.round(hue2(h + 1 / 3) * 255),
+    Math.round(hue2(h) * 255),
+    Math.round(hue2(h - 1 / 3) * 255),
+  ];
+}
+
 type ConnSnapshot = ReturnType<typeof useConnectionStore.getState>;
 
 type ActiveMiniPanFilter = {
@@ -232,12 +263,19 @@ type ActiveMiniPanFilter = {
   filterPresetName: string | null;
 };
 
-function filterMiniPanReceivers(rx2Enabled: boolean): SpectrumReceiver[] {
-  // Filter panes follow which receivers are ENABLED. RX2 audio routing is now
-  // governed solely by per-RX mute (the legacy Rx2AudioMode was retired in
-  // PR #932), so when RX2 is on we show both filter panes — you may be
-  // listening to either, and a muted receiver is still tunable/filterable.
-  return rx2Enabled ? ['A', 'B'] : ['A'];
+// One mini-pan per EXPOSED receiver: RX1 ('A') always; RX2 ('B') when enabled;
+// then every enabled extra DDC (RX3+) by its numeric index. The bandwidth-filter
+// panel splits into as many segments as there are receivers. RX2 audio routing
+// is governed solely by per-RX mute (legacy Rx2AudioMode retired in PR #932);
+// a muted receiver is still tunable/filterable.
+function filterMiniPanReceivers(
+  rx2Enabled: boolean,
+  receivers: readonly { index: number; enabled: boolean }[],
+): SpectrumReceiver[] {
+  const keys: SpectrumReceiver[] = ['A'];
+  if (rx2Enabled) keys.push('B');
+  for (const r of receivers) if (r.index >= 2 && r.enabled) keys.push(r.index);
+  return keys;
 }
 
 // All per-receiver reads/writes go through the canonical receivers[] selectors
@@ -584,12 +622,17 @@ function FilterMiniPanSurface({
       const ink0 = (a: number) => `rgba(${fg0r}, ${fg0g}, ${fg0b}, ${a})`;
       const ink1 = (a: number) => `rgba(${fg1r}, ${fg1g}, ${fg1b}, ${a})`;
       const ink3 = (a: number) => `rgba(${fg3r}, ${fg3g}, ${fg3b}, ${a})`;
-      // A follows --accent, B follows --signal so the mini-pan matches the
-      // focused receiver colour used by the main spectrum surfaces.
-      const receiverAccent = receiver === 'B'
-        ? (cs.getPropertyValue('--signal').trim() || '#25d366')
-        : (cs.getPropertyValue('--accent').trim() || '#4a9eff');
-      const [ar, ag, ab] = parseRgb(receiverAccent);
+      // Each receiver gets its OWN colour, matching the main spectrum surfaces:
+      // A → --accent, B → --signal, RX3+ → its distinct identity hue
+      // (receiverColorByIndex returns an hsl() we resolve to rgb here).
+      const [ar, ag, ab] =
+        typeof receiver === 'number' && receiver >= 2
+          ? hslStringToRgb(receiverColorByIndex(receiver))
+          : parseRgb(
+              receiver === 'B'
+                ? cs.getPropertyValue('--signal').trim() || '#25d366'
+                : cs.getPropertyValue('--accent').trim() || '#4a9eff',
+            );
       const accent = (a: number) => `rgba(${ar}, ${ag}, ${ab}, ${a})`;
       const eqBlue = (a: number) => `rgba(34, 204, 255, ${Math.max(0, Math.min(1, a))})`;
 
@@ -1962,17 +2005,18 @@ function FilterMiniPanSurface({
 
 export function FilterMiniPan() {
   const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
-  const receivers = filterMiniPanReceivers(rx2Enabled);
-  const split = receivers.length > 1;
+  const receivers = useConnectionStore((s) => s.receivers);
+  const keys = filterMiniPanReceivers(rx2Enabled, receivers);
+  const split = keys.length > 1;
 
   return (
     <div className={`filter-minipan-stack ${split ? 'filter-minipan-stack--split' : ''}`}>
-      {receivers.map((receiver) => (
+      {keys.map((receiver) => (
         <FilterMiniPanSurface
-          key={receiver}
+          key={String(receiver)}
           receiver={receiver}
           split={split}
-          showReceiverLabel={rx2Enabled}
+          showReceiverLabel={split}
         />
       ))}
     </div>

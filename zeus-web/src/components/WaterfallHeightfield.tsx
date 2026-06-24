@@ -431,7 +431,8 @@ export function WaterfallHeightfield({
       } as CSSProperties}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
-      {status === 'ready' && (!stitched || rxIndex === 0) && <WfDbScale />}
+      {/* One global waterfall dB scale — only RX1 (leftmost) renders it. */}
+      {status === 'ready' && rxIndex === 0 && <WfDbScale />}
       {/* Dial-position cursor on BOTH halves (RX2) — each tracks its own VFO so
           the stitched pair behaves like one waterfall with two live dials. */}
       {status === 'ready' && (
