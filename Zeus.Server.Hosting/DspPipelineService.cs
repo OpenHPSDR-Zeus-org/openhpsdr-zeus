@@ -747,6 +747,11 @@ public class DspPipelineService : BackgroundService,
     private bool _radioMicAttached;
 
     private RxMode _appliedMode = RxMode.USB;
+    // Sideband actually pushed to WDSP. Equals _appliedMode for every mode except
+    // FreeDv, where it follows the FreeDV band convention (LSB < 10 MHz, USB ≥) so
+    // a dial crossing 10 MHz while staying in FreeDv re-flips the demod/mod
+    // orientation. See RadioService.EffectiveEngineMode.
+    private RxMode _appliedEngineMode = RxMode.USB;
     private int _appliedLowHz;
     private int _appliedHighHz;
     // WDSP RX filter shift currently applied (Hz). Equals
@@ -770,7 +775,25 @@ public class DspPipelineService : BackgroundService,
     {
         int loAbs = Math.Min(Math.Abs(s.TxFilterLowHz), Math.Abs(s.TxFilterHighHz));
         int hiAbs = Math.Max(Math.Abs(s.TxFilterLowHz), Math.Abs(s.TxFilterHighHz));
-        return RadioService.SignedFilterForMode(s.Mode, loAbs, hiAbs);
+        // EffectiveEngineMode is a no-op for every mode except FreeDv, where the
+        // TX bandpass must follow the same band-convention sideband as the RX/TXA
+        // demod so the transmitted OFDM carriers land on the band's shared
+        // orientation (LSB < 10 MHz, USB ≥). See RadioService.EffectiveEngineMode.
+        return RadioService.SignedFilterForMode(
+            RadioService.EffectiveEngineMode(s.Mode, s.VfoHz), loAbs, hiAbs);
+    }
+
+    // RX bandpass signed for the effective engine sideband. For FreeDv this
+    // re-signs the stored (USB-positive) FreeDV passband to the convention
+    // sideband so an LSB sub-10 MHz demod gets a negative-frequency passband
+    // rather than a dead positive one. Every other mode passes its already-signed
+    // stored width straight through (byte-identical to the prior direct push).
+    private static (int low, int high) SignedRxFilterFor(StateDto s, RxMode engineMode)
+    {
+        if (s.Mode != RxMode.FreeDv) return (s.FilterLowHz, s.FilterHighHz);
+        int loAbs = Math.Min(Math.Abs(s.FilterLowHz), Math.Abs(s.FilterHighHz));
+        int hiAbs = Math.Max(Math.Abs(s.FilterLowHz), Math.Abs(s.FilterHighHz));
+        return RadioService.SignedFilterForMode(engineMode, loAbs, hiAbs);
     }
     private double _appliedAgcTopDb;
     private double _appliedAgcOffsetDb;
@@ -3328,19 +3351,31 @@ public class DspPipelineService : BackgroundService,
         for (int ri = 2; ri < MaxReceivers; ri++)
             _ = EnsureSecondaryRxChannel(engine, ri, s);
 
-        if (s.Mode != _appliedMode)
+        // FreeDV has no WDSP sideband of its own — resolve the effective demod/mod
+        // orientation from the dial (LSB < 10 MHz, USB ≥). For every other mode
+        // this equals s.Mode, so the change-detection and pushes are byte-identical
+        // to before. Tracked via _appliedEngineMode so a dial crossing 10 MHz while
+        // staying in FreeDv re-flips the sideband. See RadioService.EffectiveEngineMode.
+        var engineMode = RadioService.EffectiveEngineMode(s.Mode, s.VfoHz);
+        if (s.Mode != _appliedMode || engineMode != _appliedEngineMode)
         {
-            engine.SetMode(channel, s.Mode);
+            engine.SetMode(channel, engineMode);
             // Keep TXA modulator mode in sync with the RX side. On Synthetic
             // and before OpenTxChannel has run this is a no-op.
-            engine.SetTxMode(s.Mode);
+            engine.SetTxMode(engineMode);
             _appliedMode = s.Mode;
+            _appliedEngineMode = engineMode;
         }
-        if (s.FilterLowHz != _appliedLowHz || s.FilterHighHz != _appliedHighHz)
+        // FreeDV's stored bandpass is USB-positive; re-sign it for the effective
+        // sideband so an LSB (sub-10 MHz) FreeDV demod gets a negative-frequency
+        // passband instead of a dead positive one. Non-FreeDv modes carry their
+        // already-signed width through unchanged.
+        var (rxLowHz, rxHighHz) = SignedRxFilterFor(s, engineMode);
+        if (rxLowHz != _appliedLowHz || rxHighHz != _appliedHighHz)
         {
-            engine.SetFilter(channel, s.FilterLowHz, s.FilterHighHz);
-            _appliedLowHz = s.FilterLowHz;
-            _appliedHighHz = s.FilterHighHz;
+            engine.SetFilter(channel, rxLowHz, rxHighHz);
+            _appliedLowHz = rxLowHz;
+            _appliedHighHz = rxHighHz;
         }
         // Frozen-NCO frequency shift. The dial sits off-centre on the WDSP
         // IF (the radio's NCO is frozen at RadioLoHz); WDSP's `shift` stage
@@ -3746,12 +3781,16 @@ public class DspPipelineService : BackgroundService,
         var agc = s.Agc ?? new AgcConfig(AgcMode.Med);
         var squelch = s.Squelch ?? new SquelchConfig();
         var txLeveling = s.TxLeveling ?? new TxLevelingConfig();
-        engine.SetMode(channelId, s.Mode);
+        // FreeDV resolves to the band-convention sideband (LSB < 10 MHz, USB ≥);
+        // every other mode passes through as itself. See RadioService.EffectiveEngineMode.
+        var openEngineMode = RadioService.EffectiveEngineMode(s.Mode, s.VfoHz);
+        engine.SetMode(channelId, openEngineMode);
         // Sync TXA modulator with RX mode at engine-open time so the first
         // key-down lands with the correct sideband (no-op on Synthetic / pre-
         // OpenTxChannel).
-        engine.SetTxMode(s.Mode);
-        engine.SetFilter(channelId, s.FilterLowHz, s.FilterHighHz);
+        engine.SetTxMode(openEngineMode);
+        var (openRxLow, openRxHigh) = SignedRxFilterFor(s, openEngineMode);
+        engine.SetFilter(channelId, openRxLow, openRxHigh);
         // Sign the TX bandpass from the live mode (see SignedTxFilterFor) so a
         // fresh engine doesn't key up with a USB-positive default while in LSB.
         var (txOpenLow, txOpenHigh) = SignedTxFilterFor(s);
@@ -3806,8 +3845,11 @@ public class DspPipelineService : BackgroundService,
         engine.SetNotches(_radio.Notches);
         engine.SetZoom(channelId, s.ZoomLevel);
         _appliedMode = s.Mode;
-        _appliedLowHz = s.FilterLowHz;
-        _appliedHighHz = s.FilterHighHz;
+        _appliedEngineMode = openEngineMode;
+        // Cache the SIGNED values we actually pushed (FreeDv re-signs by sideband)
+        // so the first OnRadioStateChanged tick doesn't see a phantom width change.
+        _appliedLowHz = openRxLow;
+        _appliedHighHz = openRxHigh;
         _appliedCtunOffsetHz = ctunShiftHz;
         _appliedTxLowHz = txOpenLow;
         _appliedTxHighHz = txOpenHigh;
@@ -3974,7 +4016,16 @@ public class DspPipelineService : BackgroundService,
         var agc = s.Agc ?? new AgcConfig(AgcMode.Med);
         var squelch = s.Squelch ?? new SquelchConfig();
         var (mode, vfoHz, filterLow, filterHigh, afGainDb) = SecondaryRxParams(s, rxIndex);
-        engine.SetMode(channelId, mode);
+        // FreeDV on a secondary RX follows the same band-convention sideband as the
+        // primary (LSB < 10 MHz, USB ≥); other modes pass through unchanged.
+        var secEngineMode = RadioService.EffectiveEngineMode(mode, vfoHz);
+        engine.SetMode(channelId, secEngineMode);
+        if (mode == RxMode.FreeDv)
+        {
+            int loAbs = Math.Min(Math.Abs(filterLow), Math.Abs(filterHigh));
+            int hiAbs = Math.Max(Math.Abs(filterLow), Math.Abs(filterHigh));
+            (filterLow, filterHigh) = RadioService.SignedFilterForMode(secEngineMode, loAbs, hiAbs);
+        }
         engine.SetFilter(channelId, filterLow, filterHigh);
         engine.SetVfoHz(channelId, vfoHz);
         UpdateRxLo(rxIndex, s);

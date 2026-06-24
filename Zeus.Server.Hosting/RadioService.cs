@@ -1936,6 +1936,21 @@ public sealed class RadioService : IDisposable
     // call site in DspPipelineService for why (legacy DB / split-on-B paths can
     // leave a positive value behind on an LSB mode and transmit the wrong
     // sideband). Idempotent for well-formed state.
+    // FreeDV rides on an SSB demod/mod. The FreeDV community adopted the SSB
+    // voice-mode convention — LSB below 10 MHz, USB at/above — so every station
+    // on a band shares one spectral orientation. Mismatching it mirror-images the
+    // OFDM carriers in RF and nothing decodes. WDSP has no FreeDv sideband of its
+    // own (WdspDspEngine.MapMode defaults FreeDv → USB, correct only ≥10 MHz), so
+    // we resolve the effective engine sideband from the dial at the point the mode
+    // and filter are pushed. RxMode.FreeDv stays the radio's mode everywhere else;
+    // only the WDSP RXA/TXA orientation + bandpass sign follow this. Non-FreeDv
+    // modes pass through unchanged.
+    internal const long FreeDvUsbThresholdHz = 10_000_000;
+    internal static RxMode EffectiveEngineMode(RxMode mode, long dialHz)
+        => mode == RxMode.FreeDv
+            ? (dialHz < FreeDvUsbThresholdHz ? RxMode.LSB : RxMode.USB)
+            : mode;
+
     internal static (int low, int high) SignedFilterForMode(RxMode mode, int loAbs, int hiAbs)
     {
         return mode switch

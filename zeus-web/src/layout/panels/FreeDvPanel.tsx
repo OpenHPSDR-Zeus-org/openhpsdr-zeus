@@ -18,8 +18,9 @@
 // submode selector, SYNC lamp + SNR readout, SNR squelch, and the RX/TX text
 // sidechannel — driven by GET /api/freedv/status (polled ~4 Hz) and
 // PUT /api/freedv/config. FreeDV is a normal RxMode ('FREEDV'); selecting it
-// from the mode row engages the modem (backend forces USB underneath). This
-// panel is telemetry/config only — it does NOT select the mode itself.
+// from the mode row engages the modem (backend runs the SSB demod underneath on
+// the FreeDV band-convention sideband — LSB < 10 MHz, USB ≥). This panel is
+// telemetry/config only — it does NOT select the mode itself.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -448,7 +449,8 @@ export function FreeDvPanel() {
         style={{ color: 'var(--fg-3)', lineHeight: 1.4, marginTop: 2 }}
       >
         FreeDV requires the radio in <strong>FreeDV</strong> mode — pick it from
-        the mode row. The modem runs USB underneath automatically.
+        the mode row. The modem rides the band-convention sideband automatically
+        (LSB below 10&nbsp;MHz, USB at/above).
       </div>
     </div>
   );
