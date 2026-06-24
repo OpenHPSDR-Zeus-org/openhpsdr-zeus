@@ -17,6 +17,7 @@ import { useConnectionStore } from '../state/connection-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
+import { getReceiverMode, type ReceiverKey } from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
 
 // Issue #846: licence-class band overlay rendered as a header treatment along
@@ -68,7 +69,7 @@ const HEADER_LINE_TOP_PX = 24;
 const MIN_LABEL_WIDTH_PCT = 4;
 
 type BandOverlayProps = {
-  receiver?: 'A' | 'B';
+  receiver?: ReceiverKey;
 };
 
 type SegmentColors = (typeof COLORS)[keyof typeof COLORS];
@@ -86,7 +87,7 @@ export function BandOverlay({ receiver = 'A' }: BandOverlayProps = {}) {
   const centerHz = useDisplayStore((s) => selectDisplaySlice(s, receiver).centerHz);
   const hzPerPixel = useDisplayStore((s) => selectDisplaySlice(s, receiver).hzPerPixel);
   const width = useDisplayStore((s) => selectDisplaySlice(s, receiver).width);
-  const mode = useConnectionStore((s) => (receiver === 'B' ? s.modeB : s.mode));
+  const mode = useConnectionStore((s) => getReceiverMode(s, receiver));
 
   const stripRef = useRef<HTMLDivElement | null>(null);
 

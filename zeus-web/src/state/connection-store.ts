@@ -182,6 +182,25 @@ export type ConnectionState = {
   setWisdomStatus: (status: string) => void;
 };
 
+// Merge the server's receivers[] into the previous list, applying the RX3+
+// optimistic-tune poll guard. For each server entry with index >= 2, while the
+// operator is mid-tune (poll response predates the gesture: !trustVfo and a
+// recent optimistic stamp), keep the PREVIOUS entry's vfoHz but adopt every
+// other server field. RX1/RX2 keep their dedicated vfoHz/vfoBHz guards above.
+function mergeReceivers(
+  prev: ReceiverDto[],
+  next: ReceiverDto[] | undefined,
+  trustVfo: boolean,
+): ReceiverDto[] {
+  if (!next) return prev;
+  if (trustVfo) return next;
+  return next.map((r) => {
+    if (r.index < 2 || msSinceOptimisticTuneFor(r.index) >= 1500) return r;
+    const prevEntry = prev.find((p) => p.index === r.index);
+    return prevEntry ? { ...r, vfoHz: prevEntry.vfoHz } : r;
+  });
+}
+
 export const useConnectionStore = create<ConnectionState>((set) => ({
   status: 'Disconnected',
   endpoint: null,
@@ -254,7 +273,12 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
         rx2Enabled: s.rx2Enabled,
         rx2AudioMode: s.rx2AudioMode,
         rx2AfGainDb: s.rx2AfGainDb,
-        receivers: s.receivers ?? prev.receivers,
+        // RX3+ poll-guard: mirror the vfoHz/vfoBHz guard above for the multi-DDC
+        // receivers[]. While the operator is actively tuning an extra DDC, a
+        // 1 Hz /api/state poll generated just before the gesture would rubber-band
+        // its vfoHz; keep the previous entry's vfoHz (but adopt all other server
+        // fields) until the optimistic window expires.
+        receivers: mergeReceivers(prev.receivers, s.receivers, trustVfo),
         maxReceivers: s.maxReceivers ?? prev.maxReceivers,
         txVfo: s.txVfo,
         txReceiverIndex: s.txReceiverIndex ?? prev.txReceiverIndex,

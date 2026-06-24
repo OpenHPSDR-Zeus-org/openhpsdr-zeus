@@ -57,6 +57,7 @@ import {
   useSignalEnhanceStore,
 } from '../dsp/signal-estimator';
 import { normalizeStitchedBins, stitchFloorShiftDb } from '../dsp/stitch-normalizer';
+import { getReceiverVfoHz, rxIndexOf, type ReceiverKey } from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
 import * as viewZoom from '../state/view-zoom';
 import { useTxStore } from '../state/tx-store';
@@ -71,7 +72,7 @@ import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
 type WaterfallProps = {
   /** When true, noise floor fades to transparent so the QRZ-mode map shows through. */
   transparent?: boolean;
-  receiver?: 'A' | 'B';
+  receiver?: ReceiverKey;
   touchMode?: PanTuneGestureOptions['touchMode'];
   tuneReceiver?: PanTuneGestureOptions['tuneReceiver'];
   stitched?: boolean;
@@ -95,6 +96,7 @@ export function Waterfall({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cursorRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<ReturnType<typeof createWfRenderer> | null>(null);
+  const rxIndex = rxIndexOf(receiver);
   const popEnabled = useSignalEnhanceStore((s) => s.popEnabled);
   const popRenderIntensity = useSignalEnhanceStore((s) => s.popRenderIntensity);
   const waterfallReliefDepth = useSignalEnhanceStore((s) => s.waterfallReliefDepth);
@@ -338,7 +340,7 @@ export function Waterfall({
       // planner to emit a 'reset' on the next frame so the textures re-seed,
       // and seed immediately from the last-held frame so a paused-RX restore
       // is not left blank.
-      resetFramePlan(receiver);
+      resetFramePlan(String(receiver));
       contextLost = false;
       resize();
       const st = selectDisplaySlice(useDisplayStore.getState(), receiver);
@@ -383,13 +385,13 @@ export function Waterfall({
         centerHz: slice.centerHz,
         hzPerPixel: slice.hzPerPixel,
         width: slice.width,
-        planKey: receiver,
+        planKey: String(receiver),
       });
       // Drive the shared zoom tween (view-zoom.ts) from RX1 only — zoom is a
       // single global setting, so one driver avoids RX2's resets interrupting
       // an in-flight glide. A hard reset snaps (no glide); otherwise ease to
       // the server span so a zoom step scales smoothly instead of snapping.
-      if (receiver === 'A' && slice.hzPerPixel > 0) {
+      if (rxIndex === 0 && slice.hzPerPixel > 0) {
         if (decision.kind === 'reset') viewZoom.snapTo(slice.hzPerPixel);
         else viewZoom.setTarget(slice.hzPerPixel);
       }
@@ -403,7 +405,7 @@ export function Waterfall({
         // Feed the RX auto-range tracker — it's a no-op when AUTO is off, and
         // while keyed (TX pixels are a hotter domain; the Panadapter ingest
         // owns the TX auto-range fit so it works on every waterfall renderer).
-        if (receiver === 'A' && !useTxStore.getState().moxOn && !useTxStore.getState().tunOn) {
+        if (rxIndex === 0 && !useTxStore.getState().moxOn && !useTxStore.getState().tunOn) {
           useDisplaySettingsStore.getState().updateAutoRange(wfDb);
         }
       }
@@ -444,7 +446,13 @@ export function Waterfall({
     // (the draw-time scale in draw() animates the zoom). Silent when parked.
     const unsubViewZoom = viewZoom.subscribe(requestRedraw);
     const unsubConn = useConnectionStore.subscribe((state, prev) => {
-      if (receiver === 'B' && state.vfoBHz !== prev.vfoBHz) requestRedraw();
+      // Secondary receivers (RX2 / RX3+) center on their VFO; redraw on its move.
+      if (rxIndex === 0) return;
+      if (rxIndex === 1) {
+        if (state.vfoBHz !== prev.vfoBHz) requestRedraw();
+      } else if (state.receivers !== prev.receivers) {
+        requestRedraw();
+      }
     });
 
     // Repaint on dB-range or colormap changes so the WfDbScale drag and the
@@ -582,7 +590,7 @@ export function Waterfall({
       }
       const spanHz = s.width * s.hzPerPixel;
       const c = useConnectionStore.getState();
-      const vfoHz = receiver === 'B' ? c.vfoBHz : c.vfoHz;
+      const vfoHz = getReceiverVfoHz(c, receiver);
       // Dial offset from THIS receiver's animated target center, so the cursor
       // tracks the glide identically on both stitched halves.
       const dialOffsetHz = vc.isInitialized() ? vfoHz - vc.getTargetCenterHz() : 0;
@@ -591,7 +599,8 @@ export function Waterfall({
     const schedule = () => requestDrawBusFrame(update);
     const unsubVc = vc.subscribe(schedule);
     const unsubConn = useConnectionStore.subscribe((s, prev) => {
-      if (s.vfoHz !== prev.vfoHz || s.vfoBHz !== prev.vfoBHz) schedule();
+      // RX3+ VFOs live in the receivers[] array, not the *B fields.
+      if (s.vfoHz !== prev.vfoHz || s.vfoBHz !== prev.vfoBHz || s.receivers !== prev.receivers) schedule();
     });
     const unsubFrame = useDisplayStore.subscribe((s, prev) => {
       if (selectDisplaySlice(s, receiver).lastSeq !== selectDisplaySlice(prev, receiver).lastSeq) schedule();
@@ -677,7 +686,7 @@ export function Waterfall({
           Waterfall renderer unavailable
         </div>
       )}
-      {(!stitched || receiver === 'A') && <WfDbScale />}
+      {(!stitched || rxIndex === 0) && <WfDbScale />}
       {/* Dial-position cursor on BOTH halves (RX2) — each tracks its own VFO. */}
       <div
         ref={cursorRef}
@@ -689,7 +698,7 @@ export function Waterfall({
           Parity with the WebGPU heightfield and the panadapter. */}
       <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
       <FilterCursorOverlay containerRef={containerRef} receiver={receiver} />
-      {receiver === 'A' && (!stitched || foreground) && (
+      {rxIndex === 0 && (!stitched || foreground) && (
         <>
           {/* No delete x here — the single control lives on the panadapter (top). */}
           <NotchOverlay resizable containerRef={containerRef} />

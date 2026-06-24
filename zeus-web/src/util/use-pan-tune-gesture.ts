@@ -44,9 +44,18 @@
 // License for details.
 
 import { createContext, useContext, useEffect, type RefObject } from 'react';
-import { setRadioLo, setVfo, setVfoB, setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
+import { setRadioLo, setZoom, ZOOM_MAX, ZOOM_MIN, type RadioStateDto, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
+import {
+  getReceiverVfoFromState,
+  getReceiverVfoHz,
+  isSecondaryReceiver,
+  optimisticSetReceiverVfo,
+  postReceiverVfo,
+  rxIndexOf,
+  type ReceiverKey,
+} from '../state/receiver-state';
 import { computeSnapToLineHz, getSnapHistorySpectrum, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { armSnapLock } from './snap-lock';
 import { useNotchStore } from '../state/notch-store';
@@ -126,7 +135,9 @@ export type SpectrumWheelActions = {
 
 export const SpectrumWheelActionsContext = createContext<SpectrumWheelActions>({});
 
-export type SpectrumReceiver = 'A' | 'B';
+// Receiver discriminator. Numbers are canonical (0 = RX1, 1 = RX2, >= 2 =
+// RX3+); 'A'/'B' remain accepted as legacy aliases for 0/1.
+export type SpectrumReceiver = ReceiverKey;
 
 export type PanTuneTarget = {
   tuneHz: number;
@@ -140,12 +151,11 @@ export type PanTuneTarget = {
 // this every frame and the click handler reads the same value, so the committed
 // dial matches whichever signal the preview was showing — they never diverge.
 // Cleared when the cursor leaves every signal so a fresh hover starts unbiased.
-const lastSnapHz: Record<SpectrumReceiver, number | null> = { A: null, B: null };
+const lastSnapHz = new Map<number, number | null>();
 
-/** Test-only: forget the snap hysteresis anchor for both receivers. */
+/** Test-only: forget the snap hysteresis anchor for every receiver. */
 export function _resetPanSnapStickyForTest(): void {
-  lastSnapHz.A = null;
-  lastSnapHz.B = null;
+  lastSnapHz.clear();
 }
 
 export function resolvePanTuneTarget(
@@ -162,9 +172,10 @@ export function resolvePanTuneTarget(
   };
   if (!Number.isFinite(lineHz)) return fallback;
 
+  const rxIdx = rxIndexOf(receiver);
   const enhance = useSignalEnhanceStore.getState();
   if (!enhance.snapEnabled) {
-    lastSnapHz[receiver] = null;
+    lastSnapHz.set(rxIdx, null);
     return fallback;
   }
 
@@ -173,7 +184,7 @@ export function resolvePanTuneTarget(
 
   const maxRadiusHz = Math.min(ds.hzPerPixel * SNAP_RADIUS_PX, enhance.snapRadiusHz);
   const hysteresisHz = ds.hzPerPixel * SNAP_HYSTERESIS_PX;
-  const sticky = lastSnapHz[receiver];
+  const sticky = lastSnapHz.get(rxIdx) ?? null;
   const mode = useConnectionStore.getState().mode;
   const centerHz = Number(ds.centerHz);
   const stepHz = useToolbarFavoritesStore.getState().stepHz;
@@ -188,7 +199,7 @@ export function resolvePanTuneTarget(
     hysteresisHz,
   );
   if (liveHz != null) {
-    lastSnapHz[receiver] = liveHz;
+    lastSnapHz.set(rxIdx, liveHz);
     return {
       tuneHz: quantizeToStepHz(liveHz, stepHz),
       snappedToSignal: true,
@@ -197,7 +208,7 @@ export function resolvePanTuneTarget(
     };
   }
 
-  if (includeHistory && receiver === 'A') {
+  if (includeHistory && rxIdx === 0) {
     const history = getSnapHistorySpectrum();
     if (history) {
       const historyHz = computeSnapToLineHz(
@@ -211,7 +222,7 @@ export function resolvePanTuneTarget(
         hysteresisHz,
       );
       if (historyHz != null) {
-        lastSnapHz[receiver] = historyHz;
+        lastSnapHz.set(rxIdx, historyHz);
         return {
           tuneHz: quantizeToStepHz(historyHz, stepHz),
           snappedToSignal: true,
@@ -222,7 +233,7 @@ export function resolvePanTuneTarget(
     }
   }
 
-  lastSnapHz[receiver] = null;
+  lastSnapHz.set(rxIdx, null);
   return fallback;
 }
 
@@ -233,22 +244,18 @@ type VfoNudgeController = {
 };
 
 export function createVfoNudgeController(receiver: SpectrumReceiver = 'A'): VfoNudgeController {
-  const receiverIsB = receiver === 'B';
+  const secondary = isSecondaryReceiver(receiver);
   const vc = viewCenter.viewCenterFor(receiver);
   let pendingHz: number | null = null;
   let pendingAbort: AbortController | null = null;
   let pendingRaf = 0;
 
-  const readVfo = () => {
-    const s = useConnectionStore.getState();
-    return receiverIsB ? s.vfoBHz : s.vfoHz;
-  };
+  const readVfo = () => getReceiverVfoHz(useConnectionStore.getState(), receiver);
   const writeVfo = (hz: number) => {
-    useConnectionStore.setState(receiverIsB ? { vfoBHz: hz } : { vfoHz: hz });
+    optimisticSetReceiverVfo(receiver, hz);
   };
-  const postVfo = (hz: number, signal?: AbortSignal) =>
-    receiverIsB ? setVfoB(hz, signal) : setVfo(hz, signal);
-  const tunesOffCenter = () => receiverIsB || useConnectionStore.getState().ctunEnabled;
+  const postVfo = (hz: number, signal?: AbortSignal) => postReceiverVfo(receiver, hz, signal);
+  const tunesOffCenter = () => secondary || useConnectionStore.getState().ctunEnabled;
   const commandedHz = () => pendingHz ?? readVfo();
 
   const flushPending = () => {
@@ -307,11 +314,13 @@ function readView(receiver: SpectrumReceiver = 'A'): { centerHz: number; spanHz:
   const width = s.width > 0 ? s.width : fallback.width;
   const hzPerPixel = s.hzPerPixel > 0 ? s.hzPerPixel : fallback.hzPerPixel;
   if (width <= 0 || hzPerPixel <= 0) return null;
+  // Secondary receivers (RX2 / RX3+) centre on their own VFO when their slice
+  // hasn't arrived yet; RX1 falls back to its frame centre.
   const centerHz =
     s.width > 0 && s.hzPerPixel > 0
       ? Number(s.centerHz)
-      : receiver === 'B'
-      ? useConnectionStore.getState().vfoBHz
+      : isSecondaryReceiver(receiver)
+      ? getReceiverVfoHz(useConnectionStore.getState(), receiver)
       : Number(fallback.centerHz);
   return {
     centerHz,
@@ -337,8 +346,7 @@ export function usePanTuneGesture(
     if (!canvas) return;
     const tuneReceiver = options.tuneReceiver ?? receiver;
     const dragMode = options.dragMode ?? 'tune';
-    const receiverIsB = tuneReceiver === 'B';
-    const panReceiverIsB = receiver === 'B';
+    const panIsSecondary = isSecondaryReceiver(receiver);
     const touchPinchOnly = options.touchMode === 'pinch-only';
 
     type Drag = {
@@ -405,15 +413,12 @@ export function usePanTuneGesture(
     // target always mirrors exactly what was commanded — including clamp
     // effects at the band edges — and CW pitch offsets cancel (issue #597
     // adversary #2/#12).
-    const readVfo = () => {
-      const s = useConnectionStore.getState();
-      return receiverIsB ? s.vfoBHz : s.vfoHz;
-    };
+    const readVfo = () => getReceiverVfoHz(useConnectionStore.getState(), tuneReceiver);
     const writeVfo = (hz: number) => {
-      useConnectionStore.setState(receiverIsB ? { vfoBHz: hz } : { vfoHz: hz });
+      optimisticSetReceiverVfo(tuneReceiver, hz);
     };
     const postVfo = (hz: number, signal?: AbortSignal) =>
-      receiverIsB ? setVfoB(hz, signal) : setVfo(hz, signal);
+      postReceiverVfo(tuneReceiver, hz, signal);
     // Each receiver glides its OWN view-centre tween (RX1 and RX2/VFO B are
     // independent instances), so dragging either stitched half pans smoothly and
     // optimistically — the gesture leads the frames, which then reconcile.
@@ -427,14 +432,21 @@ export function usePanTuneGesture(
     const ctunSweep = () => useConnectionStore.getState().ctunEnabled;
 
     const commandedHz = () => pendingHz ?? readVfo();
+    // Secondary receivers (RX2 / RX3+) have no separate "radio LO": their DDC
+    // follows their VFO, so a ruler/pan drag retunes the VFO. RX1 (index 0)
+    // repositions the hardware radio LO.
     const fallbackPanCenterHz = () =>
-      panReceiverIsB
-        ? useConnectionStore.getState().vfoBHz
+      panIsSecondary
+        ? getReceiverVfoHz(useConnectionStore.getState(), receiver)
         : Number(selectDisplaySlice(useDisplayStore.getState(), receiver).centerHz);
-    const writePanCenter = (hz: number) =>
-      useConnectionStore.setState(panReceiverIsB ? { vfoBHz: hz } : { radioLoHz: hz });
+    const writePanCenter = (hz: number) => {
+      if (panIsSecondary) optimisticSetReceiverVfo(receiver, hz);
+      else useConnectionStore.setState({ radioLoHz: hz });
+    };
     const postPanCenter = (hz: number, signal?: AbortSignal) =>
-      panReceiverIsB ? setVfoB(hz, signal) : setRadioLo(hz, signal);
+      panIsSecondary ? postReceiverVfo(receiver, hz, signal) : setRadioLo(hz, signal);
+    const appliedPanCenterFromState = (state: RadioStateDto) =>
+      panIsSecondary ? getReceiverVfoFromState(state, receiver) : state.radioLoHz;
     const commandedPanHz = () =>
       pendingPanHz ?? (panVc.isInitialized() ? panVc.getTargetCenterHz() : fallbackPanCenterHz());
     const readPanViewport = (): { centerHz: number; spanHz: number } | null => {
@@ -486,7 +498,7 @@ export function usePanTuneGesture(
         .then((state) => {
           if (ctrl.signal.aborted) return;
           useConnectionStore.getState().applyState(state, { trustVfo: false });
-          reconcileAppliedPan(panReceiverIsB ? state.vfoBHz : state.radioLoHz);
+          reconcileAppliedPan(appliedPanCenterFromState(state));
         })
         .catch(() => {});
     };
@@ -568,7 +580,7 @@ export function usePanTuneGesture(
       const ctrl = new AbortController();
       zoomInflight = ctrl;
       const centeredLoHz =
-        receiver === 'A' && tuneReceiver === 'A'
+        rxIndexOf(receiver) === 0 && rxIndexOf(tuneReceiver) === 0
           ? centerCtunForZoomIn(cur, next, ctrl.signal)
           : null;
       setZoom(next, ctrl.signal)
@@ -831,7 +843,7 @@ export function usePanTuneGesture(
           // Only a LIVE signal can be tracked frame-to-frame; a waterfall-memory
           // hit is by definition not on screen right now, so it tunes once but
           // does not arm the self-correcting lock.
-          if (target.fromLive && !receiverIsB && receiver === 'A') {
+          if (target.fromLive && rxIndexOf(tuneReceiver) === 0 && rxIndexOf(receiver) === 0) {
             armSnapLock({
               dialHz: target.tuneHz,
               anchorBodyHz: target.anchorBodyHz,

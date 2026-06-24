@@ -57,6 +57,7 @@ import { useDisplaySettingsStore, shouldTxAutoRange } from '../state/display-set
 import { useConnectionStore } from '../state/connection-store';
 import { enhanceInto, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { normalizeStitchedBins, stitchFloorShiftDb } from '../dsp/stitch-normalizer';
+import { getReceiverVfoHz, rxIndexOf, type ReceiverKey } from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
 import * as viewZoom from '../state/view-zoom';
 import { useTxStore } from '../state/tx-store';
@@ -73,7 +74,7 @@ import { NotchOverlay } from './NotchOverlay';
 import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
 
 type PanadapterProps = {
-  receiver?: 'A' | 'B';
+  receiver?: ReceiverKey;
   touchMode?: PanTuneGestureOptions['touchMode'];
   tuneReceiver?: PanTuneGestureOptions['tuneReceiver'];
   stitched?: boolean;
@@ -89,9 +90,8 @@ export function Panadapter({
 }: PanadapterProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const vfoHz = useConnectionStore((s) =>
-    receiver === 'B' ? s.vfoBHz : s.vfoHz,
-  );
+  const rxIndex = rxIndexOf(receiver);
+  const vfoHz = useConnectionStore((s) => getReceiverVfoHz(s, receiver));
   const popEnabled = useSignalEnhanceStore((s) => s.popEnabled);
   const popRenderIntensity = useSignalEnhanceStore((s) => s.popRenderIntensity);
   const moxOn = useTxStore((s) => s.moxOn);
@@ -296,7 +296,7 @@ export function Panadapter({
         centerHz: slice.centerHz,
         hzPerPixel: slice.hzPerPixel,
         width: slice.width,
-        planKey: receiver,
+        planKey: String(receiver),
       });
       const frameCenter = Number(slice.centerHz);
 
@@ -304,7 +304,7 @@ export function Panadapter({
       // matching block in Waterfall.tsx. Idempotent with the waterfall's call;
       // having both A surfaces drive it keeps zoom animating in layouts where
       // only one of them is mounted.
-      if (receiver === 'A' && slice.hzPerPixel > 0) {
+      if (rxIndex === 0 && slice.hzPerPixel > 0) {
         if (decision.kind === 'reset') viewZoom.snapTo(slice.hzPerPixel);
         else viewZoom.setTarget(slice.hzPerPixel);
       }
@@ -346,7 +346,7 @@ export function Panadapter({
       // regardless of which waterfall renderer is active. Receiver A only —
       // that's the slice the server feeds TX pixels into; RX2 (receiver B)
       // keeps its own RX window during TX.
-      if (receiver === 'A' && slice.panValid && slice.panDb) {
+      if (rxIndex === 0 && slice.panValid && slice.panDb) {
         const tx = useTxStore.getState();
         const ds = useDisplaySettingsStore.getState();
         if (shouldTxAutoRange(tx, ds.txAutoRange)) ds.updateTxAutoRange(slice.panDb);
@@ -384,7 +384,14 @@ export function Panadapter({
     // Zoom motion → redraw while the display span eases (draw-time scale).
     const unsubViewZoom = viewZoom.subscribe(requestRedraw);
     const unsubConn = useConnectionStore.subscribe((state, prev) => {
-      if (receiver === 'B' && state.vfoBHz !== prev.vfoBHz) requestRedraw();
+      // Secondary receivers (RX2 / RX3+) center on their VFO, so redraw when it
+      // moves. RX2 lives in vfoBHz; RX3+ in the receivers[] array.
+      if (rxIndex === 0) return;
+      if (rxIndex === 1) {
+        if (state.vfoBHz !== prev.vfoBHz) requestRedraw();
+      } else if (state.receivers !== prev.receivers) {
+        requestRedraw();
+      }
     });
 
     // Repaint on dB-range / trace-color updates so auto-range and the Display
@@ -473,7 +480,7 @@ export function Panadapter({
       } as CSSProperties}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
-      {receiver === 'A' && (!stitched || foreground) && <BandOverlay receiver={receiver} />}
+      {rxIndex === 0 && (!stitched || foreground) && <BandOverlay receiver={receiver} />}
       <div
         className="pointer-events-none absolute z-[25] rounded-sm px-2 py-0.5 font-mono text-[10px]"
         style={{
@@ -484,7 +491,7 @@ export function Panadapter({
           border: '1px solid rgba(255,255,255,0.16)',
         }}
       >
-        {receiver === 'B' ? 'RX2 · VFO B' : 'RX1 · VFO A'} · {(vfoHz / 1e6).toFixed(6)}
+        {`RX${rxIndex + 1}`} · {(vfoHz / 1e6).toFixed(6)}
         {stitched && foreground ? ' · FOCUS' : ''}
       </div>
       {/* Passband + hover crosshair render on BOTH halves (RX2), each tracking
@@ -492,7 +499,7 @@ export function Panadapter({
           points — not only on the focused half. Mirrors the WebGPU heightfield. */}
       <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
       <FilterCursorOverlay containerRef={containerRef} receiver={receiver} />
-      {receiver === 'A' && (!stitched || foreground) && (
+      {rxIndex === 0 && (!stitched || foreground) && (
         <>
           <SpotOverlay />
           <PeakMarkerOverlay />
@@ -501,7 +508,7 @@ export function Panadapter({
         </>
       )}
       <FreqAxis receiver={receiver} stitched={stitched} />
-      {(!stitched || receiver === 'A') && <DbScale />}
+      {(!stitched || rxIndex === 0) && <DbScale />}
     </div>
   );
 }

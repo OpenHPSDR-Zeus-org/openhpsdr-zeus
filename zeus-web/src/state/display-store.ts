@@ -49,7 +49,12 @@ import { maybeUpdateEstimator } from '../dsp/signal-estimator';
 
 const DISPLAY_INVALID_BIN_DB = -200;
 
-export type SpectrumReceiver = 'A' | 'B';
+// Receiver discriminator for the spectrum surfaces. Numbers are canonical
+// (0 = RX1, 1 = RX2, >= 2 = RX3+); 'A'/'B' remain accepted as legacy aliases
+// for 0/1. Re-exported as SpectrumReceiver (its historical name) since many
+// files import that identifier.
+export type ReceiverKey = 'A' | 'B' | number;
+export type SpectrumReceiver = ReceiverKey;
 
 export type ReceiverDisplaySlice = {
   width: number;
@@ -190,7 +195,12 @@ export function selectDisplaySlice(
   state: DisplayState,
   receiver: SpectrumReceiver = 'A',
 ): ReceiverDisplaySlice {
-  if (receiver === 'B') return state.rx2;
+  // Numeric RX3+ key → the multi-DDC `extra` array (extra[index-2]); RX1/RX2
+  // keep their dedicated slices. 'A'/'B' and 0/1 stay byte-identical.
+  if (typeof receiver === 'number' && receiver >= 2) {
+    return state.extra[receiver - 2] ?? EMPTY_DISPLAY_SLICE;
+  }
+  if (receiver === 'B' || receiver === 1) return state.rx2;
   return {
     width: state.width,
     centerHz: state.centerHz,
