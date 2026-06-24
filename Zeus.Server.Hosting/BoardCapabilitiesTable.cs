@@ -165,8 +165,13 @@ internal static class BoardCapabilitiesTable
         HasSteppedAttenuationRx2: true,
         SupportsPathIllustrator: true,
         MaxPowerWatts: 120,
-        // Dual-ADC DDC board: RX-antenna relays + full aux set + a dedicated RX2
-        // antenna path — antenna slice (#804). P1, so no TX-antenna relay.
+        // Dual-ADC DDC board: full Alex — TX + RX antenna relays, full aux set,
+        // and a dedicated RX2 antenna path — antenna slice (#804). The ANAN-100D
+        // runs Protocol 1, where the Alex TX antenna rides Config-frame C4[1:0]
+        // (Thetis networkproto1.c:463-468); the wire-layer encode + clamp live in
+        // ControlFrame.EncodeTxAntennaC4Bits / P1BoardHasTxAntennaRelays (external-
+        // port parity audit, GAP-P1-1). Default ANT1 → byte-identical.
+        HasTxAntennaRelays: true,
         HasRxAntennaRelays: true,
         RxAuxInputs: RxAuxInputs.All,
         HasRx2AntennaPath: true,
@@ -188,6 +193,11 @@ internal static class BoardCapabilitiesTable
         HasSteppedAttenuationRx2: true,
         SupportsPathIllustrator: true,
         MaxPowerWatts: 120,
+        // Full-Alex dual-ADC P1 board: TX antenna relay (Config-frame C4[1:0],
+        // Thetis networkproto1.c:463-468) + RX relays + full aux + RX2 path —
+        // antenna slice (#804) / external-port parity audit (GAP-P1-1). Default
+        // ANT1 → byte-identical.
+        HasTxAntennaRelays: true,
         HasRxAntennaRelays: true,
         RxAuxInputs: RxAuxInputs.All,
         HasRx2AntennaPath: true,
@@ -340,6 +350,11 @@ internal static class BoardCapabilitiesTable
         SupportsPathIllustrator: false,
         MaxPowerWatts: 10,
         HasHl2OptionalToggles: true,
+        // HL2 4-bit user GPIO (user_dig_out → 0x0a/wire-0x14 C3[3:0] → MCP23008
+        // on the IO connector). HL2-only; gates the Radio Settings "User GPIO"
+        // card + the /api/radio/hl2-gpio endpoint. External-port parity audit
+        // (re-port of external-ports plan Phase 5). Default mask 0.
+        HasHl2UserGpio: true,
         // HL2 has a SINGLE antenna jack forwarding to the N2ADR pad: NO RX
         // antenna relays, NO TX antenna relays, NO aux inputs — antenna slice
         // (#804). Explicit (not just defaulted) because the wire-layer clamp in

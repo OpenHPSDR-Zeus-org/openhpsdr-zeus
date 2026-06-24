@@ -82,6 +82,14 @@ public interface IProtocol1Client : IDisposable
     void SetPreamp(bool on);
     void SetAttenuator(HpsdrAtten atten);
     void SetAntennaRx(HpsdrAntenna ant);
+    /// <summary>
+    /// Select the TX antenna relay (ANT1/2/3) — Config-frame C4[1:0], external-
+    /// port parity audit (GAP-P1-1). Deferred while keyed and applied on the
+    /// unkey edge (no hot-switching the Alex matrix under power). Honoured on the
+    /// wire only for P1 boards with full Alex TX relays (ANAN-100D/200D); clamped
+    /// to ANT1 elsewhere by <c>ControlFrame.EncodeTxAntennaC4Bits</c>.
+    /// </summary>
+    void SetAntennaTx(HpsdrAntenna ant);
 
     /// <summary>
     /// Flip the outgoing C&amp;C MOX bit (C0 LSB on every register). Read from
@@ -272,6 +280,14 @@ public interface IProtocol1Client : IDisposable
     /// (floating-connector PTT-hang guard).
     /// </summary>
     void SetAudioFrontEnd(bool micBoost, bool micLineIn, bool micTrs, bool micBias, int lineInGain);
+
+    /// <summary>
+    /// Set the HL2 4-bit user GPIO mask (user_dig_out → C3[3:0] of the 0x14
+    /// frame; external-ports plan, Phase 5 / external-port parity audit). Low
+    /// nibble only; HL2-only on the wire. RadioService gates this behind the
+    /// HasHl2UserGpio capability so it never reaches a non-HL2 board.
+    /// </summary>
+    void SetUserDigOut(int mask);
 
     /// <summary>
     /// 1024-sample paired feedback blocks decoded from the EP6 stream when

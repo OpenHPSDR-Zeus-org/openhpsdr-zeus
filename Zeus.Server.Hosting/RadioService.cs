@@ -86,6 +86,10 @@ public sealed class RadioService : IDisposable
     // Global (per-radio, NOT per-band) TX-audio source selection. Pushed via
     // PushAudioFrontEnd on store edit + connect (external-audio-jacks re-port).
     private readonly AudioSettingsStore? _audioStore;
+    // Global (per-radio, NOT per-band) HL2 user GPIO mask (external-ports plan,
+    // Phase 5; re-ported in the external-port parity audit). Pushed via
+    // PushHl2Gpio on store edit + connect. HL2-only on the wire.
+    private readonly Hl2GpioSettingsStore? _hl2GpioStore;
     // Cached PS board key for the currently-connected radio. Set by
     // ApplyPsHwPeakForConnection (P1 or P2 connect path) and read by
     // PersistPsState to route HW Peak writes to the correct per-board slot.
@@ -346,7 +350,7 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null, Nr3ModelStore? nr3ModelStore = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null, Nr3ModelStore? nr3ModelStore = null, Hl2GpioSettingsStore? hl2GpioStore = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
@@ -370,6 +374,13 @@ public sealed class RadioService : IDisposable
         // the resolved wire bytes + StateDto (PR #359/#360 anti-clobber pattern).
         if (_audioStore is not null)
             _audioStore.Changed += PushAudioFrontEnd;
+        // HL2 user GPIO (external-ports plan, Phase 5; re-ported in the external-
+        // port parity audit). Global per-radio (NOT per-band), like the audio
+        // front-end: a store edit re-pushes the persisted mask to the live client.
+        // HL2-only; PushHl2Gpio gates on the HasHl2UserGpio capability.
+        _hl2GpioStore = hl2GpioStore;
+        if (_hl2GpioStore is not null)
+            _hl2GpioStore.Changed += PushHl2Gpio;
         if (_preferredRadioStore is not null)
             _preferredRadioStore.Changed += RecomputePaAndPush;
         _txIqSource = txIqSource;
@@ -951,6 +962,10 @@ public sealed class RadioService : IDisposable
             // clamp + the OFF defaults make this a no-op (byte-identical) on
             // boards without an audio front-end.
             PushAudioFrontEnd();
+            // Replay the persisted HL2 user-GPIO mask (external-port parity audit)
+            // onto the fresh client. Gated on HasHl2UserGpio, so on non-HL2 boards
+            // it pushes mask 0 → byte-identical.
+            PushHl2Gpio();
             return Snapshot();
         }
         catch
@@ -2621,11 +2636,19 @@ public sealed class RadioService : IDisposable
         // (HermesII only — p1LineIn is false on every other P1 board), forward
         // the 0..31 gain so ControlFrame can place it on the 0x14 frame. The gain
         // stays 0 for all other sources/boards → byte-identical to today.
+        //
+        // mic_bias (external-port parity audit, GAP-AUD-1): forward the RESOLVED
+        // bias. ClampAudioSource already dropped it to false on any board without
+        // HasMicBias and on any source other than RadioMic/XLR, so on P1 it is
+        // true only for ANAN-100D/200D with the radio mic selected — and
+        // ControlFrame writes C1[5] only when set. Default Host → false →
+        // byte-identical to today. micTrs stays false (HL2-only tip/ring jack; HL2
+        // is Host-only in v1).
         ActiveClient?.SetAudioFrontEnd(
             micBoost: p1Boost,
             micLineIn: p1LineIn,
             micTrs: false,
-            micBias: false,
+            micBias: resolved.MicBias,
             lineInGain: p1LineIn ? resolved.LineInGain : 0);
 
         // P2 (0x0A Saturn family): forward the resolved literal byte-50
@@ -2687,6 +2710,33 @@ public sealed class RadioService : IDisposable
     // fresh connection picks up the persisted audio front-end without waiting
     // for a store edit. Public so the P2-connect hook can drive it.
     public void ReplayAudioFrontEnd() => PushAudioFrontEnd();
+
+    /// <summary>
+    /// Push the persisted HL2 user-GPIO mask to the live client (external-ports
+    /// plan, Phase 5; re-ported in the external-port parity audit). Gated on the
+    /// connected board's <c>HasHl2UserGpio</c> capability: a non-HL2 board (or one
+    /// without the store) is handed mask 0, so its 0x14-frame C3 stays clear and
+    /// byte-identical to today. ControlFrame only writes C3[3:0] on HermesLite2,
+    /// so this is a belt-and-braces second gate at the service layer.
+    /// </summary>
+    private void PushHl2Gpio()
+    {
+        var caps = BoardCapabilitiesTable.For(EffectiveBoardKind, EffectiveOrionMkIIVariant);
+        byte mask = (caps.HasHl2UserGpio && _hl2GpioStore is not null) ? _hl2GpioStore.Get() : (byte)0;
+        ActiveClient?.SetUserDigOut(mask);
+    }
+
+    /// <summary>Re-push the persisted HL2 GPIO mask after a fresh P1 connect, so a
+    /// reconnect re-applies the operator's selection without a store edit.</summary>
+    public void ReplayHl2Gpio() => PushHl2Gpio();
+
+    /// <summary>The persisted HL2 user-GPIO mask (0..15), or 0 when no store.</summary>
+    public byte GetHl2GpioMask() => _hl2GpioStore?.Get() ?? 0;
+
+    /// <summary>Persist a new HL2 user-GPIO mask (low nibble). The store's Changed
+    /// event fans out to <see cref="PushHl2Gpio"/> so the live client updates on
+    /// the next outgoing frame. No-op when no store is configured.</summary>
+    public void SetHl2GpioMask(byte mask) => _hl2GpioStore?.Set((byte)(mask & 0x0F));
 
     /// <summary>
     /// HL2 Band Volts PWM enable (issue #279). Updates the persisted
@@ -2885,6 +2935,12 @@ public sealed class RadioService : IDisposable
         // P1: RX-antenna relay (C3[7:5], HL2-clamped at the wire). ActiveClient
         // is null on P2 — the P2 RX-antenna rides the SetAntennas path below.
         ActiveClient?.SetAntennaRx(antSel.RxAnt);
+        // P1: TX-antenna relay (Config-frame C4[1:0]) — external-port parity audit
+        // (GAP-P1-1). Clamped to ANT1 at the wire for boards without full Alex TX
+        // relays (ControlFrame.EncodeTxAntennaC4Bits → only ANAN-100D/200D emit
+        // it), and deferred to the unkey edge while keyed. P2 TX antenna rides the
+        // alex0[26:24] path in the SetAntennas snapshot below.
+        ActiveClient?.SetAntennaTx(antSel.TxAnt);
 
         PaSnapshotChanged?.Invoke(new PaRuntimeSnapshot(
             DriveByte: driveByte,
@@ -3489,6 +3545,8 @@ public sealed class RadioService : IDisposable
             _antennaStore.Changed -= RecomputePaAndPush;
         if (_audioStore is not null)
             _audioStore.Changed -= PushAudioFrontEnd;
+        if (_hl2GpioStore is not null)
+            _hl2GpioStore.Changed -= PushHl2Gpio;
         try { DisconnectAsync(CancellationToken.None).GetAwaiter().GetResult(); }
         catch { /* best-effort */ }
         _stateFlushTimer?.Dispose();

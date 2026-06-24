@@ -125,13 +125,19 @@ public sealed record BoardCapabilities(
     /// board.</summary>
     bool SupportsAnvelinaDxOc = false,
     // ---- External antenna ports (external-ports plan — antenna slice, #804) --
-    /// <summary>True when the board has switchable TX antenna relays
-    /// (ANT1/2/3) — the 0x0A / Saturn OrionMkII family (G2 / G2-1K / 7000DLE /
-    /// 8000DLE / Apache OrionMkII original / ANVELINA-PRO3 / Red Pitaya), which
-    /// emit the alex0[26:24] TX-antenna bits over Protocol 2. Every other board
-    /// is ANT1-hardwired on transmit. The frontend gates the TX-antenna selector
-    /// on this flag; the server returns 409 to a non-ANT1 TX request when it is
-    /// false. External-ports plan — antenna slice (issue #804).</summary>
+    /// <summary>True when the board has switchable TX antenna relays (ANT1/2/3).
+    /// Two wire paths: the 0x0A / Saturn OrionMkII family (G2 / G2-1K / 7000DLE /
+    /// 8000DLE / Apache OrionMkII original / ANVELINA-PRO3 / Red Pitaya) emit the
+    /// alex0[26:24] TX-antenna bits over Protocol 2; the full-Alex dual-ADC ANAN
+    /// boards (ANAN-100D / ANAN-200D) emit them over Protocol 1 on Config-frame
+    /// C4[1:0] (Thetis networkproto1.c:463-468; external-port parity audit,
+    /// GAP-P1-1). Every other board is ANT1-hardwired on transmit (Hermes / Metis
+    /// / ANAN-10 / ANAN-10E — no full Alex; ANAN-G2E — hardwired; Hermes-Lite 2 —
+    /// single jack). The frontend gates the TX-antenna selector on this flag; the
+    /// server returns 409 to a non-ANT1 TX request when it is false. The P1 wire
+    /// encode + clamp live in ControlFrame.EncodeTxAntennaC4Bits /
+    /// P1BoardHasTxAntennaRelays, which MUST stay in step with the per-board
+    /// values here. External-ports plan — antenna slice (issue #804).</summary>
     bool HasTxAntennaRelays = false,
     /// <summary>True when the board has switchable RX antenna relays (ANT1/2/3).
     /// Every ANAN / Hermes-class Protocol-1 board does (RX-antenna rides
@@ -183,7 +189,16 @@ public sealed record BoardCapabilities(
     /// jack. Do NOT derive this from <see cref="HasAudioAmplifier"/>. mic_bias
     /// defaults OFF (a floating connector with bias can hang PTT). True for
     /// 100D/200D/7000DLE/8000DLE/G2/G2-1K.</summary>
-    bool HasMicBias = false)
+    bool HasMicBias = false,
+    /// <summary>Hermes-Lite 2 exposes a 4-bit user GPIO (<c>user_dig_out</c>)
+    /// on the IO/DB9 connector, driven over the Protocol-1 register 0x0a
+    /// (wire 0x14) frame C3[3:0] → MCP23008 (Thetis-mi0bot
+    /// <c>networkproto1.c</c> case 11; ramdor Thetis identical). The frontend
+    /// gates the User-GPIO card and the <c>/api/radio/hl2-gpio</c> endpoint
+    /// returns 409 on a non-HL2 board. True for Hermes-Lite 2 only. Default 0 →
+    /// byte-identical to a board that never drives the lines. External-port
+    /// parity audit (re-port of external-ports plan Phase 5).</summary>
+    bool HasHl2UserGpio = false)
 {
     /// <summary>Safe defaults for an unrecognised / disconnected board.
     /// Single ADC, no extras — minimum-surprise capability set so a
