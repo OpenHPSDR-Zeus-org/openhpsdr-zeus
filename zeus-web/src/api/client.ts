@@ -7048,3 +7048,66 @@ export function getFreeDvInstallStatus(signal?: AbortSignal): Promise<FreeDvInst
 export function startFreeDvInstall(signal?: AbortSignal): Promise<FreeDvInstallStatusDto> {
   return jsonFetch('/api/freedv/install', { method: 'POST', signal }, normalizeFreeDvInstallStatus);
 }
+
+// ---- FreeDV Reporter — live station list (GET /api/freedv/stations) ----
+// Mirrors the server-side FreeDvStationDto / FreeDvStationsResponseDto records
+// (System.Text.Json camelCase serialisation).
+
+export type FreeDvStationDto = {
+  sid: string;
+  callsign: string;
+  gridSquare: string | null;
+  freqHz: number;
+  mode: string;          // FreeDV submode as advertised, e.g. "1600","700D","700E","RADEV1"
+  transmitting: boolean;
+  rxOnly: boolean;
+  message: string | null;
+  version: string | null;
+  lastRxSnr: number | null;
+  lastRxCallsign: string | null;
+  lastRxMode: string | null;
+  lastUpdate: string;    // ISO-8601 UTC
+  connectTime: string | null;
+};
+
+export type FreeDvStationsResponseDto = {
+  connectionState: string; // "Disconnected"|"Connecting"|"Connected"|"Reconnecting"
+  enabled: boolean;
+  stations: FreeDvStationDto[];
+};
+
+function normalizeFreeDvStation(raw: unknown): FreeDvStationDto {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+  const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  return {
+    sid: typeof r.sid === 'string' ? r.sid : '',
+    callsign: typeof r.callsign === 'string' ? r.callsign : '',
+    gridSquare: str(r.gridSquare),
+    freqHz: typeof r.freqHz === 'number' ? r.freqHz : 0,
+    mode: typeof r.mode === 'string' ? r.mode : '',
+    transmitting: r.transmitting === true,
+    rxOnly: r.rxOnly === true,
+    message: str(r.message),
+    version: str(r.version),
+    lastRxSnr: num(r.lastRxSnr),
+    lastRxCallsign: str(r.lastRxCallsign),
+    lastRxMode: str(r.lastRxMode),
+    lastUpdate: typeof r.lastUpdate === 'string' ? r.lastUpdate : '',
+    connectTime: str(r.connectTime),
+  };
+}
+
+function normalizeFreeDvStationsResponse(raw: unknown): FreeDvStationsResponseDto {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    connectionState: typeof r.connectionState === 'string' ? r.connectionState : 'Disconnected',
+    enabled: r.enabled === true,
+    stations: Array.isArray(r.stations) ? (r.stations as unknown[]).map(normalizeFreeDvStation) : [],
+  };
+}
+
+// GET /api/freedv/stations — live FreeDV Reporter station list.
+export function fetchFreeDvStations(signal?: AbortSignal): Promise<FreeDvStationsResponseDto> {
+  return jsonFetch('/api/freedv/stations', { signal }, normalizeFreeDvStationsResponse);
+}

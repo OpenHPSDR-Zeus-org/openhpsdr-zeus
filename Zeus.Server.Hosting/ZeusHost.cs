@@ -737,6 +737,15 @@ public static class ZeusHost
         builder.Services.AddSingleton<ActivationSpotsService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<ActivationSpotsService>());
 
+        // FreeDvReporterService — holds a persistent read-only Socket.IO link to
+        // the FreeDV Reporter network (qso.freedv.org) and mirrors the live
+        // station roster for the Stations panel (GET /api/freedv/stations). Same
+        // singleton + hosted-service shape as ActivationSpotsService; streaming
+        // Socket.IO instead of HTTP polling. Touches nothing on the radio / DSP /
+        // TX path — outbound TLS WebSocket in, station snapshot out.
+        builder.Services.AddSingleton<FreeDvReporterService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<FreeDvReporterService>());
+
         // TCI (Transceiver Control Interface) — ExpertSDR3-compatible WebSocket server
         // for remote control by loggers (Log4OM, N1MM+), digital-mode apps (JTDX, WSJT-X),
         // and SDR display tools. Disabled by default; enable via appsettings.json Tci:Enabled=true.

@@ -35,13 +35,27 @@ import {
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
 import { useQrzStore } from '../../state/qrz-store';
+import { freqHzToBand } from '../../state/spots-store';
 
 const POLL_MS = 250; // ~4 Hz, matches the brief.
 const SNR_SQUELCH_MIN = -2;
 const SNR_SQUELCH_MAX = 10;
 
+// FreeDV community sideband convention: LSB below 10 MHz, USB at/above 10 MHz —
+// FreeDV adopted the SSB voice-mode convention so every station on a band shares
+// one spectral orientation. Zeus runs the FreeDV modem on this sideband
+// underneath; a mismatch would invert the OFDM carriers in RF and nothing would
+// decode. This mirrors freedv-gui's "current mode" readout (which shows the rig
+// sideband, red when it's unexpected for the band).
+const FREEDV_USB_THRESHOLD_HZ = 10_000_000;
+function freedvSidebandForFreq(hz: number): 'LSB' | 'USB' {
+  return hz < FREEDV_USB_THRESHOLD_HZ ? 'LSB' : 'USB';
+}
+
 export function FreeDvPanel() {
   const mode = useConnectionStore((s) => s.mode);
+  const vfoHz = useConnectionStore((s) => s.vfoHz);
+  const connected = useConnectionStore((s) => s.status === 'Connected');
   const inFreeDvMode = mode === 'FREEDV';
 
   // Operator's own callsign from the QRZ session — used to seed the FreeDV TX
@@ -186,6 +200,12 @@ export function FreeDvPanel() {
   return (
     <div className="dsp-cfg" style={{ gap: 8, padding: '10px 12px', overflowY: 'auto' }}>
       <FreeDvHeader status={status} reachable={reachable} inFreeDvMode={inFreeDvMode} />
+
+      <FreeDvBandModeIndicator
+        connected={connected}
+        inFreeDvMode={inFreeDvMode}
+        vfoHz={vfoHz}
+      />
 
       {/* SYNC lamp + SNR readout. */}
       <div className="dsp-cfg-row">
@@ -478,6 +498,66 @@ function FreeDvHeader({
               ? 'engaging…'
               : 'idle'}
         {status?.libraryVersion ? ` · ${status.libraryVersion}` : ''}
+      </span>
+    </div>
+  );
+}
+
+// Band / sideband readout — Zeus's analogue of freedv-gui's "current mode"
+// indicator. FreeDV follows the SSB convention (LSB < 10 MHz, USB ≥ 10 MHz), so
+// the operator wants to see, at a glance, which sideband the modem is riding for
+// the current dial. When the radio isn't connected (no dial to read) we show a
+// grayed "unk", exactly like freedv-gui does when CAT can't report the mode.
+function FreeDvBandModeIndicator({
+  connected,
+  inFreeDvMode,
+  vfoHz,
+}: {
+  connected: boolean;
+  inFreeDvMode: boolean;
+  vfoHz: number;
+}) {
+  const haveDial = connected && vfoHz > 0;
+  const band = haveDial ? freqHzToBand(vfoHz) : null;
+  const sideband = haveDial ? freedvSidebandForFreq(vfoHz) : null;
+  const freqMhz = haveDial ? (vfoHz / 1e6).toFixed(3) : null;
+
+  // freedv-gui semantics: gray "unk" when the mode can't be determined (no CAT /
+  // here: no radio). When we do know the dial, the convention sideband is what
+  // Zeus rides underneath — show it confidently in the accent colour while
+  // FreeDV is the active mode, muted otherwise (advisory of what it *would* use).
+  const valueColor = !haveDial
+    ? 'var(--fg-3)'
+    : inFreeDvMode
+      ? 'var(--accent)'
+      : 'var(--fg-2)';
+
+  return (
+    <div className="dsp-cfg-row">
+      <span className="dsp-cfg-label">
+        Band
+        <span className="dsp-cfg-hint"> FreeDV sideband</span>
+      </span>
+      <span
+        className="mono dsp-cfg-unit"
+        title={
+          haveDial
+            ? `FreeDV uses ${sideband} ${
+                sideband === 'LSB' ? 'below' : 'at/above'
+              } 10 MHz — Zeus rides this sideband so its carriers line up with other FreeDV stations on the band.`
+            : 'Connect a radio so the dial frequency can be read (freedv-gui shows "unk" here without CAT).'
+        }
+        style={{ color: valueColor, display: 'flex', alignItems: 'center', gap: 6 }}
+      >
+        {haveDial ? (
+          <>
+            <span>{freqMhz} MHz</span>
+            {band && <span style={{ color: 'var(--fg-3)' }}>{band}</span>}
+            <span style={{ fontWeight: 600 }}>{sideband}</span>
+          </>
+        ) : (
+          'unk'
+        )}
       </span>
     </div>
   );
