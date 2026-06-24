@@ -31,6 +31,8 @@ public static class FreeDvNativeLoader
     private static bool _registered;
     private static bool _probedLoadable;
     private static bool _loadable;
+    private static bool _radeProbed;
+    private static bool _radeLoadable;
 
     internal static void EnsureResolverRegistered()
     {
@@ -65,10 +67,33 @@ public static class FreeDvNativeLoader
         }
     }
 
+    /// <summary>True if the zeus_rade shim shared library can be located and loaded.</summary>
+    internal static bool TryProbeRade()
+    {
+        EnsureResolverRegistered();
+        if (_radeProbed) return _radeLoadable;
+        lock (Gate)
+        {
+            if (_radeProbed) return _radeLoadable;
+            if (TryResolveRade(typeof(RadeNativeMethods).Assembly, out var handle))
+            {
+                NativeLibrary.Free(handle);
+                _radeLoadable = true;
+            }
+            else
+            {
+                _radeLoadable = false;
+            }
+            _radeProbed = true;
+            return _radeLoadable;
+        }
+    }
+
     /// <summary>
-    /// Drop the cached <see cref="TryProbe"/> result so the next probe re-scans
-    /// the candidate paths. Called after the in-app installer stages a new
-    /// codec2 binary so FreeDV can go live without restarting the host.
+    /// Drop the cached <see cref="TryProbe"/> and <see cref="TryProbeRade"/>
+    /// results so the next probe re-scans the candidate paths. Called after the
+    /// in-app installer stages a new codec2 / zeus_rade binary so FreeDV / RADE
+    /// can go live without restarting the host.
     /// </summary>
     public static void ResetProbe()
     {
@@ -76,18 +101,23 @@ public static class FreeDvNativeLoader
         {
             _probedLoadable = false;
             _loadable = false;
+            _radeProbed = false;
+            _radeLoadable = false;
         }
     }
 
     private static IntPtr Resolve(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
     {
-        if (libraryName != FreeDvNativeMethods.LibraryName) return IntPtr.Zero;
-        return TryResolve(assembly, out var handle) ? handle : IntPtr.Zero;
+        if (libraryName == FreeDvNativeMethods.LibraryName)
+            return TryResolve(assembly, out var handle) ? handle : IntPtr.Zero;
+        if (libraryName == RadeNativeMethods.LibraryName)
+            return TryResolveRade(assembly, out var radeHandle) ? radeHandle : IntPtr.Zero;
+        return IntPtr.Zero;
     }
 
     private static bool TryResolve(Assembly assembly, out IntPtr handle)
     {
-        foreach (var candidate in CandidatePaths(assembly))
+        foreach (var candidate in CandidatePaths(assembly, NativeFileName()))
         {
             if (File.Exists(candidate) && NativeLibrary.TryLoad(candidate, out handle))
                 return true;
@@ -95,15 +125,24 @@ public static class FreeDvNativeLoader
         return NativeLibrary.TryLoad(FreeDvNativeMethods.LibraryName, assembly, null, out handle);
     }
 
-    private static IEnumerable<string> CandidatePaths(Assembly assembly)
+    private static bool TryResolveRade(Assembly assembly, out IntPtr handle)
+    {
+        foreach (var candidate in CandidatePaths(assembly, RadeNativeFileName()))
+        {
+            if (File.Exists(candidate) && NativeLibrary.TryLoad(candidate, out handle))
+                return true;
+        }
+        return NativeLibrary.TryLoad(RadeNativeMethods.LibraryName, assembly, null, out handle);
+    }
+
+    private static IEnumerable<string> CandidatePaths(Assembly assembly, string fileName)
     {
         string rid = CurrentRid();
-        string fileName = NativeFileName();
 
         // Writable per-user install location first: a binary staged by the
         // in-app installer should win over (and back-fill) a missing bundled one.
-        string? managed = ManagedLibraryPath();
-        if (managed is not null) yield return managed;
+        string? managedDir = ManagedLibraryDir();
+        if (managedDir is not null) yield return Path.Combine(managedDir, fileName);
 
         string? asmDir = Path.GetDirectoryName(assembly.Location);
         if (!string.IsNullOrEmpty(asmDir))
@@ -162,5 +201,14 @@ public static class FreeDvNativeLoader
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return "libcodec2.so";
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return "codec2.dll";
         return "libcodec2";
+    }
+
+    /// <summary>Platform shared-library filename for the zeus_rade shim (zeus_rade.dll / libzeus_rade.so / libzeus_rade.dylib).</summary>
+    public static string RadeNativeFileName()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return "libzeus_rade.dylib";
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return "libzeus_rade.so";
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return "zeus_rade.dll";
+        return "libzeus_rade";
     }
 }
