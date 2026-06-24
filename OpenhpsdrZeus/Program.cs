@@ -413,7 +413,13 @@ public partial class Program
                 if (TryReadOpenExternalRequest(msg, out var externalUrl))
                     OpenExternalUrl(externalUrl);
             })
-            .Load(new Uri(startUrl));
+            // Deliberately load a dark placeholder, NOT the SPA, as the startup
+            // content. The real SPA navigation is deferred to the WindowCreated
+            // handler below so it happens AFTER the frame is resized to the saved
+            // geometry — see the comment there. The placeholder matches --bg-app
+            // (#0a0a0c) so the brief pre-size frame is invisible against the dark
+            // chrome instead of flashing white.
+            .LoadRawString("<!doctype html><meta name=\"color-scheme\" content=\"dark\"><body style=\"margin:0;height:100vh;background:#0a0a0c\">");
 
         // Remember the last NORMAL (non-maximized) frame size as resize events
         // arrive. This is only needed for the maximized-at-close case: when the
@@ -459,6 +465,20 @@ public partial class Program
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"window.geometry.restore failed: {ex.Message}");
+            }
+            finally
+            {
+                // Navigate to the SPA only NOW — after the frame has been resized
+                // to the saved geometry. Loading it in the builder chain made
+                // WebView2 paint the SPA at the min-size opening frame (Photino
+                // frequently opens at SetMinWidth/Height and the resize lands a
+                // frame later), so React's first layout measured the small
+                // viewport and the panels visibly reflowed when the window grew.
+                // Deferring the load means React's first measurement is the final
+                // size and the panels don't jump. In a finally so a failed resize
+                // above can never strand the window on the dark placeholder.
+                try { window.Load(new Uri(startUrl)); }
+                catch (Exception ex) { Console.Error.WriteLine($"window.spa.load failed: {ex.Message}"); }
             }
         });
 
