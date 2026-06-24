@@ -68,7 +68,7 @@ import {
 } from '../../state/receiver-state';
 import { formatCutOffset, formatFilterWidth, nudgeStepHz } from './filterPresets';
 import { MeterGlass } from '../meters/render/MeterGlass';
-import type { Rx2AudioMode, RxMode, TxVfo } from '../../api/client';
+import type { RxMode } from '../../api/client';
 import {
   DB_FLOOR,
   MINI_NOISE_GATE_DB,
@@ -232,14 +232,12 @@ type ActiveMiniPanFilter = {
   filterPresetName: string | null;
 };
 
-function filterMiniPanReceivers(
-  rx2Enabled: boolean,
-  rx2AudioMode: Rx2AudioMode,
-  rxFocus: TxVfo,
-): SpectrumReceiver[] {
-  if (!rx2Enabled) return ['A'];
-  if (rx2AudioMode === 'both') return ['A', 'B'];
-  return [rxFocus];
+function filterMiniPanReceivers(rx2Enabled: boolean): SpectrumReceiver[] {
+  // Filter panes follow which receivers are ENABLED. RX2 audio routing is now
+  // governed solely by per-RX mute (the legacy Rx2AudioMode was retired in
+  // PR #932), so when RX2 is on we show both filter panes — you may be
+  // listening to either, and a muted receiver is still tunable/filterable.
+  return rx2Enabled ? ['A', 'B'] : ['A'];
 }
 
 // All per-receiver reads/writes go through the canonical receivers[] selectors
@@ -1964,9 +1962,7 @@ function FilterMiniPanSurface({
 
 export function FilterMiniPan() {
   const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
-  const rx2AudioMode = useConnectionStore((s) => s.rx2AudioMode);
-  const rxFocus = useConnectionStore((s) => s.rxFocus);
-  const receivers = filterMiniPanReceivers(rx2Enabled, rx2AudioMode, rxFocus);
+  const receivers = filterMiniPanReceivers(rx2Enabled);
   const split = receivers.length > 1;
 
   return (
