@@ -210,6 +210,14 @@ public sealed class FreeDvModem : IDisposable
     public int ModemSampleRateHz => _modemRate;
     public string? LibraryVersion => _nativeAvailable ? "codec2 1.2.0 (FreeDV)" : null;
 
+    /// <summary>
+    /// True when the native RADE (Radio Autoencoder) modem is available. RADE V1
+    /// is a separate native library (librade + FARGAN) not yet integrated, so this
+    /// is always false for now; <see cref="FreeDvSubmode.RadeV1"/> runs as
+    /// passthrough (no decode) until it lands. See rade-v1-integration.
+    /// </summary>
+    public bool RadeAvailable => false;
+
     private static int ToNativeMode(FreeDvSubmode m) => m switch
     {
         FreeDvSubmode.Mode700D => FreeDvNativeMethods.FREEDV_MODE_700D,
@@ -398,6 +406,20 @@ public sealed class FreeDvModem : IDisposable
 
     private void OpenLocked()
     {
+        // RADE V1 is a separate native modem (librade) not yet integrated. Never
+        // route it through freedv_open — a classic decoder mis-opened on a RADE
+        // signal just emits garbage. Tear down any classic handles and run as a
+        // clean passthrough until RADE lands; the UI gates on RadeAvailable.
+        if (_submode == FreeDvSubmode.RadeV1)
+        {
+            RetireRx(IntPtr.Zero);
+            RetireTx(IntPtr.Zero);
+            _synced = false;
+            Volatile.Write(ref _snrDb, 0f);
+            _log?.LogInformation("FreeDV: RADE V1 selected — native RADE not yet available; passthrough (no decode).");
+            return;
+        }
+
         int mode = ToNativeMode(_submode);
         IntPtr rx = FreeDvNativeMethods.freedv_open(mode);
         IntPtr tx = FreeDvNativeMethods.freedv_open(mode);

@@ -73,4 +73,27 @@ public class FreeDvModemTests
         modem.Activate();
         modem.FlushTx();
     }
+
+    [Fact]
+    public void RadeV1_ReportsUnavailable_AndPassesThrough()
+    {
+        // RADE V1 has no native decoder yet. Selecting it must NOT mis-open a
+        // classic codec2 handle (which would emit garbage on a RADE signal) — it
+        // runs as a clean passthrough and reports RadeAvailable=false so the UI
+        // can gate it. This holds whether or not codec2 native is present.
+        using var modem = new FreeDvModem();
+        modem.SetSubmode(FreeDvSubmode.RadeV1);
+        Assert.Equal(FreeDvSubmode.RadeV1, modem.Submode);
+        Assert.False(modem.RadeAvailable);
+
+        modem.Activate();
+        Assert.True(modem.Active);
+        Assert.False(modem.Synced);
+
+        var block = new float[480];
+        for (int i = 0; i < block.Length; i++) block[i] = MathF.Sin(i * 0.1f);
+        var expected = (float[])block.Clone();
+        modem.ProcessRxInPlace(block);
+        Assert.Equal(expected, block); // passthrough — no decode, buffer untouched
+    }
 }
