@@ -58,6 +58,8 @@ import {
 } from '../dsp/signal-estimator';
 import { normalizeStitchedBins, stitchFloorShiftDb } from '../dsp/stitch-normalizer';
 import { getReceiverVfoHz, rxIndexOf, type ReceiverKey } from '../state/receiver-state';
+import { estimateRowFloorDb, reportReceiverFloorDb } from '../dsp/floor-normalization';
+import { effectiveRxWfWindow, useRxDbWindowStore } from '../state/rx-db-window-store';
 import * as viewCenter from '../state/view-center';
 import * as viewZoom from '../state/view-zoom';
 import { useTxStore } from '../state/tx-store';
@@ -247,7 +249,7 @@ export function Waterfall({
 
     const redraw = () => {
       if (contextLost || !renderer) return;
-      const { wfDbMin, wfDbMax, wfTxDbMin, wfTxDbMax, waterfallScrollSpeed } =
+      const { wfTxDbMin, wfTxDbMax, waterfallScrollSpeed } =
         useDisplaySettingsStore.getState();
       const { moxOn, tunOn } = useTxStore.getState();
       const keyed = moxOn || tunOn;
@@ -264,10 +266,15 @@ export function Waterfall({
         renderer.setScrollSpeed(waterfallScrollSpeed);
         lastScrollSpeed = waterfallScrollSpeed;
       }
-      // Mirror DbScale.tsx — keyed (MOX/TUN) renders the TX waterfall
-      // window so the operator's RX noise-floor view stays put.
-      const dbMin = popOn ? 0 : keyed ? wfTxDbMin : wfDbMin;
-      const dbMax = popOn ? 1 : keyed ? wfTxDbMax : wfDbMax;
+      // Mirror DbScale.tsx — keyed (MOX/TUN) renders the TX waterfall window so
+      // the operator's RX noise-floor view stays put.
+      // Per-receiver RX window: RX1 uses the global window; every other receiver
+      // uses its own — an operator override (set by focusing it and dragging the
+      // WfDbScale), or the global window floor-normalized to RX1 so noise floors
+      // line up out of the box. Keyed/POP domains are absolute, never per-RX.
+      const rxWin = popOn || keyed ? null : effectiveRxWfWindow(rxIndex);
+      const dbMin = popOn ? 0 : keyed ? wfTxDbMin : rxWin!.wfDbMin;
+      const dbMax = popOn ? 1 : keyed ? wfTxDbMax : rxWin!.wfDbMax;
       renderer.setPopMode(popOn, popIntensity, reliefDepth, smoothness);
       renderer.draw(
         dbMin,
@@ -408,6 +415,14 @@ export function Waterfall({
         if (rxIndex === 0 && !useTxStore.getState().moxOn && !useTxStore.getState().tunOn) {
           useDisplaySettingsStore.getState().updateAutoRange(wfDb);
         }
+        // Report this pane's noise floor for cross-band normalization (every
+        // receiver, RX domain only). Cheap downsampled percentile, EMA-smoothed
+        // in the registry; consumed by redraw() to align floors to RX1 so one
+        // dB-scale slider fits every band.
+        if (!useTxStore.getState().moxOn && !useTxStore.getState().tunOn) {
+          const floorDb = estimateRowFloorDb(wfDb);
+          if (floorDb != null) reportReceiverFloorDb(rxIndex, floorDb);
+        }
       }
       // RX only: substitute the per-bin floor-subtracted texture row so weak
       // coherent carriers get shape before the colormap. Gated off while keyed
@@ -450,6 +465,12 @@ export function Waterfall({
       // Every secondary lives in the receivers[] array (RX2 = index 1).
       if (rxIndex === 0) return;
       if (state.receivers !== prev.receivers) requestRedraw();
+    });
+
+    // Repaint when this receiver's per-RX dB window override changes (operator
+    // dragged the WfDbScale while this RX was focused).
+    const unsubRxWin = useRxDbWindowStore.subscribe((state, prev) => {
+      if (state.overrides[rxIndex] !== prev.overrides[rxIndex]) requestRedraw();
     });
 
     // Repaint on dB-range or colormap changes so the WfDbScale drag and the
@@ -528,6 +549,7 @@ export function Waterfall({
       unsubViewCenter();
       unsubViewZoom();
       unsubConn();
+      unsubRxWin();
       unsubSettings();
       unsubTx();
       unsubEnhance();

@@ -18,6 +18,10 @@
 
 import { setReceiver } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import {
+  PRACTICAL_MAX_RECEIVERS,
+  setExposedReceiverCount,
+} from '../state/receiver-state';
 
 function formatMhz(hz: number): string {
   return `${(hz / 1_000_000).toFixed(6)} MHz`;
@@ -33,35 +37,26 @@ export function ReceiversPanel() {
   const connected = status === 'Connected';
   const isP2 = connectedProtocol === 'P2';
 
+  // Effective ceiling = whatever the build/wire allows, clamped to the count
+  // that actually streams on hardware (see PRACTICAL_MAX_RECEIVERS).
+  const effectiveMax = Math.min(maxReceivers, PRACTICAL_MAX_RECEIVERS);
+
   // Number of contiguous active receivers (RX1 always counts).
   const exposedCount = Math.max(1, receivers.filter((r) => r.enabled).length);
 
-  // Set the exposed receiver count by composing the per-index endpoint. Server
-  // contiguity does the cascade: enabling index target-1 turns on RX2..target-1;
-  // disabling index target turns off everything above it.
+  // Set the exposed receiver count via the shared action (composes the per-index
+  // endpoint; the server contiguity cascade does the rest).
   function setExposedCount(target: number): void {
-    const n = Math.min(Math.max(target, 1), maxReceivers);
+    const n = Math.min(Math.max(target, 1), effectiveMax);
     if (n === exposedCount) return;
-    if (n <= 1) {
-      setReceiver(1, { enabled: false }).then(applyState).catch(() => {});
-      return;
-    }
-    setReceiver(n - 1, { enabled: true })
-      .then((s) => {
-        applyState(s);
-        if (n < maxReceivers) {
-          return setReceiver(n, { enabled: false }).then(applyState);
-        }
-        return undefined;
-      })
-      .catch(() => {});
+    setExposedReceiverCount(n);
   }
 
   function setAdc(index: number, adcSource: number): void {
     setReceiver(index, { adcSource }).then(applyState).catch(() => {});
   }
 
-  const countOptions = Array.from({ length: maxReceivers }, (_, i) => i + 1);
+  const countOptions = Array.from({ length: effectiveMax }, (_, i) => i + 1);
 
   return (
     <div className="ps-shell">
@@ -99,7 +94,7 @@ export function ReceiversPanel() {
                 <em>
                   How many hardware DDC receivers to run concurrently. RX1..RXN
                   are activated together (contiguous DDC run); each tunes to its
-                  own VFO. Up to {maxReceivers}.
+                  own VFO. Up to {effectiveMax}.
                 </em>
               </div>
               <div className="btn-row wrap" role="group" aria-label="Exposed receiver count">
@@ -113,6 +108,23 @@ export function ReceiversPanel() {
                     {n}
                   </button>
                 ))}
+              </div>
+            </div>
+
+            <div className="ps-field">
+              <div className="ps-name">
+                ADC source
+                <em>
+                  Each receiver reads from one of the radio's two ADCs.{' '}
+                  <strong>ADC 0</strong> is your main receive antenna (the same
+                  one RX1 uses) — leave receivers here unless you have a reason
+                  not to. <strong>ADC 1</strong> is the separate RX2/EXT antenna
+                  jack on the back of the radio; only move a receiver to ADC 1 if
+                  you actually have a second antenna wired to that jack, otherwise
+                  that receiver will be silent (it'll be listening to a dead
+                  input). There's no performance gain from spreading receivers
+                  across ADCs — many DDCs share one ADC with no penalty.
+                </em>
               </div>
             </div>
 
