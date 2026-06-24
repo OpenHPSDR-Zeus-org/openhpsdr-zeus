@@ -58,13 +58,16 @@ calls. (`OPUS_DRED`/`OPUS_OSCE` are **not** required for the V1 decode path.)
 > files that does not exist on disk, `mkdir -p $(dirname) && : > $file`). This was the
 > only patch needed to make `opus_dnn` configure on Linux/CMake.
 
-### `freedv_text/` — mixed license (vendored but NOT yet wired)
-Not needed to **decode audio**. It is the FreeDV-GUI reliable-text (LDPC) codec that
-decodes the on-air **EOO callsign** frame. radae_c's built-in
-`rade_rx_get_eoo_callsign()` uses a simple 7-bit-MSB packing that is *not* the
-FreeDV-GUI on-air format, so callsigns decoded through the shim today are garbled. Wiring
-`freedv_text/src/rade_text.c` into the shim is a known follow-up (see
-"Decode-test result" below). Licenses within the slice:
+### `freedv_text/` — mixed license (vendored AND wired)
+The FreeDV-GUI reliable-text (LDPC) codec for the on-air **EOO callsign** frame.
+radae_c's built-in `rade_rx_get_eoo_callsign()` uses a simple 7-bit-MSB packing
+that is *not* the FreeDV-GUI on-air format. The shim therefore uses
+`freedv_text/src/rade_text.c` (CRC8 + 6-bit chars + LDPC HRA_56_56 +
+gp_interleaver) for **both** TX-encode and RX-decode of the callsign, so it
+interoperates with FreeDV-GUI RADE stations. Compiled into `zeus_rade` via
+`../CMakeLists.txt` (`FREEDV_TXT_SOURCES`) along with the codec2 LDPC files; on
+Windows a one-file `shim/compat/alloca.h` maps `<alloca.h>`→`<malloc.h>` (the
+codec2 sources hardcode the glibc/BSD header). Licenses within the slice:
 - `freedv_text/src/rade_text.{c,h}` — BSD-2/3-Clause (Mooneer Salem)
 - `freedv_text/codec2/*` (LDPC: `mpdecode_core.c`, `gp_interleaver.c`, `ldpc_codes.c`,
   `HRA_56_56.c`, `phi0.c`) — **LGPL-2.1** (David Rowe / codec2)
@@ -78,9 +81,9 @@ FreeDV-GUI on-air format, so callsigns decoded through the shim today are garble
 | freedv_text/src (rade_text) | BSD | no |
 | freedv_text/codec2 (LDPC) | LGPL-2.1 | weak (dynamic-link OK) |
 
-The audio-decode build (`radae_c` + `opus_dnn` + Zeus shim) is **BSD-only**. The
-LGPL-2.1 codec2 LDPC code is pulled in **only** if/when the EOO-callsign path is wired,
-and `libzeus_rade` is already a shared library (dynamic linking satisfies LGPL-2.1).
+The audio RX/TX build (`radae_c` + `opus_dnn` + Zeus shim) is **BSD-only**. The
+LGPL-2.1 codec2 LDPC code is pulled in for the EOO-callsign path (now wired);
+`libzeus_rade` is a shared library, so dynamic linking satisfies LGPL-2.1.
 
 ## Proven build + decode (WSL Ubuntu-24.04, 2026-06-24)
 
@@ -105,10 +108,23 @@ The one-shared-library composition above was built and validated end-to-end:
   radae_nopy reference run (~2628 ticks / 14 dB / 0.9999 max-amp). RADE V1 decode from
   the radae_c + opus_dnn base is PROVEN.
 
-- **Known follow-up:** EOO callsign decoded garbled (`8}sRy`) — expected, because the
-  shim still uses radae_c's 7-bit `rade_rx_get_eoo_callsign`. Correct callsigns require
-  wiring `freedv_text/src/rade_text.c` (LGPL-2.1 codec2 LDPC). Out of scope for the
-  audio-decode base decision; tracked separately.
+## Transmit + EOO callsign (proven, 2026-06-24)
+
+The shim gained a full TX path (`zeus_rade_tx`): 16 kHz speech → opus_dnn LPCNet
+feature analyzer (`lpcnet_compute_single_frame_features`) → `rade_tx` → modem IQ;
+the transmitted SSB audio is the **real** part of the IQ (inverse of the RX feed).
+The EOO callsign uses `freedv_text` (`rade_text`), not radae_c's 7-bit packing, so
+it matches FreeDV-GUI on the air. A self-contained encode→decode loopback
+(`zeus_rade_test loopback N9WAR`, win-x64 MinGW) PROVES it end-to-end:
+
+```
+loopback: ticks=60 synced=48 last_snr=35dB pcm=89440 callsign=N9WAR
+loopback: callsign round-trip OK ('N9WAR')   loopback: PASS
+```
+
+i.e. the TX modem waveform re-syncs in the decoder (48 ticks / 35 dB) and the
+LDPC EOO callsign round-trips byte-exact. The managed RadeModem TX→RX loopback
+test mirrors this through the C# resampler/ring/P-Invoke chain.
 
 ## Proven build + decode (Windows / MinGW, 2026-06-24)
 
