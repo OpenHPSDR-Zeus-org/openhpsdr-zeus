@@ -20,6 +20,9 @@ public class FreeDvLoopbackTests
     [SkippableTheory]
     [InlineData(FreeDvSubmode.Mode700D)]
     [InlineData(FreeDvSubmode.Mode700E)]
+    [InlineData(FreeDvSubmode.Mode700C)]
+    [InlineData(FreeDvSubmode.Mode1600)]
+    [InlineData(FreeDvSubmode.Mode800XA)]
     public void NativeLoopback_TxToRx_AchievesSync(FreeDvSubmode submode)
     {
         using var tx = new FreeDvModem();
@@ -35,7 +38,7 @@ public class FreeDvLoopbackTests
         rx.Activate();
 
         const int blockSize = 960;   // 20 ms @ 48 kHz
-        const int txBlocks = 250;    // ~5 s of transmit — ample for OFDM acquisition
+        const int txBlocks = 500;    // ~10 s of transmit — ample acquisition for every mode
 
         // 1) Run a speech-like signal through TX, collecting the 48 kHz modem audio.
         var modemAudio = new List<float>(txBlocks * blockSize);
@@ -128,6 +131,117 @@ public class FreeDvLoopbackTests
         Assert.Equal(8000, m.SpeechSampleRateHz);
         Assert.Equal(8000, m.ModemSampleRateHz);
         Assert.StartsWith("codec2", m.LibraryVersion);
+    }
+
+    /// <summary>
+    /// The RX hot path must run far faster than real time — it is one of several
+    /// inserts on the DSP tick and cannot be the bottleneck. We feed real synced
+    /// modem audio (so freedv_rx does full decode work, not just sync search) and
+    /// assert the decode wall-clock is a small fraction of the audio duration.
+    /// Conservative threshold (>=10x) to stay green on a loaded CI box; in
+    /// practice the margin is far larger.
+    /// </summary>
+    [SkippableFact]
+    public void NativeLoopback_RxHotPath_RunsFasterThanRealTime()
+    {
+        using var tx = new FreeDvModem();
+        Skip.IfNot(tx.NativeAvailable, "codec2 native library not present — perf test skipped.");
+        using var rx = new FreeDvModem();
+        tx.SetSubmode(FreeDvSubmode.Mode700E);
+        rx.SetSubmode(FreeDvSubmode.Mode700E);
+        rx.SetSquelch(enabled: false, threshDb: null);
+        tx.Activate();
+        rx.Activate();
+
+        const int blockSize = 960;   // 20 ms @ 48 kHz
+        const int txBlocks = 500;    // ~10 s of modem audio
+        var modemAudio = GenerateModemAudio(tx, blockSize, txBlocks);
+
+        var rxBlock = new float[blockSize];
+        int total = modemAudio.Count;
+
+        // Warm up (JIT + sync acquisition) so the timed region is steady-state decode.
+        for (int i = 0; i + blockSize <= total; i += blockSize)
+        {
+            modemAudio.CopyTo(i, rxBlock, 0, blockSize);
+            rx.ProcessRxInPlace(rxBlock);
+        }
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        int processed = 0;
+        for (int i = 0; i + blockSize <= total; i += blockSize)
+        {
+            modemAudio.CopyTo(i, rxBlock, 0, blockSize);
+            rx.ProcessRxInPlace(rxBlock);
+            processed += blockSize;
+        }
+        sw.Stop();
+
+        double audioSeconds = processed / (double)FreeDvResampler.FsHigh;
+        double wallSeconds = sw.Elapsed.TotalSeconds;
+        double realtimeFactor = audioSeconds / wallSeconds;
+        Assert.True(
+            realtimeFactor >= 10.0,
+            $"FreeDV RX hot path too slow: {realtimeFactor:F1}x real time " +
+            $"({wallSeconds * 1000:F1} ms to decode {audioSeconds:F1} s of audio). " +
+            "Must be well above 1x — it is one insert among many on the DSP tick.");
+    }
+
+    /// <summary>
+    /// The RX hot path is contractually zero-allocation (matches the realtime
+    /// discipline of the Zeus audio bus). After warmup, processing a long run of
+    /// blocks must allocate nothing on the calling thread — any per-block alloc
+    /// would invite GC pauses on the audio tick.
+    /// </summary>
+    [SkippableFact]
+    public void RxHotPath_SteadyState_DoesNotAllocate()
+    {
+        using var tx = new FreeDvModem();
+        Skip.IfNot(tx.NativeAvailable, "codec2 native library not present — alloc test skipped.");
+        using var rx = new FreeDvModem();
+        tx.SetSubmode(FreeDvSubmode.Mode700D);
+        rx.SetSubmode(FreeDvSubmode.Mode700D);
+        rx.SetSquelch(enabled: false, threshDb: null);
+        tx.Activate();
+        rx.Activate();
+
+        const int blockSize = 960;
+        const int txBlocks = 300;
+        var modemAudio = GenerateModemAudio(tx, blockSize, txBlocks);
+        var rxBlock = new float[blockSize];
+        int total = modemAudio.Count;
+
+        // Warm up: drive to sync and JIT every branch of the hot path.
+        for (int i = 0; i + blockSize <= total; i += blockSize)
+        {
+            modemAudio.CopyTo(i, rxBlock, 0, blockSize);
+            rx.ProcessRxInPlace(rxBlock);
+        }
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int rep = 0; rep < 3; rep++)
+            for (int i = 0; i + blockSize <= total; i += blockSize)
+            {
+                modemAudio.CopyTo(i, rxBlock, 0, blockSize);
+                rx.ProcessRxInPlace(rxBlock);
+            }
+        long after = GC.GetAllocatedBytesForCurrentThread();
+
+        Assert.Equal(0, after - before);
+    }
+
+    // Run the TX modem over speech-like input and collect the 48 kHz modem audio.
+    private static List<float> GenerateModemAudio(FreeDvModem tx, int blockSize, int txBlocks)
+    {
+        var modemAudio = new List<float>(txBlocks * blockSize);
+        var block = new float[blockSize];
+        for (int b = 0; b < txBlocks; b++)
+        {
+            FillSpeechLike(block, b);
+            tx.ProcessTxInPlace(block);
+            modemAudio.AddRange(block);
+        }
+        return modemAudio;
     }
 
     // A crude voiced-speech-like excitation: a low-frequency "pitch" fundamental

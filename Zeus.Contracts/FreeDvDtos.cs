@@ -51,11 +51,16 @@ public sealed record FreeDvStatusDto(
     int ModemSampleRateHz,
     string? RxText,
     string? TxText,
-    string? LibraryVersion);
+    string? LibraryVersion,
+    // True when auto submode detection is engaged: while unsynced the modem
+    // cycles submodes until one locks. Submode reflects the live (possibly
+    // scanner-chosen) mode.
+    bool AutoDetect = false);
 
 /// <summary>Operator config for the FreeDV modem. Null fields leave the current value unchanged.</summary>
 public sealed record FreeDvConfigRequest(
     FreeDvSubmode? Submode = null,
     bool? SquelchEnabled = null,
     double? SnrSquelchThreshDb = null,
-    string? TxText = null);
+    string? TxText = null,
+    bool? AutoDetect = null);
