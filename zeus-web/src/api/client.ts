@@ -6864,19 +6864,26 @@ export function setMicGain(
 // config that drive the native FreeDV panel — they are NOT part of StateDto.
 
 export type FreeDvSubmode =
+  | 'RadeV1'
   | 'Mode700D'
   | 'Mode700E'
   | 'Mode700C'
   | 'Mode1600'
   | 'Mode800XA';
 
-// Panel-facing submode order + short labels (matches freedv-gui's selector).
-export const FREEDV_SUBMODES: ReadonlyArray<{ value: FreeDvSubmode; label: string }> = [
+// Panel-facing submode order + short labels, matching freedv-gui 2.1.0's
+// selector (RADEV1, 700D, 700E, 1600). 700C/800XA remain valid on the backend
+// and in auto-detect's scan set, but freedv-gui retired them from its UI so we
+// mirror that here. `rade` marks the submode that needs the native RADE library.
+export const FREEDV_SUBMODES: ReadonlyArray<{
+  value: FreeDvSubmode;
+  label: string;
+  rade?: boolean;
+}> = [
+  { value: 'RadeV1', label: 'RADEV1', rade: true },
   { value: 'Mode700D', label: '700D' },
   { value: 'Mode700E', label: '700E' },
-  { value: 'Mode700C', label: '700C' },
   { value: 'Mode1600', label: '1600' },
-  { value: 'Mode800XA', label: '800XA' },
 ];
 
 // Mirrors the server-side FreeDvStatusDto (GET /api/freedv/status).
@@ -6896,6 +6903,9 @@ export type FreeDvStatusDto = {
   // Auto submode detection: while unsynced the modem cycles submodes until one
   // locks. `submode` reflects the live (possibly scanner-chosen) mode.
   autoDetect: boolean;
+  // True when the native RADE modem is available. False until librade is
+  // integrated — RADEV1 then runs no decoder and the panel shows a gated state.
+  radeAvailable: boolean;
 };
 
 // PUT /api/freedv/config body — all fields optional, null = leave unchanged.
@@ -6907,16 +6917,35 @@ export type FreeDvConfigRequest = {
   autoDetect?: boolean;
 };
 
-const FREEDV_SUBMODE_ORDER: readonly FreeDvSubmode[] = FREEDV_SUBMODES.map(
-  (s) => s.value,
-);
+// Every valid submode name — a SUPERSET of the panel list. The backend can
+// report 700C/800XA (auto-detect still scans them) even though they're not shown
+// as buttons, so the normalizer must accept them or it would mislabel them.
+const FREEDV_SUBMODE_NAMES: readonly FreeDvSubmode[] = [
+  'Mode700D',
+  'Mode700E',
+  'Mode700C',
+  'Mode1600',
+  'Mode800XA',
+  'RadeV1',
+];
+
+// Indexed by the C# FreeDvSubmode byte value (700D=0 … 800XA=4, RadeV1=5) for the
+// defensive numeric path. Order here is the wire byte order, NOT the panel order.
+const FREEDV_SUBMODE_BY_BYTE: readonly FreeDvSubmode[] = [
+  'Mode700D',
+  'Mode700E',
+  'Mode700C',
+  'Mode1600',
+  'Mode800XA',
+  'RadeV1',
+];
 
 function normalizeFreeDvSubmode(v: unknown): FreeDvSubmode {
-  if (typeof v === 'string' && (FREEDV_SUBMODE_ORDER as readonly string[]).includes(v)) {
+  if (typeof v === 'string' && (FREEDV_SUBMODE_NAMES as readonly string[]).includes(v)) {
     return v as FreeDvSubmode;
   }
   if (typeof v === 'number' && Number.isInteger(v)) {
-    return FREEDV_SUBMODE_ORDER[v] ?? 'Mode700D';
+    return FREEDV_SUBMODE_BY_BYTE[v] ?? 'Mode700D';
   }
   return 'Mode700D';
 }
@@ -6943,6 +6972,7 @@ function normalizeFreeDvStatus(raw: unknown): FreeDvStatusDto {
     txText: str(r.txText),
     libraryVersion: str(r.libraryVersion),
     autoDetect: bool(r.autoDetect),
+    radeAvailable: bool(r.radeAvailable),
   };
 }
 

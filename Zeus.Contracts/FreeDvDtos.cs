@@ -32,6 +32,13 @@ public enum FreeDvSubmode : byte
     Mode1600 = 3,
     /// <summary>800XA — 4FSK 2 kHz, narrowband (legacy interop).</summary>
     Mode800XA = 4,
+    /// <summary>
+    /// RADE V1 — neural "Radio Autoencoder" (FreeDV's flagship ML mode). NOT a
+    /// codec2/freedv_open submode: it's a separate native modem (librade + FARGAN
+    /// vocoder, complex IO, 16 kHz speech). Selectable but gated until the native
+    /// RADE library is integrated — see the rade-v1-integration design.
+    /// </summary>
+    RadeV1 = 5,
 }
 
 /// <summary>
@@ -55,7 +62,11 @@ public sealed record FreeDvStatusDto(
     // True when auto submode detection is engaged: while unsynced the modem
     // cycles submodes until one locks. Submode reflects the live (possibly
     // scanner-chosen) mode.
-    bool AutoDetect = false);
+    bool AutoDetect = false,
+    // True when the native RADE (Radio Autoencoder) modem is available. False
+    // until librade is integrated — selecting RadeV1 then runs no decoder
+    // (passthrough), and the panel shows a "RADE not installed" state.
+    bool RadeAvailable = false);
 
 /// <summary>Operator config for the FreeDV modem. Null fields leave the current value unchanged.</summary>
 public sealed record FreeDvConfigRequest(

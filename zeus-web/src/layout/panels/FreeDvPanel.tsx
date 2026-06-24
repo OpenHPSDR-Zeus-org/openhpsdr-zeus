@@ -249,6 +249,10 @@ export function FreeDvPanel() {
           </button>
           {FREEDV_SUBMODES.map((m) => {
             const isCurrent = status.submode === m.value;
+            // RADEV1 needs the native RADE library, which isn't integrated yet —
+            // mark it as not-ready but still selectable so the operator sees the
+            // explanatory notice rather than a silently dead button.
+            const radeUnavailable = m.rade === true && !status.radeAvailable;
             // When scanning, dim the 'active' look on the tried mode so AUTO is
             // visually the engaged control, not the transient submode.
             const cls =
@@ -262,19 +266,48 @@ export function FreeDvPanel() {
                   sendConfig({ submode: m.value as FreeDvSubmode, autoDetect: false })
                 }
                 className={`btn sm ${cls}`}
-                title={`FreeDV ${m.label}${isCurrent && status.autoDetect && !status.synced ? ' (scanning)' : ''}`}
+                title={
+                  radeUnavailable
+                    ? 'RADEV1 — neural Radio Autoencoder (decoder not installed yet)'
+                    : `FreeDV ${m.label}${isCurrent && status.autoDetect && !status.synced ? ' (scanning)' : ''}`
+                }
                 style={
                   isCurrent && status.autoDetect && !status.synced
                     ? { outline: '1px dashed var(--accent)', outlineOffset: -1 }
-                    : undefined
+                    : radeUnavailable
+                      ? { opacity: 0.7 }
+                      : undefined
                 }
               >
                 {m.label}
+                {radeUnavailable ? ' •' : ''}
               </button>
             );
           })}
         </div>
       </div>
+
+      {/* RADEV1 selected but the native RADE library isn't integrated yet — be
+          explicit so the operator understands why it won't decode, instead of
+          chasing a "silent" mode the way a missing codec2 would look. */}
+      {status.submode === 'RadeV1' && !status.radeAvailable && (
+        <div
+          className="label-xs"
+          style={{
+            padding: '8px 10px',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--r-sm)',
+            background: 'var(--bg-1)',
+            color: 'var(--fg-2)',
+            lineHeight: 1.45,
+          }}
+        >
+          <strong>RADEV1</strong> is FreeDV's neural (Radio Autoencoder) mode. Its
+          decoder isn't built into Zeus yet, so this mode won't produce audio.
+          Use <strong>700D / 700E / 1600</strong> for now — RADE support is in
+          progress.
+        </div>
+      )}
 
       {/* SNR squelch toggle. */}
       <div className="dsp-cfg-row">

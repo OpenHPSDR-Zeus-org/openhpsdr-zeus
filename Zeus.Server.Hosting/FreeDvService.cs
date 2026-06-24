@@ -128,7 +128,8 @@ public sealed class FreeDvService : IDisposable
         RxText: _modem.RxText,
         TxText: _txText,
         LibraryVersion: _modem.LibraryVersion,
-        AutoDetect: _autoDetect);
+        AutoDetect: _autoDetect,
+        RadeAvailable: _modem.RadeAvailable);
 
     public FreeDvStatusDto ApplyConfig(FreeDvConfigRequest req)
     {
