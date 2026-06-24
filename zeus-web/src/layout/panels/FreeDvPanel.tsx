@@ -42,7 +42,6 @@ const SNR_SQUELCH_MAX = 10;
 
 export function FreeDvPanel() {
   const mode = useConnectionStore((s) => s.mode);
-  const connected = useConnectionStore((s) => s.status === 'Connected');
   const inFreeDvMode = mode === 'FREEDV';
 
   // Operator's own callsign from the QRZ session — used to seed the FreeDV TX
@@ -175,7 +174,13 @@ export function FreeDvPanel() {
     );
   }
 
-  const ctrlsDisabled = !connected || !reachable;
+  // This panel is entirely REST-driven (getFreeDvStatus / setFreeDvConfig), so
+  // the controls only need the backend to be reachable — NOT a live SignalR hub
+  // connection to a radio. Gating on the hub status locked AUTO/submode/squelch
+  // whenever the hub wasn't 'Connected' (e.g. just after a backend restart) even
+  // though the modem service was fully reachable. The FreeDV modem config is
+  // independent of the radio link, so reachability is the correct gate.
+  const ctrlsDisabled = !reachable;
   const snrThreshDisabled = ctrlsDisabled || !status.squelchEnabled;
 
   return (
