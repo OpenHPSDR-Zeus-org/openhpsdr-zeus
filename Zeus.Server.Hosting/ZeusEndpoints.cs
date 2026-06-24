@@ -1281,6 +1281,33 @@ public static class ZeusEndpoints
         // and offers click-to-tune.
         app.MapGet("/api/freedv/stations",
             (FreeDvReporterService svc) => Results.Ok(svc.GetSnapshot()));
+
+        // FreeDV Reporter "report mode" — strictly opt-in (default OFF). When
+        // enabled with a callsign + Maidenhead grid, Zeus connects to the reporter
+        // in "report" role and broadcasts the operator's callsign / grid / freq /
+        // TX activity to the public qso.freedv.org map. GET returns the current
+        // (normalized) settings; POST saves them and forces a reconnect so the new
+        // role / identity takes effect.
+        app.MapGet("/api/freedv/reporter/settings",
+            (FreeDvReporterService svc) => Results.Ok(svc.GetSettings()));
+        app.MapPost("/api/freedv/reporter/settings",
+            (FreeDvReporterSettings req, FreeDvReporterService svc) =>
+            {
+                var saved = svc.SaveSettings(req);
+                log.LogInformation(
+                    "api.freedv.reporter.settings report={Enabled} call={Call} grid={Grid}",
+                    saved.ReportEnabled, saved.Callsign, saved.GridSquare);
+                return Results.Ok(saved);
+            });
+
+        // QSY request — ask the station identified by {sid} to move to the
+        // operator's current VFO frequency. Requires report mode active and a
+        // known sid; 400 otherwise.
+        app.MapPost("/api/freedv/stations/{sid}/qsy",
+            (string sid, FreeDvReporterService svc) =>
+                svc.RequestQsy(sid)
+                    ? Results.Ok(new { ok = true })
+                    : Results.BadRequest(new { error = "Not reporting, or station unknown." }));
         app.MapPut("/api/freedv/config", (FreeDvConfigRequest req, FreeDvService fd) =>
         {
             log.LogInformation(

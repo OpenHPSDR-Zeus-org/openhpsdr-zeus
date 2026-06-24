@@ -10,7 +10,9 @@ import {
   useFreeDvStationsStore,
   stationMatchesQuery,
   freqHzToBand,
+  type FreeDvReporterSettings,
 } from '../../state/freedv-stations-store';
+import { useQrzStore } from '../../state/qrz-store';
 import type { FreeDvStationDto } from '../../api/client';
 
 const POLL_MS = 5_000;
@@ -97,6 +99,17 @@ export function FreeDvStationsPanel() {
   const loadStations = useFreeDvStationsStore((s) => s.loadStations);
   const tuneToStation = useFreeDvStationsStore((s) => s.tuneToStation);
 
+  const reporting = useFreeDvStationsStore((s) => s.reporting);
+  const mySid = useFreeDvStationsStore((s) => s.mySid);
+  const reporterSettings = useFreeDvStationsStore((s) => s.reporterSettings);
+  const reporterError = useFreeDvStationsStore((s) => s.reporterError);
+  const reporterSaving = useFreeDvStationsStore((s) => s.reporterSaving);
+  const loadReporterSettings = useFreeDvStationsStore((s) => s.loadReporterSettings);
+  const saveReporterSettings = useFreeDvStationsStore((s) => s.saveReporterSettings);
+  const requestQsy = useFreeDvStationsStore((s) => s.requestQsy);
+
+  const qrzHome = useQrzStore((s) => s.home);
+
   const [sortKey, setSortKey] = useState<SortKey>('age');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
 
@@ -114,12 +127,13 @@ export function FreeDvStationsPanel() {
   useEffect(() => {
     const ac = new AbortController();
     void loadStations();
+    void loadReporterSettings();
     const id = window.setInterval(() => void loadStations(), POLL_MS);
     return () => {
       window.clearInterval(id);
       ac.abort();
     };
-  }, [loadStations]);
+  }, [loadStations, loadReporterSettings]);
 
   const filtered = useMemo(
     () => stations.filter((st) => stationMatchesQuery(st, query)),
@@ -202,6 +216,17 @@ export function FreeDvStationsPanel() {
         </button>
       </div>
 
+      {/* Report-me section — opt-in onto the public FreeDV Reporter map. */}
+      <ReportSection
+        reporting={reporting}
+        settings={reporterSettings}
+        error={reporterError}
+        saving={reporterSaving}
+        qrzCall={qrzHome?.callsign ?? ''}
+        qrzGrid={qrzHome?.grid ?? ''}
+        onSave={saveReporterSettings}
+      />
+
       {/* Tune error banner */}
       {tuneError && (
         <div
@@ -253,7 +278,14 @@ export function FreeDvStationsPanel() {
             </thead>
             <tbody>
               {visible.map((st) => (
-                <StationRow key={st.sid || `${st.callsign}|${st.freqHz}`} station={st} onTune={() => void tuneToStation(st)} />
+                <StationRow
+                  key={st.sid || `${st.callsign}|${st.freqHz}`}
+                  station={st}
+                  isSelf={!!mySid && st.sid === mySid}
+                  canQsy={reporting && !!st.sid && st.sid !== mySid}
+                  onTune={() => void tuneToStation(st)}
+                  onQsy={() => void requestQsy(st.sid)}
+                />
               ))}
             </tbody>
           </table>
@@ -281,10 +313,16 @@ export function FreeDvStationsPanel() {
 
 function StationRow({
   station,
+  isSelf,
+  canQsy,
   onTune,
+  onQsy,
 }: {
   station: FreeDvStationDto;
+  isSelf: boolean;
+  canQsy: boolean;
   onTune: () => void;
+  onQsy: () => void;
 }) {
   const band = freqHzToBand(station.freqHz);
   const [hovered, setHovered] = useState(false);
@@ -329,11 +367,15 @@ function StationRow({
   return (
     <tr
       onClick={onTune}
-      title={`Tune ${fmtFreq(station.freqHz)} MHz FreeDV ${station.mode}${title ? ` — ${title}` : ''}`}
+      title={`Tune ${fmtFreq(station.freqHz)} MHz FreeDV ${station.mode}${title ? ` — ${title}` : ''}${
+        isSelf ? ' — this is you' : ''
+      }`}
       style={{
         cursor: 'pointer',
         borderBottom: '1px solid var(--panel-border)',
-        background: hovered ? 'var(--accent-soft)' : '',
+        background: isSelf ? 'var(--accent-soft)' : hovered ? 'var(--accent-soft)' : '',
+        // Subtle left accent marks the operator's own row on the map.
+        boxShadow: isSelf ? 'inset 3px 0 0 var(--accent)' : undefined,
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -354,16 +396,170 @@ function StationRow({
       </td>
       {/* Status */}
       <td style={tdStyle}>
-        {statusBadge}
-        {heardLine && !station.transmitting && (
-          <span style={{ fontSize: 10, color: 'var(--fg-3)' }}>{heardLine}</span>
-        )}
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {statusBadge}
+          {heardLine && !station.transmitting && (
+            <span style={{ fontSize: 10, color: 'var(--fg-3)' }}>{heardLine}</span>
+          )}
+          {canQsy && (
+            <button
+              type="button"
+              className="btn sm"
+              title="Ask this station to QSY to my current frequency"
+              onClick={(e) => {
+                e.stopPropagation();
+                onQsy();
+              }}
+              style={{ fontSize: 10, padding: '0 5px', lineHeight: '16px' }}
+            >
+              QSY→me
+            </button>
+          )}
+        </span>
       </td>
       {/* Age */}
       <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--fg-2)' }}>
         {fmtAge(station.lastUpdate)}
       </td>
     </tr>
+  );
+}
+
+// Opt-in "Report me" controls. Default OFF; when enabled, Zeus connects to the
+// FreeDV Reporter in "report" role and broadcasts the operator's callsign /
+// grid / freq / TX activity to the public map. Callsign + grid pre-fill from QRZ
+// home (editable). Reporting only engages when toggled on AND both fields set.
+function ReportSection({
+  reporting,
+  settings,
+  error,
+  saving,
+  qrzCall,
+  qrzGrid,
+  onSave,
+}: {
+  reporting: boolean;
+  settings: FreeDvReporterSettings | null;
+  error: string | null;
+  saving: boolean;
+  qrzCall: string;
+  qrzGrid: string;
+  onSave: (settings: FreeDvReporterSettings) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [call, setCall] = useState('');
+  const [grid, setGrid] = useState('');
+  const [message, setMessage] = useState('');
+  const [seeded, setSeeded] = useState(false);
+
+  // Seed the editable fields once from the persisted settings, falling back to
+  // the QRZ home station for any blank field so a fresh operator sees their call.
+  useEffect(() => {
+    if (seeded || !settings) return;
+    setCall(settings.callsign || qrzCall || '');
+    setGrid(settings.gridSquare || qrzGrid || '');
+    setMessage(settings.message || '');
+    setSeeded(true);
+  }, [seeded, settings, qrzCall, qrzGrid]);
+
+  const enabled = settings?.reportEnabled ?? false;
+  const canEnable = call.trim().length > 0 && grid.trim().length > 0;
+
+  const persist = (next: Partial<FreeDvReporterSettings>) => {
+    onSave({
+      reportEnabled: next.reportEnabled ?? enabled,
+      callsign: next.callsign ?? call,
+      gridSquare: next.gridSquare ?? grid,
+      message: next.message ?? message,
+    });
+  };
+
+  return (
+    <div
+      style={{
+        borderBottom: '1px solid var(--panel-border)',
+        padding: '4px 8px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <button
+          type="button"
+          className="btn sm"
+          onClick={() => setOpen((o) => !o)}
+          title="Report my station onto the FreeDV Reporter map"
+          style={{ fontSize: 10 }}
+        >
+          {open ? '▾' : '▸'} Report me
+        </button>
+
+        {/* Enable toggle — disabled until call + grid are present. */}
+        <label
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            fontSize: 11,
+            color: canEnable ? 'var(--fg-1)' : 'var(--fg-3)',
+            cursor: canEnable ? 'pointer' : 'not-allowed',
+          }}
+          title={canEnable ? 'Broadcast my station publicly' : 'Enter callsign + grid first'}
+        >
+          <input
+            type="checkbox"
+            checked={enabled}
+            disabled={!canEnable || saving}
+            onChange={(e) => persist({ reportEnabled: e.target.checked })}
+          />
+          On the map
+        </label>
+
+        {reporting && (
+          <span
+            style={{ fontSize: 10, color: 'var(--accent)', whiteSpace: 'nowrap' }}
+            title="Your station is live on qso.freedv.org"
+          >
+            ● on the map
+          </span>
+        )}
+      </div>
+
+      {open && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+          <input
+            className="cs-input mono"
+            value={call}
+            onChange={(e) => setCall(e.target.value)}
+            onBlur={() => persist({ callsign: call })}
+            placeholder="Callsign"
+            spellCheck={false}
+            style={{ width: 90 }}
+          />
+          <input
+            className="cs-input mono"
+            value={grid}
+            onChange={(e) => setGrid(e.target.value)}
+            onBlur={() => persist({ gridSquare: grid })}
+            placeholder="Grid"
+            spellCheck={false}
+            style={{ width: 70 }}
+          />
+          <input
+            className="cs-input"
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            onBlur={() => persist({ message })}
+            placeholder="Status message (optional)"
+            maxLength={80}
+            style={{ flex: 1, minWidth: 110 }}
+          />
+        </div>
+      )}
+
+      {error && <span style={{ fontSize: 10, color: 'var(--tx)' }}>{error}</span>}
+    </div>
   );
 }
 

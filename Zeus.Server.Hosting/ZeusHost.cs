@@ -743,6 +743,10 @@ public static class ZeusHost
         // singleton + hosted-service shape as ActivationSpotsService; streaming
         // Socket.IO instead of HTTP polling. Touches nothing on the radio / DSP /
         // TX path — outbound TLS WebSocket in, station snapshot out.
+        // Persists the operator's FreeDV Reporter "report mode" opt-in (default
+        // OFF). Reporting only broadcasts the operator's callsign/grid/TX activity
+        // to the public map after an explicit opt-in — see FreeDvReporterService.
+        builder.Services.AddSingleton<FreeDvReporterSettingsStore>();
         builder.Services.AddSingleton<FreeDvReporterService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<FreeDvReporterService>());
 
