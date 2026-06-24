@@ -216,7 +216,23 @@ To build (the native phase):
 | 0 | Diagnose (RADE on-air, classic modes fail), scope, research API/build | ✅ done |
 | 1 | UI/contract groundwork: `RadeV1` submode, gated panel, `RadeAvailable` | ✅ done (committed) |
 | 2a | Prove the dependency-free decoder (build radae_nopy, decode off-air sample) | ✅ done (WSL, 2026-06-23) |
-| 2b | `native/radae/` vendoring: build `rade`+Opus/FARGAN cross-platform (Win MinGW+autotools, arm), CI binaries | ⏳ next (the hard one) |
+| 2b | **`zeus_rade` shim** — one C lib: complex IQ → `rade_rx` → FARGAN → 16 kHz PCM | ✅ done + validated (WSL: 2628 synced ticks, 14 dB, 5:14 speech out) |
+| 2c | `native/radae/` vendoring CMake: fetch radae_nopy + build Opus/FARGAN + shim into one shared lib, cross-platform (Win MinGW+autotools, arm `--disable-rtcd`), CI binaries | ⏳ next (the hard one) |
+| 4 | `RadeModem` P/Invoke the shim (`zeus_rade_*`) + 48k↔16k resample + real→complex; flip `RadeAvailable` | ⏳ (no model files; weights compiled in) |
+
+### zeus_rade shim (PROVEN 2026-06-23)
+`native/radae/shim/{zeus_rade.h,zeus_rade.c,zeus_rade_test.c,build_test_wsl.sh}` —
+a thin C wrapper giving Zeus a single P/Invoke surface instead of binding both
+`rade_api.h` and Opus's FARGAN. Verified by compiling against the radae_nopy +
+Opus build and decoding `FDV_offair.wav` through `zeus_rade_rx()` alone:
+`pcm_samples=5033280, synced=2628/2717, last_snr=14 dB`, 5:14 of real speech.
+
+Concrete dims learned at runtime: `rade_n_features_in_out=432` (= 12 × 36-float
+frames per `rade_rx`), `Nmf=960`, `n_eoo_bits=180`. FARGAN: prime 5 frames
+(`fargan_cont`) then `fargan_synthesize` 160 samples/frame; weights built in.
+Known issue: EOO callsign decode returns garbage — revisit (likely the EOO
+soft-bit handoff). Both RADE and FARGAN weights are compiled in → **no model
+files to ship**. The shim re-primes FARGAN on each sync re-acquire.
 | 3 | Model weights export + bundling/install | ⏳ |
 | 4 | `RadeModem` + P/Invoke + complex IO + FARGAN + 48k↔16k resample; flip `RadeAvailable` | ⏳ |
 | 5 | On-air validation vs a live RADEV1 station | ⏳ |
