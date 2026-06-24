@@ -385,13 +385,10 @@ export function Panadapter({
     const unsubViewZoom = viewZoom.subscribe(requestRedraw);
     const unsubConn = useConnectionStore.subscribe((state, prev) => {
       // Secondary receivers (RX2 / RX3+) center on their VFO, so redraw when it
-      // moves. RX2 lives in vfoBHz; RX3+ in the receivers[] array.
+      // moves. Every secondary lives in the receivers[] array (RX2 = index 1),
+      // whose reference changes on any per-receiver update.
       if (rxIndex === 0) return;
-      if (rxIndex === 1) {
-        if (state.vfoBHz !== prev.vfoBHz) requestRedraw();
-      } else if (state.receivers !== prev.receivers) {
-        requestRedraw();
-      }
+      if (state.receivers !== prev.receivers) requestRedraw();
     });
 
     // Repaint on dB-range / trace-color updates so auto-range and the Display

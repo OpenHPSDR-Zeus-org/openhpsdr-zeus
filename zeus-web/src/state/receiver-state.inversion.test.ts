@@ -41,14 +41,13 @@ function rx(index: number, patch: Partial<ReceiverDto> = {}): ReceiverDto {
 describe('receiver-state RX2 inversion', () => {
   beforeEach(() => {
     useConnectionStore.setState({
-      // Flat *B fields hold STALE values so we can prove reads come from the
-      // array, not these.
-      vfoBHz: 7_000_000,
-      modeB: 'LSB',
-      filterLowHzB: -2850,
-      filterHighHzB: -100,
-      filterPresetNameB: 'VAR1',
-      rx2AfGainDb: -12,
+      // RX1 baseline on the flat primary fields; RX2+ only in receivers[].
+      vfoHz: 14_200_000,
+      mode: 'USB',
+      filterLowHz: 100,
+      filterHighHz: 2800,
+      filterPresetName: 'VAR1',
+      rxAfGainDb: 0,
       receivers: [
         rx(0, { vfoHz: 14_074_000, mode: 'DIGU' }),
         rx(1, {
@@ -63,7 +62,7 @@ describe('receiver-state RX2 inversion', () => {
     });
   });
 
-  it('reads RX2 from receivers[1], not the flat *B fields', () => {
+  it('reads RX2 from receivers[1]', () => {
     const s = useConnectionStore.getState();
     expect(getReceiverVfoHz(s, 1)).toBe(21_074_000);
     expect(getReceiverMode(s, 1)).toBe('CWU');
@@ -75,16 +74,16 @@ describe('receiver-state RX2 inversion', () => {
     expect(getReceiverVfoHz(s, 'B')).toBe(21_074_000);
   });
 
-  it('falls back to the flat *B fields when receivers[1] is absent', () => {
+  it('falls back to the RX1 primary fields when receivers[1] is absent', () => {
     useConnectionStore.setState({ receivers: [rx(0, { vfoHz: 14_074_000 })] });
     const s = useConnectionStore.getState();
-    expect(getReceiverVfoHz(s, 1)).toBe(7_000_000);
-    expect(getReceiverMode(s, 1)).toBe('LSB');
-    expect(getReceiverFilterLowHz(s, 1)).toBe(-2850);
-    expect(getReceiverAfGainDb(s, 1)).toBe(-12);
+    expect(getReceiverVfoHz(s, 1)).toBe(s.vfoHz);
+    expect(getReceiverMode(s, 1)).toBe(s.mode);
+    expect(getReceiverFilterLowHz(s, 1)).toBe(s.filterLowHz);
+    expect(getReceiverAfGainDb(s, 1)).toBe(s.rxAfGainDb);
   });
 
-  it('optimistic RX2 writes update BOTH receivers[1] and the flat *B mirror', () => {
+  it('optimistic RX2 writes update receivers[1]', () => {
     optimisticSetReceiverVfo(1, 28_074_000);
     optimisticSetReceiverMode(1, 'DIGL');
     optimisticSetReceiverFilter(1, 250, 3050);
@@ -97,13 +96,9 @@ describe('receiver-state RX2 inversion', () => {
     expect(entry.filterLowHz).toBe(250);
     expect(entry.filterHighHz).toBe(3050);
     expect(entry.filterPresetName).toBe('F5');
-
-    // Flat mirror stayed in lock-step for the not-yet-migrated direct readers.
-    expect(s.vfoBHz).toBe(28_074_000);
-    expect(s.modeB).toBe('DIGL');
-    expect(s.filterLowHzB).toBe(250);
-    expect(s.filterHighHzB).toBe(3050);
-    expect(s.filterPresetNameB).toBe('F5');
+    // Reads reflect the write.
+    expect(getReceiverVfoHz(s, 1)).toBe(28_074_000);
+    expect(getReceiverMode(s, 1)).toBe('DIGL');
   });
 
   it('keeps RX1 (index 0) on the flat primary fields', () => {

@@ -25,11 +25,9 @@ function resetStore() {
   useConnectionStore.setState({
     status: 'Connected',
     vfoHz: 14_200_000,
-    vfoBHz: 7_200_000,
     rx2Enabled: false,
     rxFocus: 'A',
     mode: 'USB',
-    modeB: 'LSB',
   });
 }
 

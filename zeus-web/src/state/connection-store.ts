@@ -75,10 +75,10 @@ export type ConnectionState = {
   status: ConnectionStatus;
   endpoint: string | null;
   vfoHz: number;
-  vfoBHz: number;
+  // RX2+ per-receiver state (VFO/mode/filter/AF) lives in `receivers[]` (RX2 =
+  // index 1), not flat *B fields. RX1 keeps its flat primary fields below.
   rx2Enabled: boolean;
   rx2AudioMode: Rx2AudioMode;
-  rx2AfGainDb: number;
   txVfo: TxVfo;
   // Authoritative TX target as a receiver index (0=RX1, 1=RX2, >=2 extra DDC);
   // txVfo stays the legacy A/B projection. Driven by the VFO panel TX-select.
@@ -94,13 +94,9 @@ export type ConnectionState = {
   // Plain focus selects a single receiver; Ctrl/Cmd-click toggles membership.
   selectedRxIndices: number[];
   mode: RxMode;
-  modeB: RxMode;
   filterLowHz: number;
   filterHighHz: number;
-  filterLowHzB: number;
-  filterHighHzB: number;
   filterPresetName: string | null;
-  filterPresetNameB: string | null;
   filterAdvancedPaneOpen: boolean;
   txFilterLowHz: number;
   txFilterHighHz: number;
@@ -189,11 +185,12 @@ export type ConnectionState = {
   setWisdomStatus: (status: string) => void;
 };
 
-// Merge the server's receivers[] into the previous list, applying the RX3+
-// optimistic-tune poll guard. For each server entry with index >= 2, while the
-// operator is mid-tune (poll response predates the gesture: !trustVfo and a
-// recent optimistic stamp), keep the PREVIOUS entry's vfoHz but adopt every
-// other server field. RX1/RX2 keep their dedicated vfoHz/vfoBHz guards above.
+// Merge the server's receivers[] into the previous list, applying the
+// optimistic-tune poll guard for every SECONDARY receiver (RX2 = index 1, RX3+).
+// For each such server entry, while the operator is mid-tune (poll response
+// predates the gesture: !trustVfo and a recent optimistic stamp), keep the
+// PREVIOUS entry's vfoHz but adopt every other server field. RX1 (index 0) is
+// read via the flat vfoHz field, which keeps its own dedicated guard above.
 function mergeReceivers(
   prev: ReceiverDto[],
   next: ReceiverDto[] | undefined,
@@ -202,7 +199,7 @@ function mergeReceivers(
   if (!next) return prev;
   if (trustVfo) return next;
   return next.map((r) => {
-    if (r.index < 2 || msSinceOptimisticTuneFor(r.index) >= 1500) return r;
+    if (r.index < 1 || msSinceOptimisticTuneFor(r.index) >= 1500) return r;
     const prevEntry = prev.find((p) => p.index === r.index);
     return prevEntry ? { ...r, vfoHz: prevEntry.vfoHz } : r;
   });
@@ -212,10 +209,8 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   status: 'Disconnected',
   endpoint: null,
   vfoHz: 14_200_000,
-  vfoBHz: 14_200_000,
   rx2Enabled: false,
   rx2AudioMode: 'both',
-  rx2AfGainDb: 0,
   receivers: [],
   maxReceivers: 8,
   txVfo: 'A',
@@ -224,13 +219,9 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   focusedRxIndex: 0,
   selectedRxIndices: [0],
   mode: 'USB',
-  modeB: 'USB',
   filterLowHz: 150,
   filterHighHz: 2850,
-  filterLowHzB: 150,
-  filterHighHzB: 2850,
   filterPresetName: 'VAR1',
-  filterPresetNameB: 'VAR1',
   filterAdvancedPaneOpen: false,
   txFilterLowHz: 150,
   txFilterHighHz: 2850,
@@ -274,18 +265,13 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
           trustVfo || msSinceOptimisticTuneFor('A') >= 1500
             ? s.vfoHz
             : prev.vfoHz,
-        vfoBHz:
-          trustVfo || msSinceOptimisticTuneFor('B') >= 1500
-            ? s.vfoBHz
-            : prev.vfoBHz,
         rx2Enabled: s.rx2Enabled,
         rx2AudioMode: s.rx2AudioMode,
-        rx2AfGainDb: s.rx2AfGainDb,
-        // RX3+ poll-guard: mirror the vfoHz/vfoBHz guard above for the multi-DDC
-        // receivers[]. While the operator is actively tuning an extra DDC, a
-        // 1 Hz /api/state poll generated just before the gesture would rubber-band
-        // its vfoHz; keep the previous entry's vfoHz (but adopt all other server
-        // fields) until the optimistic window expires.
+        // Secondary-receiver poll-guard: RX2 (index 1) and RX3+ live in the
+        // receivers[] array. While the operator is mid-tune, a 1 Hz /api/state
+        // poll generated just before the gesture would rubber-band that
+        // receiver's vfoHz; mergeReceivers keeps the previous entry's vfoHz (but
+        // adopts all other server fields) until the optimistic window expires.
         receivers: mergeReceivers(prev.receivers, s.receivers, trustVfo),
         maxReceivers: s.maxReceivers ?? prev.maxReceivers,
         txVfo: s.txVfo,
@@ -295,13 +281,9 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
         focusedRxIndex: prev.focusedRxIndex,
         selectedRxIndices: prev.selectedRxIndices,
         mode: s.mode,
-        modeB: s.modeB,
         filterLowHz: s.filterLowHz,
         filterHighHz: s.filterHighHz,
-        filterLowHzB: s.filterLowHzB,
-        filterHighHzB: s.filterHighHzB,
         filterPresetName: s.filterPresetName,
-        filterPresetNameB: s.filterPresetNameB,
         filterAdvancedPaneOpen: s.filterAdvancedPaneOpen,
         txFilterLowHz: s.txFilterLowHz,
         txFilterHighHz: s.txFilterHighHz,

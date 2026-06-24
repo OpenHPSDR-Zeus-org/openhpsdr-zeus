@@ -27,15 +27,15 @@
 //
 // Field routing by receiver INDEX:
 //   - index 0 (RX1)  → the connection-store primary fields (vfoHz, mode, …)
-//   - index >= 1     → the matching `receivers[]` entry, found by `.index`,
-//                      falling back to the flat *B fields (vfoBHz, modeB, …) for
-//                      index 1 only when the array entry is absent
+//   - index >= 1     → the matching `receivers[]` entry, found by `.index`
+//                      (falling back to the RX1 primary field only when the
+//                      array entry is absent, e.g. disconnected/empty store)
 //
-// The `receivers[]` array is the canonical per-receiver source of truth. RX2
-// (index 1) is being migrated off the flat *B fields onto `receivers[1]`: reads
-// prefer the array entry and the optimistic writers keep BOTH in sync (the flat
-// *B fields stay populated for the components that still read them directly,
-// until that migration completes and the flat dupes are retired).
+// The `receivers[]` array is the SOLE client-side source of truth for RX2+ —
+// the flat *B fields (vfoBHz/modeB/filter*B/rx2AfGainDb) have been removed from
+// the client. RX2 changes still POST through the legacy A/B write endpoints
+// (setVfoB / setMode?receiver=B / …); the server projects the result back into
+// `receivers[1]`, which is what these selectors read.
 //
 // RX2 and RX3+ are the same class of "secondary receiver" (the VFO is the DDC
 // center); only RX1 (index 0) gets radioLo pan, CTUN sweep, snap history /
@@ -97,33 +97,25 @@ function patchReceiverEntry(
 export function getReceiverVfoHz(state: ConnState, key: ReceiverKey): number {
   const idx = rxIndexOf(key);
   if (idx === 0) return state.vfoHz;
-  const entry = receiverEntry(state, idx);
-  if (entry) return entry.vfoHz;
-  return idx === 1 ? state.vfoBHz : state.vfoHz;
+  return receiverEntry(state, idx)?.vfoHz ?? state.vfoHz;
 }
 
 export function getReceiverMode(state: ConnState, key: ReceiverKey) {
   const idx = rxIndexOf(key);
   if (idx === 0) return state.mode;
-  const entry = receiverEntry(state, idx);
-  if (entry) return entry.mode;
-  return idx === 1 ? state.modeB : state.mode;
+  return receiverEntry(state, idx)?.mode ?? state.mode;
 }
 
 export function getReceiverFilterLowHz(state: ConnState, key: ReceiverKey): number {
   const idx = rxIndexOf(key);
   if (idx === 0) return state.filterLowHz;
-  const entry = receiverEntry(state, idx);
-  if (entry) return entry.filterLowHz;
-  return idx === 1 ? state.filterLowHzB : state.filterLowHz;
+  return receiverEntry(state, idx)?.filterLowHz ?? state.filterLowHz;
 }
 
 export function getReceiverFilterHighHz(state: ConnState, key: ReceiverKey): number {
   const idx = rxIndexOf(key);
   if (idx === 0) return state.filterHighHz;
-  const entry = receiverEntry(state, idx);
-  if (entry) return entry.filterHighHz;
-  return idx === 1 ? state.filterHighHzB : state.filterHighHz;
+  return receiverEntry(state, idx)?.filterHighHz ?? state.filterHighHz;
 }
 
 /** Read a receiver's VFO out of a server RadioStateDto (e.g. to reconcile the
@@ -135,17 +127,13 @@ export function getReceiverVfoFromState(
 ): number {
   const idx = rxIndexOf(key);
   if (idx === 0) return state.vfoHz;
-  const entry = state.receivers?.find((r) => r.index === idx);
-  if (entry) return entry.vfoHz;
-  return idx === 1 ? state.vfoBHz : state.vfoHz;
+  return state.receivers?.find((r) => r.index === idx)?.vfoHz ?? state.vfoHz;
 }
 
 export function getReceiverAfGainDb(state: ConnState, key: ReceiverKey): number {
   const idx = rxIndexOf(key);
   if (idx === 0) return state.rxAfGainDb;
-  const entry = receiverEntry(state, idx);
-  if (entry) return entry.afGainDb;
-  return idx === 1 ? state.rx2AfGainDb : state.rxAfGainDb;
+  return receiverEntry(state, idx)?.afGainDb ?? state.rxAfGainDb;
 }
 
 export function getReceiverFilterPresetName(
@@ -154,9 +142,7 @@ export function getReceiverFilterPresetName(
 ): string | null {
   const idx = rxIndexOf(key);
   if (idx === 0) return state.filterPresetName;
-  const entry = receiverEntry(state, idx);
-  if (entry) return entry.filterPresetName;
-  return idx === 1 ? state.filterPresetNameB : state.filterPresetName;
+  return receiverEntry(state, idx)?.filterPresetName ?? state.filterPresetName;
 }
 
 // ---------------------------------------------------------------------------
@@ -169,11 +155,9 @@ export function optimisticSetReceiverVfo(key: ReceiverKey, hz: number): void {
   if (idx === 0) {
     useConnectionStore.setState({ vfoHz: hz });
   } else {
-    // index >= 1: update the canonical receivers[] entry; for RX2 (index 1)
-    // also keep the flat vfoBHz mirror in sync until its direct readers migrate.
+    // index >= 1 (RX2 / RX3+) lives in the canonical receivers[] array.
     useConnectionStore.setState((s) => ({
       receivers: patchReceiverEntry(s.receivers, idx, { vfoHz: hz }),
-      ...(idx === 1 ? { vfoBHz: hz } : {}),
     }));
   }
 }
@@ -189,7 +173,6 @@ export function optimisticSetReceiverFilter(
   } else {
     useConnectionStore.setState((s) => ({
       receivers: patchReceiverEntry(s.receivers, idx, { filterLowHz: lo, filterHighHz: hi }),
-      ...(idx === 1 ? { filterLowHzB: lo, filterHighHzB: hi } : {}),
     }));
   }
 }
@@ -201,7 +184,17 @@ export function optimisticSetReceiverMode(key: ReceiverKey, mode: RxMode): void 
   } else {
     useConnectionStore.setState((s) => ({
       receivers: patchReceiverEntry(s.receivers, idx, { mode }),
-      ...(idx === 1 ? { modeB: mode } : {}),
+    }));
+  }
+}
+
+export function optimisticSetReceiverAfGain(key: ReceiverKey, db: number): void {
+  const idx = rxIndexOf(key);
+  if (idx === 0) {
+    useConnectionStore.setState({ rxAfGainDb: db });
+  } else {
+    useConnectionStore.setState((s) => ({
+      receivers: patchReceiverEntry(s.receivers, idx, { afGainDb: db }),
     }));
   }
 }
@@ -213,7 +206,6 @@ export function optimisticSetReceiverPreset(key: ReceiverKey, slot: string): voi
   } else {
     useConnectionStore.setState((s) => ({
       receivers: patchReceiverEntry(s.receivers, idx, { filterPresetName: slot }),
-      ...(idx === 1 ? { filterPresetNameB: slot } : {}),
     }));
   }
 }

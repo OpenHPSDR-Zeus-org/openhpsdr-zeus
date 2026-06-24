@@ -210,17 +210,13 @@ describe('normalizeState', () => {
     });
     expect(s.status).toBe('Connected');
     expect(s.mode).toBe('USB');
-    expect(s.modeB).toBe('CWU');
     expect(s.endpoint).toBe('192.168.100.21:1024');
     expect(s.vfoHz).toBe(14_200_000);
-    expect(s.vfoBHz).toBe(14_250_000);
+    // RX2 (*B) fields no longer surface on RadioStateDto — they live in
+    // receivers[1]. The server may still send them; normalizeState ignores them.
     expect(s.rx2Enabled).toBe(true);
     expect(s.rx2AudioMode).toBe('rx2');
-    expect(s.rx2AfGainDb).toBe(-3);
     expect(s.txVfo).toBe('B');
-    expect(s.filterLowHzB).toBe(475);
-    expect(s.filterHighHzB).toBe(725);
-    expect(s.filterPresetNameB).toBe('F6');
     expect(s.sampleRate).toBe(192_000);
     expect(s.preampOn).toBe(false);
   });
@@ -243,15 +239,10 @@ describe('normalizeState', () => {
     expect(s.status).toBe('Error');
     expect(s.endpoint).toBe(null);
     expect(s.vfoHz).toBe(0);
-    expect(s.vfoBHz).toBe(0);
     expect(s.rx2Enabled).toBe(false);
     expect(s.rx2AudioMode).toBe('both');
-    expect(s.rx2AfGainDb).toBe(0);
     expect(s.txVfo).toBe('A');
     expect(s.mode).toBe('USB');
-    expect(s.modeB).toBe('USB');
-    expect(s.filterLowHzB).toBe(0);
-    expect(s.filterHighHzB).toBe(0);
     expect(s.nr).toEqual(NR_CONFIG_DEFAULT);
     expect(s.zoomLevel).toBe(1);
   });

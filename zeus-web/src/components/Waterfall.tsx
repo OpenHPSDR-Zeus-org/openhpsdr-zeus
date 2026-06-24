@@ -447,12 +447,9 @@ export function Waterfall({
     const unsubViewZoom = viewZoom.subscribe(requestRedraw);
     const unsubConn = useConnectionStore.subscribe((state, prev) => {
       // Secondary receivers (RX2 / RX3+) center on their VFO; redraw on its move.
+      // Every secondary lives in the receivers[] array (RX2 = index 1).
       if (rxIndex === 0) return;
-      if (rxIndex === 1) {
-        if (state.vfoBHz !== prev.vfoBHz) requestRedraw();
-      } else if (state.receivers !== prev.receivers) {
-        requestRedraw();
-      }
+      if (state.receivers !== prev.receivers) requestRedraw();
     });
 
     // Repaint on dB-range or colormap changes so the WfDbScale drag and the
@@ -599,8 +596,9 @@ export function Waterfall({
     const schedule = () => requestDrawBusFrame(update);
     const unsubVc = vc.subscribe(schedule);
     const unsubConn = useConnectionStore.subscribe((s, prev) => {
-      // RX3+ VFOs live in the receivers[] array, not the *B fields.
-      if (s.vfoHz !== prev.vfoHz || s.vfoBHz !== prev.vfoBHz || s.receivers !== prev.receivers) schedule();
+      // RX1 is the flat primary VFO; every secondary (RX2 = index 1, RX3+) lives
+      // in the receivers[] array, whose reference changes on any update.
+      if (s.vfoHz !== prev.vfoHz || s.receivers !== prev.receivers) schedule();
     });
     const unsubFrame = useDisplayStore.subscribe((s, prev) => {
       if (selectDisplaySlice(s, receiver).lastSeq !== selectDisplaySlice(prev, receiver).lastSeq) schedule();

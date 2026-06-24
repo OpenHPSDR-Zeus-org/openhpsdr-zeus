@@ -15,10 +15,8 @@ export const BAND_MEMORY_UPDATED_EVENT = 'zeus-band-memory-updated';
 // prefer the canonical receivers[] entry and fall back to the flat *B fields.
 type BandMemoryState = {
   vfoHz: number;
-  vfoBHz: number;
   rx2Enabled: boolean;
   mode: RxMode;
-  modeB: RxMode;
   receivers?: readonly ReceiverDto[];
 };
 
@@ -55,7 +53,9 @@ export function saveReceiverBandModeMemory(
 ): void {
   const targetB = receiver === 'B' && state.rx2Enabled;
   const entry = targetB ? state.receivers?.find((r) => r.index === 1) : undefined;
-  const hz = entry?.vfoHz ?? (targetB ? state.vfoBHz : state.vfoHz);
-  const mode = modeOverride ?? entry?.mode ?? (targetB ? state.modeB : state.mode);
+  // RX2 (index 1) reads from receivers[1]; RX1 (and RX2-absent) use the flat
+  // primary VFO/mode. The flat *B fields no longer exist on the client.
+  const hz = entry?.vfoHz ?? state.vfoHz;
+  const mode = modeOverride ?? entry?.mode ?? state.mode;
   saveBandModeMemory(hz, mode);
 }

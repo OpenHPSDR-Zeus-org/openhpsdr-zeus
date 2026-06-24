@@ -57,13 +57,19 @@ import { bandOf } from '../../components/design/data';
 import { receiverColorByIndex } from '../../components/spectrumReceiverColor';
 import { VfoDisplay } from '../../components/VfoDisplay';
 import { useConnectionStore } from '../../state/connection-store';
+import {
+  getReceiverAfGainDb,
+  getReceiverVfoHz,
+  optimisticSetReceiverAfGain,
+  optimisticSetReceiverVfo,
+} from '../../state/receiver-state';
 
 export function VfoPanel() {
   const applyState = useConnectionStore((s) => s.applyState);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
-  const vfoBHz = useConnectionStore((s) => s.vfoBHz);
+  const vfoBHz = useConnectionStore((s) => getReceiverVfoHz(s, 1));
   const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
-  const rx2AfGainDb = useConnectionStore((s) => s.rx2AfGainDb);
+  const rx2AfGainDb = useConnectionStore((s) => getReceiverAfGainDb(s, 1));
   const receivers = useConnectionStore((s) => s.receivers);
   const txReceiverIndex = useConnectionStore((s) => s.txReceiverIndex);
   const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
@@ -76,11 +82,11 @@ export function VfoPanel() {
     vfoBHz?: number;
     afGainDb?: number;
   }) => {
-    const optimistic: Partial<ReturnType<typeof useConnectionStore.getState>> = {};
-    if (req.enabled !== undefined) optimistic.rx2Enabled = req.enabled;
-    if (req.vfoBHz !== undefined) optimistic.vfoBHz = req.vfoBHz;
-    if (req.afGainDb !== undefined) optimistic.rx2AfGainDb = req.afGainDb;
-    useConnectionStore.setState(optimistic);
+    if (req.enabled !== undefined) useConnectionStore.setState({ rx2Enabled: req.enabled });
+    // RX2 VFO/AF are canonical on receivers[1]; the helpers dual-write the flat
+    // mirror so any not-yet-migrated reader stays in sync.
+    if (req.vfoBHz !== undefined) optimisticSetReceiverVfo(1, req.vfoBHz);
+    if (req.afGainDb !== undefined) optimisticSetReceiverAfGain(1, req.afGainDb);
     setRx2(req).then(applyState).catch(() => {});
   };
 
