@@ -1946,6 +1946,17 @@ public sealed record Hl2OptionsDto(bool BandVolts);
 // (e.g. PUT becoming a partial update with nullable fields).
 public sealed record Hl2OptionsSetRequest(bool BandVolts);
 
+// HL2 user GPIO (external-port parity audit — re-port of external-ports plan
+// Phase 5). The 4-bit user_dig_out mask driven on the Protocol-1 0x0a/wire-0x14
+// frame C3[3:0] → MCP23008 on the HL2 IO connector. Supported is true only on a
+// connected Hermes-Lite 2 (HasHl2UserGpio); the frontend gates the User-GPIO
+// card on it. Bits is the low nibble (0..15).
+public sealed record Hl2GpioDto(bool Supported, int Bits);
+
+// PUT body for /api/radio/hl2-gpio — sets the 4-bit user_dig_out mask. Only the
+// low nibble is honoured; the server 409s on a board without HasHl2UserGpio.
+public sealed record Hl2GpioSetRequest(int Bits);
+
 // ANAN-G2 / Saturn-class ADC options surfaced via /api/radio/g2-options.
 // Dither and randomizer default on, matching the Thetis G2 option block.
 // MaxRxFreqMHz is read-only: Zeus enforces the same 0..60 MHz ceiling in

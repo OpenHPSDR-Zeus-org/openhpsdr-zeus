@@ -2577,6 +2577,36 @@ public static class ZeusEndpoints
             return Results.Ok(new Hl2OptionsDto(BandVolts: effective));
         });
 
+        // HL2 user GPIO (external-port parity audit — re-port of external-ports
+        // plan Phase 5). The 4-bit user_dig_out mask → 0x0a/wire-0x14 frame
+        // C3[3:0] → MCP23008 on the HL2 IO connector. GET always returns 200; the
+        // Supported flag is the board's HasHl2UserGpio capability (HL2 only) and
+        // the frontend gates the User-GPIO card on it. PUT 409s on a board without
+        // the capability so a non-HL2 board can never be handed a GPIO mask. The
+        // save is server-authoritative: SetHl2GpioMask persists + fires
+        // Changed → RadioService.PushHl2Gpio, which re-pushes to the live client —
+        // never via the frontend, so no clobber-on-connect.
+        app.MapGet("/api/radio/hl2-gpio", (RadioService radio) =>
+        {
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            return Results.Ok(new Hl2GpioDto(
+                Supported: caps.HasHl2UserGpio,
+                Bits: caps.HasHl2UserGpio ? radio.GetHl2GpioMask() : 0));
+        });
+
+        app.MapPut("/api/radio/hl2-gpio", (Hl2GpioSetRequest req, RadioService radio) =>
+        {
+            if (req is null)
+                return Results.BadRequest(new { error = "body required" });
+
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            if (!caps.HasHl2UserGpio)
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no user GPIO" });
+
+            radio.SetHl2GpioMask((byte)(req.Bits & 0x0F));
+            return Results.Ok(new Hl2GpioDto(Supported: true, Bits: radio.GetHl2GpioMask()));
+        });
+
         // External antenna ports (external-ports plan — antenna slice, #804).
         // GET returns the per-band TX/RX antenna + RX-aux selection plus the
         // board-capability gates the frontend renders the right selectors from.

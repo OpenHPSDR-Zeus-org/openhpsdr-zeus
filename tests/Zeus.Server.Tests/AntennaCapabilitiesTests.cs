@@ -21,18 +21,27 @@ namespace Zeus.Server.Tests;
 public class AntennaCapabilitiesTests
 {
     [Fact]
-    public void TxAntennaRelays_Only_OrionMkII_0x0A_Family()
+    public void TxAntennaRelays_OrionMkII_0x0A_Family_And_FullAlex_P1()
     {
-        // Only the 0x0A / Saturn family has switchable TX antenna relays.
-        // Every variant in that family (incl. Apache OrionMkII original) does.
+        // The 0x0A / Saturn family has switchable TX antenna relays over P2
+        // (alex0[26:24]) — every variant in that family (incl. Apache OrionMkII
+        // original) does.
         foreach (var variant in Enum.GetValues<OrionMkIIVariant>())
             Assert.True(BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, variant).HasTxAntennaRelays);
 
-        // No P1 board and not HL2.
+        // External-port parity audit (GAP-P1-1): the full-Alex dual-ADC P1 boards
+        // ANAN-100D (Angelia) / ANAN-200D (Orion) also emit a switchable TX
+        // antenna — over Protocol 1 on Config-frame C4[1:0] (Thetis
+        // networkproto1.c:463-468). Their encode + clamp live in
+        // ControlFrame.EncodeTxAntennaC4Bits / P1BoardHasTxAntennaRelays.
+        foreach (var board in new[] { HpsdrBoardKind.Angelia, HpsdrBoardKind.Orion })
+            Assert.True(BoardCapabilitiesTable.For(board).HasTxAntennaRelays);
+
+        // ANT1-hardwired on transmit: no full Alex (Metis / Hermes / HermesII),
+        // ANAN-G2E (HermesC10), and HL2 (single jack).
         foreach (var board in new[] {
             HpsdrBoardKind.Metis, HpsdrBoardKind.Hermes, HpsdrBoardKind.HermesII,
-            HpsdrBoardKind.Angelia, HpsdrBoardKind.Orion, HpsdrBoardKind.HermesC10,
-            HpsdrBoardKind.HermesLite2 })
+            HpsdrBoardKind.HermesC10, HpsdrBoardKind.HermesLite2 })
             Assert.False(BoardCapabilitiesTable.For(board).HasTxAntennaRelays);
     }
 

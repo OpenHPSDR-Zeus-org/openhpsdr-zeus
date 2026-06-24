@@ -15,13 +15,14 @@
 // one board-branched / protocol-branched encoder instead of scattered bit
 // literals in the emission code:
 //
-//   ANTENNA — RX-antenna select (P1 C3[7:5]) and TX-antenna select
-//   (P2 alex0[26:24]). The encoders delegate to the very same pure helpers the
-//   wire path already uses (ControlFrame.EncodeRxAntennaC3Bits on P1;
-//   Protocol2Client.EncodeTxAntennaBits on P2), so the bits are byte-identical
-//   to the wire path for every supported board. The per-board wire-layer clamp
-//   (force ANT1 on relay-less boards) lives in the shared P1 helper itself
-//   (HL2 single-jack case).
+//   ANTENNA — RX-antenna select (P1 C3[7:5]), P1 TX-antenna select (Config
+//   C4[1:0], full-Alex ANAN-100D/200D — external-port parity audit GAP-P1-1),
+//   and P2 TX-antenna select (alex0[26:24]). The encoders delegate to the very
+//   same pure helpers the wire path already uses (ControlFrame.EncodeRxAntennaC3Bits
+//   / EncodeTxAntennaC4Bits on P1; Protocol2Client.EncodeTxAntennaBits on P2), so
+//   the bits are byte-identical to the wire path for every supported board. The
+//   per-board wire-layer clamp (force ANT1 on relay-less boards) lives in the
+//   shared P1 helpers themselves (HL2 single-jack case; non-full-Alex TX case).
 //
 //   TX AUDIO — P2 TxSpecific byte-50 mic_control / byte-51 line_in_gain, and the
 //   P1 0x12-codec mic_boost/mic_linein bits, composed from the selected
@@ -110,6 +111,15 @@ public interface IExternalPortEncoder
     byte EncodeP1RxAntennaC3Bits(in ExternalPortState state);
 
     /// <summary>
+    /// Encode the Protocol-1 Config-frame TX-antenna relay bits (C4[1:0]) for the
+    /// desired <paramref name="state"/>. Returns the byte to OR into C4. Delegates
+    /// to the wire path's own pure helper (<c>ControlFrame.EncodeTxAntennaC4Bits</c>)
+    /// so the bytes match exactly, including the per-board ANT1 clamp on boards
+    /// without full Alex TX relays. External-port parity audit (GAP-P1-1).
+    /// </summary>
+    byte EncodeP1TxAntennaC4Bits(in ExternalPortState state);
+
+    /// <summary>
     /// Encode the Protocol-2 Alex-word TX-antenna relay bits (alex0[26:24]) for
     /// the desired <paramref name="state"/>. Returns the bits to OR into the
     /// Alex word. Delegates to the wire path's own pure helper.
@@ -182,6 +192,11 @@ public sealed class Protocol1PortEncoder : IExternalPortEncoder
         return ControlFrame.EncodeRxAntennaC3Bits(state.RxAnt, _board);
     }
 
+    public byte EncodeP1TxAntennaC4Bits(in ExternalPortState state)
+        // Full-Alex P1 boards (ANAN-100D/200D) emit the TX antenna on Config-frame
+        // C4[1:0]; the shared helper clamps every other P1 board to ANT1 (GAP-P1-1).
+        => ControlFrame.EncodeTxAntennaC4Bits(state.TxAnt, _board);
+
     public uint EncodeP2TxAntennaBits(in ExternalPortState state)
         // P1 boards do not emit a P2 Alex word; ANT1-hardwired on transmit.
         => Protocol2Client.EncodeTxAntennaBits(txAnt: 1);
@@ -244,6 +259,10 @@ public sealed class Protocol2PortEncoder : IExternalPortEncoder
         // the Alex word on the SetAntennas state path.
         => 0;
 
+    public byte EncodeP1TxAntennaC4Bits(in ExternalPortState state)
+        // P2 boards do not use the P1 Config frame; TX antenna rides the Alex word.
+        => 0;
+
     public uint EncodeP2TxAntennaBits(in ExternalPortState state)
     {
         // Gate the alex0[26:24] TX-antenna emission on the variant's relay
@@ -298,6 +317,10 @@ public sealed class HermesLite2PortEncoder : IExternalPortEncoder
         // operator persisted, the emitted bits are ANT1 — the N2ADR pad never
         // flips off a stale per-band ANT2/3.
         => ControlFrame.EncodeRxAntennaC3Bits(state.RxAnt, HpsdrBoardKind.HermesLite2);
+
+    public byte EncodeP1TxAntennaC4Bits(in ExternalPortState state)
+        // HL2 single jack — ANT1-hardwired on transmit; the helper clamps to 0.
+        => ControlFrame.EncodeTxAntennaC4Bits(state.TxAnt, HpsdrBoardKind.HermesLite2);
 
     public uint EncodeP2TxAntennaBits(in ExternalPortState state)
         => Protocol2Client.EncodeTxAntennaBits(txAnt: 1);

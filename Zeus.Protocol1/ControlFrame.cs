@@ -281,7 +281,22 @@ internal static class ControlFrame
         // protocol doc ("Tune request: ... initiate an ATU tune"). Held by the
         // client for the tune duration then auto-cleared. Default false →
         // byte-identical to today on every board.
-        bool AtuTune = false);
+        bool AtuTune = false,
+        // TX antenna relay select — Config-frame C4[1:0] (external-port parity
+        // audit, GAP-P1-1). Thetis networkproto1.c:463-468 case 0: ANT3 → 0b10,
+        // ANT2 → 0b01, ANT1 → 0b00. The HpsdrAntenna enum value (Ant1=0/Ant2=1/
+        // Ant3=2) IS the 2-bit wire selector. Honoured ONLY on P1 boards with
+        // full Alex TX relays (P1BoardHasTxAntennaRelays — ANAN-100D/200D); every
+        // other P1 board is ANT1-hardwired on transmit and the encoder clamps to
+        // 0. Default Ant1 → C4[1:0]=0, byte-identical to before this audit.
+        HpsdrAntenna TxAntenna = HpsdrAntenna.Ant1,
+        // HL2 user GPIO (external-ports plan, Phase 5; re-ported in the external-
+        // port parity audit). The 4-bit user_dig_out mask lands in C3[3:0] of the
+        // 0x0a / wire-0x14 frame → MCP23008 on the HL2 IO connector. Verified
+        // Thetis-mi0bot networkproto1.c case 11 (`C3 = prn->user_dig_out & 0x0F`);
+        // ramdor Thetis identical. HL2 only — gated at the wire layer. Default 0
+        // → byte-identical to today (the 0x14 frame's C3 was previously 0).
+        byte UserDigOut = 0);
 
     /// <summary>
     /// Write the 5 C&amp;C bytes for <paramref name="register"/> given the current
@@ -415,15 +430,20 @@ internal static class ControlFrame
         // verified layout (Thetis networkproto1.c:597-599 case 11; identical in
         // mi0bot):
         //   C1[4] = mic_trs, C1[5] = mic_bias, C1[6] = mic_ptt
-        //   C2[4:0] = line_in_gain, C2[6] = puresignal_run
-        // We READ-MODIFY-WRITE: set ONLY the audio bits, leaving the C4 PGA /
-        // step-attenuator byte (already in c14[3]) and the C2[6] PS bit (set
-        // below) untouched. mic_ptt is a PTT-IN concern, not this feature, so
-        // C1[6] is intentionally left 0 — same as today. mic_bias (C1[5])
-        // defaults OFF: enabling it on a floating connector can hang PTT, so the
-        // operator must opt in explicitly via the audio panel. At defaults
-        // (mic_trs/mic_bias off, line_in_gain 0) every byte is unchanged, so
-        // this block is byte-identical to today on HL2.
+        //   C2[4:0] = line_in_gain, C2[6] = puresignal_run, C3[3:0] = user_dig_out
+        // SINGLE-PASS COMPOSE — this method is the SOLE owner of the 0x0a register
+        // frame, so every co-tenant bit must be (re)asserted here each tick: the
+        // C4 PGA / step-attenuator byte (already in c14[3]), the C2[6] PS bit (set
+        // below), the C2[4:0] line-in gain, and (HL2) the C3[3:0] user GPIO. The
+        // frame is rebuilt from a freshly-cleared span every pass — it is NOT a
+        // hardware-readback read-modify-write (mi0bot composes the same way). If a
+        // future writer ever sets one field here, it must keep asserting all the
+        // others or it will clobber them. mic_ptt is a PTT-IN concern, not this
+        // feature, so C1[6] is intentionally left 0 — same as today. mic_bias
+        // (C1[5]) defaults OFF: enabling it on a floating connector can hang PTT,
+        // so the operator must opt in explicitly. At defaults (mic_trs/mic_bias
+        // off, line_in_gain 0, GPIO 0) every byte is unchanged → byte-identical to
+        // today on HL2.
         if (s.Board == HpsdrBoardKind.HermesLite2)
         {
             byte c1 = 0;
@@ -433,6 +453,11 @@ internal static class ControlFrame
             // line_in_gain is the low 5 bits of C2; OR it in so the PS bit
             // (set below) and the reserved high bits stay clear.
             c14[1] |= (byte)(s.LineInGain & 0x1F);
+            // HL2 user GPIO: 4-bit user_dig_out → C3[3:0] (MCP23008 on the IO
+            // connector). Thetis-mi0bot networkproto1.c case 11; ramdor identical.
+            // Default 0 → byte-identical (C3 was 0 before this re-port). HL2-only;
+            // RadioService gates the mask behind HasHl2UserGpio.
+            c14[2] |= (byte)(s.UserDigOut & 0x0F);
         }
 
         // ANAN-10E line-in (HermesII, issue #667). The 10E TLV320 codec carries
@@ -447,6 +472,21 @@ internal static class ControlFrame
         if (s.Board == HpsdrBoardKind.HermesII)
         {
             c14[1] |= (byte)(s.LineInGain & 0x1F);
+        }
+
+        // ANAN codec mic_bias (external-port parity audit, GAP-AUD-1). Thetis
+        // networkproto1.c case 11 (C0=0x14) is board-agnostic: C1[5] = mic_bias
+        // for every codec board, yet the re-port only wired the bit for HL2 above
+        // — so ANAN-100D/200D advertised HasMicBias but could never enable it
+        // (the electret bias supply stayed off). RadioService.ClampAudioSource
+        // gates s.MicBias to boards with HasMicBias (on P1: ANAN-100D/200D) AND
+        // to the RadioMic/XLR source, so at the default (Host / bias off) this is
+        // byte-identical to today. HL2 sets C1[5] in its own block above; this
+        // covers the non-HL2 codec boards. mic_trs/mic_ptt stay 0 on ANAN (no
+        // tip-ring jack split), matching today.
+        if (s.Board != HpsdrBoardKind.HermesLite2 && s.MicBias)
+        {
+            c14[0] |= 1 << 5;   // C1[5] mic_bias
         }
 
         // HL2 PureSignal: register 0x0a bit 22 = puresignal_run. Bit 22 lives
@@ -589,13 +629,21 @@ internal static class ControlFrame
         c3 |= EncodeRxAntennaC3Bits(s.RxAntenna, s.Board);
         c14[2] = c3;
 
-        // C4: Alex TX antenna [1:0] = 0 (RX-only MVP), duplex [2] = 1 (always, per
+        // C4: Alex TX antenna [1:0], duplex [2] = 1 (always, per
         // old_protocol.c:2661), N-1 receivers at [5:3]. mi0bot
         // networkproto1.c:973 — `C4 |= (nddc - 1) << 3`. Single-RX default
         // is 0; HL2 PS armed bumps to 1 (= 2 receivers, paired DDC0/DDC1
         // layout). Capped at 7 by the 3-bit field.
         byte c4 = 1 << 2;
         c4 |= (byte)((s.NumReceiversMinusOne & 0x07) << 3);
+        // TX antenna relay select C4[1:0] (external-port parity audit, GAP-P1-1).
+        // Thetis networkproto1.c:463-468 case 0: ANT3 → 0b10, ANT2 → 0b01, ANT1 →
+        // 0b00. Only emitted on P1 boards with full Alex TX relays (ANAN-100D/
+        // 200D); EncodeTxAntennaC4Bits clamps every other board to ANT1 so a stale
+        // per-band ANT2/3 (band rows are board-agnostic) can never reroute the
+        // transmitter on a board that is ANT1-hardwired on transmit. Default Ant1
+        // → 0 → byte-identical to before this audit.
+        c4 |= EncodeTxAntennaC4Bits(s.TxAntenna, s.Board);
         c14[3] = c4;
     }
 
@@ -634,6 +682,44 @@ internal static class ControlFrame
     /// </summary>
     internal static bool P1BoardHasRxAntennaRelays(HpsdrBoardKind board) =>
         board != HpsdrBoardKind.HermesLite2;
+
+    /// <summary>
+    /// Encode the Config-frame TX-antenna relay bits (C4[1:0]) for the given
+    /// board (external-port parity audit — GAP-P1-1). Thetis networkproto1.c
+    /// case 0 (lines 463-468): ANT3 → 0b10, ANT2 → 0b01, ANT1 → 0b00. The
+    /// <see cref="HpsdrAntenna"/> enum value (Ant1=0/Ant2=1/Ant3=2) IS the 2-bit
+    /// wire selector, so the byte is just the masked enum. Single source of the
+    /// C4[1:0] math, shared by the wire path (WriteConfigPayload) and the
+    /// external-port encoder seam so the two are byte-identical by construction.
+    ///
+    /// WIRE-LAYER CLAMP: a P1 board WITHOUT full Alex TX relays
+    /// (<see cref="P1BoardHasTxAntennaRelays"/> false — every board except
+    /// ANAN-100D/200D) is forced to ANT1 here, so a stale per-band ANT2/3 can
+    /// never reroute the transmitter on a board that is ANT1-hardwired on
+    /// transmit. This is the wire layer of the same UI-gate / REST-409 / wire-
+    /// clamp defence the RX-antenna path uses; it holds even if an upstream layer
+    /// is bypassed. Relay-capable boards emit the raw selection — byte-identical
+    /// to before this audit at the default-ANT1, so the goldens stay green.
+    /// </summary>
+    internal static byte EncodeTxAntennaC4Bits(HpsdrAntenna txAntenna, HpsdrBoardKind board)
+    {
+        if (!P1BoardHasTxAntennaRelays(board)) return 0;
+        return (byte)((byte)txAntenna & 0x03);
+    }
+
+    /// <summary>
+    /// Whether a Protocol-1 board has switchable full-Alex TX-antenna relays
+    /// (ANT1/2/3 on Config-frame C4[1:0]). Mirrors the P1 subset of
+    /// <c>BoardCapabilities.HasTxAntennaRelays</c>: the full-Alex dual-ADC ANAN
+    /// boards (ANAN-100D / ANAN-200D = <see cref="HpsdrBoardKind.Angelia"/> /
+    /// <see cref="HpsdrBoardKind.Orion"/>). Hermes / Metis / ANAN-10 / ANAN-10E
+    /// (no full Alex), ANAN-G2E (ANT1-hardwired on TX) and Hermes-Lite 2 (single
+    /// jack) are ANT1-only on transmit. Kept local to the protocol assembly so the
+    /// wire-layer clamp needs no reference to Zeus.Server.Hosting; it MUST stay in
+    /// step with the BoardCapabilitiesTable HasTxAntennaRelays entries for P1.
+    /// </summary>
+    internal static bool P1BoardHasTxAntennaRelays(HpsdrBoardKind board) =>
+        board is HpsdrBoardKind.Angelia or HpsdrBoardKind.Orion;
 
     /// <summary>
     /// Build a complete 1032-byte Metis data frame with two USB frames carrying

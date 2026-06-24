@@ -22,6 +22,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { RadioSettingsPanel } from './RadioSettingsPanel';
 import { useAudioStore, type TxAudioSource } from '../state/audio-store';
 import { usePttStore } from '../state/ptt-store';
+import { useHl2GpioStore } from '../state/hl2-gpio-store';
 
 type Gates = {
   hasOnboardCodec: boolean;
@@ -78,6 +79,14 @@ let root: Root;
 beforeEach(() => {
   // Neutralize the PTT mount-effect load too (no network in jsdom).
   usePttStore.setState((s) => ({ ...s, load: async () => {} }));
+  // Neutralize the HL2 GPIO mount-effect load and default it to unsupported so
+  // the card stays out of the way of the Audio Input tests below.
+  useHl2GpioStore.setState((s) => ({
+    ...s,
+    load: async () => {},
+    state: { supported: false, bits: 0 },
+    inflight: false,
+  }));
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -164,5 +173,77 @@ describe('RadioSettingsPanel — Audio Input card', () => {
     expect(container.querySelector('[role="radiogroup"]')).toBeNull();
     const text = container.textContent ?? '';
     expect(text).toContain('no onboard audio codec');
+  });
+});
+
+// HL2 user GPIO card (external-ports re-port). The card is gated entirely on the
+// store's server-authoritative `supported` flag (true only for a connected
+// Hermes-Lite 2); when supported it renders the 4 user_dig_out toggles and a
+// click drives the store's setBit.
+function seedGpio(supported: boolean, bits = 0) {
+  useHl2GpioStore.setState((s) => ({
+    ...s,
+    load: async () => {},
+    state: { supported, bits: bits & 0x0f },
+    inflight: false,
+  }));
+}
+
+describe('RadioSettingsPanel — HL2 User GPIO card', () => {
+  beforeEach(() => {
+    // Audio at Host so the picker section is quiet; GPIO is the unit here.
+    seedAudio(HL2_GATES, 'Host');
+  });
+
+  it('is absent when the board does not support user GPIO', () => {
+    seedGpio(false);
+    render();
+    const text = container.textContent ?? '';
+    expect(text).not.toContain('User GPIO');
+    expect(text).not.toContain('OUT 0');
+  });
+
+  it('renders the 4 output toggles when supported (HL2)', () => {
+    seedGpio(true);
+    render();
+    const text = container.textContent ?? '';
+    expect(text).toContain('User GPIO');
+    for (const i of [0, 1, 2, 3]) {
+      expect(text).toContain(`OUT ${i}`);
+    }
+    const checks = Array.from(
+      container.querySelectorAll('label.ps-check'),
+    ).filter((l) => /OUT \d/.test(l.textContent ?? ''));
+    expect(checks.length).toBe(4);
+  });
+
+  it('reflects the current bit mask in the toggle checked state', () => {
+    // bits=0b0101 → OUT 0 and OUT 2 on, OUT 1 and OUT 3 off.
+    seedGpio(true, 0b0101);
+    render();
+    const boxFor = (n: number) => {
+      const label = Array.from(
+        container.querySelectorAll('label.ps-check'),
+      ).find((l) => (l.textContent ?? '').includes(`OUT ${n}`));
+      return label!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    };
+    expect(boxFor(0).checked).toBe(true);
+    expect(boxFor(1).checked).toBe(false);
+    expect(boxFor(2).checked).toBe(true);
+    expect(boxFor(3).checked).toBe(false);
+  });
+
+  it('toggling an output line calls the store with that bit + new value', () => {
+    seedGpio(true, 0);
+    const spy = vi
+      .spyOn(useHl2GpioStore.getState(), 'setBit')
+      .mockResolvedValue();
+    render();
+    const out2 = Array.from(
+      container.querySelectorAll('label.ps-check'),
+    ).find((l) => (l.textContent ?? '').includes('OUT 2'));
+    const box = out2!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    act(() => box.click());
+    expect(spy).toHaveBeenCalledWith(2, true);
   });
 });

@@ -94,6 +94,17 @@ public sealed class Protocol1Client : IProtocol1Client
     // desired antenna here (-1 = nothing pending) instead of mutating the live
     // _antenna; it is flushed on the unkey edge in SetMox(false). -1 = none.
     private int _pendingAntenna = -1;
+    // TX-antenna relay select (Config-frame C4[1:0]) — external-port parity audit
+    // (GAP-P1-1). Same MOX-deferred discipline as the RX antenna: while keyed the
+    // desired TX antenna is stashed in _pendingTxAntenna and applied on the unkey
+    // edge so the Alex relay matrix never hot-switches under power. Default ANT1.
+    private int _txAntenna = (int)HpsdrAntenna.Ant1;
+    private int _pendingTxAntenna = -1;
+    // HL2 user GPIO 4-bit user_dig_out mask (external-ports plan, Phase 5; re-
+    // ported in the external-port parity audit). Rides C3[3:0] of the 0x14 frame
+    // on HL2. Default 0 → byte-identical. RadioService gates this behind the
+    // HasHl2UserGpio capability so it never reaches a non-HL2 board.
+    private int _userDigOut;   // 0..15
     // HL2 Band Volts PWM enable. Wire encoding is C3 bit 3 of the Config
     // frame — same bit that legacy HPSDR boards used for ADC DITHER, which
     // HL2's AD9866 doesn't need (see hermes-lite2-protocol.md line 39 and
@@ -646,6 +657,26 @@ public sealed class Protocol1Client : IProtocol1Client
         }
         Interlocked.Exchange(ref _antenna, (int)ant);
     }
+
+    /// <summary>
+    /// Select the TX antenna relay (ANT1/2/3) — Config-frame C4[1:0], external-
+    /// port parity audit (GAP-P1-1). SAFETY: like <see cref="SetAntennaRx"/>, the
+    /// Alex/relay matrix must not be hot-switched while keyed, so the selection is
+    /// stashed into <see cref="_pendingTxAntenna"/> during MOX and applied on the
+    /// unkey edge in <see cref="SetMox"/>(false). At idle it is applied
+    /// immediately. The wire-layer clamp (force ANT1 on boards without full Alex
+    /// TX relays) lives in <c>ControlFrame.EncodeTxAntennaC4Bits</c>, so this
+    /// method stores the raw selection on every board.
+    /// </summary>
+    public void SetAntennaTx(HpsdrAntenna ant)
+    {
+        if (Volatile.Read(ref _mox) != 0)
+        {
+            Interlocked.Exchange(ref _pendingTxAntenna, (int)ant);
+            return;
+        }
+        Interlocked.Exchange(ref _txAntenna, (int)ant);
+    }
     public void SetBoardKind(HpsdrBoardKind board) => Interlocked.Exchange(ref _boardKind, (int)board);
 
     public HpsdrBoardKind BoardKind => (HpsdrBoardKind)Volatile.Read(ref _boardKind);
@@ -660,6 +691,11 @@ public sealed class Protocol1Client : IProtocol1Client
         {
             int pending = Interlocked.Exchange(ref _pendingAntenna, -1);
             if (pending >= 0) Interlocked.Exchange(ref _antenna, pending);
+            // Apply any TX-antenna change deferred while keyed (GAP-P1-1) on the
+            // same unkey edge so the relay matrix switches at idle, never under
+            // power.
+            int pendingTx = Interlocked.Exchange(ref _pendingTxAntenna, -1);
+            if (pendingTx >= 0) Interlocked.Exchange(ref _txAntenna, pendingTx);
         }
     }
     public void SetDrive(int percent) =>
@@ -750,6 +786,16 @@ public sealed class Protocol1Client : IProtocol1Client
         Interlocked.Exchange(ref _lineInGain, Math.Clamp(lineInGain, 0, 31));
     }
 
+    /// <summary>
+    /// Set the HL2 4-bit user GPIO mask (user_dig_out → C3[3:0] of the 0x14
+    /// frame; external-ports plan, Phase 5 / external-port parity audit). Low
+    /// nibble only. HL2-only on the wire (RadioService gates it behind
+    /// HasHl2UserGpio); a value pushed to a non-HL2 client never reaches the wire
+    /// because ControlFrame only writes C3[3:0] for HermesLite2.
+    /// </summary>
+    public void SetUserDigOut(int mask) =>
+        Interlocked.Exchange(ref _userDigOut, mask & 0x0F);
+
     public void SetHl2TxStepAttenuationDb(int db)
     {
         // Range matches mi0bot console.cs:2084 (udTXStepAttData.Minimum=-28,
@@ -834,7 +880,9 @@ public sealed class Protocol1Client : IProtocol1Client
             MicTrs: Volatile.Read(ref _micTrs) != 0,
             MicBias: Volatile.Read(ref _micBias) != 0,
             LineInGain: (byte)Volatile.Read(ref _lineInGain),
-            AtuTune: Volatile.Read(ref _atuTuneUntilTicks) > Environment.TickCount64);
+            AtuTune: Volatile.Read(ref _atuTuneUntilTicks) > Environment.TickCount64,
+            TxAntenna: (HpsdrAntenna)Volatile.Read(ref _txAntenna),
+            UserDigOut: (byte)Volatile.Read(ref _userDigOut));
     }
 
     private void RxLoop()

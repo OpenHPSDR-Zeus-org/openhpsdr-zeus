@@ -16,8 +16,9 @@
 // Every board exposes a PTT-IN line, so that card is ungated by board. The
 // `keyed` lamp is driven live by the PttStatusFrame WS edge regardless of the
 // enable toggle; the toggle only controls whether a footswitch press is promoted
-// to host MOX. Defaults ON (Thetis-faithful) server-side; promotion is
-// edge-triggered so default-ON never auto-keys without a real footswitch edge.
+// to host MOX. Defaults OFF (operator opts in) server-side; promotion is
+// edge-triggered, so even once enabled it never auto-keys without a real
+// footswitch edge.
 //
 // Visual idiom reuses PsSettingsPanel's `.ps-shell` / `.ps-card` / `.ps-field`
 // surfaces (tokens only, no new chrome / palette). Layout / visual specifics
@@ -32,6 +33,7 @@ import {
   type AntennaName,
   type RxAuxName,
 } from '../state/antenna-store';
+import { useHl2GpioStore } from '../state/hl2-gpio-store';
 
 // TX-audio source labels for the single-select control. The control is a radio-
 // button group (role="radiogroup") bound to the ONE TxAudioSource enum value —
@@ -54,6 +56,10 @@ const MIC_BIAS_CONFIRM =
   'couple RF. Leave it OFF unless your microphone needs bias.';
 
 const ANTENNA_OPTIONS: AntennaName[] = ['Ant1', 'Ant2', 'Ant3'];
+
+// HL2 user GPIO line labels (4-bit user_dig_out → MCP23008). HL2-only; the
+// store's `supported` flag gates the whole card.
+const GPIO_LINES = [0, 1, 2, 3] as const;
 
 export function RadioSettingsPanel() {
   const pttKeyed = usePttStore((s) => s.keyed);
@@ -84,12 +90,18 @@ export function RadioSettingsPanel() {
   const loadAntenna = useAntennaStore((s) => s.load);
   const setAntennaBand = useAntennaStore((s) => s.setBand);
 
+  const gpio = useHl2GpioStore((s) => s.state);
+  const gpioInflight = useHl2GpioStore((s) => s.inflight);
+  const loadGpio = useHl2GpioStore((s) => s.load);
+  const setGpioBit = useHl2GpioStore((s) => s.setBit);
+
   useEffect(() => {
     void loadPtt();
     void loadG2();
     void loadAudio();
     void loadAntenna();
-  }, [loadPtt, loadG2, loadAudio, loadAntenna]);
+    void loadGpio();
+  }, [loadPtt, loadG2, loadAudio, loadAntenna, loadGpio]);
 
   // Poll the front-panel bridge status while this tab is mounted so the
   // connected lamp reflects plug/unplug without a manual reload.
@@ -555,6 +567,50 @@ export function RadioSettingsPanel() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* User GPIO — HL2 only (the 4 user_dig_out lines → MCP23008). Gated on
+          the store's `supported` flag, which the server sets true only for a
+          connected Hermes-Lite 2. Server-authoritative: the backend pushes the
+          persisted mask on connect, so this only loads + PUTs operator edits. */}
+      {gpio.supported && (
+        <div className="ps-card">
+          <h4>
+            <svg className="ps-ic-sm" viewBox="0 0 12 12">
+              <path d="M2 6h2M8 6h2M6 2v2M6 8v2M4 4h4v4H4z" fill="none" />
+            </svg>
+            User GPIO
+            <span className="ps-card-hint">HL2 — 4 digital outputs</span>
+          </h4>
+
+          <div className="ps-field">
+            <div className="ps-name">
+              Output Lines
+              <em>
+                The four user-controllable digital output pins (user_dig_out →
+                MCP23008) on the IO/DB9 connector. Operator-defined — wire to
+                whatever your station needs.
+              </em>
+            </div>
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+              {GPIO_LINES.map((bit) => {
+                const on = (gpio.bits & (1 << bit)) !== 0;
+                return (
+                  <label className="ps-check" key={bit}>
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      disabled={gpioInflight}
+                      onChange={(e) => void setGpioBit(bit, e.target.checked)}
+                    />
+                    <span className="ps-check-box" />
+                    <span>OUT {bit}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -282,14 +282,32 @@ public class ControlFrameAudioEncoderTests
     }
 
     [Fact]
-    public void Attenuator_NonHl2_AudioFields_DoNotTouchTheFrame()
+    public void Attenuator_NonHl2_MicTrsAndLineInGain_DoNotTouchTheFrame()
     {
-        // A Hermes board with the 0x14-frame audio fields set must NOT emit
-        // mic_trs/bias/line_in_gain there — that frame's mic surface is HL2-
-        // only. (Hermes mic bits ride the 0x12 frame instead.)
-        var s = Hermes() with { MicTrs = true, MicBias = true, LineInGain = 0x1F };
+        // On a non-HL2 board the 0x14-frame mic_trs (C1[4]) and line_in_gain
+        // (C2[4:0]) are HL2-only — Hermes mic bits ride the 0x12 frame instead,
+        // and the ANAN-10E line-in rides the HermesII branch. mic_bias is the
+        // exception (board-agnostic, see the GAP-AUD-1 test below), so it stays
+        // OFF here.
+        var s = Hermes() with { MicTrs = true, LineInGain = 0x1F };
         var cc = Frame(ControlFrame.CcRegister.Attenuator, s);
-        Assert.Equal(0x00, cc[1]); // C1 — no mic bits
+        Assert.Equal(0x00, cc[1]); // C1 — no mic_trs (mic_bias off in this state)
         Assert.Equal(0x00, cc[2] & 0x1F); // C2 — no line_in_gain
+    }
+
+    [Fact]
+    public void Attenuator_NonHl2_MicBias_RidesC1Bit5()
+    {
+        // External-port parity audit (GAP-AUD-1): the 0x14-frame C1[5]=mic_bias
+        // bit is board-agnostic per Thetis networkproto1.c case 11, so a non-HL2
+        // codec board (ANAN-100D/200D) emits it when set. The encoder trusts that
+        // RadioService.ClampAudioSource has already gated s.MicBias to HasMicBias
+        // boards + the RadioMic/XLR source upstream; at the wire it rides for any
+        // non-HL2 board with the bit set. mic_trs / line_in_gain stay HL2-only.
+        var s = Hermes() with { Board = HpsdrBoardKind.Angelia, MicBias = true };
+        var cc = Frame(ControlFrame.CcRegister.Attenuator, s);
+        Assert.Equal(1 << 5, cc[1] & (1 << 5)); // C1[5] mic_bias set
+        Assert.Equal(0x00, cc[1] & ~(1 << 5)); // no other C1 bits
+        Assert.Equal(0x00, cc[2] & 0x1F); // C2 — still no line_in_gain
     }
 }

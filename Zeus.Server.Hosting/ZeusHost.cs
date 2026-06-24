@@ -248,6 +248,12 @@ public static class ZeusHost
         // AudioSettingsStore? ctor param resolves it and wires the Changed →
         // PushAudioFrontEnd push. Shares zeus-prefs.db (single global row).
         builder.Services.AddSingleton<AudioSettingsStore>();
+        // Global (per-radio) HL2 user-GPIO mask store (external-port parity audit
+        // — re-port of external-ports plan Phase 5). Registered before
+        // RadioService so the latter's optional Hl2GpioSettingsStore? ctor param
+        // resolves it and wires the Changed → PushHl2Gpio push. Shares
+        // zeus-prefs.db (single global row); HL2-only on the wire.
+        builder.Services.AddSingleton<Hl2GpioSettingsStore>();
         builder.Services.AddSingleton<RadioService>();
         // Frees a Busy radio (drops its current owner) so the operator can take
         // it over from the Connect panel. Stateless — opens its own socket.
