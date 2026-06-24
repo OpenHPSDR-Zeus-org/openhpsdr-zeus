@@ -233,4 +233,37 @@ describe('BandFavorites', () => {
 
     unmount();
   });
+
+  it('gangs a band selection across every selected receiver', async () => {
+    // RX1 + RX2 both selected, RX1 focused. A band click must retune BOTH.
+    useConnectionStore.setState({
+      vfoHz: 14_200_000,
+      vfoBHz: 14_200_000,
+      mode: 'USB',
+      modeB: 'USB',
+      rx2Enabled: true,
+      focusedRxIndex: 0,
+      rxFocus: 'A',
+      selectedRxIndices: [0, 1],
+    });
+
+    const { container, unmount } = render(createElement(BandFavorites));
+    const fortyMeters = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === '40m');
+
+    await act(async () => {
+      fortyMeters?.click();
+      await Promise.resolve();
+    });
+
+    // Both receivers were commanded to the 40m centre (the ganged contract).
+    // The focused receiver (RX1) reconciles the store from its own response;
+    // RX2's committed value lands on the next state poll, so we assert the
+    // posts rather than the transiently-reconciled sibling field.
+    expect(setVfo).toHaveBeenCalledWith(7_074_000, undefined);
+    expect(setVfoB).toHaveBeenCalledWith(7_074_000, undefined);
+    expect(useConnectionStore.getState().vfoHz).toBe(7_074_000);
+
+    unmount();
+  });
 });
