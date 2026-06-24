@@ -12,9 +12,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#  include <io.h>
+#  include <fcntl.h>
+#endif
 
 int main(void)
 {
+#ifdef _WIN32
+    /* Windows opens stdin/stdout in text mode by default, which mangles binary
+     * IQ/PCM (a 0x0A byte ends a read early). Force binary mode. */
+    _setmode(_fileno(stdin),  _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     zeus_rade_global_init();
     zeus_rade *z = zeus_rade_open();
     if (!z) { fprintf(stderr, "zeus_rade_open failed\n"); return 1; }
