@@ -27,8 +27,15 @@
 //
 // Field routing by receiver INDEX:
 //   - index 0 (RX1)  → the connection-store primary fields (vfoHz, mode, …)
-//   - index 1 (RX2)  → the *B fields (vfoBHz, modeB, …)
-//   - index >= 2     → the matching `receivers[]` entry, found by `.index`
+//   - index >= 1     → the matching `receivers[]` entry, found by `.index`,
+//                      falling back to the flat *B fields (vfoBHz, modeB, …) for
+//                      index 1 only when the array entry is absent
+//
+// The `receivers[]` array is the canonical per-receiver source of truth. RX2
+// (index 1) is being migrated off the flat *B fields onto `receivers[1]`: reads
+// prefer the array entry and the optimistic writers keep BOTH in sync (the flat
+// *B fields stay populated for the components that still read them directly,
+// until that migration completes and the flat dupes are retired).
 //
 // RX2 and RX3+ are the same class of "secondary receiver" (the VFO is the DDC
 // center); only RX1 (index 0) gets radioLo pan, CTUN sweep, snap history /
@@ -70,6 +77,17 @@ function receiverEntry(state: ConnState, idx: number): ReceiverDto | undefined {
   return state.receivers.find((r) => r.index === idx);
 }
 
+/** Immutably patch the `receivers[]` entry with the given index, leaving the
+ *  rest of the array untouched. Used by the optimistic writers so RX2 (index 1)
+ *  and RX3+ live in the canonical array even before the server round-trips. */
+function patchReceiverEntry(
+  receivers: ReceiverDto[],
+  idx: number,
+  patch: Partial<ReceiverDto>,
+): ReceiverDto[] {
+  return receivers.map((r) => (r.index === idx ? { ...r, ...patch } : r));
+}
+
 // ---------------------------------------------------------------------------
 // Pure selectors over connection-store state. Usable directly as zustand
 // selectors (`useConnectionStore((s) => getReceiverVfoHz(s, key))`). For
@@ -79,29 +97,33 @@ function receiverEntry(state: ConnState, idx: number): ReceiverDto | undefined {
 export function getReceiverVfoHz(state: ConnState, key: ReceiverKey): number {
   const idx = rxIndexOf(key);
   if (idx === 0) return state.vfoHz;
-  if (idx === 1) return state.vfoBHz;
-  return receiverEntry(state, idx)?.vfoHz ?? state.vfoHz;
+  const entry = receiverEntry(state, idx);
+  if (entry) return entry.vfoHz;
+  return idx === 1 ? state.vfoBHz : state.vfoHz;
 }
 
 export function getReceiverMode(state: ConnState, key: ReceiverKey) {
   const idx = rxIndexOf(key);
   if (idx === 0) return state.mode;
-  if (idx === 1) return state.modeB;
-  return receiverEntry(state, idx)?.mode ?? state.mode;
+  const entry = receiverEntry(state, idx);
+  if (entry) return entry.mode;
+  return idx === 1 ? state.modeB : state.mode;
 }
 
 export function getReceiverFilterLowHz(state: ConnState, key: ReceiverKey): number {
   const idx = rxIndexOf(key);
   if (idx === 0) return state.filterLowHz;
-  if (idx === 1) return state.filterLowHzB;
-  return receiverEntry(state, idx)?.filterLowHz ?? state.filterLowHz;
+  const entry = receiverEntry(state, idx);
+  if (entry) return entry.filterLowHz;
+  return idx === 1 ? state.filterLowHzB : state.filterLowHz;
 }
 
 export function getReceiverFilterHighHz(state: ConnState, key: ReceiverKey): number {
   const idx = rxIndexOf(key);
   if (idx === 0) return state.filterHighHz;
-  if (idx === 1) return state.filterHighHzB;
-  return receiverEntry(state, idx)?.filterHighHz ?? state.filterHighHz;
+  const entry = receiverEntry(state, idx);
+  if (entry) return entry.filterHighHz;
+  return idx === 1 ? state.filterHighHzB : state.filterHighHz;
 }
 
 /** Read a receiver's VFO out of a server RadioStateDto (e.g. to reconcile the
@@ -113,15 +135,17 @@ export function getReceiverVfoFromState(
 ): number {
   const idx = rxIndexOf(key);
   if (idx === 0) return state.vfoHz;
-  if (idx === 1) return state.vfoBHz;
-  return state.receivers?.find((r) => r.index === idx)?.vfoHz ?? state.vfoHz;
+  const entry = state.receivers?.find((r) => r.index === idx);
+  if (entry) return entry.vfoHz;
+  return idx === 1 ? state.vfoBHz : state.vfoHz;
 }
 
 export function getReceiverAfGainDb(state: ConnState, key: ReceiverKey): number {
   const idx = rxIndexOf(key);
   if (idx === 0) return state.rxAfGainDb;
-  if (idx === 1) return state.rx2AfGainDb;
-  return receiverEntry(state, idx)?.afGainDb ?? state.rxAfGainDb;
+  const entry = receiverEntry(state, idx);
+  if (entry) return entry.afGainDb;
+  return idx === 1 ? state.rx2AfGainDb : state.rxAfGainDb;
 }
 
 export function getReceiverFilterPresetName(
@@ -130,8 +154,9 @@ export function getReceiverFilterPresetName(
 ): string | null {
   const idx = rxIndexOf(key);
   if (idx === 0) return state.filterPresetName;
-  if (idx === 1) return state.filterPresetNameB;
-  return receiverEntry(state, idx)?.filterPresetName ?? state.filterPresetName;
+  const entry = receiverEntry(state, idx);
+  if (entry) return entry.filterPresetName;
+  return idx === 1 ? state.filterPresetNameB : state.filterPresetName;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,11 +168,12 @@ export function optimisticSetReceiverVfo(key: ReceiverKey, hz: number): void {
   const idx = rxIndexOf(key);
   if (idx === 0) {
     useConnectionStore.setState({ vfoHz: hz });
-  } else if (idx === 1) {
-    useConnectionStore.setState({ vfoBHz: hz });
   } else {
+    // index >= 1: update the canonical receivers[] entry; for RX2 (index 1)
+    // also keep the flat vfoBHz mirror in sync until its direct readers migrate.
     useConnectionStore.setState((s) => ({
-      receivers: s.receivers.map((r) => (r.index === idx ? { ...r, vfoHz: hz } : r)),
+      receivers: patchReceiverEntry(s.receivers, idx, { vfoHz: hz }),
+      ...(idx === 1 ? { vfoBHz: hz } : {}),
     }));
   }
 }
@@ -160,13 +186,10 @@ export function optimisticSetReceiverFilter(
   const idx = rxIndexOf(key);
   if (idx === 0) {
     useConnectionStore.setState({ filterLowHz: lo, filterHighHz: hi });
-  } else if (idx === 1) {
-    useConnectionStore.setState({ filterLowHzB: lo, filterHighHzB: hi });
   } else {
     useConnectionStore.setState((s) => ({
-      receivers: s.receivers.map((r) =>
-        r.index === idx ? { ...r, filterLowHz: lo, filterHighHz: hi } : r,
-      ),
+      receivers: patchReceiverEntry(s.receivers, idx, { filterLowHz: lo, filterHighHz: hi }),
+      ...(idx === 1 ? { filterLowHzB: lo, filterHighHzB: hi } : {}),
     }));
   }
 }
@@ -175,11 +198,10 @@ export function optimisticSetReceiverMode(key: ReceiverKey, mode: RxMode): void 
   const idx = rxIndexOf(key);
   if (idx === 0) {
     useConnectionStore.setState({ mode });
-  } else if (idx === 1) {
-    useConnectionStore.setState({ modeB: mode });
   } else {
     useConnectionStore.setState((s) => ({
-      receivers: s.receivers.map((r) => (r.index === idx ? { ...r, mode } : r)),
+      receivers: patchReceiverEntry(s.receivers, idx, { mode }),
+      ...(idx === 1 ? { modeB: mode } : {}),
     }));
   }
 }
@@ -188,13 +210,10 @@ export function optimisticSetReceiverPreset(key: ReceiverKey, slot: string): voi
   const idx = rxIndexOf(key);
   if (idx === 0) {
     useConnectionStore.setState({ filterPresetName: slot });
-  } else if (idx === 1) {
-    useConnectionStore.setState({ filterPresetNameB: slot });
   } else {
     useConnectionStore.setState((s) => ({
-      receivers: s.receivers.map((r) =>
-        r.index === idx ? { ...r, filterPresetName: slot } : r,
-      ),
+      receivers: patchReceiverEntry(s.receivers, idx, { filterPresetName: slot }),
+      ...(idx === 1 ? { filterPresetNameB: slot } : {}),
     }));
   }
 }
