@@ -104,9 +104,71 @@ public sealed record FreeDvStationDto(
 /// <see cref="ConnectionState"/> mirrors the upstream Socket.IO link state
 /// ("Disconnected" | "Connecting" | "Connected" | "Reconnecting") so the panel
 /// can show a live/stale indicator; <see cref="Stations"/> is sorted by
-/// frequency ascending.
+/// frequency ascending. <see cref="Reporting"/> is true when the operator is
+/// connected in the "report" role (on the public map); <see cref="MySid"/> is
+/// the operator's own per-connection session id while reporting (null otherwise),
+/// so the panel can highlight the operator's own row.
 /// </summary>
 public sealed record FreeDvStationsResponseDto(
     string ConnectionState,
     bool Enabled,
-    IReadOnlyList<FreeDvStationDto> Stations);
+    IReadOnlyList<FreeDvStationDto> Stations,
+    bool Reporting = false,
+    string? MySid = null);
+
+/// <summary>
+/// Operator config for FreeDV Reporter "report" mode. Strictly opt-in: when
+/// <see cref="ReportEnabled"/> is false (the default), or callsign / grid are
+/// blank, Zeus stays a read-only "view" observer and broadcasts nothing. When
+/// enabled with a callsign + Maidenhead grid, Zeus connects in the "report" role
+/// and publishes the operator's callsign, grid, frequency and TX activity to the
+/// public qso.freedv.org map. <see cref="Message"/> is an optional status text.
+/// </summary>
+public sealed record FreeDvReporterSettings(
+    bool ReportEnabled = false,
+    string Callsign = "",
+    string GridSquare = "",
+    string Message = "")
+{
+    public const int MaxGridLength = 6;
+    public const int MaxMessageLength = 80;
+
+    /// <summary>
+    /// Trim/normalize so a hand-crafted POST or stale persisted row can't push
+    /// junk to the public reporter: callsign upper-cased, grid trimmed/capped to
+    /// a Maidenhead-shaped prefix, message trimmed/capped. Reporting still only
+    /// engages when ReportEnabled is true AND both callsign and grid are present.
+    /// </summary>
+    public FreeDvReporterSettings Normalized() => this with
+    {
+        Callsign = (Callsign ?? "").Trim().ToUpperInvariant(),
+        GridSquare = NormalizeGrid(GridSquare),
+        Message = NormalizeMessage(Message),
+    };
+
+    /// <summary>True when the settings are sufficient to connect in report role.</summary>
+    public bool CanReport =>
+        ReportEnabled
+        && !string.IsNullOrWhiteSpace(Callsign)
+        && !string.IsNullOrWhiteSpace(GridSquare);
+
+    private static string NormalizeGrid(string? grid)
+    {
+        var g = (grid ?? "").Trim();
+        if (g.Length == 0) return "";
+        // A Maidenhead locator is field/square[/subsquare]: two letters, two
+        // digits, optionally two more letters. Keep only that leading run, cap
+        // at six chars, and upper-case the field/subsquare so it round-trips
+        // consistently. Anything that doesn't even start letter-letter is
+        // dropped (so a typo can't broadcast a bogus location).
+        if (g.Length > MaxGridLength) g = g[..MaxGridLength];
+        if (g.Length < 2 || !char.IsLetter(g[0]) || !char.IsLetter(g[1])) return "";
+        return g.ToUpperInvariant();
+    }
+
+    private static string NormalizeMessage(string? message)
+    {
+        var m = (message ?? "").Trim();
+        return m.Length > MaxMessageLength ? m[..MaxMessageLength] : m;
+    }
+}

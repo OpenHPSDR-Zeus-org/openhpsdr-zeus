@@ -8,16 +8,21 @@
 import { create } from 'zustand';
 import {
   fetchFreeDvStations,
+  getFreeDvReporterSettings,
+  setFreeDvReporterSettings,
+  freeDvStationQsy,
   setMode,
   setVfo,
   setFreeDvConfig,
   type FreeDvStationDto,
+  type FreeDvReporterSettings,
   type FreeDvSubmode,
 } from '../api/client';
 import { useConnectionStore } from './connection-store';
 import { freqHzToBand } from './spots-store';
 
 export { freqHzToBand };
+export type { FreeDvReporterSettings };
 
 interface FreeDvStationsState {
   stations: FreeDvStationDto[];
@@ -25,6 +30,17 @@ interface FreeDvStationsState {
   loading: boolean;
   error: string | null;
   lastUpdated: number | null;
+
+  /** True when Zeus is connected in "report" role (on the public map). */
+  reporting: boolean;
+  /** Operator's own session id while reporting (highlights own row). */
+  mySid: string | null;
+
+  /** Report-mode settings (opt-in toggle + callsign/grid/message). */
+  reporterSettings: FreeDvReporterSettings | null;
+  /** Transient feedback from the last report-settings save / QSY. */
+  reporterError: string | null;
+  reporterSaving: boolean;
 
   /** Free-text filter (callsign / grid / mode / band). */
   query: string;
@@ -35,6 +51,10 @@ interface FreeDvStationsState {
   setQuery: (query: string) => void;
   loadStations: () => Promise<void>;
   tuneToStation: (station: FreeDvStationDto) => Promise<void>;
+
+  loadReporterSettings: () => Promise<void>;
+  saveReporterSettings: (settings: FreeDvReporterSettings) => Promise<void>;
+  requestQsy: (sid: string) => Promise<void>;
 }
 
 /** Map a FreeDV Reporter mode string to a FreeDvSubmode enum value.
@@ -73,12 +93,17 @@ export function stationMatchesQuery(station: FreeDvStationDto, query: string): b
   );
 }
 
-export const useFreeDvStationsStore = create<FreeDvStationsState>()((set) => ({
+export const useFreeDvStationsStore = create<FreeDvStationsState>()((set, get) => ({
   stations: [],
   connectionState: 'Disconnected',
   loading: false,
   error: null,
   lastUpdated: null,
+  reporting: false,
+  mySid: null,
+  reporterSettings: null,
+  reporterError: null,
+  reporterSaving: false,
   query: '',
   tuneError: null,
 
@@ -91,6 +116,8 @@ export const useFreeDvStationsStore = create<FreeDvStationsState>()((set) => ({
       set({
         stations: resp.stations,
         connectionState: resp.connectionState,
+        reporting: resp.reporting,
+        mySid: resp.mySid,
         error: null,
         loading: false,
         lastUpdated: Date.now(),
@@ -100,6 +127,41 @@ export const useFreeDvStationsStore = create<FreeDvStationsState>()((set) => ({
         error: err instanceof Error ? err.message : 'Failed to load FreeDV stations',
         loading: false,
       });
+    }
+  },
+
+  loadReporterSettings: async () => {
+    try {
+      const settings = await getFreeDvReporterSettings();
+      set({ reporterSettings: settings, reporterError: null });
+    } catch (err) {
+      set({
+        reporterError: err instanceof Error ? err.message : 'Failed to load report settings',
+      });
+    }
+  },
+
+  saveReporterSettings: async (settings) => {
+    set({ reporterSaving: true, reporterError: null });
+    try {
+      const saved = await setFreeDvReporterSettings(settings);
+      set({ reporterSettings: saved, reporterSaving: false });
+      // Reconnect takes a moment server-side; refresh the roster + reporting flag.
+      void get().loadStations();
+    } catch (err) {
+      set({
+        reporterError: err instanceof Error ? err.message : 'Failed to save report settings',
+        reporterSaving: false,
+      });
+    }
+  },
+
+  requestQsy: async (sid) => {
+    set({ reporterError: null });
+    try {
+      await freeDvStationQsy(sid);
+    } catch (err) {
+      set({ reporterError: err instanceof Error ? err.message : 'QSY request failed' });
     }
   },
 

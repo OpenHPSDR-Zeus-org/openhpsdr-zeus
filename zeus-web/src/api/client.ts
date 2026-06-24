@@ -7074,7 +7074,30 @@ export type FreeDvStationsResponseDto = {
   connectionState: string; // "Disconnected"|"Connecting"|"Connected"|"Reconnecting"
   enabled: boolean;
   stations: FreeDvStationDto[];
+  reporting: boolean;      // true when on the public map ("report" role)
+  mySid: string | null;    // operator's own session id while reporting
 };
+
+// ---- FreeDV Reporter "report mode" settings (GET/POST /api/freedv/reporter/settings) ----
+// Mirrors the server-side FreeDvReporterSettings record. Strictly opt-in:
+// reportEnabled defaults false and the backend only joins the public map in
+// "report" role when enabled AND callsign + grid are present.
+export type FreeDvReporterSettings = {
+  reportEnabled: boolean;
+  callsign: string;
+  gridSquare: string;
+  message: string;
+};
+
+function normalizeFreeDvReporterSettings(raw: unknown): FreeDvReporterSettings {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    reportEnabled: r.reportEnabled === true,
+    callsign: typeof r.callsign === 'string' ? r.callsign : '',
+    gridSquare: typeof r.gridSquare === 'string' ? r.gridSquare : '',
+    message: typeof r.message === 'string' ? r.message : '',
+  };
+}
 
 function normalizeFreeDvStation(raw: unknown): FreeDvStationDto {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -7104,10 +7127,51 @@ function normalizeFreeDvStationsResponse(raw: unknown): FreeDvStationsResponseDt
     connectionState: typeof r.connectionState === 'string' ? r.connectionState : 'Disconnected',
     enabled: r.enabled === true,
     stations: Array.isArray(r.stations) ? (r.stations as unknown[]).map(normalizeFreeDvStation) : [],
+    reporting: r.reporting === true,
+    mySid: typeof r.mySid === 'string' ? r.mySid : null,
   };
 }
 
 // GET /api/freedv/stations — live FreeDV Reporter station list.
 export function fetchFreeDvStations(signal?: AbortSignal): Promise<FreeDvStationsResponseDto> {
   return jsonFetch('/api/freedv/stations', { signal }, normalizeFreeDvStationsResponse);
+}
+
+// GET /api/freedv/reporter/settings — current report-mode opt-in settings.
+export function getFreeDvReporterSettings(signal?: AbortSignal): Promise<FreeDvReporterSettings> {
+  return jsonFetch('/api/freedv/reporter/settings', { signal }, normalizeFreeDvReporterSettings);
+}
+
+// POST /api/freedv/reporter/settings — save report-mode settings (the backend
+// normalizes, persists, and reconnects in the new role). Returns what was saved.
+export function setFreeDvReporterSettings(
+  settings: FreeDvReporterSettings,
+  signal?: AbortSignal,
+): Promise<FreeDvReporterSettings> {
+  return jsonFetch(
+    '/api/freedv/reporter/settings',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        reportEnabled: settings.reportEnabled,
+        callsign: settings.callsign,
+        gridSquare: settings.gridSquare,
+        message: settings.message,
+      }),
+      signal,
+    },
+    normalizeFreeDvReporterSettings,
+  );
+}
+
+// POST /api/freedv/stations/{sid}/qsy — ask that station to QSY to my current
+// VFO frequency. Resolves on success; rejects (jsonFetch throws on non-2xx) when
+// not reporting or the sid is unknown.
+export function freeDvStationQsy(sid: string, signal?: AbortSignal): Promise<void> {
+  return jsonFetch(
+    `/api/freedv/stations/${encodeURIComponent(sid)}/qsy`,
+    { method: 'POST', signal },
+    () => undefined,
+  );
 }
