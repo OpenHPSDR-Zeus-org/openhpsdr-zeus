@@ -91,6 +91,16 @@ set(RADAE_C_SOURCES
     "${RADAE_C}/src/rade_dec_data.c"   # ~24 MB compiled-in decoder weights
     "${RADAE_C}/src/rade_enc_data.c")  # ~24 MB compiled-in encoder weights
 
+# The two compiled-in weight tables are ~24 MB each of generated data — at -O2/-O3
+# they cost minutes and gigabytes of RAM to compile for zero runtime benefit (they
+# are data, not hot code). Pin them to -O1. (GCC / Clang / MinGW; MSVC ignores.)
+if(NOT MSVC)
+  set_source_files_properties(
+    "${RADAE_C}/src/rade_enc_data.c"
+    "${RADAE_C}/src/rade_dec_data.c"
+    PROPERTIES COMPILE_OPTIONS "-O1")
+endif()
+
 # ---------------------------------------------------------------------------
 # 3. zeus_rade shim
 # ---------------------------------------------------------------------------
@@ -136,6 +146,20 @@ set_target_properties(zeus_rade PROPERTIES
     OUTPUT_NAME zeus_rade
     VERSION 1.0
     SOVERSION 1)
+
+# Windows: emit `zeus_rade.dll` (drop MinGW's "lib" prefix) so the file name
+# matches what the .NET loader probes (FreeDvNativeLoader.RadeNativeFileName).
+# Linux/macOS keep the conventional lib<name>.so / .dylib.
+if(WIN32)
+  set_target_properties(zeus_rade PROPERTIES PREFIX "")
+endif()
+
+# MinGW: statically link the GCC + winpthread runtimes so the DLL depends only on
+# system libraries (KERNEL32 + UCRT) — never libgcc_s_seh-1.dll / libwinpthread-1.dll.
+# PROVEN: yields a standalone zeus_rade.dll that decoded off-air RADE on Windows.
+if(MINGW)
+  target_link_options(zeus_rade PRIVATE -static -static-libgcc -Wl,-Bstatic)
+endif()
 
 # ---------------------------------------------------------------------------
 # Optional: standalone decode-validation harness (proves the lib end-to-end).

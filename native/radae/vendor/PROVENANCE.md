@@ -109,3 +109,23 @@ The one-shared-library composition above was built and validated end-to-end:
   shim still uses radae_c's 7-bit `rade_rx_get_eoo_callsign`. Correct callsigns require
   wiring `freedv_text/src/rade_text.c` (LGPL-2.1 codec2 LDPC). Out of scope for the
   audio-decode base decision; tracked separately.
+
+## Proven build + decode (Windows / MinGW, 2026-06-24)
+
+The same composition was then PROVEN on native Windows with MinGW UCRT64 gcc 16.1
+(Ninja, `OPUS_DISABLE_INTRINSICS=ON`):
+
+- `zeus_rade.dll` (11.0 MB) linked clean; all 12 `zeus_rade_*` symbols exported.
+- **Standalone** — `objdump -p` shows deps only on `KERNEL32` + `ADVAPI32` +
+  system UCRT (`api-ms-win-crt-*`); NO `libgcc_s_seh-1.dll` / `libwinpthread-1.dll`
+  / `libstdc++`. The static-link flags are now in `../CMakeLists.txt` (`if(MINGW)`).
+- Decoded `FDV_offair.wav` (Windows exe): `synced=2620 last_snr=14dB`,
+  decoded audio max-amp `0.999969` — **byte-for-byte identical to the Linux run**.
+
+Windows build notes now folded into `../CMakeLists.txt`:
+- `if(WIN32) PREFIX ""` so MinGW emits `zeus_rade.dll`, not `libzeus_rade.dll`
+  (matches the .NET loader's probe name).
+- `if(MINGW)` static-runtime link (`-static -static-libgcc -Wl,-Bstatic`).
+- `-O1` on the two ~24 MB weight `.c` files (compile-time/RAM; they are data).
+- The `shim/zeus_rade_test.c` harness needs `_setmode(_O_BINARY)` on Windows (stdio
+  binary mode) — added there; the production P/Invoke path doesn't use stdio.

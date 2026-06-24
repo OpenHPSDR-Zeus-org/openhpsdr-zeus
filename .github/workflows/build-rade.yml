@@ -16,10 +16,14 @@
 #   - linux-x64 / linux-arm64 : the exact composition was PROVEN end-to-end in
 #     WSL Ubuntu-24.04 (2620 synced ticks / 14 dB / 0.999969 max-amp). Scalar
 #     build (OPUS_DISABLE_INTRINSICS=ON), so arm64 is the same code path.
-#   - win-x64 / osx-arm64     : same CMake recipe + toolchain wired, but NOT yet
-#     run on a CI runner — expect to iterate the first dispatch. The opus_dnn
-#     slice is scalar-only with stubbed SIMD subtrees (see the stub step below),
-#     which is compiler-agnostic, so the risk is toolchain/link flags, not code.
+#   - win-x64 : PROVEN locally with MinGW UCRT64 gcc — decoded the same off-air
+#     sample to the identical numbers, and the produced zeus_rade.dll is
+#     standalone (KERNEL32 + UCRT only). The static-link + PREFIX="" fixes are now
+#     baked into native/radae/CMakeLists.txt, so no win-specific flags are passed
+#     here. (CI runner toolchain — msys2 python3/shell — may still need a tweak.)
+#   - osx-arm64 : same CMake recipe + toolchain wired, NOT yet run — expect to
+#     iterate the first dispatch. The opus_dnn slice is scalar-only with stubbed
+#     SIMD subtrees, compiler-agnostic, so the risk is toolchain/link, not code.
 
 name: build-rade
 
