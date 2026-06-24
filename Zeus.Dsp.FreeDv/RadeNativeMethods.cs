@@ -82,9 +82,44 @@ internal static partial class RadeNativeMethods
     internal static partial int zeus_rade_snr_db(IntPtr z);
 
     // Last decoded End-of-Over callsign. Copies into callsign_out (>= 9 bytes);
-    // returns chars written, 0 if none since the last over. KNOWN-GARBLED until
-    // freedv_text is wired — not surfaced as RxText this pass.
+    // returns chars written, 0 if none since the last over. Decoded with the
+    // FreeDV reliable-text LDPC (rade_text) — CRC-checked, FreeDV-GUI compatible.
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int zeus_rade_get_eoo_callsign(IntPtr z, byte[] callsign_out);
+
+    // ---- Transmit (mirror of the RX surface) ----
+    // TX sizing (call after open).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int zeus_rade_n_speech_samples(IntPtr z); // int16 @16k consumed per tx call
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int zeus_rade_n_tx_out(IntPtr z);         // RADE_COMP produced per tx call
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int zeus_rade_n_tx_eoo_out(IntPtr z);     // RADE_COMP in the EOO frame
+
+    // Encode one frame-group of 16 kHz speech to modem IQ.
+    //   pcm_in : zeus_rade_n_speech_samples(z) int16 @16k
+    //   tx_out : >= zeus_rade_n_tx_out(z) interleaved complex (real,imag) floats @8k
+    // Returns the number of RADE_COMP samples written.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int zeus_rade_tx(IntPtr z, short[] pcm_in, float[] tx_out);
+
+    // Flush the End-of-Over frame (carries the callsign). Call once on un-key.
+    //   tx_eoo_out : >= zeus_rade_n_tx_eoo_out(z) interleaved complex floats @8k
+    // Returns the number of RADE_COMP samples written.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int zeus_rade_tx_eoo(IntPtr z, float[] tx_eoo_out);
+
+    // Set the EOO callsign (<= 8 chars), encoded with the FreeDV reliable-text
+    // LDPC so it interoperates with FreeDV-GUI. Empty/null clears it.
+    [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void zeus_rade_set_tx_callsign(IntPtr z, string callsign);
 }

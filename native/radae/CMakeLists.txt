@@ -1,18 +1,21 @@
 # native/radae/CMakeLists.txt
 #
-# Builds ONE shared library, `zeus_rade`, that decodes RADE V1 (Radio Autoencoder)
-# off-air IQ to 16 kHz PCM. It is the cross-platform native base for Zeus's RADE
-# support and is P/Invoked from the .NET side as a single library.
+# Builds ONE shared library, `zeus_rade`, the full-duplex RADE V1 (Radio
+# Autoencoder) modem — RX (IQ -> 16 kHz PCM) and TX (16 kHz PCM -> IQ) with an
+# LDPC End-of-Over callsign. Cross-platform native base for Zeus's RADE support,
+# P/Invoked from the .NET side as a single library.
 #
 # Composition (all statically linked into the one .so/.dll/.dylib):
-#   1. opus_dnn   — Xiph Opus + the DNN/FARGAN vocoder (built here via CMake with
-#                   OPUS_DEEP_PLC=ON; provides fargan_synthesize / nnet).
-#   2. radae_c    — David Rowe's pure-C, Python-free RADE modem (IQ -> 36-float
-#                   feature frames). Weights are compiled in (rade_enc_data.c /
-#                   rade_dec_data.c, ~24 MB each). No model files at runtime.
-#   3. zeus_rade  — Zeus's thin shim (shim/zeus_rade.c): rade_rx() -> accumulate
-#                   NB_TOTAL_FEATURES -> fargan_synthesize(), behind one streaming
-#                   "complex IQ in -> int16 PCM out" surface.
+#   1. opus_dnn    — Xiph Opus + DNN/FARGAN vocoder + LPCNet feature analyzer
+#                    (OPUS_DEEP_PLC=ON: fargan_synthesize / nnet /
+#                    lpcnet_compute_single_frame_features).
+#   2. radae_c     — David Rowe's pure-C, Python-free RADE modem (IQ <-> 36-float
+#                    feature frames). Weights compiled in (rade_enc_data.c /
+#                    rade_dec_data.c, ~24 MB each). No model files at runtime.
+#   3. freedv_text — FreeDV reliable-text LDPC for the EOO callsign (FreeDV-GUI
+#                    on-air compatible). LGPL-2.1 codec2 LDPC; dynamic-linked.
+#   4. zeus_rade   — Zeus's thin shim (shim/zeus_rade.c): one streaming "complex
+#                    IQ <-> int16 PCM" RX/TX surface over the three above.
 #
 # The three upstream slices are NOT committed to the Zeus git tree (~95 MB of
 # weight sources). CI (build-native-libs.yml) vendors them into ${ZEUS_RADE_VENDOR}
@@ -102,19 +105,45 @@ if(NOT MSVC)
 endif()
 
 # ---------------------------------------------------------------------------
-# 3. zeus_rade shim
+# 3. freedv_text — FreeDV reliable-text (LDPC) EOO callsign codec. On-air
+#    compatible with FreeDV-GUI's RADE EOO frame (CRC8 + 6-bit chars + LDPC
+#    HRA_56_56 + gp_interleaver), unlike radae_c's internal 7-bit packing. Used
+#    by the shim for both TX-encode and RX-decode of the callsign. The codec2
+#    LDPC slice is LGPL-2.1; zeus_rade is a shared library, so dynamic linking
+#    satisfies it (see vendor/PROVENANCE.md).
+# ---------------------------------------------------------------------------
+set(FREEDV_TXT_SOURCES
+    "${FREEDV_TXT}/src/rade_text.c"
+    "${FREEDV_TXT}/codec2/gp_interleaver.c"
+    "${FREEDV_TXT}/codec2/ldpc_codes.c"
+    "${FREEDV_TXT}/codec2/HRA_56_56.c"
+    "${FREEDV_TXT}/codec2/mpdecode_core.c"
+    "${FREEDV_TXT}/codec2/phi0.c")
+
+# ---------------------------------------------------------------------------
+# 4. zeus_rade shim
 # ---------------------------------------------------------------------------
 set(SHIM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/shim/zeus_rade.c")
 
 # ---------------------------------------------------------------------------
 # The one shared library
 # ---------------------------------------------------------------------------
-add_library(zeus_rade SHARED ${RADAE_C_SOURCES} ${SHIM_SOURCES})
+add_library(zeus_rade SHARED ${RADAE_C_SOURCES} ${FREEDV_TXT_SOURCES} ${SHIM_SOURCES})
 
 target_include_directories(zeus_rade PRIVATE
     "${RADAE_C}/src"
+    "${FREEDV_TXT}/src"
+    "${FREEDV_TXT}/codec2"
     "${CMAKE_CURRENT_SOURCE_DIR}/shim"
     ${OPUS_INCLUDE_DIRS})
+
+# Windows has no <alloca.h>; the vendored codec2 LDPC sources hardcode it. Add a
+# Windows-only compat shim dir (FIRST) that maps <alloca.h> -> <malloc.h>. Not
+# added on Linux/macOS, so their real system header is used unchanged.
+if(WIN32)
+  target_include_directories(zeus_rade BEFORE PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/shim/compat")
+endif()
 
 # RADE_STATIC neutralises the DLL import/export + __stdcall decoration in
 # rade_api.h (Thetis-RADE static-build patch); RADE_PYTHON_FREE selects the C
@@ -172,4 +201,9 @@ if(ZEUS_RADE_BUILD_TEST)
       "${CMAKE_CURRENT_SOURCE_DIR}/shim"
       ${OPUS_INCLUDE_DIRS})
   target_link_libraries(zeus_rade_test PRIVATE zeus_rade)
+  # The harness calls libm directly (sin() in the synth). GNU ld needs an explicit
+  # -lm for the executable's own references (MinGW/MSVC auto-link it).
+  if(NOT MSVC)
+    target_link_libraries(zeus_rade_test PRIVATE m)
+  endif()
 endif()
