@@ -446,10 +446,12 @@ void main() {
   // signals reach the brighter end of the Pop palette (closer to how the normal
   // textured waterfall lets them pop) while terrain still has headroom above.
   float colorLevel = mix(n, min(n, 0.82 + terrainDisplayHeight * 0.12), popI);
-  // Match the WebGPU heightfield tone: in normal RX mode pull the noise floor
-  // down with a gamma so it reads dark and signals separate, instead of the
-  // legacy lifted/harsh curve. Gated to normal mode (Pop/TX keep their mapping).
-  colorLevel = mix(colorLevel, pow(colorLevel, 1.5), normalI);
+  // Match the WebGPU heightfield's normal-RX tone: a mild contrast lift around
+  // 0.5, not a gamma squash. The previous pow(colorLevel, 1.5) pulled the noise
+  // floor so far down that the Blue palette's 0.42 dark anchor swallowed typical
+  // HF signal levels — colour only appeared above ~-90 dBm, well above a
+  // Hermes-Lite 2 noise floor (#840). Gated to normal mode (Pop unchanged).
+  colorLevel = mix(colorLevel, clamp((colorLevel - 0.5) * 1.12 + 0.5, 0.0, 1.0), normalI);
   vec4 c = texture(uLut, vec2(colorLevel, 0.5));
   // Hillshade relief multiply — applied in BOTH modes (this is the topographic
   // look the WebGPU heightfield also uses; it does not over-expose on its own).
