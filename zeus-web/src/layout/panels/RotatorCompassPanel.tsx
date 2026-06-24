@@ -15,6 +15,7 @@ import { LeafletMapErrorBoundary } from '../../components/design/LeafletMapError
 import { bearingDeg, distanceKm } from '../../components/design/geo';
 import { useQrzStore } from '../../state/qrz-store';
 import { useRotatorStore } from '../../state/rotator-store';
+import { RotatorSlotSelector } from '../../components/RotatorSlotSelector';
 
 function normalizeAz(deg: number | null | undefined): number | null {
   if (deg == null || !Number.isFinite(deg)) return null;
@@ -120,6 +121,7 @@ export function RotatorCompassPanel() {
           {rotMoving && targetVisibleAz != null && (
             <span className="rc-arrow">→ {fmtAz(targetVisibleAz)}</span>
           )}
+          <RotatorSlotSelector />
         </div>
 
         <div className="rc-controls">

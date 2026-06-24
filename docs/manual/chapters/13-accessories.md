@@ -107,23 +107,41 @@ forces an update. No setup is required.
 
 ### Rotator Control
 
-Zeus drives an antenna rotator through **rotctld**, the Hamlib rotator
-daemon. Under **Settings → Rotator**, tick **Enabled**, enter the host and
-port where rotctld is running (often `127.0.0.1:4533`), use **Test
-Connection** to confirm it answers, and **Save**. The settings live on the
-backend and are shared across browsers; Zeus only auto-connects on startup
-if Enabled was set at the last clean exit.
+Zeus talks to any Hamlib-compatible rotator server. That includes
+**rotctld** (Hamlib's own rotator daemon) and **PSTRotator** in its built-in
+**Hamlib-Rotor** mode — point either at a free TCP port and Zeus connects.
 
-Two panels let you point the antenna:
+Under **Settings → Rotator**, you'll see up to four rotator *slots*. A
+single-rotator station only needs slot 1 — give it a label, set host and
+port (often `127.0.0.1:4533`), tick **Enabled**, use **Test Connection** to
+confirm it answers, and **Save**. Settings live on the backend and are
+shared across browsers; Zeus only auto-connects on startup if Enabled was
+set at the last clean exit.
+
+**Multiple rotators.** Stations with more than one tower (HF beam, VHF
+Yagi, dedicated 6 m antenna…) can configure up to four slots, each with its
+own host:port and a checklist of the bands it covers. PSTRotator users
+running several PSTRotator instances on the same PC just point each slot at
+a different port. Tick **Auto-route active rotator by TX band** and Zeus
+switches the live rotator automatically as you QSY across bands — the
+matching slot becomes the active one and the Compass/Dial panels follow.
+
+Only the active slot holds a live TCP connection at a time; switching slots
+takes a couple of seconds while Zeus closes the old socket and opens a new
+one to the next controller.
+
+Two panels let you point whichever rotator is active:
 
 - **Rotator Dial** — a compass dial with a live needle showing the current
   heading and a marker for the pending target. Click anywhere on the face to
-  rotate there, type a heading and press **GO**, or hit **STOP**.
+  rotate there, type a heading and press **GO**, or hit **STOP**. When you
+  have more than one rotator configured, a small picker in the controls row
+  lets you override which rotator the dial drives.
 - **Rotator Compass** — the dial overlaid on a world map centered on your QRZ
   home. Look up a callsign in the QRZ panel and the map draws the great-circle
   path; **SP** and **LP** buttons slew short-path or long-path with one click,
   with a **DIST** readout in kilometers. Right-click the map to rotate to any
-  bearing.
+  bearing. The rotator picker sits next to the NOW heading badge.
 
 Headings are always shown as a clean 0–359°, even when the rotator reports a
 signed angle from crossing its zero stop.

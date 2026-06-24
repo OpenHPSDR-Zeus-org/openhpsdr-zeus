@@ -10,70 +10,178 @@
 // Free Software Foundation, either version 2 of the License, or (at your
 // option) any later version. See the LICENSE file at the root of this
 // repository for the full text, or https://www.gnu.org/licenses/.
-//
-// See ATTRIBUTIONS.md at the repository root for the full provenance
-// statement and per-component attribution.
-//
-// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
-// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
-// Wüllen (DL1YCF); and by DeskHPSDR
-// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
-// Both are GPL-2.0-or-later.
 
-import { useEffect, useState } from 'react';
-import { useRotatorStore } from '../state/rotator-store';
+import { useEffect, useMemo, useState } from 'react';
+import { useRotatorStore, ROTATOR_BANDS } from '../state/rotator-store';
+import type { RotctldSlot } from '../api/rotator';
+
+const MAX_SLOTS = 4;
+
+type EditableSlot = {
+  id: number;
+  label: string;
+  enabled: boolean;
+  host: string;
+  port: string;
+  bands: string[];
+  pollingIntervalMs: number;
+};
+
+function slotToEditable(s: RotctldSlot): EditableSlot {
+  return {
+    id: s.id,
+    label: s.label,
+    enabled: s.enabled,
+    host: s.host,
+    port: String(s.port),
+    bands: [...s.bands],
+    pollingIntervalMs: s.pollingIntervalMs,
+  };
+}
 
 export function RotatorSettingsPanel() {
-  const config = useRotatorStore((s) => s.config);
+  const multi = useRotatorStore((s) => s.multi);
   const status = useRotatorStore((s) => s.status);
   const testInFlight = useRotatorStore((s) => s.testInFlight);
   const lastTestResult = useRotatorStore((s) => s.lastTestResult);
-  const saveConfig = useRotatorStore((s) => s.saveConfig);
+  const saveMultiConfig = useRotatorStore((s) => s.saveMultiConfig);
+  const setActiveSlot = useRotatorStore((s) => s.setActiveSlot);
   const stop = useRotatorStore((s) => s.stop);
   const test = useRotatorStore((s) => s.test);
 
-  const [host, setHost] = useState(config.host);
-  const [port, setPort] = useState(String(config.port));
-  const [enabled, setEnabled] = useState(config.enabled);
+  const [slots, setSlots] = useState<EditableSlot[]>(() => multi.slots.map(slotToEditable));
+  const [activeSlotId, setActiveSlotIdLocal] = useState<number>(multi.activeSlotId);
+  const [autoRoute, setAutoRoute] = useState<boolean>(multi.autoRoute);
   const [saving, setSaving] = useState(false);
+  const [testingSlotId, setTestingSlotId] = useState<number | null>(null);
+  // Result display is keyed to the slot we last *finished* testing, not the
+  // in-flight one (which is cleared in onTest's finally before the result
+  // lands) — otherwise the ✓/✗ feedback never renders.
+  const [lastTestedSlotId, setLastTestedSlotId] = useState<number | null>(null);
+  // True once the operator edits any field. While dirty we suppress the
+  // [multi] rehydrate so an active-slot switch (this panel's ACTIVE radio or
+  // the Compass/Dial selector, both of which refresh `multi`) can't silently
+  // wipe unsaved edits. Cleared on save.
+  const [dirty, setDirty] = useState(false);
 
-  // Rehydrate the form when the store finishes reading localStorage after mount.
+  // Rehydrate the form when the backend snapshot changes (other tab, restart).
+  // Skip while the form has unsaved edits so a live active-slot switch doesn't
+  // clobber them.
   useEffect(() => {
-    setHost(config.host);
-    setPort(String(config.port));
-    setEnabled(config.enabled);
-  }, [config.host, config.port, config.enabled]);
+    if (dirty) return;
+    setSlots(multi.slots.map(slotToEditable));
+    setActiveSlotIdLocal(multi.activeSlotId);
+    setAutoRoute(multi.autoRoute);
+  }, [multi, dirty]);
 
-  const connected = !!status?.connected;
-  const moving = !!status?.moving;
-  const currentAz = status?.currentAz;
-  const targetAz = status?.targetAz;
+  const activeRuntimeAz = status?.currentAz;
+  const activeRuntimeTarget = status?.targetAz;
+  const activeMoving = !!status?.moving;
+  const activeConnected = !!status?.connected;
+  const activeError = status?.error ?? null;
 
-  async function onSave(e: React.FormEvent) {
-    e.preventDefault();
+  const canAdd = slots.length < MAX_SLOTS;
+
+  function updateSlot(id: number, patch: Partial<EditableSlot>) {
+    setDirty(true);
+    setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  }
+
+  function toggleBand(id: number, band: string) {
+    setDirty(true);
+    setSlots((prev) =>
+      prev.map((s) => {
+        if (s.id !== id) return s;
+        const has = s.bands.includes(band);
+        return { ...s, bands: has ? s.bands.filter((b) => b !== band) : [...s.bands, band] };
+      }),
+    );
+  }
+
+  function addSlot() {
+    if (slots.length >= MAX_SLOTS) return;
+    setDirty(true);
+    const used = new Set(slots.map((s) => s.id));
+    let nextId = 1;
+    while (used.has(nextId)) nextId++;
+    setSlots((prev) => [
+      ...prev,
+      {
+        id: nextId,
+        label: `Rotator ${nextId}`,
+        enabled: false,
+        host: '127.0.0.1',
+        port: '4533',
+        bands: [],
+        pollingIntervalMs: 500,
+      },
+    ]);
+  }
+
+  function removeSlot(id: number) {
+    setDirty(true);
+    setSlots((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      if (next.length === 0) return prev; // keep at least one
+      return next;
+    });
+    if (activeSlotId === id) {
+      const remaining = slots.filter((s) => s.id !== id);
+      const first = remaining[0];
+      if (first) setActiveSlotIdLocal(first.id);
+    }
+  }
+
+  async function onSave() {
     setSaving(true);
     try {
-      const portNum = Number(port);
-      if (!Number.isFinite(portNum) || portNum <= 0 || portNum >= 65536) return;
-      await saveConfig({
-        enabled,
-        host: host.trim() || '127.0.0.1',
-        port: portNum,
-        pollingIntervalMs: config.pollingIntervalMs,
+      const sanitizedSlots = slots.map((s) => {
+        const portNum = Number(s.port);
+        return {
+          id: s.id,
+          label: s.label.trim() || `Rotator ${s.id}`,
+          enabled: s.enabled,
+          host: s.host.trim() || '127.0.0.1',
+          port: Number.isFinite(portNum) && portNum > 0 && portNum < 65536 ? portNum : 4533,
+          bands: s.bands,
+          pollingIntervalMs: s.pollingIntervalMs,
+        };
       });
+      const saved = await saveMultiConfig({
+        activeSlotId,
+        autoRoute,
+        slots: sanitizedSlots,
+      });
+      // Adopt the server's sanitized snapshot as the new clean baseline, then
+      // clear dirty so external snapshot changes rehydrate normally again.
+      setSlots(saved.slots.map(slotToEditable));
+      setActiveSlotIdLocal(saved.activeSlotId);
+      setAutoRoute(saved.autoRoute);
+      setDirty(false);
     } finally {
       setSaving(false);
     }
   }
 
-  async function onTest() {
-    const portNum = Number(port);
+  async function onTest(slot: EditableSlot) {
+    const portNum = Number(slot.port);
     if (!Number.isFinite(portNum) || portNum <= 0 || portNum >= 65536) return;
-    await test(host.trim() || '127.0.0.1', portNum);
+    setTestingSlotId(slot.id);
+    try {
+      await test(slot.host.trim() || '127.0.0.1', portNum);
+      setLastTestedSlotId(slot.id);
+    } finally {
+      setTestingSlotId(null);
+    }
+  }
+
+  async function onMakeActive(slotId: number) {
+    setActiveSlotIdLocal(slotId);
+    await setActiveSlot(slotId);
   }
 
   return (
-    <div style={{ maxWidth: 600 }}>
+    <div style={{ maxWidth: 720 }}>
       <h3
         style={{
           margin: '0 0 14px',
@@ -84,149 +192,257 @@ export function RotatorSettingsPanel() {
           color: 'var(--fg-2)',
         }}
       >
-        ROTCTLD (HAMLIB ROTATOR)
+        ROTATORS (HAMLIB / PSTROTATOR)
       </h3>
 
-      <form onSubmit={onSave} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input
             type="checkbox"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
+            checked={autoRoute}
+            onChange={(e) => {
+              setDirty(true);
+              setAutoRoute(e.target.checked);
+            }}
             style={{ accentColor: 'var(--accent)' }}
           />
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg-1)' }}>Enabled</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg-1)' }}>
+            Auto-route active rotator by TX band
+          </span>
+          <span style={{ fontSize: 10, color: 'var(--fg-3)' }}>
+            (when on, QSY into a band assigned below switches the live rotator automatically)
+          </span>
         </label>
 
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-2)' }}>Host</span>
-          <input
-            type="text"
-            value={host}
-            onChange={(e) => setHost(e.target.value)}
-            spellCheck={false}
-            style={{
-              padding: '6px 8px',
-              fontSize: 12,
-              fontFamily: 'monospace',
-              background: 'var(--bg-0)',
-              border: '1px solid var(--panel-border)',
-              borderRadius: 'var(--r-sm)',
-              color: 'var(--fg-0)',
-            }}
-          />
-        </label>
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-2)' }}>Port</span>
-          <input
-            type="number"
-            value={port}
-            onChange={(e) => setPort(e.target.value)}
-            min={1}
-            max={65535}
-            style={{
-              padding: '6px 8px',
-              fontSize: 12,
-              fontFamily: 'monospace',
-              background: 'var(--bg-0)',
-              border: '1px solid var(--panel-border)',
-              borderRadius: 'var(--r-sm)',
-              color: 'var(--fg-0)',
-            }}
-          />
-        </label>
-
-        {status?.error && (
-          <div
-            style={{
-              padding: 10,
-              fontSize: 12,
-              color: 'var(--tx)',
-              background: 'rgba(230, 58, 43, 0.1)',
-              border: '1px solid var(--tx)',
-              borderRadius: 'var(--r-sm)',
-            }}
-          >
-            {status.error}
-          </div>
-        )}
-
-        {lastTestResult && (
-          <div
-            style={{
-              padding: 10,
-              fontSize: 12,
-              color: lastTestResult.ok ? 'var(--accent)' : 'var(--tx)',
-              background: lastTestResult.ok
-                ? 'rgba(74, 158, 255, 0.1)'
-                : 'rgba(230, 58, 43, 0.1)',
-              border: `1px solid ${lastTestResult.ok ? 'var(--accent)' : 'var(--tx)'}`,
-              borderRadius: 'var(--r-sm)',
-            }}
-          >
-            {lastTestResult.ok
-              ? `✓ Test OK — rotctld is reachable at ${host}:${port}`
-              : `✗ Test failed: ${lastTestResult.error ?? 'unknown error'}`}
-          </div>
-        )}
-
-        {connected && (
-          <div
-            style={{
-              padding: 10,
-              background: 'var(--bg-0)',
-              border: '1px solid var(--panel-border)',
-              borderRadius: 'var(--r-sm)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              fontSize: 12,
-              color: 'var(--fg-1)',
-            }}
-          >
-            <span style={{ color: 'var(--fg-2)' }}>Current:</span>
-            <span style={{ fontFamily: 'monospace', fontWeight: 600, color: 'var(--accent)' }}>
-              {formatAz(currentAz)}
-            </span>
-            {targetAz != null && (
-              <>
-                <span style={{ color: 'var(--fg-2)' }}>· Target:</span>
-                <span style={{ fontFamily: 'monospace', fontWeight: 600, color: 'var(--power)' }}>
-                  {formatAz(targetAz)}
-                </span>
-              </>
-            )}
-            {moving && (
-              <span style={{ color: 'var(--power)', fontWeight: 600 }}>moving</span>
-            )}
-          </div>
-        )}
-
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button
-            type="button"
-            onClick={onTest}
-            disabled={testInFlight}
-            className="btn sm"
-          >
-            {testInFlight ? 'TESTING…' : 'TEST CONNECTION'}
-          </button>
-          {connected && (
-            <button
-              type="button"
-              onClick={() => stop()}
-              className="btn sm"
+        {slots.map((slot) => {
+          const isActive = slot.id === activeSlotId;
+          const showRuntime = isActive && activeConnected;
+          return (
+            <div
+              key={slot.id}
               style={{
-                borderColor: 'var(--tx)',
-                color: 'var(--tx)',
+                padding: 12,
+                background: 'var(--bg-1)',
+                border: `1px solid ${isActive ? 'var(--accent)' : 'var(--panel-border)'}`,
+                borderRadius: 'var(--r-md)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
               }}
             >
-              STOP
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <label
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--fg-2)' }}
+                  title="Make this rotator the live one"
+                >
+                  <input
+                    type="radio"
+                    name="rotator-active-slot"
+                    checked={isActive}
+                    onChange={() => void onMakeActive(slot.id)}
+                    style={{ accentColor: 'var(--accent)' }}
+                  />
+                  ACTIVE
+                </label>
+                <input
+                  type="text"
+                  value={slot.label}
+                  onChange={(e) => updateSlot(slot.id, { label: e.target.value })}
+                  placeholder={`Rotator ${slot.id}`}
+                  spellCheck={false}
+                  style={{
+                    flex: 1,
+                    padding: '6px 8px',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    background: 'var(--bg-0)',
+                    border: '1px solid var(--panel-border)',
+                    borderRadius: 'var(--r-sm)',
+                    color: 'var(--fg-0)',
+                  }}
+                />
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--fg-2)' }}>
+                  <input
+                    type="checkbox"
+                    checked={slot.enabled}
+                    onChange={(e) => updateSlot(slot.id, { enabled: e.target.checked })}
+                    style={{ accentColor: 'var(--accent)' }}
+                  />
+                  ENABLED
+                </label>
+                {slots.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => removeSlot(slot.id)}
+                    className="btn sm"
+                    title="Remove this rotator slot"
+                    style={{ borderColor: 'var(--tx)', color: 'var(--tx)' }}
+                  >
+                    REMOVE
+                  </button>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', gap: 10 }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 2 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-2)' }}>Host</span>
+                  <input
+                    type="text"
+                    value={slot.host}
+                    onChange={(e) => updateSlot(slot.id, { host: e.target.value })}
+                    spellCheck={false}
+                    style={{
+                      padding: '6px 8px',
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      background: 'var(--bg-0)',
+                      border: '1px solid var(--panel-border)',
+                      borderRadius: 'var(--r-sm)',
+                      color: 'var(--fg-0)',
+                    }}
+                  />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-2)' }}>Port</span>
+                  <input
+                    type="number"
+                    value={slot.port}
+                    onChange={(e) => updateSlot(slot.id, { port: e.target.value })}
+                    min={1}
+                    max={65535}
+                    style={{
+                      padding: '6px 8px',
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      background: 'var(--bg-0)',
+                      border: '1px solid var(--panel-border)',
+                      borderRadius: 'var(--r-sm)',
+                      color: 'var(--fg-0)',
+                    }}
+                  />
+                </label>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-2)', marginBottom: 6 }}>
+                  Bands assigned to this rotator
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  {ROTATOR_BANDS.map((band) => {
+                    const on = slot.bands.includes(band);
+                    return (
+                      <button
+                        type="button"
+                        key={band}
+                        onClick={() => toggleBand(slot.id, band)}
+                        className={`btn sm${on ? ' active' : ''}`}
+                        style={{ minWidth: 44 }}
+                        title={`${on ? 'Remove' : 'Add'} ${band}`}
+                      >
+                        {band}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <BandConflictWarning slot={slot} allSlots={slots} />
+
+              {isActive && activeError && (
+                <div
+                  style={{
+                    padding: 8,
+                    fontSize: 12,
+                    color: 'var(--tx)',
+                    background: 'rgba(230, 58, 43, 0.1)',
+                    border: '1px solid var(--tx)',
+                    borderRadius: 'var(--r-sm)',
+                  }}
+                >
+                  {activeError}
+                </div>
+              )}
+
+              {showRuntime && (
+                <div
+                  style={{
+                    padding: 8,
+                    background: 'var(--bg-0)',
+                    border: '1px solid var(--panel-border)',
+                    borderRadius: 'var(--r-sm)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    fontSize: 12,
+                    color: 'var(--fg-1)',
+                  }}
+                >
+                  <span style={{ color: 'var(--fg-2)' }}>Current:</span>
+                  <span style={{ fontFamily: 'monospace', fontWeight: 600, color: 'var(--accent)' }}>
+                    {formatAz(activeRuntimeAz)}
+                  </span>
+                  {activeRuntimeTarget != null && (
+                    <>
+                      <span style={{ color: 'var(--fg-2)' }}>· Target:</span>
+                      <span style={{ fontFamily: 'monospace', fontWeight: 600, color: 'var(--power)' }}>
+                        {formatAz(activeRuntimeTarget)}
+                      </span>
+                    </>
+                  )}
+                  {activeMoving && (
+                    <span style={{ color: 'var(--power)', fontWeight: 600 }}>moving</span>
+                  )}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => void onTest(slot)}
+                  disabled={testingSlotId === slot.id || testInFlight}
+                  className="btn sm"
+                >
+                  {testingSlotId === slot.id && testInFlight ? 'TESTING…' : 'TEST CONNECTION'}
+                </button>
+                {isActive && activeConnected && (
+                  <button
+                    type="button"
+                    onClick={() => stop()}
+                    className="btn sm"
+                    style={{
+                      borderColor: 'var(--tx)',
+                      color: 'var(--tx)',
+                    }}
+                  >
+                    STOP
+                  </button>
+                )}
+                {lastTestedSlotId === slot.id && testingSlotId === null && lastTestResult && (
+                  <span
+                    style={{
+                      alignSelf: 'center',
+                      fontSize: 12,
+                      color: lastTestResult.ok ? 'var(--accent)' : 'var(--tx)',
+                    }}
+                  >
+                    {lastTestResult.ok
+                      ? `✓ OK — reachable`
+                      : `✗ ${lastTestResult.error ?? 'unknown error'}`}
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        <div style={{ display: 'flex', gap: 6 }}>
+          {canAdd && (
+            <button type="button" onClick={addSlot} className="btn sm">
+              + ADD ROTATOR
             </button>
           )}
           <span style={{ flex: 1 }} />
-          <button type="submit" disabled={saving} className="btn sm active">
+          <button type="button" onClick={() => void onSave()} disabled={saving} className="btn sm active">
             {saving ? 'SAVING…' : 'SAVE'}
           </button>
         </div>
@@ -238,15 +454,40 @@ export function RotatorSettingsPanel() {
             color: 'var(--fg-3)',
           }}
         >
-          rotctld is hamlib's rotator daemon. Start it with e.g.{' '}
-          <span style={{ fontFamily: 'monospace' }}>
-            rotctld -m 2 -r /dev/ttyUSB0 -s 9600 -t 4533
-          </span>{' '}
-          (model 2 = dummy rotor for testing). Settings are saved server-side in zeus-prefs.db and
-          shared across browsers and sessions; Zeus only auto-connects on startup if Enabled was
-          checked at last clean exit.
+          Each rotator slot opens its own TCP connection to a Hamlib-compatible rotator server —
+          that's either <span style={{ fontFamily: 'monospace' }}>rotctld</span> (hamlib's daemon)
+          or PSTRotator's built-in Hamlib-Rotor port. Auto-route follows the TX VFO band: when you
+          QSY into a band assigned to a different rotator, Zeus switches the live connection. Only
+          the active slot is connected at any one time. Up to {MAX_SLOTS} rotators. Settings are
+          stored server-side in zeus-prefs.db and shared across browsers and sessions.
         </div>
-      </form>
+      </div>
+    </div>
+  );
+}
+
+function BandConflictWarning(props: { slot: EditableSlot; allSlots: EditableSlot[] }) {
+  const conflicts = useMemo(() => {
+    const out: string[] = [];
+    for (const band of props.slot.bands) {
+      const claimedBy = props.allSlots.filter((s) => s.id !== props.slot.id && s.bands.includes(band));
+      if (claimedBy.length > 0) out.push(band);
+    }
+    return out;
+  }, [props.slot, props.allSlots]);
+  if (conflicts.length === 0) return null;
+  return (
+    <div
+      style={{
+        padding: 6,
+        fontSize: 11,
+        color: 'var(--power)',
+        background: 'rgba(255, 160, 40, 0.08)',
+        border: '1px solid var(--power)',
+        borderRadius: 'var(--r-sm)',
+      }}
+    >
+      Also assigned elsewhere: {conflicts.join(', ')}. On auto-route, the first matching slot wins.
     </div>
   );
 }

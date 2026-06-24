@@ -45,6 +45,12 @@
 
 namespace Zeus.Contracts;
 
+// Legacy single-slot view of the rotator. Continues to power the existing
+// Compass / Dial panels and the legacy /api/rotator/{status,config,set,stop}
+// endpoints — RotctldService projects the active slot into this shape so
+// nothing in the frontend that just wants "is the rotator pointing somewhere?"
+// has to learn about slots. Multi-rotator config (issue #917) lives in the
+// RotctldMultiConfig / RotctldSlot records below.
 public sealed record RotctldConfig(
     bool Enabled = false,
     string Host = "127.0.0.1",
@@ -59,10 +65,44 @@ public sealed record RotctldStatus(
     double? CurrentAz,
     double? TargetAz,
     bool Moving,
-    string? Error);
+    string? Error,
+    int ActiveSlotId = 1,
+    int SlotCount = 1);
 
 public sealed record RotctldSetAzRequest(double Azimuth);
 
 public sealed record RotctldTestRequest(string Host, int Port);
 
 public sealed record RotctldTestResult(bool Ok, string? Error);
+
+// Multi-rotator config (issue #917).
+//
+// Stations that run several towers — e.g. an HF beam, a VHF Yagi, and a 6 m
+// stack — typically point each one with its own rotator controller and want
+// Zeus to route the active controller automatically when they QSY across
+// bands. PSTRotator users hit this when running multiple PSTRotator instances
+// (one per controller) on the same PC, each exposing its own Hamlib-Rotor
+// (rotctld-compatible) port.
+//
+// One live TCP connection at a time: the slot list defines the available
+// rotators (label / host / port / band assignment); the *active* slot is the
+// one currently connected, polled, and receiving P/S commands. When a slot is
+// switched (manually via the panel selector, or automatically by the TX VFO
+// crossing into a band assigned to a different slot), Zeus closes the current
+// connection and opens the new one. Inactive slots are static config — they
+// don't keep sockets open.
+public sealed record RotctldSlot(
+    int Id,
+    string Label,
+    bool Enabled,
+    string Host,
+    int Port,
+    IReadOnlyList<string> Bands,
+    int PollingIntervalMs = 500);
+
+public sealed record RotctldMultiConfig(
+    int ActiveSlotId,
+    bool AutoRoute,
+    IReadOnlyList<RotctldSlot> Slots);
+
+public sealed record RotctldSetActiveRequest(int SlotId);
