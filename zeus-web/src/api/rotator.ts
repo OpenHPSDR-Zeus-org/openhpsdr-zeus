@@ -10,38 +10,6 @@
 // Free Software Foundation, either version 2 of the License, or (at your
 // option) any later version. See the LICENSE file at the root of this
 // repository for the full text, or https://www.gnu.org/licenses/.
-//
-// Zeus is an independent reimplementation in .NET — not a fork. Its
-// Protocol-1 / Protocol-2 framing, WDSP integration, meter pipelines, and
-// TX behaviour were informed by studying the Thetis project
-// (https://github.com/ramdor/Thetis), the authoritative reference
-// implementation in the OpenHPSDR ecosystem. Zeus gratefully acknowledges
-// the Thetis contributors whose work made this possible:
-//
-//   Richard Samphire (MW0LGE), Warren Pratt (NR0V),
-//   Laurence Barker (G8NJJ),   Rick Koch (N1GP),
-//   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
-//   Doug Wigley (W5WC),        FlexRadio Systems,
-//   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
-//   Sigi Jetzlsperger (DH1KLM).
-//
-// Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
-// and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
-// here. See ATTRIBUTIONS.md at the repository root for the full provenance
-// statement and per-component attribution.
-//
-// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
-// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
-// Wüllen (DL1YCF); and by DeskHPSDR
-// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
-// Both are GPL-2.0-or-later.
-//
-// WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
-// (NR0V), distributed under GPL v2 or later.
-//
-// Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
-// License for details.
 
 import { ApiError } from './client';
 
@@ -54,6 +22,8 @@ export type RotctldStatus = {
   targetAz: number | null;
   moving: boolean;
   error: string | null;
+  activeSlotId: number;
+  slotCount: number;
 };
 
 export type RotctldConfig = {
@@ -61,6 +31,22 @@ export type RotctldConfig = {
   host: string;
   port: number;
   pollingIntervalMs: number;
+};
+
+export type RotctldSlot = {
+  id: number;
+  label: string;
+  enabled: boolean;
+  host: string;
+  port: number;
+  bands: string[];
+  pollingIntervalMs: number;
+};
+
+export type RotctldMultiConfig = {
+  activeSlotId: number;
+  autoRoute: boolean;
+  slots: RotctldSlot[];
 };
 
 export type RotctldTestResult = { ok: boolean; error: string | null };
@@ -80,6 +66,8 @@ function normalizeStatus(raw: unknown): RotctldStatus {
     targetAz: toNum(r.targetAz),
     moving: Boolean(r.moving),
     error: typeof r.error === 'string' && r.error.length > 0 ? r.error : null,
+    activeSlotId: typeof r.activeSlotId === 'number' && r.activeSlotId > 0 ? r.activeSlotId : 1,
+    slotCount: typeof r.slotCount === 'number' && r.slotCount > 0 ? r.slotCount : 1,
   };
 }
 
@@ -118,6 +106,38 @@ function normalizeConfig(raw: unknown): RotctldConfig {
   };
 }
 
+function normalizeSlot(raw: unknown): RotctldSlot {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const bandsRaw = Array.isArray(r.bands) ? r.bands : [];
+  return {
+    id: typeof r.id === 'number' && r.id > 0 ? r.id : 1,
+    label: typeof r.label === 'string' && r.label ? r.label : 'Rotator',
+    enabled: Boolean(r.enabled),
+    host: typeof r.host === 'string' && r.host ? r.host : '127.0.0.1',
+    port: typeof r.port === 'number' && r.port > 0 ? r.port : 4533,
+    bands: bandsRaw.filter((b): b is string => typeof b === 'string'),
+    pollingIntervalMs:
+      typeof r.pollingIntervalMs === 'number' && r.pollingIntervalMs > 0
+        ? r.pollingIntervalMs
+        : 500,
+  };
+}
+
+function normalizeMultiConfig(raw: unknown): RotctldMultiConfig {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const slotsRaw = Array.isArray(r.slots) ? r.slots : [];
+  const slots = slotsRaw.map(normalizeSlot);
+  const fallbackActive = slots[0]?.id ?? 1;
+  return {
+    activeSlotId:
+      typeof r.activeSlotId === 'number' && slots.some((s) => s.id === r.activeSlotId)
+        ? (r.activeSlotId as number)
+        : fallbackActive,
+    autoRoute: Boolean(r.autoRoute),
+    slots,
+  };
+}
+
 export function getRotatorConfig(signal?: AbortSignal): Promise<RotctldConfig> {
   return jsonFetch('/api/rotator/config', { signal }, normalizeConfig);
 }
@@ -129,6 +149,36 @@ export function postRotatorConfig(cfg: RotctldConfig, signal?: AbortSignal): Pro
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(cfg),
+      signal,
+    },
+    normalizeStatus,
+  );
+}
+
+export function getRotatorMultiConfig(signal?: AbortSignal): Promise<RotctldMultiConfig> {
+  return jsonFetch('/api/rotator/multi-config', { signal }, normalizeMultiConfig);
+}
+
+export function postRotatorMultiConfig(cfg: RotctldMultiConfig, signal?: AbortSignal): Promise<RotctldMultiConfig> {
+  return jsonFetch(
+    '/api/rotator/multi-config',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(cfg),
+      signal,
+    },
+    normalizeMultiConfig,
+  );
+}
+
+export function setRotatorActiveSlot(slotId: number, signal?: AbortSignal): Promise<RotctldStatus> {
+  return jsonFetch(
+    '/api/rotator/active',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ slotId }),
       signal,
     },
     normalizeStatus,

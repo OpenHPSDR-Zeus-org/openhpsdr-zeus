@@ -3224,6 +3224,28 @@ public static class ZeusEndpoints
             return Results.Ok(result);
         });
 
+        // Multi-rotator config (issue #917). Returns / updates the full slot
+        // list + the active slot id + the AutoRoute toggle. Slot-aware UI hits
+        // these; legacy /api/rotator/config above keeps reflecting only the
+        // active slot for the Compass / Dial panels.
+        app.MapGet("/api/rotator/multi-config", (RotctldService rot) => rot.GetMultiConfig());
+
+        app.MapPost("/api/rotator/multi-config", async (RotctldMultiConfig req, RotctldService rot, HttpContext ctx) =>
+        {
+            log.LogInformation(
+                "api.rotator.multi-config slots={Count} active={Active} autoRoute={Auto}",
+                req.Slots?.Count ?? 0, req.ActiveSlotId, req.AutoRoute);
+            var cfg = await rot.SetMultiConfigAsync(req, ctx.RequestAborted);
+            return Results.Ok(cfg);
+        });
+
+        app.MapPost("/api/rotator/active", async (RotctldSetActiveRequest req, RotctldService rot, HttpContext ctx) =>
+        {
+            if (req.SlotId <= 0) return Results.BadRequest(new { error = "slotId must be positive" });
+            var status = await rot.SetActiveSlotAsync(req.SlotId, ctx.RequestAborted);
+            return Results.Ok(status);
+        });
+
         app.MapGet("/api/tci/status", (TciManagementService tci) => tci.GetStatus());
 
         app.MapPost("/api/tci/config", (TciRuntimeConfig req, TciManagementService tci, HttpContext ctx) =>

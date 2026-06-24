@@ -11,6 +11,7 @@
 
 import { forwardRef, useRef, useState, type PointerEvent } from 'react';
 import { useRotatorStore } from '../../state/rotator-store';
+import { RotatorSlotSelector } from '../../components/RotatorSlotSelector';
 
 function normalizeAz(deg: number | null | undefined): number | null {
   if (deg == null || !Number.isFinite(deg)) return null;
@@ -102,6 +103,7 @@ export function RotatorDialPanel() {
       </div>
 
       <div className="rd-controls">
+        <RotatorSlotSelector compact />
         <form
           className="rd-manual"
           onSubmit={(e) => {
