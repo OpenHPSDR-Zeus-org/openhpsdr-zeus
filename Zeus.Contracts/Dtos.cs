@@ -1152,14 +1152,14 @@ public sealed record StateDto(
     // RX1/RX2 inside the captured bandwidth immediately; future protocol
     // work can map this same state onto a second hardware DDC for wider
     // splits without changing the UI contract.
+    //
+    // RX2's *tuning* (VFO / mode / filter / AF gain) now lives in the canonical
+    // <see cref="Receivers"/> array at index 1 — the flat VFO-B fields
+    // (VfoBHz / ModeB / Filter*B / Rx2AfGainDb) were retired in the A/B wire
+    // collapse. Only the RX2 *control* fields below remain flat: the enable
+    // toggle, audio-routing mode, and per-RX mute.
     bool Rx2Enabled = false,
-    long VfoBHz = 14_200_000,
-    RxMode ModeB = RxMode.USB,
-    int FilterLowHzB = 100,
-    int FilterHighHzB = 2850,
-    string? FilterPresetNameB = "VAR1",
     Zeus.Contracts.Rx2AudioMode Rx2AudioMode = Zeus.Contracts.Rx2AudioMode.Both,
-    double Rx2AfGainDb = 0.0,
     Zeus.Contracts.TxVfo TxVfo = Zeus.Contracts.TxVfo.A,
 
     // CW sidetone pitch in Hz. Currently a baked-in constant
@@ -1194,13 +1194,14 @@ public sealed record StateDto(
 
     // ---- Multi-DDC receivers array (wire v2) ----
     // Canonical per-receiver list: index 0 = RX1, index 1 = RX2, index ≥ 2 =
-    // additional DDCs. The flat RX1 fields (VfoHz/Mode/Filter*/RxAfGainDb) and
-    // the RX2 / VFO-B fields (VfoBHz/ModeB/Filter*B/Rx2AfGainDb) remain the
-    // authoritative source for indices 0/1; RadioService projects them into
-    // this array on every state change (Mutate + Snapshot), so the array is
-    // never stale. Null only on a pre-projection seed — every wire-bound path
-    // populates it. The frontend migrates to this array (multi-DDC UI); the
-    // flat dupes are retired once that lands.
+    // additional DDCs. RX1 (index 0) is still projected from the flat RX1 fields
+    // (VfoHz/Mode/Filter*/RxAfGainDb). RX2 (index 1) and every extra DDC are
+    // AUTHORITATIVE in this array — RX2's old flat VFO-B dupes were removed in
+    // the A/B wire collapse, so RadioService.ProjectReceivers carries index 1's
+    // tuning forward and only overlays the flat RX2 control fields (Rx2Enabled/
+    // Rx2Muted) + shared SampleRate. RadioService re-projects on every state
+    // change (Mutate + Snapshot), so the array is never stale. Null only on a
+    // pre-seed construction — every wire-bound path populates it.
     IReadOnlyList<ReceiverDto>? Receivers = null,
 
     // Wire contract version (WireContract.Version) so the frontend can

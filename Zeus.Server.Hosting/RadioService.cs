@@ -516,6 +516,17 @@ public sealed class RadioService : IDisposable
                 ps?.MoxDelaySec ?? 0.2);
         }
 
+        // RX2 (VFO-B) tuning is hydrated into the canonical Receivers[1] entry —
+        // the flat VFO-B StateDto fields were retired in the A/B wire collapse.
+        // Legacy rows that never stored RX2 fall back to the RX1 values, exactly
+        // as the old flat-field hydration did.
+        long hydVfoB = (rsSnap?.VfoBHz ?? 0L) != 0L ? rsSnap!.VfoBHz : (rsSnap?.VfoHz ?? 14_200_000);
+        RxMode hydModeB = rsSnap?.ModeB ?? rsSnap?.Mode ?? RxMode.USB;
+        int hydFilterLowB = rsSnap?.FilterLowHzB ?? rsSnap?.FilterLowHz ?? 100;
+        int hydFilterHighB = rsSnap?.FilterHighHzB ?? rsSnap?.FilterHighHz ?? 2850;
+        string? hydPresetB = rsSnap?.FilterPresetNameB ?? rsSnap?.FilterPresetName ?? "VAR1";
+        double hydAfGainB = Math.Clamp(rsSnap?.Rx2AfGainDb ?? 0.0, -50.0, 20.0);
+
         _state = new(
             Status: ConnectionStatus.Disconnected,
             Endpoint: null,
@@ -601,19 +612,32 @@ public sealed class RadioService : IDisposable
                 ? rsSnap!.RadioLoHz
                 : (rsSnap?.VfoHz ?? 14_200_000),
             Rx2Enabled: rsSnap?.Rx2Enabled ?? false,
-            VfoBHz: (rsSnap?.VfoBHz ?? 0L) != 0L
-                ? rsSnap!.VfoBHz
-                : (rsSnap?.VfoHz ?? 14_200_000),
-            ModeB: rsSnap?.ModeB ?? rsSnap?.Mode ?? RxMode.USB,
-            FilterLowHzB: rsSnap?.FilterLowHzB ?? rsSnap?.FilterLowHz ?? 100,
-            FilterHighHzB: rsSnap?.FilterHighHzB ?? rsSnap?.FilterHighHz ?? 2850,
-            FilterPresetNameB: rsSnap?.FilterPresetNameB ?? rsSnap?.FilterPresetName ?? "VAR1",
             Rx2AudioMode: rsSnap?.Rx2AudioMode ?? Zeus.Contracts.Rx2AudioMode.Both,
-            Rx2AfGainDb: Math.Clamp(rsSnap?.Rx2AfGainDb ?? 0.0, -50.0, 20.0),
             TxVfo: rsSnap?.TxVfo ?? TxVfo.A,
             CwPitchHz: CwOffset.CwPitchHz,
             CtunEnabled: rsSnap?.CtunEnabled ?? false,
             PreampOn: rsSnap?.PreampOn ?? false);
+
+        // Seed the canonical Receivers[] so RX2's hydrated tuning is the live
+        // source of truth from the very first snapshot. RX1 (index 0) is rebuilt
+        // from the flat RX1 fields by ProjectReceivers on every later Mutate;
+        // index 1's tuning is carried forward (the flat VFO-B fields are gone).
+        _state = _state with
+        {
+            Receivers = new ReceiverDto[]
+            {
+                new(Index: 0, Enabled: true, AdcSource: 0,
+                    VfoHz: _state.VfoHz, Mode: _state.Mode,
+                    FilterLowHz: _state.FilterLowHz, FilterHighHz: _state.FilterHighHz,
+                    FilterPresetName: _state.FilterPresetName, AfGainDb: _state.RxAfGainDb,
+                    SampleRateHz: _state.SampleRate, Muted: _state.Rx1Muted),
+                new(Index: 1, Enabled: _state.Rx2Enabled, AdcSource: 0,
+                    VfoHz: hydVfoB, Mode: hydModeB,
+                    FilterLowHz: hydFilterLowB, FilterHighHz: hydFilterHighB,
+                    FilterPresetName: hydPresetB, AfGainDb: hydAfGainB,
+                    SampleRateHz: _state.SampleRate, Muted: _state.Rx2Muted),
+            },
+        };
 
         // Kick off the debounce flush timer. Fires every 1 s; only writes to
         // LiteDB when _stateDirty is set (i.e., at least one Mutate() has fired
@@ -1021,7 +1045,7 @@ public sealed class RadioService : IDisposable
         lock (_sync) { if (_state.VfoLocked) return Snapshot(); }
         long previousTx;
         lock (_sync) previousTx = TxFrequencyHzLocked(_state);
-        Mutate(s => s with { VfoBHz = clamped });
+        Mutate(s => WithRx2(s, r => r with { VfoHz = clamped }));
         if (BandUtils.FreqToBand(previousTx) != BandUtils.FreqToBand(TxFrequencyHz(Snapshot())))
         {
             RecomputePaAndPush();
@@ -1083,8 +1107,8 @@ public sealed class RadioService : IDisposable
             if (filterLowHz is not null || filterHighHz is not null || filterPresetName is not null)
             {
                 var cur = Snapshot();
-                int lo = filterLowHz ?? (index == 1 ? cur.FilterLowHzB : cur.FilterLowHz);
-                int hi = filterHighHz ?? (index == 1 ? cur.FilterHighHzB : cur.FilterHighHz);
+                int lo = filterLowHz ?? (index == 1 ? cur.Rx2().FilterLowHz : cur.FilterLowHz);
+                int hi = filterHighHz ?? (index == 1 ? cur.Rx2().FilterHighHz : cur.FilterHighHz);
                 SetFilter(lo, hi, filterPresetName, receiver);
             }
             if (afGainDb is double af)
@@ -1145,23 +1169,20 @@ public sealed class RadioService : IDisposable
         lock (_sync) previousTx = TxFrequencyHzLocked(_state);
         Mutate(s =>
         {
+            var rx2 = s.Rx2();
             long nextVfoB = req.VfoBHz.HasValue
                 ? Math.Clamp(req.VfoBHz.Value, 0L, 60_000_000L)
-                : s.VfoBHz > 0
-                    ? s.VfoBHz
+                : rx2.VfoHz > 0
+                    ? rx2.VfoHz
                     : s.VfoHz;
             var nextMode = req.AudioMode ?? s.Rx2AudioMode;
             double nextGain = req.AfGainDb.HasValue
                 ? Math.Clamp(req.AfGainDb.Value, -50.0, 20.0)
-                : s.Rx2AfGainDb;
+                : rx2.AfGainDb;
             bool nextEnabled = req.Enabled ?? s.Rx2Enabled;
-            return s with
-            {
-                Rx2Enabled = nextEnabled,
-                VfoBHz = nextVfoB,
-                Rx2AudioMode = nextMode,
-                Rx2AfGainDb = nextGain,
-            };
+            return WithRx2(
+                s with { Rx2Enabled = nextEnabled, Rx2AudioMode = nextMode },
+                r => r with { VfoHz = nextVfoB, AfGainDb = nextGain });
         });
         if (BandUtils.FreqToBand(previousTx) != BandUtils.FreqToBand(TxFrequencyHz(Snapshot())))
         {
@@ -1224,7 +1245,7 @@ public sealed class RadioService : IDisposable
     public static long TxFrequencyHz(StateDto state) => state.TxReceiverIndex switch
     {
         <= 0 => state.VfoHz,
-        1 => state.VfoBHz,
+        1 => state.Rx2().VfoHz,
         int i => state.Receivers is { } rs && i < rs.Count ? rs[i].VfoHz : state.VfoHz,
     };
 
@@ -1234,7 +1255,7 @@ public sealed class RadioService : IDisposable
     private long TxFrequencyHzLocked(StateDto state) => state.TxReceiverIndex switch
     {
         <= 0 => state.VfoHz,
-        1 => state.VfoBHz,
+        1 => state.Rx2().VfoHz,
         int i => i < _extraReceivers.Length && _extraReceivers[i] is { } e ? e.VfoHz : state.VfoHz,
     };
 
@@ -1255,14 +1276,16 @@ public sealed class RadioService : IDisposable
         Mutate(s =>
         {
             previousTx = TxFrequencyHzLocked(s);
-            newA = Math.Clamp(s.VfoBHz, 0L, 60_000_000L);
+            newA = Math.Clamp(s.Rx2().VfoHz, 0L, 60_000_000L);
             mode = s.Mode;
-            return s with
-            {
-                VfoHz = newA,
-                VfoBHz = Math.Clamp(s.VfoHz, 0L, 60_000_000L),
-                RadioLoHz = CwOffset.EffectiveLoHz(mode, newA),
-            };
+            long oldA = Math.Clamp(s.VfoHz, 0L, 60_000_000L);
+            return WithRx2(
+                s with
+                {
+                    VfoHz = newA,
+                    RadioLoHz = CwOffset.EffectiveLoHz(mode, newA),
+                },
+                r => r with { VfoHz = oldA });
         });
         ActiveClient?.SetVfoAHz(CwOffset.EffectiveLoHz(mode, newA));
         if (BandUtils.FreqToBand(previousTx) != BandUtils.FreqToBand(TxFrequencyHz(Snapshot())))
@@ -1714,10 +1737,11 @@ public sealed class RadioService : IDisposable
         {
             bool targetB = receiver == TxVfo.B && s.Rx2Enabled;
             targetBAtSet = targetB;
-            var currentMode = targetB ? s.ModeB : s.Mode;
-            var currentPreset = targetB ? s.FilterPresetNameB : s.FilterPresetName;
-            var currentFilterLow = targetB ? s.FilterLowHzB : s.FilterLowHz;
-            var currentFilterHigh = targetB ? s.FilterHighHzB : s.FilterHighHz;
+            var rx2 = s.Rx2();
+            var currentMode = targetB ? rx2.Mode : s.Mode;
+            var currentPreset = targetB ? rx2.FilterPresetName : s.FilterPresetName;
+            var currentFilterLow = targetB ? rx2.FilterLowHz : s.FilterLowHz;
+            var currentFilterHigh = targetB ? rx2.FilterHighHz : s.FilterHighHz;
 
             departingMode = currentMode;
             departingPreset = currentPreset;
@@ -1755,29 +1779,30 @@ public sealed class RadioService : IDisposable
             //    behaviour is unchanged.
             long bump = CwOffset.DialBumpForModeTransition(currentMode, mode);
             long nextVfoA = targetB ? s.VfoHz : Math.Clamp(s.VfoHz + bump, 0L, 60_000_000L);
-            long nextVfoB = targetB ? Math.Clamp(s.VfoBHz + bump, 0L, 60_000_000L) : s.VfoBHz;
+            long nextVfoB = targetB ? Math.Clamp(rx2.VfoHz + bump, 0L, 60_000_000L) : rx2.VfoHz;
             newVfoAHz = nextVfoA;
 
             if (targetB)
             {
-                return s with
+                return WithRx2(s, r => r with
                 {
-                    ModeB = mode,
-                    VfoBHz = nextVfoB,
-                    FilterLowHzB = lo,
-                    FilterHighHzB = hi,
-                    FilterPresetNameB = restoredPreset,
-                };
+                    Mode = mode,
+                    VfoHz = nextVfoB,
+                    FilterLowHz = lo,
+                    FilterHighHz = hi,
+                    FilterPresetName = restoredPreset,
+                });
             }
 
             var txFam = TxFamilyFilterFor(mode);
             var (txLo, txHi) = SignedFilterForMode(mode, txFam.LoAbs, txFam.HiAbs);
 
+            // RX2 is untouched on an RX1 mode change — ProjectReceivers carries
+            // Receivers[1] forward (nextVfoB == rx2.VfoHz here).
             return s with
             {
                 Mode = mode,
                 VfoHz = nextVfoA,
-                VfoBHz = nextVfoB,
                 FilterLowHz = lo, FilterHighHz = hi,
                 TxFilterLowHz = txLo, TxFilterHighHz = txHi,
                 FilterPresetName = restoredPreset,
@@ -1813,7 +1838,7 @@ public sealed class RadioService : IDisposable
         {
             bool targetB = receiver == TxVfo.B && s.Rx2Enabled;
             targetBAtSet = targetB;
-            modeAtSet = targetB ? s.ModeB : s.Mode;
+            modeAtSet = targetB ? s.Rx2().Mode : s.Mode;
             // Normalize the slot name: if (low,high) exactly matches a non-VAR
             // preset for this mode, use that slot's name regardless of what the
             // caller passed. Prevents dual selection where a stored VAR happens
@@ -1830,7 +1855,7 @@ public sealed class RadioService : IDisposable
             int hiAbs = Math.Max(Math.Abs(lowHz), Math.Abs(highHz));
             StoreFamilyFilter(modeAtSet, loAbs, hiAbs, targetB ? TxVfo.B : TxVfo.A);
             if (targetB)
-                return s with { FilterLowHzB = lowHz, FilterHighHzB = highHz, FilterPresetNameB = resolvedName };
+                return WithRx2(s, r => r with { FilterLowHz = lowHz, FilterHighHz = highHz, FilterPresetName = resolvedName });
             return s with { FilterLowHz = lowHz, FilterHighHz = highHz, FilterPresetName = resolvedName };
         });
         if (resolvedName != null && !targetBAtSet)
@@ -3615,8 +3640,32 @@ public sealed class RadioService : IDisposable
         StateChanged?.Invoke(next);
     }
 
-    // Build the canonical per-receiver array (wire v2) from the flat RX1/RX2
-    // fields. Index 0 = RX1 (always present); index 1 = RX2 with Enabled
+    // Patch the authoritative RX2 (index 1) entry inside a StateDto's Receivers
+    // array, returning a new StateDto. Callers set only RX2's tuning fields
+    // (VFO / mode / filter / AF gain) here — the subsequent Mutate /
+    // ProjectReceivers pass re-overlays the flat control fields. This is the
+    // write counterpart to ReceiverProjection.Rx2 (the read accessor). Off the
+    // audio thread (operator setters), so the small list copy is fine.
+    private static StateDto WithRx2(StateDto s, Func<ReceiverDto, ReceiverDto> patch)
+    {
+        var next = patch(s.Rx2());
+        var src = s.Receivers;
+        if (src is null)
+            return s with { Receivers = new[] { next } };
+        var list = new List<ReceiverDto>(src.Count);
+        bool replaced = false;
+        foreach (var r in src)
+        {
+            if (r.Index == 1) { list.Add(next); replaced = true; }
+            else list.Add(r);
+        }
+        if (!replaced) list.Add(next);
+        return s with { Receivers = list };
+    }
+
+    // Build the canonical per-receiver array (wire v2). Index 0 = RX1 is rebuilt
+    // from the flat RX1 fields; index 1 = RX2 is carried forward from the array
+    // (authoritative) with Enabled
     // tracking Rx2Enabled so the frontend has the VFO-B config even when RX2 is
     // off. AdcSource defaults to ADC0 until the multi-DDC UI assigns per-DDC
     // ADCs; SampleRateHz is the shared capture rate. Additional DDCs (index ≥ 2)
@@ -3634,13 +3683,20 @@ public sealed class RadioService : IDisposable
                 FilterPresetName: s.FilterPresetName,
                 AfGainDb: s.RxAfGainDb, SampleRateHz: s.SampleRate,
                 Muted: s.Rx1Muted),
-            new ReceiverDto(
-                Index: 1, Enabled: s.Rx2Enabled, AdcSource: 0,
-                VfoHz: s.VfoBHz, Mode: s.ModeB,
-                FilterLowHz: s.FilterLowHzB, FilterHighHz: s.FilterHighHzB,
-                FilterPresetName: s.FilterPresetNameB,
-                AfGainDb: s.Rx2AfGainDb, SampleRateHz: s.SampleRate,
-                Muted: s.Rx2Muted),
+            // index 1 = RX2: its VFO / mode / filter / AF gain are authoritative
+            // in the array itself (the flat VFO-B fields are gone). Carry the
+            // existing tuning forward and overlay the flat RX2 control fields
+            // (Enabled / Muted) + the shared capture rate. RX2 writes patch
+            // Receivers[1] (see WithRx2) before this runs, so the latest tuning
+            // is what gets carried.
+            s.Rx2() with
+            {
+                Index = 1,
+                Enabled = s.Rx2Enabled,
+                AdcSource = 0,
+                SampleRateHz = s.SampleRate,
+                Muted = s.Rx2Muted,
+            },
         };
         // Extra DDC receivers (RX3+). Appended contiguously while enabled — the
         // P2 multi-DDC path requires no DDC gaps, so the first disabled slot
@@ -3681,6 +3737,7 @@ public sealed class RadioService : IDisposable
             notches = _notches.ToList();
         }
 
+        var rx2Snap = snap.Rx2();
         try
         {
             _radioStateStore.Save(new RadioStateEntry
@@ -3720,14 +3777,17 @@ public sealed class RadioService : IDisposable
                 TunePct = snap.TunePct,
                 TxMoxPreKeyDelayMs = snap.TxMoxPreKeyDelayMs,
                 RadioLoHz = snap.RadioLoHz,
+                // RX2 tuning persists from the canonical Receivers[1] entry (the
+                // flat VFO-B StateDto fields are gone); the RadioStateEntry schema
+                // is unchanged so older/newer DBs round-trip identically.
                 Rx2Enabled = snap.Rx2Enabled,
-                VfoBHz = snap.VfoBHz,
-                ModeB = snap.ModeB,
-                FilterLowHzB = snap.FilterLowHzB,
-                FilterHighHzB = snap.FilterHighHzB,
-                FilterPresetNameB = snap.FilterPresetNameB,
+                VfoBHz = rx2Snap.VfoHz,
+                ModeB = rx2Snap.Mode,
+                FilterLowHzB = rx2Snap.FilterLowHz,
+                FilterHighHzB = rx2Snap.FilterHighHz,
+                FilterPresetNameB = rx2Snap.FilterPresetName,
                 Rx2AudioMode = snap.Rx2AudioMode,
-                Rx2AfGainDb = snap.Rx2AfGainDb,
+                Rx2AfGainDb = rx2Snap.AfGainDb,
                 TxVfo = snap.TxVfo,
                 CtunEnabled = snap.CtunEnabled,
                 Notches = notches.Select(n => new RadioStateNotchEntry

@@ -52,7 +52,17 @@ public class RotctldServiceTests : IDisposable
             FilterHighHz: 2850,
             SampleRate: 192_000,
             TxReceiverIndex: txRxIndex,
-            VfoBHz: vfoBHz);
+            // RX2's VFO is the canonical Receivers[1] entry (TX targets it when
+            // TxReceiverIndex == 1); the flat VFO-B field was retired.
+            Receivers: new ReceiverDto[]
+            {
+                new(Index: 0, Enabled: true, AdcSource: 0, VfoHz: vfoHz, Mode: RxMode.USB,
+                    FilterLowHz: 150, FilterHighHz: 2850, FilterPresetName: "VAR1", AfGainDb: 0,
+                    SampleRateHz: 192_000, Muted: false),
+                new(Index: 1, Enabled: true, AdcSource: 0, VfoHz: vfoBHz, Mode: RxMode.USB,
+                    FilterLowHz: 150, FilterHighHz: 2850, FilterPresetName: "VAR1", AfGainDb: 0,
+                    SampleRateHz: 192_000, Muted: false),
+            });
 
     private static RotctldSlot Slot(int id, bool enabled, params string[] bands) =>
         new RotctldSlot(id, $"Rotator {id}", enabled, "127.0.0.1", 4533, bands, 100);

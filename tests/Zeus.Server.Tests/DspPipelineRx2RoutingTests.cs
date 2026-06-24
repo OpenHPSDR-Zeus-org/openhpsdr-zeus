@@ -15,9 +15,17 @@ public class DspPipelineRx2RoutingTests
         FilterLowHz: 300,
         FilterHighHz: 2600,
         SampleRate: 384_000,
-        VfoBHz: 14_250_000,
-        ModeB: mode,
-        RadioLoHz: 14_200_000);
+        RadioLoHz: 14_200_000,
+        // RX2 tuning lives in the canonical Receivers[1] entry (VFO-B fields gone).
+        Receivers: new ReceiverDto[]
+        {
+            new(Index: 0, Enabled: true, AdcSource: 0, VfoHz: 14_200_000, Mode: mode,
+                FilterLowHz: 300, FilterHighHz: 2600, FilterPresetName: "VAR1", AfGainDb: 0,
+                SampleRateHz: 384_000, Muted: false),
+            new(Index: 1, Enabled: true, AdcSource: 0, VfoHz: 14_250_000, Mode: mode,
+                FilterLowHz: 300, FilterHighHz: 2600, FilterPresetName: "VAR1", AfGainDb: 0,
+                SampleRateHz: 384_000, Muted: false),
+        });
 
     [Fact]
     public void Rx2CtunShift_Protocol2TrueDdc_UsesRx2DdcCenter()

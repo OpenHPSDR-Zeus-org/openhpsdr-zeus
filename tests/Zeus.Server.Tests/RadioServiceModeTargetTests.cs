@@ -42,7 +42,7 @@ public sealed class RadioServiceModeTargetTests : IDisposable
 
         Assert.Equal(RxMode.CWU, after.Mode);
         Assert.Equal(14_200_600, after.VfoHz);
-        Assert.Equal(7_100_000, after.VfoBHz);
+        Assert.Equal(7_100_000, after.Rx2().VfoHz);
     }
 
     [Fact]
@@ -56,9 +56,9 @@ public sealed class RadioServiceModeTargetTests : IDisposable
         var after = radio.SetMode(RxMode.CWU, TxVfo.B);
 
         Assert.Equal(RxMode.USB, after.Mode);
-        Assert.Equal(RxMode.CWU, after.ModeB);
+        Assert.Equal(RxMode.CWU, after.Rx2().Mode);
         Assert.Equal(14_200_000, after.VfoHz);
-        Assert.Equal(7_100_600, after.VfoBHz);
+        Assert.Equal(7_100_600, after.Rx2().VfoHz);
     }
 
     [Fact]
@@ -74,9 +74,9 @@ public sealed class RadioServiceModeTargetTests : IDisposable
         Assert.Equal(150, after.FilterLowHz);
         Assert.Equal(2850, after.FilterHighHz);
         Assert.Equal("VAR1", after.FilterPresetName);
-        Assert.Equal(300, after.FilterLowHzB);
-        Assert.Equal(2400, after.FilterHighHzB);
-        Assert.Equal("F6", after.FilterPresetNameB);
+        Assert.Equal(300, after.Rx2().FilterLowHz);
+        Assert.Equal(2400, after.Rx2().FilterHighHz);
+        Assert.Equal("F6", after.Rx2().FilterPresetName);
     }
 
     [Fact]
@@ -94,8 +94,8 @@ public sealed class RadioServiceModeTargetTests : IDisposable
         Assert.Equal(RxMode.USB, after.Mode);
         Assert.Equal(150, after.FilterLowHz);
         Assert.Equal(2850, after.FilterHighHz);
-        Assert.Equal(300, after.FilterLowHzB);
-        Assert.Equal(2400, after.FilterHighHzB);
+        Assert.Equal(300, after.Rx2().FilterLowHz);
+        Assert.Equal(2400, after.Rx2().FilterHighHz);
     }
 
     [Fact]
@@ -111,10 +111,10 @@ public sealed class RadioServiceModeTargetTests : IDisposable
         var after = radio.SetMode(RxMode.USB, TxVfo.B);
 
         Assert.Equal(RxMode.USB, after.Mode);
-        Assert.Equal(RxMode.USB, after.ModeB);
+        Assert.Equal(RxMode.USB, after.Rx2().Mode);
         Assert.Equal(150, after.FilterLowHz);
         Assert.Equal(2850, after.FilterHighHz);
-        Assert.Equal(300, after.FilterLowHzB);
-        Assert.Equal(2400, after.FilterHighHzB);
+        Assert.Equal(300, after.Rx2().FilterLowHz);
+        Assert.Equal(2400, after.Rx2().FilterHighHz);
     }
 }

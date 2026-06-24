@@ -3885,13 +3885,13 @@ public class DspPipelineService : BackgroundService,
     private static bool IsReceiverMuted(StateDto s, int rxIndex) =>
         s.Receivers is { } rs && rxIndex >= 0 && rxIndex < rs.Count && rs[rxIndex].Muted;
 
-    // Per-secondary-receiver tuning params. RX2 reads the flat RX2/VFO-B fields
-    // (byte-exact); RX3+ read the per-receiver StateDto.Receivers[] entry.
+    // Per-secondary-receiver tuning params, read from the canonical Receivers[]
+    // entry (RX2 = index 1, RX3+ = index N). RadioService keeps the array
+    // current on every Mutate; RX2's flat VFO-B fields were retired in the A/B
+    // wire collapse, so every secondary receiver now flows through one path.
     private static (RxMode mode, long vfoHz, int filterLow, int filterHigh, double afGainDb)
         SecondaryRxParams(StateDto s, int rxIndex)
     {
-        if (rxIndex == 1)
-            return (s.ModeB, s.VfoBHz, s.FilterLowHzB, s.FilterHighHzB, s.Rx2AfGainDb);
         var r = s.Receivers is { } rs && rxIndex >= 0 && rxIndex < rs.Count ? rs[rxIndex] : null;
         return r is null
             ? (RxMode.USB, 0L, 100, 2850, 0.0)
@@ -3929,7 +3929,7 @@ public class DspPipelineService : BackgroundService,
                 rxIndex + 1,
                 opened,
                 rateHz,
-                s.VfoBHz);
+                s.Rx2().VfoHz);
             return opened;
         }
         catch
@@ -3993,14 +3993,15 @@ public class DspPipelineService : BackgroundService,
         long rx2LoHz,
         bool protocol2)
     {
-        long effectiveVfoBHz = CwOffset.EffectiveLoHz(s.ModeB, s.VfoBHz);
+        var rx2 = s.Rx2();
+        long effectiveVfoBHz = CwOffset.EffectiveLoHz(rx2.Mode, rx2.VfoHz);
         return protocol2
             ? (int)(effectiveVfoBHz - rx2LoHz)
             : (int)(effectiveVfoBHz - s.RadioLoHz);
     }
 
     // N-receiver generalization of ComputeRx2CtunShiftHz: the WDSP shift for any
-    // secondary, from its own mode/VFO. For RX2 (mode=ModeB, vfo=VfoBHz) this
+    // secondary, from its own mode/VFO. For RX2 (Receivers[1].Mode/VfoHz) this
     // returns the same value as ComputeRx2CtunShiftHz, keeping RX2 byte-exact.
     private static int ComputeSecondaryCtunShiftHz(
         StateDto s, RxMode mode, long vfoHz, long rxLoHz, bool protocol2)
@@ -5168,7 +5169,7 @@ public class DspPipelineService : BackgroundService,
         engine.SetVfoHz(channel, state.VfoHz);
         int rx2Channel = Volatile.Read(ref _secondaryRx[1].ChannelId);
         if (state.Rx2Enabled && rx2Channel >= 0)
-            engine.SetVfoHz(rx2Channel, state.VfoBHz);
+            engine.SetVfoHz(rx2Channel, state.Rx2().VfoHz);
 
         // Skip the entire display pipeline unless at least one client has a
         // mounted spectrum consumer. Saves: 2× engine.TryGet*DisplayPixels

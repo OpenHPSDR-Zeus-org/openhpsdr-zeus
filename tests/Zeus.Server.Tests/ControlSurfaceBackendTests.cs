@@ -60,7 +60,7 @@ public sealed class ControlSurfaceBackendTests : IDisposable
         radio.SetVfoB(7_100_000);
         radio.SetVfoLock(true);
         var after = radio.SetVfoB(7_200_000);
-        Assert.Equal(7_100_000, after.VfoBHz);
+        Assert.Equal(7_100_000, after.Rx2().VfoHz);
     }
 
     [Fact]

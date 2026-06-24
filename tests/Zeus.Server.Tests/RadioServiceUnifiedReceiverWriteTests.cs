@@ -73,14 +73,9 @@ public sealed class RadioServiceUnifiedReceiverWriteTests : IDisposable
         radio.SetReceiver(1, filterLowHz: -2850, filterHighHz: -100, filterPresetName: "VAR1");
         var s = radio.SetReceiver(1, afGainDb: -3.0);
 
-        // Flat RX2 (*B) fields and the projected receivers[1] entry agree.
+        // RX2's tuning is authoritative in the projected receivers[1] entry
+        // (the flat VFO-B fields were retired in the A/B wire collapse).
         Assert.True(s.Rx2Enabled);
-        Assert.Equal(7_074_000, s.VfoBHz);
-        Assert.Equal(RxMode.LSB, s.ModeB);
-        Assert.Equal(-2850, s.FilterLowHzB);
-        Assert.Equal(-100, s.FilterHighHzB);
-        Assert.Equal("VAR1", s.FilterPresetNameB);
-        Assert.Equal(-3.0, s.Rx2AfGainDb);
 
         var rx2 = Rx(s, 1);
         Assert.True(rx2.Enabled);

@@ -242,7 +242,7 @@ public sealed class G2PanelActionRouter
     {
         var s = _radio.Snapshot();
         _radio.SetRx2(new Rx2SetRequest(
-            AfGainDb: Math.Clamp(s.Rx2AfGainDb + ticks * AfGainStepDb, -50.0, 20.0)));
+            AfGainDb: Math.Clamp(s.Rx2().AfGainDb + ticks * AfGainStepDb, -50.0, 20.0)));
     }
 
     private void AdjustAgcRx1(int ticks)
@@ -406,7 +406,7 @@ public sealed class G2PanelActionRouter
     }
 
     private void CopyAtoB() { var s = _radio.Snapshot(); _radio.SetVfoB(s.VfoHz); }
-    private void CopyBtoA() { var s = _radio.Snapshot(); _radio.SetVfo(s.VfoBHz); }
+    private void CopyBtoA() { var s = _radio.Snapshot(); _radio.SetVfo(s.Rx2().VfoHz); }
 
     private void StepMode(int dir)
     {
