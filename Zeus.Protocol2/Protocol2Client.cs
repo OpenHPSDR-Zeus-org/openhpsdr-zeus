@@ -1981,6 +1981,25 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _log.LogInformation("p2.txAttn db={Db}", db);
     }
 
+    // RX front-end bytes of the CmdHighPriority (port 1027) packet. Grouped
+    // so the Mercury-preamp bit and the two ADC step-attenuators have one
+    // golden-byte seam to lock the wire offsets against regression. Issue
+    // #126 — the preamp bit at byte 1403 was inert on Angelia / ANAN-100D
+    // until the RadioService → DspPipelineService → Protocol2Client forwarding
+    // landed; this offset must not silently move again. Byte-identical to the
+    // inline writes it replaces.
+    //   1403 — Mercury attenuator byte: bit 0 = RX0 preamp, bit 1 = RX1 preamp
+    //          (Thetis network.c:1037)
+    //   1442 — ADC1 step attenuator 0-31 dB (`Attenuator1`, High_Priority_CC.v:186-189)
+    //   1443 — ADC0 step attenuator 0-31 dB (Thetis network.c:1057)
+    internal static void WriteRxFrontEndBytes(
+        Span<byte> p, bool preampOn, byte adc1StepAttnDb, byte adc0StepAttnDb)
+    {
+        p[1403] = (byte)(preampOn ? 0x01 : 0x00);
+        p[1442] = adc1StepAttnDb;
+        p[1443] = adc0StepAttnDb;
+    }
+
     private void SendCmdHighPriority(bool run)
     {
         var p = new byte[BufLen];
@@ -2087,17 +2106,10 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // 1400, so emission is harmless on non-Orion_MkII boards. Issue #414.
         p[1400] = _dleOutputs;
 
-        // Mercury attenuator byte: bit 0 = RX0 preamp, bit 1 = RX1 preamp
-        // (Thetis network.c:1037).
-        p[1403] = (byte)(_preampOn ? 0x01 : 0x00);
-
-        // ADC0 step attenuator (0-31 dB). Thetis network.c:1057.
-        // ADC1 step attenuator (0-31 dB) at byte 1442 — `Attenuator1` per
-        // `High_Priority_CC.v:186-189` (both Hermes and Orion_MkII RTL).
-        // Defaults to 0; set via SetRx1Attenuator for dual-RX dual-ADC
-        // boards. Issue #415.
-        p[1442] = _rx1StepAttnDb;
-        p[1443] = _rxStepAttnDb;
+        // RX front-end: Mercury preamp bit (1403) + ADC0/ADC1 step
+        // attenuators (1443/1442). _rx1StepAttnDb / _rxStepAttnDb default to 0
+        // and are set via SetRx1Attenuator on dual-RX dual-ADC boards (#415).
+        WriteRxFrontEndBytes(p, _preampOn, _rx1StepAttnDb, _rxStepAttnDb);
 
         // Alex words. Bit positions and BPF selections per pihpsdr's alex.h +
         // new_protocol.c (function new_protocol_high_priority, device cases
