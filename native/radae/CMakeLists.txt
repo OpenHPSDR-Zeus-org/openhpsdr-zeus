@@ -201,4 +201,9 @@ if(ZEUS_RADE_BUILD_TEST)
       "${CMAKE_CURRENT_SOURCE_DIR}/shim"
       ${OPUS_INCLUDE_DIRS})
   target_link_libraries(zeus_rade_test PRIVATE zeus_rade)
+  # The harness calls libm directly (sin() in the synth). GNU ld needs an explicit
+  # -lm for the executable's own references (MinGW/MSVC auto-link it).
+  if(NOT MSVC)
+    target_link_libraries(zeus_rade_test PRIVATE m)
+  endif()
 endif()
