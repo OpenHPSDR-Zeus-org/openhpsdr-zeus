@@ -11,15 +11,15 @@ namespace Zeus.Dsp.FreeDv.Tests;
 public class FreeDvAutoScannerTests
 {
     [Fact]
-    public void Order_StartsWith700D_AndCoversAllFiveModes()
+    public void Order_StartsWithRade_AndCoversPanelModes()
     {
         var s = new FreeDvAutoScanner();
-        Assert.Equal(5, s.Order.Count);
-        Assert.Equal(FreeDvSubmode.Mode700D, s.Order[0]);
+        // Scan order = the panel's exposed submodes, RADE V1 first.
+        Assert.Equal(4, s.Order.Count);
+        Assert.Equal(FreeDvSubmode.RadeV1, s.Order[0]);
+        Assert.Contains(FreeDvSubmode.Mode700D, s.Order);
         Assert.Contains(FreeDvSubmode.Mode700E, s.Order);
-        Assert.Contains(FreeDvSubmode.Mode700C, s.Order);
         Assert.Contains(FreeDvSubmode.Mode1600, s.Order);
-        Assert.Contains(FreeDvSubmode.Mode800XA, s.Order);
     }
 
     [Fact]
@@ -29,17 +29,32 @@ public class FreeDvAutoScannerTests
         Assert.Null(s.Tick(0, synced: false, FreeDvSubmode.Mode700D));   // seeds timebase
         Assert.Null(s.Tick(999, synced: false, FreeDvSubmode.Mode700D)); // still dwelling
         Assert.Equal(FreeDvSubmode.Mode700E, s.Tick(1000, synced: false, FreeDvSubmode.Mode700D));
-        // Caller applies 700E; dwell restarts at 1000.
+        // Caller applies 700E; dwell restarts at 1000. Order is [RADE,700D,700E,1600],
+        // so 700E advances to 1600.
         Assert.Null(s.Tick(1999, synced: false, FreeDvSubmode.Mode700E));
-        Assert.Equal(FreeDvSubmode.Mode700C, s.Tick(2000, synced: false, FreeDvSubmode.Mode700E));
+        Assert.Equal(FreeDvSubmode.Mode1600, s.Tick(2000, synced: false, FreeDvSubmode.Mode700E));
     }
 
     [Fact]
-    public void Advance_WrapsPastLastMode()
+    public void RadeV1_GetsLongerDwell_ThenAdvancesToClassic()
+    {
+        // RADE acquires slowly, so it dwells longer (3 s here) than the classic
+        // modes (1 s) before AUTO gives up and advances.
+        var s = new FreeDvAutoScanner(dwellMs: 1000, lockConfirmMs: 1500, unlockMs: 4000, radeDwellMs: 3000);
+        Assert.Null(s.Tick(0, synced: false, FreeDvSubmode.RadeV1));      // seeds timebase on RADE
+        Assert.Null(s.Tick(2999, synced: false, FreeDvSubmode.RadeV1));   // still within RADE dwell
+        Assert.Equal(FreeDvSubmode.Mode700D, s.Tick(3000, synced: false, FreeDvSubmode.RadeV1));
+        // Now on 700D — the shorter classic dwell applies.
+        Assert.Null(s.Tick(3999, synced: false, FreeDvSubmode.Mode700D));
+        Assert.Equal(FreeDvSubmode.Mode700E, s.Tick(4000, synced: false, FreeDvSubmode.Mode700D));
+    }
+
+    [Fact]
+    public void Advance_WrapsPastLastMode_ToRade()
     {
         var s = new FreeDvAutoScanner(dwellMs: 1000, lockConfirmMs: 1500, unlockMs: 4000);
-        s.Tick(0, synced: false, FreeDvSubmode.Mode800XA);
-        Assert.Equal(FreeDvSubmode.Mode700D, s.Tick(1000, synced: false, FreeDvSubmode.Mode800XA));
+        s.Tick(0, synced: false, FreeDvSubmode.Mode1600);
+        Assert.Equal(FreeDvSubmode.RadeV1, s.Tick(1000, synced: false, FreeDvSubmode.Mode1600));
     }
 
     [Fact]
@@ -83,6 +98,6 @@ public class FreeDvAutoScannerTests
         s.Reset(5000);
         Assert.Null(s.Tick(5000, synced: false, FreeDvSubmode.Mode700E));      // fresh dwell
         Assert.Null(s.Tick(5999, synced: false, FreeDvSubmode.Mode700E));
-        Assert.Equal(FreeDvSubmode.Mode700C, s.Tick(6000, synced: false, FreeDvSubmode.Mode700E));
+        Assert.Equal(FreeDvSubmode.Mode1600, s.Tick(6000, synced: false, FreeDvSubmode.Mode700E));
     }
 }

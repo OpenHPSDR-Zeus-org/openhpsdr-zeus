@@ -39,6 +39,14 @@ public sealed class FreeDvService : IDisposable
     // modems' active state.
     private volatile bool _radeActive;
 
+    // Serialises the routing-state mutators (SyncMode / ApplySubmode /
+    // ApplyEngagedRouting / ReloadNative). Without it the DSP tick (SyncMode), the
+    // auto-detect scan loop and the API thread (ApplyConfig) interleave and leave
+    // _radeActive out of sync with _rade.Active — routing RX to the inactive
+    // classic modem so RADE audio passes through undecoded ("sounds like USB").
+    // Hot-path ProcessRx/ProcessTx read _radeActive (volatile) without this lock.
+    private readonly object _routingGate = new();
+
     // Auto submode detection. The scanner is a pure state machine; this service
     // ticks it on a lightweight control loop and applies its submode decisions.
     // Scanning pauses while transmitting (ProcessTx stamps _lastTxActivityMs) so
@@ -67,8 +75,14 @@ public sealed class FreeDvService : IDisposable
     /// </summary>
     private bool RadeSelected => _modem.Submode == FreeDvSubmode.RadeV1;
 
-    /// <summary>True when FreeDV is engaged and the modem is processing audio.</summary>
-    public bool Active => _modem.Active;
+    /// <summary>
+    /// True when FreeDV is engaged and a decoder is processing audio. Must check
+    /// BOTH modems: when RADE V1 is selected the classic <see cref="_modem"/> is
+    /// deactivated and only <see cref="_rade"/> is active, so checking _modem alone
+    /// made the DSP pipeline skip ProcessRx for RADE — RX passed through as plain
+    /// SSB ("sounds like USB") and the RADE decoder never ran.
+    /// </summary>
+    public bool Active => _modem.Active || _rade.Active;
 
     /// <summary>True when the codec2 native library is loadable and FreeDV can run.</summary>
     public bool NativeAvailable => _modem.NativeAvailable;
@@ -94,21 +108,29 @@ public sealed class FreeDvService : IDisposable
         // Rebuild RADE too so a newly-installed zeus_rade lib re-probes and goes
         // live. Capture engaged state BEFORE disposing the old modems (Dispose
         // clears their active flags).
-        bool wasEngaged = _modem.Active || _rade.Active;
-        _radeActive = false;
         var freshRade = new RadeModem(_loggerFactory.CreateLogger<RadeModem>());
         freshRade.SetTxText(_txText); // carry the EOO callsign across the swap
 
-        var old = _modem;
-        var oldRade = _rade;
-        _modem = fresh;
-        _rade = freshRade;
-        old.Dispose();
-        oldRade.Dispose();
+        // Swap + re-route under the routing lock so a concurrent SyncMode /
+        // ApplySubmode can't observe a half-swapped pair or desynced _radeActive.
+        lock (_routingGate)
+        {
+            // Capture engaged state BEFORE disposing the old modems (Dispose
+            // clears their active flags).
+            bool wasEngaged = _modem.Active || _rade.Active;
+            _radeActive = false;
 
-        // Re-engage whichever modem the selected submode calls for, if FreeDV was
-        // active before the reload.
-        if (wasEngaged) ApplyEngagedRouting();
+            var old = _modem;
+            var oldRade = _rade;
+            _modem = fresh;
+            _rade = freshRade;
+            old.Dispose();
+            oldRade.Dispose();
+
+            // Re-engage whichever modem the selected submode calls for, if FreeDV
+            // was active before the reload.
+            if (wasEngaged) ApplyEngagedRouting();
+        }
 
         _log.LogInformation(
             "FreeDV: native reload — codec2 {State}, RADE {RadeState}",
@@ -124,19 +146,22 @@ public sealed class FreeDvService : IDisposable
     /// </summary>
     public void SyncMode(RxMode mode)
     {
-        bool want = mode == RxMode.FreeDv;
-        bool engaged = _modem.Active || _rade.Active;
-        if (want && !engaged)
+        lock (_routingGate)
         {
-            _log.LogInformation("FreeDV: engaging (mode=FreeDv, submode={Submode})", _modem.Submode);
-            ApplyEngagedRouting();
-        }
-        else if (!want && engaged)
-        {
-            _log.LogInformation("FreeDV: disengaging (mode={Mode})", mode);
-            _modem.Deactivate();
-            _rade.Deactivate();
-            _radeActive = false;
+            bool want = mode == RxMode.FreeDv;
+            bool engaged = _modem.Active || _rade.Active;
+            if (want && !engaged)
+            {
+                _log.LogInformation("FreeDV: engaging (mode=FreeDv, submode={Submode})", _modem.Submode);
+                ApplyEngagedRouting();
+            }
+            else if (!want && engaged)
+            {
+                _log.LogInformation("FreeDV: disengaging (mode={Mode})", mode);
+                _modem.Deactivate();
+                _rade.Deactivate();
+                _radeActive = false;
+            }
         }
     }
 
@@ -159,6 +184,23 @@ public sealed class FreeDvService : IDisposable
             _rade.Deactivate();
             _radeActive = false;
             _modem.Activate();
+        }
+    }
+
+    /// <summary>
+    /// Set the selected submode and, when FreeDV is engaged, route audio to the
+    /// decoder that submode calls for (RADE V1 -> _rade, otherwise -> _modem).
+    /// _modem remains the single source of truth for the selected submode even
+    /// when RADE is the active decoder. Used by both the operator's manual pick
+    /// (ApplyConfig) and the auto-detect scan loop, so AUTO can move into and out
+    /// of RADE exactly like a manual pick.
+    /// </summary>
+    private void ApplySubmode(FreeDvSubmode submode)
+    {
+        lock (_routingGate)
+        {
+            _modem.SetSubmode(submode);
+            if (_modem.Active || _rade.Active) ApplyEngagedRouting();
         }
     }
 
@@ -226,13 +268,9 @@ public sealed class FreeDvService : IDisposable
         {
             if (_autoDetect && (!req.AutoDetect.HasValue || !req.AutoDetect.Value))
                 _autoDetect = false;
-            // _modem stays the record of the selected submode even for RADE V1,
-            // mirroring today; RadeSelected then keys off it.
-            _modem.SetSubmode(req.Submode.Value);
-            // If FreeDV is engaged, swap the active modem to match the new submode
-            // (into/out of RADE). No-op when the routing already matches.
-            bool engaged = _modem.Active || _rade.Active;
-            if (engaged) ApplyEngagedRouting();
+            // _modem stays the record of the selected submode even for RADE V1;
+            // ApplySubmode swaps the active decoder to match (into/out of RADE).
+            ApplySubmode(req.Submode.Value);
         }
         if (req.SquelchEnabled.HasValue || req.SnrSquelchThreshDb.HasValue)
             _modem.SetSquelch(req.SquelchEnabled, req.SnrSquelchThreshDb);
@@ -285,18 +323,28 @@ public sealed class FreeDvService : IDisposable
                 await Task.Delay(ScanTickMs, ct).ConfigureAwait(false);
 
                 var modem = _modem; // may be swapped by ReloadNative; read once per tick
+                var rade = _rade;
                 long now = Environment.TickCount64;
                 bool transmitting = IsTxActive(now, Volatile.Read(ref _lastTxActivityMs), TxQuietMs);
-                bool scanning = _autoDetect && modem.Active && modem.NativeAvailable && !transmitting;
+                // FreeDV is engaged when EITHER decoder is active (the selected
+                // submode decides which). Scan whenever a decoder we can run is
+                // engaged — RADE counts, so AUTO works while parked on RADE V1.
+                bool engaged = modem.Active || rade.Active;
+                bool canDecode = modem.NativeAvailable || rade.RadeAvailable;
+                bool scanning = _autoDetect && engaged && canDecode && !transmitting;
 
                 if (!scanning) { wasScanning = false; continue; }
                 if (!wasScanning) { _scanner.Reset(now); wasScanning = true; }
 
-                var next = _scanner.Tick(now, modem.Synced, modem.Submode);
-                if (next is { } m && m != modem.Submode)
+                // Sync comes from whichever decoder the current submode routes to.
+                bool synced = _radeActive ? rade.Synced : modem.Synced;
+                var current = modem.Submode;
+
+                var next = _scanner.Tick(now, synced, current);
+                if (next is { } m && m != current)
                 {
                     _log.LogInformation("FreeDV: auto-detect — no lock, trying submode {Submode}", m);
-                    modem.SetSubmode(m);
+                    ApplySubmode(m); // routes RADE <-> classic, not just _modem.SetSubmode
                 }
             }
         }

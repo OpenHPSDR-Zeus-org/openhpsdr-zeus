@@ -22,19 +22,22 @@ namespace Zeus.Dsp.FreeDv;
 
 public sealed class FreeDvAutoScanner
 {
-    // Scan order: the on-air-common OFDM voice modes first (700D is the global
-    // FreeDV default), then the legacy interop modes. Matches the panel order.
+    // Scan order matches the submodes the panel exposes, so the panel's
+    // "scanning…" highlight always lands on a visible button. RADE V1 leads — it
+    // is the modern FreeDV default and is what most stations on the calling
+    // frequencies now run; the classic OFDM voice modes follow. (700C / 800XA are
+    // not exposed by the panel and so are not scanned.)
     private static readonly FreeDvSubmode[] DefaultOrder =
     {
+        FreeDvSubmode.RadeV1,
         FreeDvSubmode.Mode700D,
         FreeDvSubmode.Mode700E,
-        FreeDvSubmode.Mode700C,
         FreeDvSubmode.Mode1600,
-        FreeDvSubmode.Mode800XA,
     };
 
     private readonly FreeDvSubmode[] _order;
-    private readonly long _dwellMs;        // time given to each candidate to acquire while scanning
+    private readonly long _dwellMs;        // time given to each classic candidate to acquire while scanning
+    private readonly long _radeDwellMs;    // RADE V1 acquires more slowly — give it a longer scan dwell
     private readonly long _lockConfirmMs;  // continuous sync needed to declare LOCKED and stop scanning
     private readonly long _unlockMs;       // continuous loss-of-sync needed to give up a lock and resume
 
@@ -62,17 +65,28 @@ public sealed class FreeDvAutoScanner
     /// Continuous loss-of-sync required to give up a lock and resume scanning. Long
     /// (8 s) so QSO overs and deep fades don't bump the operator off the right mode.
     /// </param>
+    /// <param name="radeDwellMs">
+    /// Scan dwell for RADE V1 specifically. The neural autoencoder takes longer to
+    /// acquire than the classic OFDM modems, so it gets a longer window (6 s) before
+    /// the scan advances — otherwise AUTO would walk past a decodable RADE signal.
+    /// </param>
     public FreeDvAutoScanner(
         long dwellMs = 3000,
         long lockConfirmMs = 1500,
         long unlockMs = 8000,
+        long radeDwellMs = 6000,
         FreeDvSubmode[]? order = null)
     {
         _order = order is { Length: > 0 } ? order : DefaultOrder;
         _dwellMs = dwellMs;
+        _radeDwellMs = radeDwellMs;
         _lockConfirmMs = lockConfirmMs;
         _unlockMs = unlockMs;
     }
+
+    // Per-candidate scan dwell: RADE V1 gets the longer window, the classic OFDM
+    // modes the shorter one.
+    private long DwellFor(FreeDvSubmode m) => m == FreeDvSubmode.RadeV1 ? _radeDwellMs : _dwellMs;
 
     /// <summary>Submodes this scanner cycles through, in scan order.</summary>
     public IReadOnlyList<FreeDvSubmode> Order => _order;
@@ -136,7 +150,8 @@ public sealed class FreeDvAutoScanner
         }
 
         // Unsynced: stay on this candidate until its dwell elapses, then advance.
-        if (nowMs - _dwellStartMs < _dwellMs)
+        // RADE V1 gets a longer dwell than the classic modes (DwellFor).
+        if (nowMs - _dwellStartMs < DwellFor(current))
             return null;
 
         int idx = Array.IndexOf(_order, current);
