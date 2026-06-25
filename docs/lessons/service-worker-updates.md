@@ -82,6 +82,30 @@ To test the update mechanism:
 
 **Note**: During development (Vite dev server), service workers are disabled. Testing must be done with production builds.
 
+## Cache headers are a prerequisite (the "Ctrl+Shift+R fixes it" bug)
+
+The prompt flow above only works if the browser actually revalidates `sw.js` and
+`index.html` on each load. ASP.NET's `UseStaticFiles` sets `ETag`/`Last-Modified`
+but **no `Cache-Control`**, so the browser applies *heuristic* caching and holds
+both files without revalidating. Symptoms:
+
+- New visitors load a **stale `index.html`** referencing old hashed chunks → new
+  features are missing until a hard reload.
+- `reg.update()` fetches a **cached `sw.js`**, never detects the new worker, so the
+  "RELOAD NOW" prompt never appears. `Ctrl+Shift+R` "fixes" it only because a hard
+  reload bypasses the HTTP cache.
+
+Fix lives in `Zeus.Server.Hosting/ZeusHost.cs` (`UseStaticFiles.OnPrepareResponse`):
+content-hashed `/assets/*` get `public, max-age=31536000, immutable`; everything
+else (`index.html`, `sw.js`, manifest, icons, the ONNX model) gets `no-cache` so it
+revalidates every load (cheap 304s via ETag). The client also checks for updates on
+tab focus/visibility (`registerSW.ts`), not just the 60s poll, so a new deploy is
+picked up "when they open" the app.
+
+We deliberately did **not** switch to forced auto-reload: Zeus is a live radio
+control surface and reloading mid-TX/tune would be unsafe. The operator-confirmed
+"RELOAD NOW" prompt stays.
+
 ## References
 
 - [Vite PWA Plugin - Prompt for Update](https://vite-pwa-org.netlify.app/guide/prompt-for-update.html)
