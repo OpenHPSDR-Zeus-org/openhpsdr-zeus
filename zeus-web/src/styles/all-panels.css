@@ -471,6 +471,7 @@
 .workspace-tile[data-panel-id='qrz'] > .workspace-tile-body,
 .workspace-tile[data-panel-id='dsp'] > .workspace-tile-body,
 .workspace-tile[data-panel-id='freedv'] > .workspace-tile-body,
+.workspace-tile[data-panel-id='freedvstations'] > .workspace-tile-body,
 .workspace-tile[data-panel-id='vfo'] > .workspace-tile-body,
 .workspace-tile[data-panel-id='chat'] > .workspace-tile-body,
 .workspace-tile[data-panel-id='filterpresets'] > .workspace-tile-body {
@@ -487,6 +488,7 @@
 .workspace-tile[data-panel-id='qrz'] > .workspace-tile-body > *,
 .workspace-tile[data-panel-id='dsp'] > .workspace-tile-body > *,
 .workspace-tile[data-panel-id='freedv'] > .workspace-tile-body > *,
+.workspace-tile[data-panel-id='freedvstations'] > .workspace-tile-body > *,
 .workspace-tile[data-panel-id='vfo'] > .workspace-tile-body > *,
 .workspace-tile[data-panel-id='chat'] > .workspace-tile-body > *,
 .workspace-tile[data-panel-id='filterpresets'] > .workspace-tile-body > * {
