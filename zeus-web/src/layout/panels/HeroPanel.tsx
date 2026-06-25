@@ -630,9 +630,12 @@ export function HeroPanel({
                   </div>
                 ))}
                 {/* One dB scale spanning the whole waterfall grid (left edge of
-                    all rows), rather than only the RX1 tile's row. Bound to the
-                    focused receiver's window, same as the in-tile scale. */}
-                <WfDbScale />
+                    all rows), rather than only the RX1 tile's row. Master mode
+                    (multi-RX only): it drives the global window — which every
+                    pane follows via its own measured floor offset — and reads
+                    out as dB above the shared noise floor, so one drag evens out
+                    every band. Single-RX keeps the plain absolute-dBm scale. */}
+                <WfDbScale master={multiRxSpectrum} />
               </div>
             )
           )}
