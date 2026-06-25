@@ -104,6 +104,17 @@ public partial class Program
         public string? Url { get; set; }
     }
 
+    // A live detached workspace frame plus the metadata needed to persist and
+    // re-open it (the native PhotinoWindow alone carries neither its layout id
+    // nor a clean title). Tracked in a managed list so the layout id survives
+    // even after the native window is torn down at shutdown.
+    private sealed class DetachedWorkspaceWindow
+    {
+        public required string LayoutId { get; init; }
+        public required string Title { get; init; }
+        public required PhotinoWindow Window { get; init; }
+    }
+
     // OpenhpsdrZeus.csproj defaults to OutputType=Exe (console subsystem) so that
     // headless service mode keeps a usable banner / log on stdout. On Windows that
     // also means a console window pops up alongside the Photino frame in --desktop
@@ -372,6 +383,7 @@ public partial class Program
         // size (and maximized state). Position is not restored — see
         // WindowGeometryStore for why (off-screen / monitor-layout safety).
         var geometryStore = app.Services.GetRequiredService<WindowGeometryStore>();
+        var openWindowsStore = app.Services.GetRequiredService<OpenWorkspaceWindowsStore>();
         var savedGeometry = geometryStore.Get();
         var initialWidth = savedGeometry.Width;
         var initialHeight = savedGeometry.Height;
@@ -385,7 +397,7 @@ public partial class Program
         // resolves correctly from `dotnet run` output and from a published bundle.
         var iconFileName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "zeus.ico" : "zeus.png";
         var iconPath = Path.Combine(AppContext.BaseDirectory, iconFileName);
-        var detachedWorkspaceWindows = new List<PhotinoWindow>();
+        var detachedWorkspaceWindows = new List<DetachedWorkspaceWindow>();
 
         // The dark placeholder loaded as StartString carries a tiny script that,
         // once the page is live (i.e. WebView2 has finished initialising), posts a
@@ -607,11 +619,25 @@ public partial class Program
         // runs on its own thread-pool, untouched by the windowing loop.
         StartupDiagnostics.Phase("desktop: window created, entering message loop");
         window.WaitForClose();
+        // Persist the detached windows that are STILL open (operator-closed ones
+        // already removed themselves via their closing handler) so the next
+        // launch reopens them. Must run BEFORE the close-loop below — closing a
+        // child fires its handler, which removes it from this same list.
+        // Best-effort: never let a prefs write block shutdown.
+        try
+        {
+            openWindowsStore.Replace(detachedWorkspaceWindows
+                .Select(d => new OpenWorkspaceWindowDto(d.LayoutId, d.Title)));
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"workspace.windows.save failed: {ex.Message}");
+        }
         foreach (var child in detachedWorkspaceWindows.ToArray())
         {
             try
             {
-                child.Close();
+                child.Window.Close();
             }
             catch (Exception ex)
             {
@@ -721,14 +747,23 @@ public partial class Program
 
     private static void OpenWorkspaceWindow(
         PhotinoWindow owner,
-        List<PhotinoWindow> detachedWorkspaceWindows,
+        List<DetachedWorkspaceWindow> detachedWorkspaceWindows,
         WorkspaceWindowRequest request,
         string iconPath)
     {
         if (!Uri.TryCreate(request.Url, UriKind.Absolute, out var uri)) return;
+        var layoutId = request.LayoutId?.Trim() ?? string.Empty;
         var layoutTitle = string.IsNullOrWhiteSpace(request.Title)
             ? "Workspace"
             : request.Title.Trim();
+        // Startup restore reopens one frame per persisted layout; if one is
+        // already on screen for this layout (e.g. restore raced an operator
+        // drag-off) don't stack a duplicate.
+        if (layoutId.Length > 0 &&
+            detachedWorkspaceWindows.Any(d => d.LayoutId == layoutId))
+        {
+            return;
+        }
         var child = new PhotinoWindow(owner)
             .SetTitle($"Zeus - {layoutTitle}")
             .SetUseOsDefaultLocation(true)
@@ -738,20 +773,30 @@ public partial class Program
             .SetIconFile(iconPath)
             .RegisterWindowClosingHandler((sender, _) =>
             {
+                // An operator closing one detached window deliberately drops it
+                // from the live set, so it is NOT re-opened next launch. The
+                // shutdown close-loop persists the set BEFORE closing children,
+                // so those removals don't erase what we just saved.
                 if (sender is PhotinoWindow closed)
-                    detachedWorkspaceWindows.Remove(closed);
+                    detachedWorkspaceWindows.RemoveAll(d => ReferenceEquals(d.Window, closed));
                 return false;
             })
             .Load(uri);
 
-        detachedWorkspaceWindows.Add(child);
+        var entry = new DetachedWorkspaceWindow
+        {
+            LayoutId = layoutId,
+            Title = layoutTitle,
+            Window = child,
+        };
+        detachedWorkspaceWindows.Add(entry);
         try
         {
             child.WaitForClose();
         }
         catch (Exception ex)
         {
-            detachedWorkspaceWindows.Remove(child);
+            detachedWorkspaceWindows.Remove(entry);
             Console.Error.WriteLine($"detached workspace open failed: {ex.Message}");
         }
     }

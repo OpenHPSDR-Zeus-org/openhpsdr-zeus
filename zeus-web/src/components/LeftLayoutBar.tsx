@@ -210,6 +210,7 @@ export function LeftLayoutBar() {
                     className="lb-tab"
                     role="tab"
                     aria-selected={active}
+                    data-layout-tab-id={l.id}
                     draggable
                     onDragStart={(e) => handleLayoutDragStart(e, l.id, l.name)}
                     onDragEnd={(e) => handleLayoutDragEnd(e, l)}

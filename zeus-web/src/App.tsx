@@ -49,7 +49,10 @@ import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
 import { WorkspaceErrorBoundary } from './layout/WorkspaceErrorBoundary';
 import { AppErrorBoundary } from './layout/AppErrorBoundary';
-import { currentDetachedWorkspaceLayoutId } from './layout/workspace-windows';
+import {
+  currentDetachedWorkspaceLayoutId,
+  restorePersistedWorkspaceWindows,
+} from './layout/workspace-windows';
 import { ConfirmDialog } from './layout/ConfirmDialog';
 import { FreeDvWindow } from './components/FreeDvWindow';
 import { AfGainSlider } from './components/AfGainSlider';
@@ -139,6 +142,15 @@ export default function App() {
   // the broker instead of the local /ws; RemoteGate prompts for the session
   // password and owns that transport.
   const remoteMode = useMemo(() => isRemoteMode(), []);
+  // Reopen any detached workspace windows the operator left open at the last
+  // desktop shutdown. Main window only (a detached window must not re-spawn its
+  // siblings) and not in remote/web mode. Runs once on mount; the helper is a
+  // no-op outside the Photino desktop shell.
+  useEffect(() => {
+    if (detachedLayoutId || remoteMode) return;
+    void restorePersistedWorkspaceWindows();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const settingsViewOpen = useLayoutStore((s) => s.settingsViewOpen);
   const settingsInitialTab = useLayoutStore((s) => s.settingsInitialTab);
   const setSettingsView = useLayoutStore((s) => s.setSettingsView);

@@ -168,6 +168,15 @@
   color: var(--accent);
   opacity: 0.72;
 }
+/* A panel is being dragged over this layout tab — releasing here transfers
+   the panel to that layout. Mirror the active-tab accent so the drop target
+   reads as "this is where it lands." */
+.left-layout-bar .lb-tab[data-panel-drop-active='true'] {
+  background: var(--bg-2);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 10px var(--accent);
+}
 .left-layout-bar .lb-item.active .lb-tab {
   background: var(--bg-2);
   border-color: var(--line-strong);

@@ -2832,6 +2832,14 @@ public static class ZeusEndpoints
             return Results.Ok(store.DeleteNamed(radio ?? "default", id));
         });
 
+        // Detached workspace windows (extra Photino frames popped off the dock)
+        // that were open at the last desktop shutdown. The desktop shell reads
+        // this once on startup and reopens each; web/headless clients never call
+        // it (the restore path is gated on the Photino bridge), so it returns an
+        // empty list there.
+        app.MapGet("/api/ui/workspace-windows", (OpenWorkspaceWindowsStore store) =>
+            Results.Ok(store.GetAll()));
+
         // Prefs-database (profile) selector. All Zeus prefs/settings/layouts live
         // in a single LiteDB resolved by PrefsDbPath.Get() at startup; the active
         // choice is a pointer file (NOT inside any DB). Switching applies on the

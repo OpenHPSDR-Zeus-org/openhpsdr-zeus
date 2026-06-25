@@ -595,6 +595,10 @@ public static class ZeusHost
         // Desktop main-window geometry (Photino). Only RunDesktop reads it; the
         // store is harmless to register in service/headless modes (no consumer).
         builder.Services.AddSingleton<WindowGeometryStore>();
+        // Detached workspace windows the operator left open at shutdown, reopened
+        // on the next desktop launch. Same desktop-only / harmless-elsewhere note
+        // as WindowGeometryStore above.
+        builder.Services.AddSingleton<OpenWorkspaceWindowsStore>();
         builder.Services.AddSingleton<RadioStateStore>();
         builder.Services.AddSingleton<QrzService>();
         builder.Services.AddSingleton<LogService>();
