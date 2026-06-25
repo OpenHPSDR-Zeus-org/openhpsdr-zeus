@@ -815,6 +815,15 @@ public class DspPipelineService : BackgroundService,
     // AfGainDb in Receivers[i].
     private double _appliedRxAfGainDb;
 
+    // FreeDV decoded-speech AF gain (linear), slewed per audio tick. FreeDV's
+    // vocoder output level is independent of the pre-decode modem amplitude, so
+    // the WDSP panel gain (forced to unity in FreeDV) can't set the listening
+    // volume — the operator's AF is re-applied to the decoded speech here. Starts
+    // at unity so a non-FreeDV channel (ApplyFreeDvAfGain never runs) is
+    // byte-identical. See ApplyFreeDvAfGain and the FreeDV AF note in
+    // OnRadioStateChanged.
+    private double _freeDvAfGainLinear = 1.0;
+
     // Per-tick caps (dB) for the AF-gain and AGC-T register pushes to WDSP.
     // Both registers (panel.gain1, agc.max_gain) are applied by WDSP as
     // instant scalar multiplies — without a per-tick rate cap, a slider
@@ -834,6 +843,30 @@ public class DspPipelineService : BackgroundService,
     {
         double delta = target - current;
         return Math.Abs(delta) <= maxStep ? target : current + Math.Sign(delta) * maxStep;
+    }
+
+    // Apply the FreeDV decoded-speech AF gain in place. The WDSP panel gain is
+    // forced to unity in FreeDV (it would otherwise act on the pre-decode modem
+    // audio ProcessRx discards), so this is the only seam that sets FreeDV
+    // listening volume. Ramps from the previous block's gain to a rate-capped
+    // (AfGainSlewMaxDbPerTick) target across the block, mirroring the WDSP
+    // panel-gain slew, so a slider drag fades click-free instead of stair-
+    // stepping. Updates _freeDvAfGainLinear to the end-of-block gain.
+    private void ApplyFreeDvAfGain(Span<float> block, double targetDb)
+    {
+        double startGain = _freeDvAfGainLinear;
+        double startDb = 20.0 * Math.Log10(Math.Max(startGain, 1e-9));
+        double endDb = StepTowardCappedDb(startDb, targetDb, AfGainSlewMaxDbPerTick);
+        double endGain = Math.Pow(10.0, endDb / 20.0);
+        int n = block.Length;
+        if (n == 0) { _freeDvAfGainLinear = endGain; return; }
+        for (int i = 0; i < n; i++)
+        {
+            double t = (i + 1) / (double)n;
+            double g = startGain + (endGain - startGain) * t;
+            block[i] = (float)(block[i] * g);
+        }
+        _freeDvAfGainLinear = endGain;
     }
     // TX mic gain change-detect cache. NaN sentinel forces the first apply
     // even when the persisted value happens to equal 0 dB (the engine seam
@@ -3491,10 +3524,21 @@ public class DspPipelineService : BackgroundService,
         // one-block constant multiply, so a slider drag stair-steps into a
         // click train. Secondary RX AF gain slews per-receiver inside
         // ApplyStateToSecondaryRxChannel (each receiver has its own slider).
-        if (s.RxAfGainDb != _appliedRxAfGainDb)
+        //
+        // FreeDV: WDSP's panel gain runs on the received OFDM modem audio, which
+        // ProcessRx then discards when it replaces the block in place with
+        // decoded speech (the vocoder output level is fixed by the codec, not the
+        // input amplitude) — so the WDSP panel gain can't set the listening
+        // volume. Drive the WDSP panel to unity in FreeDV so the decoder always
+        // sees a consistent-level feed (a low AF setting can't starve sync), and
+        // re-apply the operator's AF on the decoded speech in the audio tick
+        // (ApplyFreeDvAfGain / _freeDvAfGainLinear). On exit the latch re-slews
+        // the WDSP panel back to s.RxAfGainDb automatically.
+        double afTargetDb = freeDvMode ? 0.0 : s.RxAfGainDb;
+        if (afTargetDb != _appliedRxAfGainDb)
         {
             _appliedRxAfGainDb = StepTowardCappedDb(
-                _appliedRxAfGainDb, s.RxAfGainDb, AfGainSlewMaxDbPerTick);
+                _appliedRxAfGainDb, afTargetDb, AfGainSlewMaxDbPerTick);
             engine.SetRxAfGainDb(channel, _appliedRxAfGainDb);
         }
         // TX mic gain: dB → linear (10^(db/20)) at the engine seam. Conversion
@@ -5648,7 +5692,17 @@ public class DspPipelineService : BackgroundService,
                 {
                     _freeDv.SyncMode(state.Mode);
                     if (_freeDv.Active && audioSampleCount > 0)
+                    {
                         _freeDv.ProcessRx(audioBuf.AsSpan(0, audioSampleCount));
+                        // AF (listening) volume for FreeDV is applied HERE, on the
+                        // decoded speech. WDSP's panel gain ran on the pre-decode
+                        // modem audio that ProcessRx just discarded, so without
+                        // this the AF slider has no effect on FreeDV volume. Placed
+                        // before the RX audio plugin + squelch to match normal-mode
+                        // ordering (WDSP applies AF before those managed inserts).
+                        ApplyFreeDvAfGain(
+                            audioBuf.AsSpan(0, audioSampleCount), state.RxAfGainDb);
+                    }
                 }
 
                 var rxAudioHandler = _rxAudioPluginHandler;
