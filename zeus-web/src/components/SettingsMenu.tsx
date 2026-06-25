@@ -32,7 +32,7 @@ import { RadioSettingsPanel } from './RadioSettingsPanel';
 import { ReceiversPanel } from './ReceiversPanel';
 import { RotatorSettingsPanel } from './RotatorSettingsPanel';
 import { ServerUrlPanel } from './ServerUrlPanel';
-import { TciSettingsPanel } from './TciSettingsPanel';
+import { NetworkSettingsPanel } from './NetworkSettingsPanel';
 import { RadioSelector } from './RadioSelector';
 import { usePaStore } from '../state/pa-store';
 import { useRadioStore } from '../state/radio-store';
@@ -55,7 +55,7 @@ export type SettingsTabId =
   | 'bandplan'
   | 'qrz'
   | 'rotator'
-  | 'tci'
+  | 'network'
   | 'display'
   | 'plugins'
   | 'hamclock'
@@ -76,7 +76,7 @@ const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
   { id: 'bandplan', label: 'BAND PLAN' },
   { id: 'qrz', label: 'QRZ' },
   { id: 'rotator', label: 'ROTATOR' },
-  { id: 'tci', label: 'TCI' },
+  { id: 'network', label: 'NETWORK' },
   { id: 'display', label: 'DISPLAY' },
   { id: 'plugins', label: 'PLUGINS' },
   { id: 'hamclock', label: 'HAMCLOCK' },
@@ -205,7 +205,7 @@ export function SettingsView({ initialTab, onClose }: Props) {
           {activeTab === 'bandplan' && <BandPlanEditor />}
           {activeTab === 'qrz' && <QrzSettingsPanel />}
           {activeTab === 'rotator' && <RotatorSettingsPanel />}
-          {activeTab === 'tci' && <TciSettingsPanel />}
+          {activeTab === 'network' && <NetworkSettingsPanel />}
           {activeTab === 'display' && <DisplayPanel />}
           {activeTab === 'plugins' && <PluginsPanel />}
           {activeTab === 'hamclock' && <HamClockSettingsPanel />}

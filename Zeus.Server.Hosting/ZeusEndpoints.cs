@@ -3280,6 +3280,23 @@ public static class ZeusEndpoints
             return Results.Ok(result);
         });
 
+        app.MapGet("/api/cat/status", (CatManagementService cat) => cat.GetStatus());
+
+        app.MapPost("/api/cat/config", (CatRuntimeConfig req, CatManagementService cat, HttpContext ctx) =>
+        {
+            log.LogInformation("api.cat.config enabled={En} bind={Bind} port={Port}", req.Enabled, req.BindAddress, req.Port);
+            var status = cat.SetConfig(req);
+            return Results.Ok(status);
+        });
+
+        app.MapPost("/api/cat/test", (CatTestRequest req, CatManagementService cat, HttpContext ctx) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.BindAddress) || req.Port is <= 0 or >= 65536)
+                return Results.BadRequest(new { error = "bindAddress and port required" });
+            var result = cat.TestPort(req.BindAddress.Trim(), req.Port);
+            return Results.Ok(result);
+        });
+
         app.Map("/ws", async (HttpContext ctx, StreamingHub hub) =>
         {
             if (!ctx.WebSockets.IsWebSocketRequest)

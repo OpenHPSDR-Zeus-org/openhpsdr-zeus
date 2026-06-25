@@ -214,6 +214,22 @@ public static class ZeusHost
             tciBindAddress = persistedTci.BindAddress;
             tciPort = persistedTci.Port;
         }
+
+        // CAT (Kenwood TS-2000 over TCP) persisted runtime override, mirroring
+        // the TCI bootstrap above. CatServer reads CatOptions directly (it owns
+        // its TcpListener — no Kestrel binding), so we only need the persisted
+        // value here to feed PostConfigure<CatOptions> below; there is no
+        // cat-enabled/bind/port local to thread into Kestrel.
+        CatRuntimeConfig? persistedCat = null;
+        try
+        {
+            using var bootstrapCatStore = new CatConfigStore(NullLogger<CatConfigStore>.Instance);
+            persistedCat = bootstrapCatStore.Get();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"cat.config.bootstrap-load failed: {ex.Message}");
+        }
         // PERF_PASS_3_DEBUG: force-disable TCI bind when running a second
         // instance on the same box (Brian's main session keeps :40001).
         // Uncommitted local edit.
@@ -821,6 +837,28 @@ public static class ZeusHost
         builder.Services.AddSingleton<SpotBroadcastService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<SpotBroadcastService>());
         builder.Services.AddSingleton<TciManagementService>();
+
+        // CAT (Kenwood TS-2000 over TCP) server — control-only sibling of TCI for
+        // loggers / digital-mode apps (WSJT-X, N1MM+, fldigi, Hamlib net rigctl).
+        // Disabled by default; enable via appsettings.json Cat:Enabled=true or the
+        // Network settings tab. CatServer owns its own TcpListener (a raw line
+        // protocol Kestrel can't serve), so — unlike TCI — there is NO Kestrel
+        // port-branch entry below; it binds in its own StartAsync.
+        builder.Services.Configure<Cat.CatOptions>(builder.Configuration.GetSection("Cat"));
+        if (persistedCat is not null)
+        {
+            var pendingCat = persistedCat;
+            builder.Services.PostConfigure<Cat.CatOptions>(o =>
+            {
+                o.Enabled = pendingCat.Enabled;
+                o.BindAddress = pendingCat.BindAddress;
+                o.Port = pendingCat.Port;
+            });
+        }
+        builder.Services.AddSingleton<CatConfigStore>();
+        builder.Services.AddSingleton<Cat.CatServer>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Cat.CatServer>());
+        builder.Services.AddSingleton<CatManagementService>();
 
         // ZeusChat — operator-to-operator chat over the Cloudflare relay.
         // Singleton (API surface) + hosted service (relay connection lifecycle),
