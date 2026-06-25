@@ -1,6 +1,6 @@
 name: Sync develop → experimental
 
-# Architectural context: Kb2uka/openhpsdr-zeus uses three long-lived
+# Architectural context: OpenHPSDR-Zeus-org/openhpsdr-zeus uses three long-lived
 # branches with distinct trust levels:
 #
 #   main         — tagged releases only. Code-owner approval required.

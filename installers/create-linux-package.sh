@@ -313,7 +313,7 @@ Requirements:
   browser UI so Zeus still starts.
 
 For more information:
-https://github.com/Kb2uka/openhpsdr-zeus
+https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus
 
 License: GNU GPL v2 or later
 Copyright (C) 2025-2026 Brian Keating (EI6LF), Douglas J. Cerrato (KB2UKA), Christian Suarez (N9WAR), and contributors

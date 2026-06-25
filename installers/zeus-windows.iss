@@ -9,7 +9,7 @@
 #define MyAppName "OpenHPSDR-Zeus"
 #define MyAppShortName "OpenHPSDR-Zeus"
 #define MyAppPublisher "Brian Keating (EI6LF), Douglas J. Cerrato (KB2UKA), Christian Suarez (N9WAR), and contributors"
-#define MyAppURL "https://github.com/Kb2uka/openhpsdr-zeus"
+#define MyAppURL "https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus"
 #define MyAppExeName "OpenhpsdrZeus.exe"
 
 ; Version will be passed via /DMyAppVersion="x.y.z" command line parameter
