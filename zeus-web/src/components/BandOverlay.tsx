@@ -47,8 +47,10 @@ import * as viewCenter from '../state/view-center';
 // the span so the bars glide in lock-step with the trace during a tuning
 // glide. This keeps React out of the per-frame path entirely.
 //
-// The overlay is RX-1 only (`receiver === 'A'`) — RX2 / stitched halves keep
-// their existing clean look so the operator can compare bands at a glance.
+// The overlay is single-RX only: it renders on RX-1 (`receiver === 'A'`) and
+// only when a single spectrum pane is exposed. In multi-RX mode (RX2 / stitched
+// halves / standalone RX3+) every pane keeps its clean look so the operator can
+// compare bands at a glance.
 
 const COLORS = {
   // `tint` fills the freq-number bar (kept low-alpha so ticks read through);

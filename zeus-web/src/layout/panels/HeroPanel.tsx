@@ -592,6 +592,7 @@ export function HeroPanel({
                     receiver={p.index}
                     stitched={multiRxSpectrum && p.index <= 1}
                     foreground={focusedRxIndex === p.index}
+                    multiRx={multiRxSpectrum}
                     tuneReceiver={p.index}
                   />
                 </div>

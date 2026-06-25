@@ -79,6 +79,7 @@ type PanadapterProps = {
   tuneReceiver?: PanTuneGestureOptions['tuneReceiver'];
   stitched?: boolean;
   foreground?: boolean;
+  multiRx?: boolean;
 };
 
 export function Panadapter({
@@ -87,6 +88,7 @@ export function Panadapter({
   tuneReceiver,
   stitched = false,
   foreground = true,
+  multiRx = false,
 }: PanadapterProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -477,7 +479,7 @@ export function Panadapter({
       } as CSSProperties}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
-      {rxIndex === 0 && (!stitched || foreground) && <BandOverlay receiver={receiver} />}
+      {rxIndex === 0 && !multiRx && <BandOverlay receiver={receiver} />}
       <div
         className="pointer-events-none absolute z-[25] rounded-sm px-2 py-0.5 font-mono text-[10px]"
         style={{
