@@ -24,6 +24,7 @@ namespace Zeus.Server;
 public sealed class BandPlanStore : IDisposable
 {
     private readonly ILogger<BandPlanStore> _log;
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<BandPlanOverrideRecord> _overrides;
 
@@ -46,7 +47,8 @@ public sealed class BandPlanStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _overrides = _db.GetCollection<BandPlanOverrideRecord>("band_plan_overrides");
         _overrides.EnsureIndex(x => x.RegionId, unique: true);
 
@@ -109,7 +111,7 @@ public sealed class BandPlanStore : IDisposable
     public bool HasOverride(string regionId) =>
         _overrides.Exists(x => x.RegionId == regionId);
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
     private void LoadShippedData()
     {

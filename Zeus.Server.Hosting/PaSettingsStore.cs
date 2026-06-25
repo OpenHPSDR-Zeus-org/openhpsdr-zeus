@@ -34,6 +34,7 @@ namespace Zeus.Server;
 // the next C&C/HPC tick.
 public sealed class PaSettingsStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<PaBandEntry> _bands;
     private readonly ILiteCollection<PaGlobalEntry> _globals;
@@ -52,7 +53,8 @@ public sealed class PaSettingsStore : IDisposable
             Directory.CreateDirectory(dir);
         }
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _bands = _db.GetCollection<PaBandEntry>("pa_bands");
         _bands.EnsureIndex(x => x.Band, unique: true);
         _globals = _db.GetCollection<PaGlobalEntry>("pa_globals");
@@ -212,7 +214,7 @@ public sealed class PaSettingsStore : IDisposable
         Changed?.Invoke();
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
 }
 

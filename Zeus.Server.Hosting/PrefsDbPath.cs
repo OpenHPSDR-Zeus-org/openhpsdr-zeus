@@ -302,10 +302,25 @@ public static class PrefsDbPath
         return ProfilesDirName + "/" + safe + ".db";
     }
 
+    // True when the file at <paramref name="path"/> opens as a real LiteDB
+    // database (header + every collection's first data page readable). Used to
+    // reject a corrupt or wrong-type file at IMPORT time, so a bad upload is
+    // refused up front with a clear message instead of silently becoming a reset
+    // database the next time the profile is activated (EnsureUsable would move
+    // it aside on launch — losing the operator's settings without warning).
+    public static bool IsValidDatabase(string path) =>
+        Probe(path, null) != ProbeResult.Corrupt;
+
+    // Delete a database file and its LiteDB -log sidecar, best effort.
+    private static void TryDeleteDbFiles(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch { /* best effort */ }
+        try { if (File.Exists(path + "-log")) File.Delete(path + "-log"); } catch { /* best effort */ }
+    }
+
     // Copy an existing .db into profiles/<name>.db. Derives the name from the
     // source file when name is null/blank. Refuses to overwrite an existing
-    // profile. The source is NOT validated as a real LiteDB — a bad file simply
-    // won't load when activated.
+    // profile, and rejects a file that is not a valid LiteDB database.
     public static string ImportProfile(string sourcePath, string? name)
     {
         if (string.IsNullOrWhiteSpace(sourcePath))
@@ -326,14 +341,19 @@ public static class PrefsDbPath
             throw new InvalidOperationException($"A profile named \"{safe}\" already exists.");
 
         File.Copy(sourcePath, target, overwrite: false);
+        if (!IsValidDatabase(target))
+        {
+            TryDeleteDbFiles(target);
+            throw new InvalidOperationException(
+                "That file is not a valid Zeus settings database (it may be corrupt or a different kind of file).");
+        }
         return ProfilesDirName + "/" + safe + ".db";
     }
 
     // Save an uploaded .db stream into profiles/<name>.db. Used by the file-
     // picker import in the UI, which uploads the chosen file's bytes (the
     // webview can't hand the server a filesystem path). Refuses to overwrite an
-    // existing profile; the stream is NOT validated as a real LiteDB — a bad
-    // file simply won't load when activated.
+    // existing profile, and rejects a file that is not a valid LiteDB database.
     public static string ImportProfileFromStream(Stream source, string name)
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -346,8 +366,16 @@ public static class PrefsDbPath
         if (File.Exists(target))
             throw new InvalidOperationException($"A profile named \"{safe}\" already exists.");
 
+        // Close the file handle before validating so the probe can open it.
         using (var dest = File.Create(target))
             source.CopyTo(dest);
+
+        if (!IsValidDatabase(target))
+        {
+            TryDeleteDbFiles(target);
+            throw new InvalidOperationException(
+                "That file is not a valid Zeus settings database (it may be corrupt or a different kind of file).");
+        }
         return ProfilesDirName + "/" + safe + ".db";
     }
 

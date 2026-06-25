@@ -14,6 +14,7 @@ public sealed class TxFidelityPolicyStore : IDisposable
     public const string DefaultProfileId = "studio-ssb";
     public const int DefaultTargetSpectralDensity = 55;
 
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<TxFidelityPolicyEntry> _policy;
     private readonly ILogger<TxFidelityPolicyStore> _log;
@@ -27,7 +28,8 @@ public sealed class TxFidelityPolicyStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _policy = _db.GetCollection<TxFidelityPolicyEntry>("tx_fidelity_policy");
 
         _log.LogInformation("TxFidelityPolicyStore initialized at {Path}", dbPath);
@@ -77,7 +79,7 @@ public sealed class TxFidelityPolicyStore : IDisposable
     private static int ClampDensity(int density) =>
         Math.Clamp(density, 0, 100);
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class TxFidelityPolicyEntry

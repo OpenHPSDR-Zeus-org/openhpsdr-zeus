@@ -16,6 +16,7 @@ namespace Zeus.Plugins.Host;
 /// </summary>
 public sealed class PluginSettingsStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly string _dbPath;
     private readonly ILogger<PluginSettingsStore>? _log;
@@ -30,7 +31,8 @@ public sealed class PluginSettingsStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _log?.LogInformation("PluginSettingsStore initialised at {Path}", dbPath);
     }
 
@@ -100,7 +102,7 @@ public sealed class PluginSettingsStore : IDisposable
     internal static string CollectionName(string pluginId)
         => "plugin_" + pluginId.Replace('.', '_').Replace('-', '_');
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
     private sealed class ScopedSettings : IPluginSettings
     {

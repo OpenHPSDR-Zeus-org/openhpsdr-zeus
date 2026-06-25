@@ -36,6 +36,7 @@ public sealed class WindowGeometryStore : IDisposable
     public const int MinWidth = 1280;
     public const int MinHeight = 800;
 
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<WindowGeometryEntry> _docs;
     private readonly ILogger<WindowGeometryStore> _log;
@@ -51,7 +52,8 @@ public sealed class WindowGeometryStore : IDisposable
             Directory.CreateDirectory(dir);
         }
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _docs = _db.GetCollection<WindowGeometryEntry>("window_geometry");
 
         _log.LogInformation("WindowGeometryStore initialized at {Path}", dbPath);
@@ -90,7 +92,7 @@ public sealed class WindowGeometryStore : IDisposable
     private static int ClampWidth(int v) => v < MinWidth ? DefaultWidth : v;
     private static int ClampHeight(int v) => v < MinHeight ? DefaultHeight : v;
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 // Normal-size geometry plus maximized flag. Plain Hosting-layer record — not a

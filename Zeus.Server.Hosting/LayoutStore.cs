@@ -62,6 +62,7 @@ namespace Zeus.Server;
 //     no radio is connected.
 public sealed class LayoutStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<LayoutEntry> _legacy;
     private readonly ILiteCollection<RadioLayoutsEntry> _v2;
@@ -78,7 +79,8 @@ public sealed class LayoutStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _legacy = _db.GetCollection<LayoutEntry>("ui_layout");
         _legacy.EnsureIndex(x => x.ProfileId, unique: true);
         _v2 = _db.GetCollection<RadioLayoutsEntry>("ui_layouts_v2");
@@ -442,7 +444,7 @@ public sealed class LayoutStore : IDisposable
         return trimmed.Length > 256 ? trimmed[..256] : trimmed;
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
 }
 

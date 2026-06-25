@@ -8,6 +8,7 @@ public sealed record AudioDeviceSettings(string? InputDeviceId, string? OutputDe
 
 public sealed class AudioDeviceSettingsStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<AudioDeviceSettingsEntry> _docs;
     private readonly ILogger<AudioDeviceSettingsStore> _log;
@@ -25,7 +26,8 @@ public sealed class AudioDeviceSettingsStore : IDisposable
             Directory.CreateDirectory(dir);
         }
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _docs = _db.GetCollection<AudioDeviceSettingsEntry>("audio_device_settings");
 
         _log.LogInformation("AudioDeviceSettingsStore initialized at {Path}", dbPath);
@@ -75,7 +77,7 @@ public sealed class AudioDeviceSettingsStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
     private AudioDeviceSettingsEntry GetOrCreateEntry() =>
         _docs.FindAll().FirstOrDefault() ?? new AudioDeviceSettingsEntry();

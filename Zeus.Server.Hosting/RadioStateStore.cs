@@ -38,6 +38,7 @@ namespace Zeus.Server;
 // Both share zeus-prefs.db with the other preference stores.
 public sealed class RadioStateStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<RadioStateEntry> _state;
     private readonly ILiteCollection<BoardSampleRateEntry> _boardRates;
@@ -52,7 +53,8 @@ public sealed class RadioStateStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _state = _db.GetCollection<RadioStateEntry>("radio_state");
         _boardRates = _db.GetCollection<BoardSampleRateEntry>("board_sample_rates");
         _boardRates.EnsureIndex(x => x.BoardKey, unique: true);
@@ -123,7 +125,7 @@ public sealed class RadioStateStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
     private static string BoardKey(HpsdrBoardKind board, OrionMkIIVariant variant) =>
         board == HpsdrBoardKind.OrionMkII
