@@ -341,7 +341,15 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!connected) return;
+    // Normally the poll only runs once a radio is connected. In remote (WebRTC)
+    // mode it must also run while still 'Disconnected': the mount-time one-shot
+    // fetchState() queues in the API tunnel until the SPAKE2+ unlock and can
+    // time out during password entry, so without a self-healing poll the
+    // connection-store status never reaches 'Connected'. That stuck status
+    // disables MOX and empties every store-driven panel (meters, TX, controls)
+    // even though the panadapter — fed straight from frames — keeps rendering.
+    // The poll seeds the store as soon as the tunnel can serve /api/state.
+    if (!connected && !remoteMode) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let ctrl: AbortController | null = null;
@@ -369,7 +377,7 @@ export default function App() {
       if (timer != null) clearTimeout(timer);
       ctrl?.abort();
     };
-  }, [connected]);
+  }, [connected, remoteMode]);
 
   useEffect(() => {
     return useConnectionStore.subscribe((state, prev) => {
