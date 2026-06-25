@@ -19,13 +19,19 @@
 //   - On DROP (placeDroppedPanel): the dragged tile lands where it was dropped.
 //       • lands on empty space → it just stays there (gaps are allowed).
 //       • lands squarely on ONE movable same-footprint-ish neighbour → the two
-//         SWAP and nothing else moves.
-//       • lands overlapping anything else (or a locked tile) → only the dragged
-//         tile relocates, to the nearest free slot to the drop point. Every
-//         other tile is left untouched.
+//         SWAP and nothing else moves (an in-place exchange — never pushes a
+//         tile below the fold).
+//       • lands overlapping anything else (or a locked tile) → it STAYS exactly
+//         where dropped, OVERLAPPING what it covers. Nothing relocates: the old
+//         relocate-to-free-slot searched downward and shoved the tile off the
+//         bottom (bringing the scrollbar back). The operator clears space by
+//         moving/shrinking the covered panel.
 //   - On RESIZE STOP (resolveResizeOverlaps): the resized tile keeps its new
-//     size; only the neighbours it now overlaps hop to their nearest free slot.
-//     One pass, each to a globally-free cell, so there is no cascade.
+//     size and OVERLAPS whatever it now covers — neighbours never move. Growing
+//     a panel must not displace another (that used to shove neighbours down past
+//     the fold or off the monitor, where they were then pruned). To clear the
+//     space, the operator shrinks/moves the covered panel. Only a LOCKED tile is
+//     protected: the resized tile is clamped back out of it instead.
 //   - Tidy (tidyWorkspacePlacements): an explicit, operator-invoked pack that
 //     closes vertical gaps. Horizontal placement stays operator-directed (x is
 //     preserved); locked tiles never move. This is the ONLY path that packs.
@@ -129,54 +135,40 @@ export function autoFitDroppedPanel(
     }
   }
 
-  // Otherwise relocate ONLY the dragged tile to the nearest free slot to the
-  // drop point. Neighbours (including locked tiles) are obstacles, never moved.
-  const slot = nearestFreeSlot(next, dragged, cols, dropX, dropY);
-  if (slot) {
-    dragged.x = slot.x;
-    dragged.y = slot.y;
-  } else {
-    // Pathological — drop below everything, which is always free.
-    dragged.x = dropX;
-    dragged.y = others.reduce((b, it) => Math.max(b, it.y + it.h), 0);
-  }
+  // Otherwise the dropped tile STAYS exactly where the operator dropped it,
+  // OVERLAPPING whatever it now covers (including a locked tile — only the
+  // locked tile's own position is protected, and it never moves because it is
+  // not the dragged tile). It used to relocate to the nearest free slot, but
+  // that search ran downward and shoved the tile below the fold, bringing the
+  // scrollbar back. Overlap is allowed; nothing moves but the tile in hand. To
+  // clear the space, the operator moves or shrinks the covered panel.
   return next;
 }
 
 /**
- * Resolve overlaps created by a resize. The resized tile keeps its new
- * geometry; each movable neighbour it now overlaps relocates to its nearest
- * free slot (single pass — every relocation targets a globally-free cell, so no
- * cascade). Locked neighbours are left in place (a resize into a locked tile is
- * a rare edge the operator can clear with Tidy).
+ * Resolve a resize. OVERLAP IS ALLOWED: the resized tile keeps its new geometry
+ * and grows OVER its neighbours, which stay exactly where they are. Resizing a
+ * panel larger must never displace another panel — pushing a neighbour to a
+ * "free slot" used to shove it down past the fold (bringing the scrollbar back)
+ * or off the monitor entirely (where it would then be pruned and lost). The
+ * operator covers a panel deliberately; to clear the space they shrink or move
+ * the covered panel themselves. This holds for every panel, the panadapter
+ * included.
+ *
+ * The one thing still enforced: a resize cannot cover a LOCKED (pinned) tile.
+ * Rather than move the locked tile, clamp the resized tile back out of it (trim
+ * height first — the common "grew downward into a locked tile" — then width).
+ * Nothing is ever relocated, so there is no cascade and nothing leaves the field.
  */
 export function resolveResizeOverlaps(
   layout: Layout,
   resizedId: string,
-  cols: number,
+  _cols: number,
 ): Layout {
   const next = clearMovedFlags(cloneLayout(layout));
   const resized = next.find((item) => item.i === resizedId);
   if (!resized) return next;
 
-  const overlapped = next
-    .filter((item) => item.i !== resizedId && !item.static)
-    .filter((item) => collides(resized, item))
-    .sort((a, b) => a.y - b.y || a.x - b.x);
-
-  for (const item of overlapped) {
-    // A prior relocation may already have cleared this one.
-    if (!collides(resized, item)) continue;
-    const slot = nearestFreeSlot(next, item, cols, item.x, item.y);
-    if (slot) {
-      item.x = slot.x;
-      item.y = slot.y;
-    }
-  }
-
-  // A locked neighbour can't be relocated — clamp the resized tile so a resize
-  // never leaves a panel sitting on top of a locked one. Trim height first (the
-  // common "grew downward into a locked tile"), then width.
   for (const blocker of next) {
     if (blocker.i === resizedId || !blocker.static) continue;
     if (!collides(resized, blocker)) continue;
@@ -192,43 +184,6 @@ export function resolveResizeOverlaps(
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
-
-function nearestFreeSlot(
-  layout: LayoutItem[],
-  item: LayoutItem,
-  cols: number,
-  prefX: number,
-  prefY: number,
-): { x: number; y: number } | null {
-  const maxX = cols - item.w;
-  if (maxX < 0) return null;
-  const others = layout.filter((other) => other.i !== item.i);
-  const layoutBottom = layout.reduce(
-    (bottom, other) => Math.max(bottom, other.y + other.h),
-    0,
-  );
-  // One full tile-height of slack below the stack guarantees a free row exists.
-  const maxY = layoutBottom + item.h;
-
-  let best: { x: number; y: number; dist: number } | null = null;
-  for (let y = 0; y <= maxY; y += 1) {
-    for (let x = 0; x <= maxX; x += 1) {
-      const candidate = { ...item, x, y };
-      if (others.some((other) => collides(candidate, other))) continue;
-      const dist = Math.abs(x - prefX) + Math.abs(y - prefY);
-      if (
-        !best ||
-        dist < best.dist ||
-        (dist === best.dist && (y < best.y || (y === best.y && x < best.x)))
-      ) {
-        best = { x, y, dist };
-      }
-      // Drop point itself is free — nothing can beat distance 0.
-      if (dist === 0) return { x, y };
-    }
-  }
-  return best ? { x: best.x, y: best.y } : null;
-}
 
 function overlapIsSquare(a: LayoutItem, b: LayoutItem): boolean {
   const overlapW = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);

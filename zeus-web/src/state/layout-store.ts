@@ -19,6 +19,7 @@
 
 import { create } from 'zustand';
 import {
+  defaultSpanFor,
   EMPTY_WORKSPACE_LAYOUT,
   newTileUid,
   parseWorkspaceLayout,
@@ -147,6 +148,18 @@ interface LayoutState {
   removeTile: (uid: string) => void;
   /** Remove a tile from a specific layout without making it active. */
   removeTileFromLayout: (layoutId: string, uid: string) => void;
+  /** One-time cleanup: close every tile whose top-left origin lies outside the
+   *  given bounds (x >= maxCols or y >= maxRows) — i.e. fully off-screen. Bounds
+   *  are measured against the MONITOR, not the window, so a panel that merely
+   *  falls outside a small/un-maximized window is kept (it reappears when the
+   *  window is maximized); only panels beyond the physical screen, unreachable
+   *  even maximized, are removed. Batched into a single persist. Returns the
+   *  number of tiles closed. */
+  pruneOffscreenTilesFromLayout: (
+    layoutId: string,
+    maxCols: number,
+    maxRows: number,
+  ) => number;
   /** Replace a tile's grid placement (x/y/w/h). */
   updateTilePlacement: (
     uid: string,
@@ -236,20 +249,6 @@ function hasRecognizedWorkspaceSchema(raw: unknown): boolean {
 
 function findActive(layouts: NamedLayout[], id: string): NamedLayout | undefined {
   return layouts.find((l) => l.id === id);
-}
-
-/** Name for a spillover page derived from the page it overflowed from. Strips a
- *  trailing number off the base name ("Default 2" → "Default") and picks the
- *  lowest free "Base N" (N ≥ 2), so pages read Default → Default 2 → Default 3. */
-function nextPageName(
-  layouts: NamedLayout[],
-  from: NamedLayout | undefined,
-): string {
-  const base = (from?.name ?? 'Workspace').replace(/\s+\d+$/, '').trim() || 'Workspace';
-  const taken = new Set(layouts.map((l) => l.name));
-  let n = 2;
-  while (taken.has(`${base} ${n}`)) n += 1;
-  return `${base} ${n}`;
 }
 
 export const useLayoutStore = create<LayoutState>((set, get) => ({
@@ -463,27 +462,21 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       ? state.workspace
       : parseLayoutOrDefault(target!.layoutJson);
 
-    // Pagination — only for the visible (active) workspace. The workspace never
-    // scrolls, so a panel that would land below/right of the page must spill
-    // onto a fresh workspace tab rather than off-screen. placeTileInPage returns
-    // null when nothing fits the current page; in that case mint the next page,
-    // switch to it, and add there (the new page is empty, so it fits).
+    // Active workspace: drop the panel into the first free slot on the field.
+    // When the field is FULL, the panel OVERLAPS at the origin instead of
+    // spilling onto a new layout — the operator drops it in on top of the
+    // others and resizes / moves it into place. The workspace is overlap-
+    // friendly and the monitor bound keeps everything on-screen, so there is no
+    // need to paginate or warn.
     let placement: { x: number; y: number; w: number; h: number };
     if (isActive) {
-      const fit = placeTileInPage(
-        panelId,
-        workspace.tiles,
-        state.viewportCols,
-        state.viewportRows,
-      );
-      if (fit === null) {
-        const newId = state.addLayout(
-          nextPageName(state.layouts, target),
-          target?.icon ? { icon: target.icon } : undefined,
-        );
-        return get().addTileToLayout(newId, panelId, opts);
-      }
-      placement = fit;
+      placement =
+        placeTileInPage(
+          panelId,
+          workspace.tiles,
+          state.viewportCols,
+          state.viewportRows,
+        ) ?? { x: 0, y: 0, ...defaultSpanFor(panelId) };
     } else {
       placement = placeTileInGrid(panelId, workspace.tiles);
     }
@@ -520,6 +513,29 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       tiles: workspace.tiles.filter((t) => t.uid !== uid),
     };
     applyWorkspaceMutationForLayout(set, get, layoutId, next);
+  },
+
+  pruneOffscreenTilesFromLayout: (layoutId, maxCols, maxRows) => {
+    if (!(maxCols > 0) || !(maxRows > 0)) return 0;
+    const target = findActive(get().layouts, layoutId);
+    if (!target && layoutId !== get().activeLayoutId) return 0;
+    const workspace =
+      layoutId === get().activeLayoutId
+        ? get().workspace
+        : parseLayoutOrDefault(target!.layoutJson);
+    // A tile is off-screen only when its top-left origin lies outside the field
+    // (x >= maxCols or y >= maxRows): no part of it can be seen. A tile that
+    // merely straddles an edge keeps its origin inside and is left alone.
+    const kept = workspace.tiles.filter(
+      (t) => t.x < maxCols && t.y < maxRows,
+    );
+    const removed = workspace.tiles.length - kept.length;
+    if (removed === 0) return 0;
+    applyWorkspaceMutationForLayout(set, get, layoutId, {
+      ...workspace,
+      tiles: kept,
+    });
+    return removed;
   },
 
   updateTilePlacement: (uid, layout) => {

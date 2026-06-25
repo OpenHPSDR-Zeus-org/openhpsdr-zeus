@@ -26,11 +26,17 @@
   height: 100%;
   /* Fixed-cell grid: a column and a row are a CONSTANT pixel size (set in
    * FlexWorkspace), so panels never rescale when the window is resized. The
-   * column count tracks the window width; vertically the grid grows downward.
-   * When the layout is larger than the viewport — because the operator expanded
-   * panels, or shrank the window below the content — the workspace SCROLLS to
-   * the content instead of squashing or clipping it. A layout that fits shows
-   * no scrollbar and still reads like a hardware front panel. */
+   * workspace canvas is sized to the MONITOR (the maximum field), and panels
+   * are bounded to it (RGL gridBounds + maxRows) — a panel can never be dragged
+   * or expanded past the physical screen, so there is no "infinite void" to
+   * scroll into. Scrolling therefore only ever spans real content, and the
+   * north star is the MAXIMIZED window (any OS, desktop or web):
+   *   - Maximized (window ≈ monitor): everything fits, no scrollbars.
+   *   - Windowed / resized smaller (window < monitor): the canvas is larger
+   *     than the window, so the workspace SCROLLS to reach the panels.
+   * A panel saved beyond the monitor (from before this bound) is unreachable
+   * even when maximized, so the add-panel flow closes those on first run;
+   * panels merely outside a small window are kept and reappear on maximize. */
   overflow: auto;
   /* v3 Lifted Dark: workspace ground is the distinct mid-grey "table"
    * (--bg-workspace), so the chrome (--bg-0) and the panels (--bg-1) each

@@ -59,19 +59,27 @@ describe('layout-store / workspace tile mutators', () => {
     expect(tile?.h).toBe(8);
   });
 
-  it('addTile spills onto a new workspace when the current page is full', () => {
-    // DEFAULT_WORKSPACE_LAYOUT fills the 24×48 page (no free 8×8 slot), so the
-    // workspace never scrolls — instead the panel paginates: a new workspace tab
-    // is created, switched to, and the panel lands at the origin of the fresh
-    // page.
+  it('addTile overlaps at the origin on the SAME layout when the page is full', () => {
+    // Fill the page so there is no free slot for a new tile, then add one. The
+    // workspace is overlap-friendly and bounded to the view: instead of spilling
+    // to a new layout (or warning), the panel drops in at the origin, overlapping
+    // — the operator then resizes / moves it. No new layout, no tab switch.
+    useLayoutStore.setState({
+      viewportCols: 6,
+      viewportRows: 6,
+      workspace: {
+        ...EMPTY_WORKSPACE_LAYOUT,
+        tiles: [{ uid: 'full', panelId: 'hero', x: 0, y: 0, w: 6, h: 6 }],
+      },
+    });
     const layoutsBefore = useLayoutStore.getState().layouts.length;
     const activeBefore = useLayoutStore.getState().activeLayoutId;
     const uid = useLayoutStore.getState().addTile('cw');
     const state = useLayoutStore.getState();
-    expect(state.layouts.length).toBe(layoutsBefore + 1);
-    expect(state.activeLayoutId).not.toBe(activeBefore);
+    expect(state.layouts.length).toBe(layoutsBefore); // no new layout
+    expect(state.activeLayoutId).toBe(activeBefore); // no tab switch
     const tiles = state.workspace.tiles;
-    expect(tiles.length).toBe(1);
+    expect(tiles.length).toBe(2); // landed on the same layout, overlapping
     const tile = tiles.find((t) => t.uid === uid);
     expect(tile?.panelId).toBe('cw');
     expect(tile?.x).toBe(0);
@@ -510,5 +518,74 @@ describe('parseWorkspaceLayout', () => {
       cur = parseWorkspaceLayout(JSON.parse(JSON.stringify(cur)));
     }
     expect(cur).toEqual(DEFAULT_WORKSPACE_LAYOUT);
+  });
+});
+
+describe('layout-store / pruneOffscreenTilesFromLayout', () => {
+  beforeEach(() => {
+    useLayoutStore.setState({
+      radioKey: '',
+      layouts: [],
+      activeLayoutId: 'default',
+      workspace: DEFAULT_WORKSPACE_LAYOUT,
+      isLoaded: true,
+    });
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+  });
+
+  // Field for these cases: 24 cols × 48 rows (the monitor capacity the canvas
+  // would pass in). A tile is "off-screen" only when its top-left origin is
+  // outside that field.
+  const seed = (tiles: WorkspaceLayout['tiles']) =>
+    useLayoutStore.setState({
+      workspace: { ...EMPTY_WORKSPACE_LAYOUT, tiles },
+    });
+
+  it('closes tiles whose origin is past the right edge or below the bottom', () => {
+    seed([
+      { uid: 'in', panelId: 'cw', x: 0, y: 0, w: 8, h: 8 },
+      { uid: 'below', panelId: 'cw', x: 0, y: 48, w: 8, h: 8 }, // y >= rows
+      { uid: 'right', panelId: 'cw', x: 24, y: 0, w: 8, h: 8 }, // x >= cols
+    ]);
+    const removed = useLayoutStore
+      .getState()
+      .pruneOffscreenTilesFromLayout('default', 24, 48);
+    expect(removed).toBe(2);
+    const uids = useLayoutStore.getState().workspace.tiles.map((t) => t.uid);
+    expect(uids).toEqual(['in']);
+  });
+
+  it('keeps a tile that merely straddles an edge (origin still inside)', () => {
+    seed([
+      // Origin inside the field but extends past the bottom — visible, kept.
+      { uid: 'straddle', panelId: 'cw', x: 20, y: 44, w: 8, h: 8 },
+    ]);
+    const removed = useLayoutStore
+      .getState()
+      .pruneOffscreenTilesFromLayout('default', 24, 48);
+    expect(removed).toBe(0);
+    expect(useLayoutStore.getState().workspace.tiles.length).toBe(1);
+  });
+
+  it('is a no-op (returns 0, leaves the layout reference) when nothing is off-screen', () => {
+    seed([{ uid: 'a', panelId: 'cw', x: 0, y: 0, w: 8, h: 8 }]);
+    const before = useLayoutStore.getState().workspace;
+    const removed = useLayoutStore
+      .getState()
+      .pruneOffscreenTilesFromLayout('default', 24, 48);
+    expect(removed).toBe(0);
+    expect(useLayoutStore.getState().workspace).toBe(before);
+  });
+
+  it('refuses to prune against a bogus (non-positive) field', () => {
+    seed([{ uid: 'a', panelId: 'cw', x: 100, y: 100, w: 8, h: 8 }]);
+    expect(
+      useLayoutStore.getState().pruneOffscreenTilesFromLayout('default', 0, 0),
+    ).toBe(0);
+    // The far-off tile survives because the field was invalid — never delete on
+    // a measurement we don't trust.
+    expect(useLayoutStore.getState().workspace.tiles.length).toBe(1);
   });
 });
