@@ -202,6 +202,7 @@ function PrefsDatabaseRow() {
   const [restarting, setRestarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newDialogOpen, setNewDialogOpen] = useState(false);
+  const [pendingSwitch, setPendingSwitch] = useState<string | null>(null);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -222,8 +223,8 @@ function PrefsDatabaseRow() {
 
   const onSwitch = useCallback(
     async (relativePath: string) => {
+      setPendingSwitch(null);
       if (relativePath === activeRel) return;
-      if (!window.confirm('Switch database and restart Zeus?')) return;
       setError(null);
       setBusy(true);
       try {
@@ -321,7 +322,10 @@ function PrefsDatabaseRow() {
           aria-label="Active prefs database"
           value={activeRel}
           disabled={disabled}
-          onChange={(e) => void onSwitch(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value;
+            if (next && next !== activeRel) setPendingSwitch(next);
+          }}
           style={{ ...prefsDbSelectStyle, flex: 1 }}
         >
           {databases === null && <option value="">Loading…</option>}
@@ -390,6 +394,23 @@ function PrefsDatabaseRow() {
           onSubmit={(name) => void onCreate(name)}
           onCancel={() => setNewDialogOpen(false)}
         />
+      )}
+      {pendingSwitch !== null && (
+        <ConfirmDialog
+          title="Switch Database"
+          confirmLabel="Switch & Restart"
+          intent="primary"
+          onConfirm={() => void onSwitch(pendingSwitch)}
+          onCancel={() => setPendingSwitch(null)}
+        >
+          <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg-1)' }}>
+            Switch to{' '}
+            <strong className="mono">
+              {(databases ?? []).find((db) => db.relativePath === pendingSwitch)?.name ?? pendingSwitch}
+            </strong>{' '}
+            and restart Zeus?
+          </p>
+        </ConfirmDialog>
       )}
     </div>
   );
