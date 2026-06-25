@@ -107,7 +107,13 @@ export function LeftLayoutBar() {
     setModal({ kind: 'delete', id, name });
   };
 
-  const openEdit = (id: string) => setModal({ kind: 'edit', id });
+  // Opening the manager switches the workspace to that layout so the editor's
+  // "current arrangement" (used by Save / Save as new) always matches the
+  // layout being edited.
+  const openManage = (id: string) => {
+    setActiveLayout(id);
+    setModal({ kind: 'edit', id });
+  };
 
   const handleModalSave = (value: LayoutSettingsValue) => {
     if (modal.kind === 'create') {
@@ -127,6 +133,26 @@ export function LeftLayoutBar() {
       setWorkspaceLockedInLayout(modal.id, value.locked);
     }
     setModal({ kind: 'closed' });
+  };
+
+  // Save as new — copy the CURRENT panel arrangement into a fresh saved layout
+  // and re-target the manager to it. addLayout makes the new layout active.
+  const handleSaveAsNew = (value: LayoutSettingsValue) => {
+    const ws = useLayoutStore.getState().workspace;
+    const newId = addLayout(value.name, {
+      icon: value.icon || undefined,
+      description: value.description || undefined,
+      workspace: value.locked ? { ...ws, locked: true } : ws,
+    });
+    setModal({ kind: 'edit', id: newId });
+  };
+
+  // Delete from the manager — removeLayout promotes the next layout to active;
+  // follow it so the still-open manager keeps editing a valid layout.
+  const handleManagerDelete = (id: string) => {
+    removeLayout(id);
+    const nextActive = useLayoutStore.getState().activeLayoutId;
+    setModal({ kind: 'edit', id: nextActive });
   };
 
   const editingLayout =
@@ -209,7 +235,7 @@ export function LeftLayoutBar() {
                   <button
                     type="button"
                     className="lb-gear"
-                    onClick={() => openEdit(l.id)}
+                    onClick={() => openManage(l.id)}
                     title={`Edit ${l.name}`}
                     aria-label={`Edit ${l.name}`}
                   >
@@ -285,6 +311,19 @@ export function LeftLayoutBar() {
             icon: editingLayout.icon ?? '',
             description: editingLayout.description ?? '',
             locked: parseLayoutOrDefault(editingLayout.layoutJson).locked === true,
+          }}
+          manager={{
+            layouts: layouts.map((l) => ({
+              id: l.id,
+              name: l.name,
+              ...(l.icon ? { icon: l.icon } : {}),
+              locked: lockedLayoutIds.has(l.id),
+            })),
+            selectedId: modal.id,
+            onSelect: openManage,
+            onSaveAsNew: handleSaveAsNew,
+            onDelete: handleManagerDelete,
+            canDelete: layouts.length > 1,
           }}
           onSave={handleModalSave}
           onClose={() => setModal({ kind: 'closed' })}
