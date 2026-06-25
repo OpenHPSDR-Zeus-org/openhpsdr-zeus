@@ -56,6 +56,31 @@ if (isRemoteMode()) {
   installApiTunnel();
 }
 
+// Hidden <audio> sink for the radio's RX audio when it arrives on the WebRTC
+// media track (Opus-RX host path). The browser owns decode + jitter buffer +
+// PLC; we just attach the stream and let it play. One element, reused across
+// reconnects.
+let rxAudioEl: HTMLAudioElement | null = null;
+
+function playRemoteRxAudioTrack(stream: MediaStream): void {
+  if (typeof document === 'undefined') return;
+  if (!rxAudioEl) {
+    rxAudioEl = document.createElement('audio');
+    rxAudioEl.autoplay = true;
+    // Not added to the DOM tree — an offscreen element still plays audio.
+  }
+  rxAudioEl.srcObject = stream;
+  void rxAudioEl.play().catch((e) => {
+    console.warn('[remote] RX audio track autoplay blocked:', e);
+  });
+}
+
+function stopRemoteRxAudioTrack(): void {
+  if (!rxAudioEl) return;
+  rxAudioEl.pause();
+  rxAudioEl.srcObject = null;
+}
+
 /**
  * Connect to the operator's radio via the broker, unlock with the supplied
  * password, then route the unlocked frame stream into the stores and request
@@ -80,6 +105,18 @@ export async function startRemoteClient(
   // loopback Kestrel. The session is unlocked by the time connectViaBroker
   // resolves (deny-by-default holds).
   setApiChannel(conn.api);
+
+  // State-of-the-art RX audio: when the radio host has the Opus-RX path enabled it
+  // streams RX audio back on the WebRTC audio track instead of as PCM over the
+  // data channel. Play that track directly so we inherit the browser's native
+  // adaptive jitter buffer + packet-loss concealment (lowest latency, robust to
+  // internet loss). If the host doesn't enable it, no inbound track arrives and
+  // RX audio keeps flowing through the existing PCM/WebAudio path — nothing here
+  // fires. The unlock click is a user gesture, so autoplay is permitted.
+  conn.pc.addEventListener('track', (ev) => {
+    if (ev.track.kind !== 'audio') return;
+    playRemoteRxAudioTrack(ev.streams[0] ?? new MediaStream([ev.track]));
+  });
 
   // Voice-mic uplink: stream the operator's mic to the radio only while keyed
   // (MOX). The first key lazily prompts for mic permission; thereafter it's an
@@ -113,6 +150,8 @@ export async function startRemoteClient(
       // Stop driving the mic from MOX and release the capture (conn.close also
       // stops the tracks; this unhooks the store subscription).
       unsubMic();
+      // Detach the RX audio track sink so a dead stream doesn't linger.
+      stopRemoteRxAudioTrack();
     }
   });
 
