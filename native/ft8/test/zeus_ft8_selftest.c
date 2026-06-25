@@ -61,13 +61,13 @@ int main(int argc, char** argv)
     static float signal[MAX_SAMPLES];
     zeus_ft8_decode_t out[MAX_DECODES];
 
-    int total_got = 0, total_exp = 0, slots_with_key = 0;
-    printf("%-28s %8s %8s\n", "slot", "decoded", "expected");
-    printf("------------------------------------------------\n");
+    int tot1 = 0, totM = 0, total_exp = 0, slots_with_key = 0;
+    printf("%-28s %7s %7s %8s\n", "slot", "single", "multi", "expected");
+    printf("-------------------------------------------------------\n");
 
     for (int i = 0; i < n_files; ++i)
     {
-        char wav[512], txt[512];
+        char wav[512], txt[512], expbuf[16];
         snprintf(wav, sizeof(wav), "%s/%s", dir, names[i]);
         snprintf(txt, sizeof(txt), "%s/%.*s.txt", dir, (int)(strlen(names[i]) - 4), names[i]);
 
@@ -78,23 +78,38 @@ int main(int argc, char** argv)
             continue;
         }
 
-        zeus_ft8_ctx* ctx = zeus_ft8_ctx_create();
-        int got = zeus_ft8_decode(ctx, signal, num_samples, sample_rate,
-                                  ZEUS_FT8_PROTO_FT8, 1, out, MAX_DECODES);
-        zeus_ft8_ctx_destroy(ctx);
+        // Single-pass (NORMAL) and multi-pass (MULTI, 3 passes) on the same slot.
+        zeus_ft8_ctx* c1 = zeus_ft8_ctx_create();
+        int got1 = zeus_ft8_decode(c1, signal, num_samples, sample_rate,
+                                   ZEUS_FT8_PROTO_FT8, 1, out, MAX_DECODES);
+        zeus_ft8_ctx_destroy(c1);
+
+        zeus_ft8_ctx* cM = zeus_ft8_ctx_create();
+        int gotM = zeus_ft8_decode(cM, signal, num_samples, sample_rate,
+                                   ZEUS_FT8_PROTO_FT8, 3, out, MAX_DECODES);
+        zeus_ft8_ctx_destroy(cM);
 
         int exp = count_lines(txt);
-        if (exp >= 0) { total_got += got; total_exp += exp; ++slots_with_key; }
-        printf("%-28s %8d %8s\n", names[i], got, exp >= 0 ? (snprintf(txt, 8, "%d", exp), txt) : "-");
+        if (exp >= 0) { tot1 += got1; totM += gotM; total_exp += exp; ++slots_with_key; }
+        snprintf(expbuf, sizeof(expbuf), "%d", exp);
+        printf("%-28s %7d %7d %8s\n", names[i], got1, gotM, exp >= 0 ? expbuf : "-");
     }
 
-    printf("------------------------------------------------\n");
-    printf("CORPUS: decoded %d / %d expected across %d keyed slots (%.0f%%)\n",
-           total_got, total_exp, slots_with_key,
-           total_exp > 0 ? 100.0 * total_got / total_exp : 0.0);
+    printf("-------------------------------------------------------\n");
+    printf("CORPUS single-pass: %d / %d (%.0f%%)\n", tot1, total_exp,
+           total_exp > 0 ? 100.0 * tot1 / total_exp : 0.0);
+    printf("CORPUS multi-pass : %d / %d (%.0f%%)   [+%d decodes over single]\n",
+           totM, total_exp, total_exp > 0 ? 100.0 * totM / total_exp : 0.0, totM - tot1);
 
-    // Gate: the shim must at minimum decode *something* on the easy slots and
-    // hit a reasonable fraction of the corpus. Single-pass baseline ~65-70%.
-    if (total_got == 0) { fprintf(stderr, "FAIL: zero decodes across corpus\n"); return 1; }
+    // Gates:
+    //  - must decode something;
+    //  - multi-pass must never regress below single-pass (subtraction only ever
+    //    reveals more, never fewer — guards against a broken subtract step);
+    //  - corpus decode rate must clear a floor (current ~76%; 65% leaves margin
+    //    for minor per-platform FFT/rounding differences without redding CI).
+    double rate = total_exp > 0 ? (double)totM / total_exp : 0.0;
+    if (totM == 0) { fprintf(stderr, "FAIL: zero decodes across corpus\n"); return 1; }
+    if (totM < tot1) { fprintf(stderr, "FAIL: multi-pass regressed vs single-pass\n"); return 1; }
+    if (rate < 0.65) { fprintf(stderr, "FAIL: corpus decode rate %.0f%% below 65%% floor\n", rate * 100); return 1; }
     return 0;
 }

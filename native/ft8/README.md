@@ -49,21 +49,43 @@ platform FFT difference doesn't red CI.
   breaking the managed P/Invoke signatures.
 - **Hidden visibility.** Only the six `zeus_ft8_*` symbols are exported.
 
-## Decode quality / deep-decode roadmap
+## Decode quality
 
-Single-pass baseline (matches stock ft8_lib) is **~73 % of the WSJT-X answer
-key across the bundled corpus** — clean signals decode fully; weak/marginal
-and stronger-masked signals on crowded slots are missed. Closing that gap is
-the **deep multi-pass decode** work (subtract-and-redecode):
+Measured against the bundled WSJT-X answer keys (`ctest`):
 
-1. decode pass *n* → for each decode, re-encode + synthesise the GFSK waveform
-   at the decoded freq/dt/amplitude and subtract it from the slot audio;
-2. re-run the monitor on the residual → decode again (now-unmasked signals
-   emerge); repeat for `passes` iterations.
+| Config | corpus decodes | rate |
+|---|---|---|
+| stock ft8_lib (time_osr=2, single) | 265 / 362 | 73 % |
+| **default (time_osr=4, single)** | 275 / 362 | 76 % |
+| **default + multi-pass (passes=3)** | 276 / 362 | 76 % |
 
-The `passes` parameter is already in the ABI; the subtraction step is the
-follow-up. SNR is currently approximated from the sync score and is a
-refinement target.
+Two levers were evaluated empirically (see the sweep in git history):
+
+1. **Time oversampling (`time_osr`)** — the real win. `time_osr=4` gives finer
+   sync resolution and +10 decodes over stock for ~2× compute (well within
+   budget for a once-per-15 s decode). `time_osr=8` and `freq_osr=4` both
+   *regressed* the corpus, so the defaults are `time_osr=4`, `freq_osr=2`.
+2. **Multi-pass subtract-and-redecode (`passes`)** — implemented and correct:
+   each decoded FT8 signal's GFSK waveform is reconstructed (carrier
+   fine-searched ±2.5 Hz, amplitude+phase fit by 2D least squares) and
+   subtracted from the slot audio before re-decoding. It is **safe** (CRC-14 +
+   LDPC reject any garbage from imperfect subtraction; the self-test asserts
+   multi-pass never regresses below single-pass) but yields only **+1** on this
+   corpus: individual FT8 signals are ~0.01 amplitude in a crowded passband, so
+   removing them barely shifts the decode landscape. Subtraction helps only
+   genuinely-overlapping signals, a minority here.
+
+**The remaining gap to WSJT-X (~95 %) is decoder *sensitivity*, not masking.**
+WSJT-X's extra decodes come from **ordered-statistics decoding (OSD)** of the
+LDPC code plus a-priori decoding — algorithms ft8_lib does not implement.
+Adding OSD is the next decode-quality phase and is where the bulk of the gap
+closes; the multi-pass framework stays as the right architecture for it (and
+for true overlapping-signal cases).
+
+Tuning knobs (env overrides, for per-platform tuning — e.g. lower `time_osr`
+on a Pi): `ZF_TOSR`, `ZF_FOSR`, `ZF_MINSCORE`, `ZF_LDPCIT`, and `ZF_DEBUG=1`
+for per-pass/subtraction diagnostics. SNR is approximated from the sync score
+and is a refinement target.
 
 ## Re-vendoring ft8_lib
 
