@@ -48,6 +48,7 @@ import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent }
 import { GripVertical, Sliders, Volume2, VolumeX, X } from 'lucide-react';
 import { Panadapter } from '../../components/Panadapter';
 import { WaterfallSurface } from '../../components/WaterfallSurface';
+import { WfDbScale } from '../../components/WfDbScale';
 import { ZoomControl } from '../../components/ZoomControl';
 import { WaterfallSpeedControl } from '../../components/WaterfallSpeedControl';
 import { SpectrumControls } from '../../components/SpectrumControls';
@@ -623,9 +624,14 @@ export function HeroPanel({
                       stitched={multiRxSpectrum && p.index <= 1}
                       foreground={focusedRxIndex === p.index}
                       tuneReceiver={p.index}
+                      dbScale={false}
                     />
                   </div>
                 ))}
+                {/* One dB scale spanning the whole waterfall grid (left edge of
+                    all rows), rather than only the RX1 tile's row. Bound to the
+                    focused receiver's window, same as the in-tile scale. */}
+                <WfDbScale />
               </div>
             )
           )}

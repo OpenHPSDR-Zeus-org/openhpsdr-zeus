@@ -57,6 +57,9 @@ type Props = {
   foreground?: boolean;
   touchMode?: PanTuneGestureOptions['touchMode'];
   tuneReceiver?: PanTuneGestureOptions['tuneReceiver'];
+  /** Render the in-tile dB scale on RX1. Off when the parent draws one scale
+   *  spanning the whole (possibly multi-row) waterfall grid instead. */
+  dbScale?: boolean;
   /** Called once if WebGPU is unavailable, the renderer fails to init, or the
    *  device is lost, so the parent (WaterfallSurface) falls back to the WebGL
    *  waterfall. */
@@ -72,6 +75,7 @@ export function WaterfallHeightfield({
   foreground = true,
   touchMode = 'normal',
   tuneReceiver,
+  dbScale = true,
   onUnavailable,
 }: Props = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -432,7 +436,7 @@ export function WaterfallHeightfield({
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
       {/* One global waterfall dB scale — only RX1 (leftmost) renders it. */}
-      {status === 'ready' && rxIndex === 0 && <WfDbScale />}
+      {status === 'ready' && dbScale && rxIndex === 0 && <WfDbScale />}
       {/* Dial-position cursor on BOTH halves (RX2) — each tracks its own VFO so
           the stitched pair behaves like one waterfall with two live dials. */}
       {status === 'ready' && (

@@ -79,6 +79,9 @@ type WaterfallProps = {
   tuneReceiver?: PanTuneGestureOptions['tuneReceiver'];
   stitched?: boolean;
   foreground?: boolean;
+  /** Render the in-tile dB scale on RX1. Off when the parent draws one scale
+   *  spanning the whole (possibly multi-row) waterfall grid instead. */
+  dbScale?: boolean;
 };
 
 type WaterfallValueDomain = 'rx-db' | 'pop' | 'tx-db';
@@ -93,6 +96,7 @@ export function Waterfall({
   tuneReceiver,
   stitched = false,
   foreground = true,
+  dbScale = true,
 }: WaterfallProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -706,8 +710,9 @@ export function Waterfall({
           Waterfall renderer unavailable
         </div>
       )}
-      {/* One global waterfall dB scale — only RX1 (leftmost) renders it. */}
-      {rxIndex === 0 && <WfDbScale />}
+      {/* One global waterfall dB scale — only RX1 (leftmost) renders it, and
+          only when the parent isn't drawing a grid-spanning scale itself. */}
+      {dbScale && rxIndex === 0 && <WfDbScale />}
       {/* Dial-position cursor on BOTH halves (RX2) — each tracks its own VFO. */}
       <div
         ref={cursorRef}

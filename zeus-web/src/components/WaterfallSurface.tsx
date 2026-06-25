@@ -47,6 +47,7 @@ export function WaterfallSurface(props: WaterfallProps) {
         foreground={props.foreground}
         touchMode={props.touchMode}
         tuneReceiver={props.tuneReceiver}
+        dbScale={props.dbScale}
         onUnavailable={() => setHeightfieldUnavailable(true)}
       />
     );
