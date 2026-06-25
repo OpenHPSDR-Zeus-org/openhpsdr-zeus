@@ -30,7 +30,10 @@
 //   against its OWN displayed view, so a stitched/multi-RX layout keeps each
 //   half in view independently. RX1 pans its hardware NCO; secondaries pan
 //   their own DDC centre (panReceiverCenterTo → /api/receivers/{i}/lo, which is
-//   a true independent DDC on Protocol 2 and a no-op on P1's shared NCO).
+//   a true independent DDC on Protocol 2 and a no-op on P1's shared NCO). The
+//   Kiwi slice receiver routes the same /lo call to its waterfall centre
+//   (KiwiSdrService.SetCenter), so the Kiwi waterfall keeps the crosshair in
+//   view exactly like the hardware panes.
 //   Outside CTUN the view already tracks the dial (offset ~0), so the geometry
 //   never asks for a pan there — but we still gate on ctunEnabled to keep the
 //   intent explicit.
@@ -55,6 +58,7 @@ import {
   getReceiverFilterLowHz,
   getReceiverMode,
   getReceiverVfoHz,
+  KIWI_RECEIVER_INDEX,
 } from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
 import { panReceiverCenterTo } from './ctun-zoom-center';
@@ -198,17 +202,21 @@ export function useFilterAutopan(): void {
         schedule();
       }
     });
-    // View-centre motion (RX1 + RX2): catches a glide easing toward the dial and,
-    // crucially, a ruler-pan that scrolled the dial off-screen — so the crosshair
-    // is recovered once the drag releases, not just on the next tune.
-    const unsubVc0 = viewCenter.viewCenterFor(0).subscribe(schedule);
-    const unsubVc1 = viewCenter.viewCenterFor(1).subscribe(schedule);
+    // View-centre motion for every receiver index, including the Kiwi slice
+    // (KIWI_RECEIVER_INDEX) whose waterfall pans its own centre via SetCenter:
+    // catches a glide easing toward the dial and, crucially, a ruler-pan that
+    // scrolled the dial off-screen — so the crosshair is recovered once the drag
+    // releases on ANY pane, not only on the next tune. Subscribing to inactive
+    // indices is free: their view-centre never glides, so the listener never fires.
+    const unsubVcs: Array<() => void> = [];
+    for (let i = 0; i <= KIWI_RECEIVER_INDEX; i++) {
+      unsubVcs.push(viewCenter.viewCenterFor(i).subscribe(schedule));
+    }
 
     return () => {
       unsubConn();
       unsubDisplay();
-      unsubVc0();
-      unsubVc1();
+      for (const u of unsubVcs) u();
       cancelDrawBusFrame(check);
     };
   }, []);
