@@ -32,8 +32,49 @@ public static class ZeusHost
     {
         var app = Build(args, options);
         await InitializeAsync(app, cancellationToken);
-        await app.RunAsync(cancellationToken);
+        try
+        {
+            await app.RunAsync(cancellationToken);
+        }
+        catch (Exception ex) when (IsBenignShutdownDisposeError(ex))
+        {
+            // Headless/service mode reaches here on a clean Ctrl-C: app.RunAsync's
+            // finally runs Host.DisposeAsync(), which disposes the ~50 LiteDB
+            // settings stores. Each opens zeus-prefs.db with Connection=shared, so
+            // LiteDB wraps a named Mutex; SharedEngine.Dispose() calls
+            // Mutex.ReleaseMutex(), which throws when the disposing thread isn't the
+            // one that took the mutex (Windows mutex thread-affinity). That throw
+            // was escaping Main as an unhandled exception and crashing the process
+            // with a 0xc0000005 system-error dialog *after* a clean shutdown. By the
+            // time we get here data is already checkpointed and the OS releases the
+            // named mutex on process exit, so the throw is benign — swallow it and
+            // exit 0 instead of letting it abort the process. (Desktop/--server
+            // modes use StartAsync/StopAsync and never hit this path.)
+            Console.Error.WriteLine(
+                $"shutdown: ignored benign LiteDB shared-mutex dispose error: {ex.GetBaseException().Message}");
+        }
         return 0;
+    }
+
+    // True for the LiteDB shared-connection Mutex.ReleaseMutex() thread-affinity
+    // throw that surfaces only during host teardown. Matched narrowly (across the
+    // whole inner-exception chain) so a genuine fault during shutdown still
+    // propagates. See the call site in RunAsync for why it is safe to ignore.
+    private static bool IsBenignShutdownDisposeError(Exception ex)
+    {
+        for (var cur = ex; cur is not null; cur = cur.InnerException)
+        {
+            if (cur is System.Threading.SynchronizationLockException or System.Threading.AbandonedMutexException)
+                return true;
+            // Mutex.ReleaseMutex() from a non-owning thread throws ApplicationException
+            // with this message ("Object synchronization method was called from an
+            // unsynchronized block of code.").
+            if (cur is ApplicationException &&
+                cur.Message.Contains("synchronization method was called from an unsynchronized block",
+                    StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>
