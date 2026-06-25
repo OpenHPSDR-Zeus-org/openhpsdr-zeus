@@ -598,6 +598,16 @@ export function LightningMapPanel() {
 
   const onUnitChange = (unit: 'km' | 'mi') => patchAlert({ unit });
 
+  // Acknowledge the alert: clear the in-radius tally so the count drops to 0 and
+  // the banner/ring stand down immediately. Resetting prevAlertingRef re-arms the
+  // chirp, so a fresh storm building back over threshold trips (and sounds) anew.
+  const resetAlert = () => {
+    nearRef.current.length = 0;
+    prevAlertingRef.current = false;
+    setNearCount(0);
+    setAlerting(false);
+  };
+
   return (
     <div className="lightning-map">
       <div ref={hostRef} className="lm-host" />
@@ -626,7 +636,17 @@ export function LightningMapPanel() {
 
       {alerting && (
         <div className="lm-alert-banner" role="status" aria-live="assertive">
-          ⚡ Lightning alert — {nearCount} strikes within {radiusLabel} of your QTH
+          <span className="lm-alert-text">
+            ⚡ Lightning alert — {nearCount} strikes within {radiusLabel} of your QTH
+          </span>
+          <button
+            type="button"
+            className="lm-alert-reset"
+            onClick={resetAlert}
+            title="Acknowledge the alert and reset the strike count to 0"
+          >
+            Reset
+          </button>
         </div>
       )}
 

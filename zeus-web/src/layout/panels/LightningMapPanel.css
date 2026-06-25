@@ -170,14 +170,39 @@
   border: 1px solid var(--tx, #ff4a59);
   border-radius: 4px;
   box-shadow: 0 0 18px rgba(255, 74, 89, 0.5);
-  pointer-events: none;
+  pointer-events: auto; /* the Reset button inside needs to be clickable */
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   animation: lm-alert-blink 1.1s steps(1) infinite;
 }
 
 @keyframes lm-alert-blink {
   0%, 60% { opacity: 1; }
   61%, 100% { opacity: 0.55; }
+}
+
+/* Reset/acknowledge — clears the in-radius tally back to 0 and stands the
+   alert down. Steady (no blink) so it stays an easy click target. */
+.lightning-map .lm-alert-reset {
+  flex: 0 0 auto;
+  padding: 2px 9px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 3px;
+  cursor: pointer;
+  animation: none; /* opt out of the banner blink so it reads as steady */
+}
+.lightning-map .lm-alert-reset:hover {
+  background: #fff;
+  color: var(--tx, #d6281e);
 }
 
 /* Alert settings — gear button bottom-right, above the recenter control. */
