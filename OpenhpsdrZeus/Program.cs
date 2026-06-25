@@ -994,8 +994,15 @@ public partial class Program
         {
             foreach (var ip in lanIps)
             {
+                // HTTPS first and tagged: browsers only grant microphone TX on a
+                // secure origin, so a LAN operator who wants to transmit voice must
+                // use this row. The plain-HTTP row still works for RX-only / non-mic
+                // use but is listed second so it isn't the obvious first pick (issue
+                // #844 — operators were landing on http:// and getting "mic
+                // unavailable"). Mirrors the console banner's "use this for
+                // microphone TX" marker.
+                lanRows.Append($"<li><span class='lbl'>LAN HTTPS</span><a class='url' href='#' data-url='https://{ip}:{lanHttpsPort}'>https://{ip}:{lanHttpsPort}</a><span class='tag'>microphone TX</span></li>");
                 lanRows.Append($"<li><span class='lbl'>LAN HTTP</span><a class='url' href='#' data-url='http://{ip}:{httpPort}'>http://{ip}:{httpPort}</a></li>");
-                lanRows.Append($"<li><span class='lbl'>LAN HTTPS</span><a class='url' href='#' data-url='https://{ip}:{lanHttpsPort}'>https://{ip}:{lanHttpsPort}</a></li>");
             }
         }
         else
@@ -1036,6 +1043,7 @@ public partial class Program
   .url {{ color:var(--accent); text-decoration:none; font-variant-numeric:tabular-nums; }}
   .url:hover {{ text-decoration:underline; }}
   .muted {{ color:var(--fg-3); font-style:italic; }}
+  .tag {{ margin-left:8px; padding:1px 7px; border-radius:9px; font-family:-apple-system, 'Segoe UI', system-ui, sans-serif; font-size:9px; font-weight:600; letter-spacing:0.6px; text-transform:uppercase; color:var(--panel-bot); background:var(--power); }}
   .actions {{ display:flex; justify-content:flex-end; gap:8px; margin-top:6px; }}
   button {{
     padding:6px 14px; font-family:-apple-system, system-ui, sans-serif; font-size:11px;
@@ -1055,7 +1063,7 @@ public partial class Program
     {lanRows}
   </ul>
   <div class='actions'><button id='stop'>Stop Zeus</button></div>
-  <div class='hint'>HTTPS uses a self-signed certificate — accept the browser warning on first connect. Closing this window also stops the server.</div>
+  <div class='hint'>Browsers only allow microphone TX over HTTPS on a LAN address — open the <b>LAN HTTPS</b> URL above to transmit voice. HTTPS uses a self-signed certificate; accept the browser warning once on first connect. Closing this window also stops the server.</div>
 </div>
 <script>
   document.getElementById('stop').addEventListener('click', () => {{
