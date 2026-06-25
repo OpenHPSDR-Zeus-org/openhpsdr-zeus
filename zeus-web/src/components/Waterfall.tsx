@@ -58,7 +58,7 @@ import {
 } from '../dsp/signal-estimator';
 import { normalizeStitchedBins, stitchFloorShiftDb } from '../dsp/stitch-normalizer';
 import { getReceiverVfoHz, rxIndexOf, type ReceiverKey } from '../state/receiver-state';
-import { estimateRowFloorDb, reportReceiverFloorDb } from '../dsp/floor-normalization';
+import { estimateRowFloorDb, forgetReceiverFloor, reportReceiverFloorDb } from '../dsp/floor-normalization';
 import { effectiveRxWfWindow, useRxDbWindowStore } from '../state/rx-db-window-store';
 import * as viewCenter from '../state/view-center';
 import * as viewZoom from '../state/view-zoom';
@@ -569,6 +569,9 @@ export function Waterfall({
       cancelDrawBusFrame(redraw);
       releaseFrameConsumer();
       releaseEstimatorConsumer();
+      // Drop this pane's floor from the median anchor — a removed band shouldn't
+      // keep skewing the cross-RX normalization with its last reading.
+      forgetReceiverFloor(rxIndex);
       renderer?.dispose();
       // Free the ANGLE context slot on real unmounts, but give React
       // StrictMode's development-only effect remount a chance to cancel it.

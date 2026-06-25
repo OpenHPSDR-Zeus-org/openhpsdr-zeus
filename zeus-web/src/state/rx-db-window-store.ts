@@ -24,9 +24,9 @@
 // window (which already round-trips to server prefs).
 //
 // Until a receiver has an explicit override, its effective window is the global
-// window shifted by its floor-normalization offset (anchored to RX1), so floors
-// line up out of the box. Once the operator drags a receiver's scale, that
-// absolute window sticks and persists across restarts (localStorage).
+// window shifted by its floor-normalization offset (anchored to the median floor
+// across all panes), so floors line up out of the box. Once the operator drags a
+// receiver's scale, that absolute window sticks and persists (localStorage).
 
 import { create } from 'zustand';
 import { useDisplaySettingsStore } from './display-settings-store';
@@ -100,6 +100,8 @@ type RxDbWindowState = {
   shiftRxWfWindow: (rxIndex: number, deltaDb: number) => void;
   /** Drop a receiver's override so it falls back to the normalized default. */
   clearRxWfWindow: (rxIndex: number) => void;
+  /** Drop EVERY override so all receivers fall back to floor normalization. */
+  clearAllRxWfWindows: () => void;
 };
 
 export const useRxDbWindowStore = create<RxDbWindowState>((set, get) => ({
@@ -128,20 +130,25 @@ export const useRxDbWindowStore = create<RxDbWindowState>((set, get) => ({
     writeSaved(overrides);
     set({ overrides });
   },
+
+  clearAllRxWfWindows: () => {
+    if (Object.keys(get().overrides).length === 0) return;
+    writeSaved({});
+    set({ overrides: {} });
+  },
 }));
 
 /**
  * The effective waterfall dB window for a receiver index.
- * - RX1 (0): the global window (display-settings-store).
- * - RXn with an explicit override: that absolute window.
- * - RXn without one: the global window shifted by its floor-normalization
- *   offset (anchored to RX1), so its noise floor lines up with RX1's.
+ * - RXn (>=1) with an explicit override: that absolute window.
+ * - Otherwise (incl. RX1): the global window shifted by the receiver's
+ *   floor-normalization offset, so every pane's noise floor lands at the shared
+ *   median level. With one receiver the offset is 0 → the raw global window.
  */
 export function effectiveRxWfWindow(rxIndex: number): RxWfWindow {
   const ds = useDisplaySettingsStore.getState();
-  if (rxIndex <= 0) return { wfDbMin: ds.wfDbMin, wfDbMax: ds.wfDbMax };
-  const ov = useRxDbWindowStore.getState().overrides[rxIndex];
+  const ov = rxIndex >= 1 ? useRxDbWindowStore.getState().overrides[rxIndex] : undefined;
   if (ov) return ov;
-  const off = floorNormalizationOffsetDb(rxIndex, 0);
+  const off = floorNormalizationOffsetDb(rxIndex);
   return { wfDbMin: ds.wfDbMin + off, wfDbMax: ds.wfDbMax + off };
 }
