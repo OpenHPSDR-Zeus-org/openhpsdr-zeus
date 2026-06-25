@@ -200,7 +200,7 @@ join.
 **TCI** lets external programs control your radio: loggers (Log4OM, N1MM+),
 digital-mode software (WSJT-X, JTDX, MSHV), and other SDR display tools.
 Zeus speaks the ExpertSDR3-compatible TCI WebSocket protocol. Configure it
-under **Settings → TCI**: tick **Enabled**, choose a **bind address**
+under **Settings → Network ▸ TCI**: tick **Enabled**, choose a **bind address**
 (`127.0.0.1` for same-machine only, or `0.0.0.0` to allow LAN clients — note
 there's no authentication), and a **port** (the ExpertSDR3 standard is
 **40001**). **Test Port** checks availability. Changing the port or bind
@@ -209,6 +209,42 @@ running, a status line shows how many clients are connected. In your other
 software's TCI settings, point it at the Zeus machine's IP, the same port,
 over `ws://`. Digital clients key cleanly through TCI, and their transmit
 meters and SWR show on the Zeus panels during a transmission.
+
+### CAT — Kenwood TS-2000 Control
+
+**CAT** is a second way to let outside software drive Zeus, for the many
+programs that speak the classic **Kenwood TS-2000** command set rather than
+TCI — most loggers, and digital-mode apps (WSJT-X, fldigi, JS8Call) set up for
+a Kenwood rig. Zeus runs a TS-2000-compatible CAT server over plain TCP:
+external software connects to an IP and port — the same role a serial COM port
+plays for a real radio — and reads or sets frequency, mode, VFO A/B, split,
+S-meter, drive, and PTT (transmit/receive). On a rig-detect query Zeus answers
+`ID019;`, the TS-2000 identifier Hamlib and most loggers expect.
+
+Configure it under **Settings → Network ▸ CAT**: tick **Enabled**, choose a
+**Bind Address**, and a **Port** (default **19090**). **Test Port** checks the
+port is free. Changing the bind address or port requires a Zeus restart — the
+panel shows a reminder until you do — and once running, a status line shows
+whether the server is up and how many clients are connected.
+
+**The bind address is a safety choice, not just a convenience.** `127.0.0.1`
+(the default) accepts connections only from software on the *same machine* as
+Zeus. `0.0.0.0` opens the port to every machine on your LAN. CAT has **no
+authentication and grants full transmit control** — anything that can reach
+the port can key and tune your radio — so only choose `0.0.0.0` on a network
+you trust, and stay on `127.0.0.1` unless you specifically need to control
+Zeus from another computer.
+
+**Connecting software that only knows COM ports.** Unlike a serial radio, the
+CAT server has nothing to "select" — it is the radio side of the link, so the
+COM-port picker lives in *your* software, not in Zeus. Programs that talk to a
+rig over the network directly need no extra setup — give them the Zeus
+machine's IP and the port. Programs that only understand a serial COM port
+need a virtual serial bridge to the CAT socket: on Windows pair `com0com` with
+`com2tcp` (pointed at the Zeus host and port 19090); on macOS or Linux use
+`socat PTY,link=/dev/ttyCAT TCP:127.0.0.1:19090`. The program then opens that
+virtual COM port as if it were a real TS-2000. Two CAT clients at once means
+two listeners on two ports — the network equivalent of two COM ports.
 
 ### Voyeur — Unattended Net Monitor (plugin)
 

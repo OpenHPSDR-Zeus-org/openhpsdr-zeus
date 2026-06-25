@@ -19,7 +19,7 @@ A note on one tab in particular: **PA Settings** is the only tab with an explici
 | **Band Plan** | The frequency/mode band plan editor. |
 | **QRZ** | Sign in to QRZ.com for callsign lookups and your home grid. |
 | **Rotator** | Connect to a Hamlib `rotctld` antenna rotator. |
-| **TCI** | Expose Zeus over the TCI (Transceiver Control Interface) protocol for logging/contest software. |
+| **Network** | Expose Zeus to external software two ways: **TCI** (ExpertSDR3 Transceiver Control Interface) and **CAT** (Kenwood TS-2000 emulation), for logging, contest, and digital-mode programs. |
 | **Display** | Theme, panadapter background, trace color, spectrum scale, waterfall colormap. |
 | **Plugins** | Install and manage backend/UI/audio plugins from the registry or by URL. |
 | **HamClock** | Install and embed the OpenHamClock dashboard as a workspace panel. |
@@ -38,9 +38,9 @@ The DSP tab groups the receive and transmit signal-processing controls into card
 
 Enter your QRZ.com API key to enable callsign lookups. Once connected, the panel shows your sign-in callsign, home grid and coordinates, and whether your account has an active **XML subscription** (lookups need that subscription — without it, lookups are disabled even though sign-in succeeds). QRZ data also feeds the Beam Map background described below.
 
-#### Rotator and TCI
+#### Rotator and Network (TCI / CAT)
 
-**Rotator** connects Zeus to a Hamlib `rotctld` daemon: tick Enabled, set the host and port (default `127.0.0.1`), and test the connection. **TCI** lets external logging or contest programs control Zeus over the Transceiver Control Interface — set the bind address and port and test it. Both are network integrations; if the daemon or client is on another machine, use that machine's LAN address rather than `127.0.0.1`.
+**Rotator** connects Zeus to a Hamlib `rotctld` daemon: tick Enabled, set the host and port (default `127.0.0.1`), and test the connection. The **Network** tab lets external software control Zeus two ways: **TCI** (the ExpertSDR3 Transceiver Control Interface, for loggers and contest programs) and **CAT** (a Kenwood TS-2000 emulation over TCP, default port **19090**, for the many programs — including digital-mode apps configured for a serial Kenwood rig — that speak Kenwood CAT). For each, set the bind address and port and test it. Both are unauthenticated and CAT grants full transmit control, so a `0.0.0.0` (LAN-visible) binding belongs only on a trusted network; if the daemon or client is on another machine, use that machine's LAN address rather than `127.0.0.1`. CAT — including connecting software that only speaks serial COM ports — is covered in full in the Accessories chapter.
 
 #### HamClock and Spots
 
