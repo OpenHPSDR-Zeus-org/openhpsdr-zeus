@@ -122,16 +122,86 @@ function prefsDbOptionLabel(db: PrefsDatabaseInfo): string {
   return `${db.name} (${parts.join(' · ')})`;
 }
 
+// A single-line text prompt rendered as a proper in-app Zeus dialog (wraps
+// ConfirmDialog with an input) — replaces window.prompt so it matches Zeus
+// chrome. Enter submits; empty/whitespace input is a no-op. The input grabs
+// focus after ConfirmDialog's focus trap settles on Cancel.
+function PromptDialog({
+  title,
+  label,
+  placeholder,
+  confirmLabel,
+  onSubmit,
+  onCancel,
+}: {
+  title: string;
+  label: string;
+  placeholder?: string;
+  confirmLabel: string;
+  onSubmit: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState('');
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, []);
+  const submit = () => {
+    const v = value.trim();
+    if (v) onSubmit(v);
+  };
+  return (
+    <ConfirmDialog
+      title={title}
+      confirmLabel={confirmLabel}
+      intent="primary"
+      onConfirm={submit}
+      onCancel={onCancel}
+    >
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12.5, color: 'var(--fg-1)' }}>
+        <span>{label}</span>
+        <input
+          ref={inputRef}
+          className="mono"
+          value={value}
+          placeholder={placeholder}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              submit();
+            }
+          }}
+          style={{
+            padding: '6px 8px',
+            borderRadius: 'var(--r-sm)',
+            border: '1px solid var(--line-strong)',
+            background: '#0c0c10',
+            color: '#d8d8dc',
+            fontSize: 13,
+            outline: 'none',
+          }}
+        />
+      </label>
+    </ConfirmDialog>
+  );
+}
+
 // Compact prefs-database (profile) selector for the connect screen. Switching
 // applies on restart, so the change confirms, flips the server pointer, then
-// relaunches. New uses window.prompt for the name; Import opens a native file
-// dialog and uploads the chosen .db.
+// relaunches. New prompts for the name via an in-app Zeus dialog; Import opens
+// a native file dialog and uploads the chosen .db.
 function PrefsDatabaseRow() {
   const [databases, setDatabases] = useState<PrefsDatabaseInfo[] | null>(null);
   const [activeRel, setActiveRel] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [newDialogOpen, setNewDialogOpen] = useState(false);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -170,9 +240,8 @@ function PrefsDatabaseRow() {
     [activeRel],
   );
 
-  const onNew = useCallback(async () => {
-    const name = window.prompt('New database name:');
-    if (name === null) return;
+  const onCreate = useCallback(async (name: string) => {
+    setNewDialogOpen(false);
     setError(null);
     setBusy(true);
     try {
@@ -266,7 +335,7 @@ function PrefsDatabaseRow() {
           type="button"
           className="label-xs"
           disabled={disabled}
-          onClick={() => void onNew()}
+          onClick={() => setNewDialogOpen(true)}
           style={prefsDbButtonStyle}
           title="Create a new database"
         >
@@ -311,6 +380,16 @@ function PrefsDatabaseRow() {
         <span className="label-xs" style={{ color: 'var(--tx)' }}>
           {error}
         </span>
+      )}
+      {newDialogOpen && (
+        <PromptDialog
+          title="New Database"
+          label="New database name:"
+          placeholder="e.g. Field Day"
+          confirmLabel="Create"
+          onSubmit={(name) => void onCreate(name)}
+          onCancel={() => setNewDialogOpen(false)}
+        />
       )}
     </div>
   );
