@@ -932,7 +932,28 @@ public static class ZeusHost
         staticContentTypes.Mappings[".onnx"] = "application/octet-stream";
         staticContentTypes.Mappings[".wasm"] = "application/wasm";
         staticContentTypes.Mappings[".mjs"] = "text/javascript";
-        app.UseStaticFiles(new Microsoft.AspNetCore.Builder.StaticFileOptions { ContentTypeProvider = staticContentTypes });
+        app.UseStaticFiles(new Microsoft.AspNetCore.Builder.StaticFileOptions
+        {
+            ContentTypeProvider = staticContentTypes,
+            // Cache policy is load-bearing for the "new features don't show up until
+            // Ctrl+Shift+R" bug. Without an explicit Cache-Control, ASP.NET only emits
+            // ETag/Last-Modified and the browser heuristically caches index.html AND
+            // sw.js — so a new deploy serves a stale index (old hashed chunks) and the
+            // service-worker update check never sees a fresh sw.js, so the "RELOAD NOW"
+            // prompt never fires. Content-hashed Vite output under /assets/ is safe to
+            // cache forever (the URL changes when the content does); everything else
+            // (index.html, sw.js, the web manifest, icons, the ONNX model) must
+            // revalidate every load. ETag keeps revalidation cheap (304s).
+            // See docs/lessons/service-worker-updates.md.
+            OnPrepareResponse = static ctx =>
+            {
+                var requestPath = ctx.Context.Request.Path.Value ?? string.Empty;
+                ctx.Context.Response.Headers.CacheControl =
+                    requestPath.StartsWith("/assets/", StringComparison.OrdinalIgnoreCase)
+                        ? "public, max-age=31536000, immutable"
+                        : "no-cache";
+            },
+        });
 
         // WDSP NR2 EMNR fopen()s "zetaHat.bin" and "calculus" by bare relative name
         // (native/wdsp/emnr.c:215,397). Anchor cwd to the assembly dir so those files
