@@ -205,6 +205,39 @@ public class VstDirectoryScanServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Scan_Does_Not_Fail_When_Stub_Dll_Is_Locked()
+    {
+        // Repro of the field failure: a rescan over an already-populated plugin
+        // root reported every plugin as Failed with "the process cannot access
+        // the file … because it is being used by another process". A loaded
+        // plugin's ALC holds an OS lock on its stub DLL, so re-writing it on a
+        // rescan throws. The stub is a constant embedded resource — a present,
+        // correctly-sized copy is already correct and must not be clobbered.
+        WriteFakeVst("Comp.vst3");
+        var first = await _scanner.ScanAsync(_srcDir, default);
+        var id = first.Registered[0].Id;
+        var stubPath = Path.Combine(_root, "plugins", id, StubAssemblyName);
+
+        // Drop it from the active set so the rescan takes the registration
+        // (write) path again instead of the skip-by-id shortcut...
+        await _manager.DeactivateAsync(id, default);
+
+        // ...and hold the exact OS lock a loaded ALC keeps on the stub
+        // (LoadFromAssemblyPath opens the DLL with read-share for the context's
+        // lifetime). File.Create against this throws — the bug under test.
+        using var heldLock = new FileStream(
+            stubPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+        var second = await _scanner.ScanAsync(_srcDir, default);
+
+        Assert.Empty(second.Errors);
+        Assert.Single(second.Registered);
+        Assert.Equal(id, second.Registered[0].Id);
+    }
+
+    private const string StubAssemblyName = "Zeus.Plugins.VstHostStub.dll";
+
+    [Fact]
     public async Task Scan_Registers_Multiple_With_Distinct_Ids()
     {
         WriteFakeVst("Reverb.vst3");

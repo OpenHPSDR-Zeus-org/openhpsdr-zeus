@@ -502,6 +502,21 @@ public sealed class VstDirectoryScanService
             .GetManifestResourceStream(StubResourceName)
             ?? throw new InvalidOperationException(
                 $"embedded stub resource '{StubResourceName}' not found");
+
+        // Idempotent by design. The stub is a constant embedded resource, so
+        // every package's copy is byte-identical. Once a plugin is loaded its
+        // collectible ALC holds an OS file lock on this DLL (LoadFromAssemblyPath
+        // keeps the file open for the context's lifetime, and a just-unloaded ALC
+        // keeps it locked until GC reclaims it). Clobbering it on a re-scan throws
+        // "the process cannot access the file … because it is being used by
+        // another process" — the failure that made a rescan over an already-
+        // populated plugin root report every plugin as Failed. A present,
+        // correctly-sized stub is already correct: leave it untouched. Only an
+        // absent or truncated copy (an interrupted prior write — which is never
+        // loaded, so never locked) is (re)written.
+        if (File.Exists(destPath) && new FileInfo(destPath).Length == res.Length)
+            return;
+
         using var file = File.Create(destPath);
         res.CopyTo(file);
     }
