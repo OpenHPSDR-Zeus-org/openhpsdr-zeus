@@ -714,6 +714,11 @@ public class DspPipelineService : BackgroundService,
         public long IqRmsLogMs; // 1 Hz IQ RMS/peak probe gate
         public long RoutedFrames; // diag: IQ frames routed to this receiver index
         public long FedFrames;    // diag: IQ frames actually FeedIq'd (channel open)
+        // Slewed AF-gain dB last pushed to this secondary's WDSP channel.
+        // NaN sentinel = "no value applied yet" — used at channel-open so
+        // the freshly-opened channel snaps to the operator's target instead
+        // of dragging from a stale 0 dB. See AfGainSlewMaxDbPerTick.
+        public double AppliedAfGainDb = double.NaN;
     }
     private readonly SecondaryRx[] _secondaryRx;
     private int _sampleRateHz;
@@ -795,9 +800,41 @@ public class DspPipelineService : BackgroundService,
         int hiAbs = Math.Max(Math.Abs(s.FilterLowHz), Math.Abs(s.FilterHighHz));
         return RadioService.SignedFilterForMode(engineMode, loAbs, hiAbs);
     }
-    private double _appliedAgcTopDb;
-    private double _appliedAgcOffsetDb;
+    // Effective AGC-T ceiling (s.AgcTopDb + s.AgcOffsetDb) last actually
+    // pushed to WDSP. Slewed by AgcTopSlewMaxDbPerTick per pipeline tick so
+    // a slider drag (or an Auto-AGC servo jump) doesn't stair-step
+    // wcpAGC.max_gain into a click train; the value snaps to the target
+    // once within one cap, so the steady-state push is bit-identical to a
+    // direct write — WDSP remains the gain authority. Computed once per
+    // OnRadioStateChanged so primary + every secondary fan the same dB.
+    private double _appliedAgcCeilingDb;
+    // Slewed AF-gain dB last pushed to RX1 — same rate-cap rationale as
+    // _appliedAgcCeilingDb, applied to the WDSP panel.gain1 register.
+    // Secondary receivers keep their own per-RX slew state on
+    // SecondaryRx.AppliedAfGainDb because each receiver carries its own
+    // AfGainDb in Receivers[i].
     private double _appliedRxAfGainDb;
+
+    // Per-tick caps (dB) for the AF-gain and AGC-T register pushes to WDSP.
+    // Both registers (panel.gain1, agc.max_gain) are applied by WDSP as
+    // instant scalar multiplies — without a per-tick rate cap, a slider
+    // drag at the 30 Hz tick rate becomes a stair-step of audible clicks.
+    //
+    // CONSERVATIVE PLACEHOLDERS pending bench tuning on a G2 with 3 RX
+    // (issue #939). Smaller cap = quieter individual step but more
+    // perceived lag; larger cap = snappier feel but louder per-step
+    // residual click. AGC-T cap MUST exceed Auto-AGC's noise-floor servo
+    // step so auto-tracking isn't throttled — Auto-AGC moves the offset
+    // by up to ~30 dB per ~500 ms eval (~60 dB/s peak burst). 6 dB/tick at
+    // the 30 Hz pipeline tick = 180 dB/s ≈ 3× headroom over that peak.
+    private const double AfGainSlewMaxDbPerTick = 2.0;
+    private const double AgcTopSlewMaxDbPerTick = 6.0;
+
+    private static double StepTowardCappedDb(double current, double target, double maxStep)
+    {
+        double delta = target - current;
+        return Math.Abs(delta) <= maxStep ? target : current + Math.Sign(delta) * maxStep;
+    }
     // TX mic gain change-detect cache. NaN sentinel forces the first apply
     // even when the persisted value happens to equal 0 dB (the engine seam
     // expects an explicit unity SetTxPanelGain call so the TX chain leaves
@@ -3424,23 +3461,41 @@ public class DspPipelineService : BackgroundService,
             engine.SetTxBandpassWindow(s.TxFilterWindow);
             _appliedTxBandpassWindow = s.TxFilterWindow;
         }
-        if (s.AgcTopDb != _appliedAgcTopDb || s.AgcOffsetDb != _appliedAgcOffsetDb)
+        // AGC-T: rate-cap the effective ceiling pushed to WDSP. wcpAGC's
+        // SetRXAAGCTop swaps max_gain instantly and recomputes min_volts /
+        // slope_constant without resetting the running envelope (a->volts),
+        // so a stair-step jump on a slider drag = click train. Slewing
+        // _appliedAgcCeilingDb toward target by AgcTopSlewMaxDbPerTick gives
+        // a smooth ceiling; the secondary RX block fans the same slewed dB
+        // to every active secondary so RX2..N see one consistent ceiling
+        // this tick (and don't double-step against the main-block push).
+        double effectiveAgcTarget = s.AgcTopDb + s.AgcOffsetDb;
+        if (effectiveAgcTarget != _appliedAgcCeilingDb)
         {
-            double effectiveAgc = s.AgcTopDb + s.AgcOffsetDb;
-            engine.SetAgcTop(channel, effectiveAgc);
-            if (rx2Channel >= 0) engine.SetAgcTop(rx2Channel, effectiveAgc);
-            _appliedAgcTopDb = s.AgcTopDb;
-            _appliedAgcOffsetDb = s.AgcOffsetDb;
+            _appliedAgcCeilingDb = StepTowardCappedDb(
+                _appliedAgcCeilingDb, effectiveAgcTarget, AgcTopSlewMaxDbPerTick);
+            engine.SetAgcTop(channel, _appliedAgcCeilingDb);
+            if (rx2Channel >= 0) engine.SetAgcTop(rx2Channel, _appliedAgcCeilingDb);
+            for (int ri = 2; ri < MaxReceivers; ri++)
+            {
+                int sec = Volatile.Read(ref _secondaryRx[ri].ChannelId);
+                if (sec >= 0) engine.SetAgcTop(sec, _appliedAgcCeilingDb);
+            }
         }
         // (Removed: the manual AGC "knee" push. WDSP's threshold and AGC-T are
         // the SAME register (max_gain) — driving both independently clobbered
         // each other and made AGC-T hair-trigger. AGC-T is now the single
         // manual control via SetRXAAGCTop above; Auto-AGC tracks the noise floor
         // on top of it. See the AGC knee removal commit.)
+        // RX1 AF gain: same rate-cap rationale — WDSP's SetRXAPanelGain1 is a
+        // one-block constant multiply, so a slider drag stair-steps into a
+        // click train. Secondary RX AF gain slews per-receiver inside
+        // ApplyStateToSecondaryRxChannel (each receiver has its own slider).
         if (s.RxAfGainDb != _appliedRxAfGainDb)
         {
-            engine.SetRxAfGainDb(channel, s.RxAfGainDb);
-            _appliedRxAfGainDb = s.RxAfGainDb;
+            _appliedRxAfGainDb = StepTowardCappedDb(
+                _appliedRxAfGainDb, s.RxAfGainDb, AfGainSlewMaxDbPerTick);
+            engine.SetRxAfGainDb(channel, _appliedRxAfGainDb);
         }
         // TX mic gain: dB → linear (10^(db/20)) at the engine seam. Conversion
         // matches the historical /api/mic-gain inline (Math.Pow(10.0, db/20.0));
@@ -3853,9 +3908,14 @@ public class DspPipelineService : BackgroundService,
         _appliedCtunOffsetHz = ctunShiftHz;
         _appliedTxLowHz = txOpenLow;
         _appliedTxHighHz = txOpenHigh;
-        _appliedAgcTopDb = s.AgcTopDb;
-        _appliedAgcOffsetDb = s.AgcOffsetDb;
+        _appliedAgcCeilingDb = s.AgcTopDb + s.AgcOffsetDb;
         _appliedRxAfGainDb = s.RxAfGainDb;
+        // Reset every secondary's per-RX AF-gain slew state — the engine has
+        // just opened a fresh RX1 channel (full engine swap or reconnect), so
+        // any RX2..N channels will be reopened too and need to snap to their
+        // operator value rather than drag from a stale slewed dB.
+        for (int i = 1; i < MaxReceivers; i++)
+            _secondaryRx[i].AppliedAfGainDb = double.NaN;
         _appliedTxMicGainLinear = micLinearInit;
         _appliedTxLevelerMaxGainDb = s.LevelerMaxGainDb;
         _appliedNr = nr;
@@ -3943,6 +4003,9 @@ public class DspPipelineService : BackgroundService,
     {
         if (chan < 0) return;
         Volatile.Write(ref _secondaryRx[rxIndex].ChannelId, -1);
+        // NaN = "no value applied yet" — a future reopen snaps to the
+        // operator's target instead of slewing from this stale value.
+        _secondaryRx[rxIndex].AppliedAfGainDb = double.NaN;
         try { engine.CloseChannel(chan); }
         catch (Exception ex)
         {
@@ -3957,7 +4020,12 @@ public class DspPipelineService : BackgroundService,
     private void ResetSecondaryRxChannels()
     {
         for (int i = 1; i < MaxReceivers; i++)
+        {
             Volatile.Write(ref _secondaryRx[i].ChannelId, -1);
+            // See SecondaryRx.AppliedAfGainDb — engine swap discards any
+            // prior slewed state, so the new channel snaps to its target.
+            _secondaryRx[i].AppliedAfGainDb = double.NaN;
+        }
     }
 
     /// <summary>
@@ -4042,8 +4110,21 @@ public class DspPipelineService : BackgroundService,
             rx.LoHz,
             protocol2: _p2Client is not null);
         engine.SetCtunShift(channelId, shiftHz);
-        engine.SetAgcTop(channelId, s.AgcTopDb + s.AgcOffsetDb);
-        engine.SetRxAfGainDb(channelId, afGainDb);
+        // AGC-T fanout uses the per-tick slewed ceiling computed in the
+        // main OnRadioStateChanged block, not the raw target — so RX2..N
+        // see the same rate-capped dB as RX1 (no extra fan-out wiring
+        // needed at the slew-advance site). Pushing every tick re-applies
+        // the value on a freshly-opened channel for free.
+        engine.SetAgcTop(channelId, _appliedAgcCeilingDb);
+        // Per-secondary AF-gain slew: each receiver has its own slider
+        // (Receivers[i].AfGainDb) so the rate-cap state is per-SecondaryRx.
+        // NaN sentinel = "no value applied yet" — snaps on the first push
+        // after a fresh channel-open so we don't drag from a stale 0 dB.
+        double afNext = double.IsNaN(rx.AppliedAfGainDb)
+            ? afGainDb
+            : StepTowardCappedDb(rx.AppliedAfGainDb, afGainDb, AfGainSlewMaxDbPerTick);
+        engine.SetRxAfGainDb(channelId, afNext);
+        rx.AppliedAfGainDb = afNext;
         engine.SetNoiseReduction(channelId, nr);
         engine.SetAgc(channelId, agc);
         engine.SetSquelch(channelId, squelch);
