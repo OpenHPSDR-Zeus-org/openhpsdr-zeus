@@ -947,7 +947,11 @@ public static class ZeusHost
         // (operator-facing UI), desktop mode hides the console and skips this.
         if (options.PrintConsoleBanner && Environment.UserInteractive)
         {
-            PrintBanner(options.HttpPort, tciEnabled, tciBindAddress, tciPort);
+            // Reuse the same LAN IP list the structured log emits above so the
+            // banner and the log agree on which addresses the radio is reachable
+            // at. Empty when BindAllInterfaces=false (loopback-only modes).
+            var bannerLanIps = options.BindAllInterfaces ? LanCertificate.GetLanIps() : new List<IPAddress>();
+            PrintBanner(options.HttpPort, httpsPort, bannerLanIps, tciEnabled, tciBindAddress, tciPort);
         }
 
         return app;
@@ -964,7 +968,13 @@ public static class ZeusHost
         await qrzService.InitializeAsync(cancellationToken);
     }
 
-    static void PrintBanner(int httpPort, bool tciEnabled, string tciBindAddress, int tciPort)
+    static void PrintBanner(
+        int httpPort,
+        int httpsPort,
+        IReadOnlyList<IPAddress> lanIps,
+        bool tciEnabled,
+        string tciBindAddress,
+        int tciPort)
     {
         var assembly = System.Reflection.Assembly.GetExecutingAssembly();
         var attr = assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
@@ -979,11 +989,35 @@ public static class ZeusHost
         Console.WriteLine("  Licensed under GPL-2.0-or-later");
         Console.WriteLine("═══════════════════════════════════════════════════════════════");
         Console.WriteLine();
-        Console.WriteLine($"  Server listening on: http://localhost:{httpPort}");
-        if (tciEnabled)
-            Console.WriteLine($"  TCI listening on:    {tciBindAddress}:{tciPort}");
+        Console.WriteLine("  Open Zeus in your web browser at one of these URLs:");
         Console.WriteLine();
-        Console.WriteLine("  Open your web browser and navigate to the server address above.");
+        Console.WriteLine("    On this machine:");
+        Console.WriteLine($"      http://localhost:{httpPort}");
+        if (httpsPort > 0)
+            Console.WriteLine($"      https://localhost:{httpsPort}");
+        if (lanIps.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("    From another device on your LAN (phone, tablet, other PC):");
+            foreach (var ip in lanIps)
+            {
+                if (httpsPort > 0)
+                    Console.WriteLine($"      https://{ip}:{httpsPort}    ← use this for microphone TX");
+                Console.WriteLine($"      http://{ip}:{httpPort}");
+            }
+            if (httpsPort > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine("    Browsers require HTTPS to allow microphone access on a LAN");
+                Console.WriteLine("    address. The first visit shows a self-signed certificate warning —");
+                Console.WriteLine("    accept it once and microphone TX will work from then on.");
+            }
+        }
+        if (tciEnabled)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"  TCI listening on:    {tciBindAddress}:{tciPort}");
+        }
         Console.WriteLine();
         Console.WriteLine("  To STOP the server:");
         Console.WriteLine("    • Press Ctrl+C in this console window, or");
