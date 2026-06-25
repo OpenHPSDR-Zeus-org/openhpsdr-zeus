@@ -126,6 +126,14 @@ public sealed class FreeDvModem : IDisposable
     // Hot path (inside freedv_rx). Single-byte lock-free enqueue; drop on overflow.
     private void OnRxTextChar(IntPtr state, byte c) => _rxTextRing.WriteByte(c);
 
+    // Test seam: feed bytes into the RX-text ring exactly as the native txt
+    // callback would, so the RxText reassembly (line completion, partial
+    // fallback, sliding-window cap) can be exercised without the codec2 lib.
+    internal void IngestRxTextForTest(string s)
+    {
+        foreach (char ch in s) _rxTextRing.WriteByte((byte)ch);
+    }
+
     // Hot path (inside freedv_tx). Returns the next char of the repeating TX text,
     // or 0 when no text is configured (codec2 sends an idle txt stream).
     private byte OnTxTextChar(IntPtr state)
@@ -161,10 +169,15 @@ public sealed class FreeDvModem : IDisposable
     }
 
     /// <summary>
-    /// Last fully-received line of RX text (callsign etc.), or null if none has
-    /// been decoded yet. Drains the lock-free RX-text ring and reassembles on the
-    /// caller's (status) thread — never touched by the hot path beyond the ring
-    /// enqueue. Guarded so concurrent status polls don't race the reassembly.
+    /// Most recent RX text (callsign etc.) decoded from the txt sidechannel, or
+    /// null if none has been received yet. Prefers a completed (CR/LF-terminated)
+    /// line; if no terminator has ever arrived — e.g. a station sending a bare,
+    /// repeating callsign with no line break, which a great many real FreeDV
+    /// stations do — it falls back to the live in-progress buffer so the operator
+    /// still sees the other station stream in. Drains the lock-free RX-text ring
+    /// and reassembles on the caller's (status) thread — never touched by the hot
+    /// path beyond the ring enqueue. Guarded so concurrent status polls don't race
+    /// the reassembly.
     /// </summary>
     public string? RxText
     {
@@ -189,12 +202,23 @@ public sealed class FreeDvModem : IDisposable
                         }
                         else if (c is >= ' ' and < (char)127)
                         {
-                            if (_rxTextWork.Length >= 64) _rxTextWork.Clear();
+                            // Bound the in-progress buffer. A terminator-less
+                            // sender never clears it via CR/LF, so slide a window
+                            // (drop the oldest half) instead of wiping the whole
+                            // buffer — a repeating callsign then stays continuously
+                            // visible through the partial fallback below rather
+                            // than blanking every 64 chars.
+                            if (_rxTextWork.Length >= 64) _rxTextWork.Remove(0, 32);
                             _rxTextWork.Append(c);
                         }
                     }
                 }
-                return _rxTextLine;
+                // A CR/LF-terminated sender snaps to its clean completed line the
+                // instant the terminator arrives, so this never degrades the
+                // well-behaved case; the partial only surfaces when no line has
+                // ever completed.
+                if (_rxTextLine is not null) return _rxTextLine;
+                return _rxTextWork.Length > 0 ? _rxTextWork.ToString() : null;
             }
         }
     }
