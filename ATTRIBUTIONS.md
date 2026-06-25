@@ -208,6 +208,41 @@ licences. The RNNoise `src/` is vendored unmodified except for the minimal
 `rnnoise_data.c` described above; per-file headers are preserved as received
 from upstream and must remain so on re-vendor.
 
+## ft8_lib (FT8/FT4 decode + encode)
+
+Zeus's native FT8/FT4 digital-mode core links against **ft8_lib** (Kārlis
+Goba), vendored in-tree under [`native/ft8/vendor/`](native/ft8/vendor/) and
+wrapped by `native/ft8/zeus_ft8.c` in the stable `zeus_ft8_*` C ABI that the
+managed `Zeus.Dsp.Ft8` P/Invoke layer binds against. It builds as
+`libzeus_ft8.{so,dll,dylib}` with hidden symbol visibility so only the
+`zeus_ft8_*` exports surface.
+
+ft8_lib is **Copyright (c) 2018 Kārlis Goba** and is distributed under the
+**MIT License**. The full licence text is preserved verbatim at
+[`native/ft8/vendor/LICENSE`](native/ft8/vendor/LICENSE).
+
+ft8_lib is an **independent, clean-room implementation** of the FT8/FT4
+protocols written from the published specification — it is **not** derived
+from WSJT-X or JTDX (which are GPL Fortran/Qt applications). The protocol
+constants it reproduces (the LDPC(174,91) parity matrix, the three Costas 7×7
+sync arrays, the CRC-14 polynomial, and the 77-bit message packing) were
+placed in the **public domain** by the protocol authors in *"The FT4 and FT8
+Communication Protocols"* (Franke, Somerville, Taylor — QEX, 2020), so their
+reproduction under the MIT licence is legitimate. Every conformant FT8
+implementation necessarily shares these constants, because they define the
+over-the-air signal.
+
+ft8_lib bundles its own **KISS FFT** (Mark Borgerding, BSD-3-Clause, under
+[`native/ft8/vendor/fft/`](native/ft8/vendor/fft/)); Zeus's FT8 path therefore
+has no FFTW dependency. MIT and BSD-3-Clause are both one-way
+licence-compatible with Zeus's GPL-2.0-or-later distribution. The vendored
+ft8_lib `ft8/`, `common/`, and `fft/` sources are unmodified; per-file headers
+are preserved as received from upstream and must remain so on re-vendor.
+
+Upstream:
+- <https://github.com/kgoba/ft8_lib>
+- FT4/FT8 protocol paper — <https://wsjt.sourceforge.io/FT4_FT8_QEX.pdf>
+
 ## Relationship to pihpsdr
 
 Zeus is independent of pihpsdr but **routinely consulted pihpsdr source as
