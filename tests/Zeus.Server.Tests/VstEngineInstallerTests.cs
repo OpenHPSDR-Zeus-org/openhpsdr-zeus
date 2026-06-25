@@ -100,4 +100,68 @@ public class VstEngineInstallerTests : IDisposable
 
         Assert.Null(VstEngineInstaller.SelectZipAsset(assets));
     }
+
+    // --- Manifest path (the production source: a Zeus-hosted, SHA-256-pinned engine) ---
+
+    [Fact]
+    public void SelectEngineAsset_prefers_windows_x64_engine_and_skips_non_engine()
+    {
+        var assets = new List<VstEngineInstaller.EngineAsset>
+        {
+            new() { Filename = "notes.txt", Url = "https://d/notes.txt", Platform = "windows", Arch = "x64" },
+            new() { Filename = "VSTHostEngine-linux.zip", Url = "https://d/lx.zip", Platform = "linux", Arch = "x64" },
+            new() { Filename = "VSTHostEngine.exe", Url = "https://d/eng.exe", Platform = "windows", Arch = "x64",
+                    Sha256 = "abc" },
+        };
+
+        var picked = VstEngineInstaller.SelectEngineAsset(assets);
+
+        Assert.NotNull(picked);
+        Assert.Equal("VSTHostEngine.exe", picked!.Filename);
+        Assert.Equal("abc", picked.Sha256);
+    }
+
+    [Fact]
+    public void SelectEngineAsset_falls_back_to_any_engine_like_asset_without_platform_tag()
+    {
+        var assets = new List<VstEngineInstaller.EngineAsset>
+        {
+            new() { Filename = "engine.zip", Url = "https://d/engine.zip" },
+        };
+
+        var picked = VstEngineInstaller.SelectEngineAsset(assets);
+
+        Assert.NotNull(picked);
+        Assert.Equal("engine.zip", picked!.Filename);
+    }
+
+    [Fact]
+    public void SelectEngineAsset_returns_null_when_no_usable_asset()
+    {
+        Assert.Null(VstEngineInstaller.SelectEngineAsset(null));
+        Assert.Null(VstEngineInstaller.SelectEngineAsset(new List<VstEngineInstaller.EngineAsset>()));
+        Assert.Null(VstEngineInstaller.SelectEngineAsset(new List<VstEngineInstaller.EngineAsset>
+        {
+            new() { Filename = "readme.md", Url = "https://d/readme.md" }, // not exe/zip
+            new() { Filename = "VSTHostEngine.exe", Url = null },          // no URL
+        }));
+    }
+
+    [Fact]
+    public void StageSingleExe_stages_verified_exe_and_replaces_stale_contents()
+    {
+        var sourceExe = Path.Combine(_root, "src", "VSTHostEngine.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourceExe)!);
+        File.WriteAllText(sourceExe, "ENGINE-BYTES");
+
+        var managed = Path.Combine(_root, "managed", "vst-engine");
+        Directory.CreateDirectory(managed);
+        File.WriteAllText(Path.Combine(managed, "stale.dll"), "old");
+
+        var staged = VstEngineInstaller.StageSingleExe(sourceExe, managed);
+
+        Assert.Equal(Path.Combine(managed, "VSTHostEngine.exe"), staged);
+        Assert.Equal("ENGINE-BYTES", File.ReadAllText(staged));
+        Assert.False(File.Exists(Path.Combine(managed, "stale.dll")));
+    }
 }
