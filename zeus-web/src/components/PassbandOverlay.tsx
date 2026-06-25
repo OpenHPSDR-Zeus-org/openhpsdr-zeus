@@ -48,6 +48,7 @@ import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { useConnectionStore } from '../state/connection-store';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import {
+  displayFilterEdgesHz,
   getReceiverFilterHighHz,
   getReceiverFilterLowHz,
   getReceiverFilterPresetName,
@@ -233,9 +234,16 @@ export function PassbandOverlay({
       // ~0 and the filter stays pinned to the zero line during a glide; under
       // CTUN the dial roams off-centre and the passband tracks it.
       const vfoHz = getReceiverVfoHz(conn, receiver);
-      const filterLowHz = getReceiverFilterLowHz(conn, receiver);
-      const filterHighHz = getReceiverFilterHighHz(conn, receiver);
       const rxMode = getReceiverMode(conn, receiver);
+      // FreeDV stores its passband USB-positive regardless of band; re-sign it
+      // to the convention sideband (LSB < 10 MHz) so the rect lands where the
+      // demod actually is. No-op for every other mode.
+      const { lowHz: filterLowHz, highHz: filterHighHz } = displayFilterEdgesHz(
+        rxMode,
+        vfoHz,
+        getReceiverFilterLowHz(conn, receiver),
+        getReceiverFilterHighHz(conn, receiver),
+      );
       // filterLow/HighHz are audio offsets from the hardware LO, not the VFO
       // dial. In CW modes the LO is shifted by ±cwPitchHz from VFO, so
       // passCenter must land on the LO (not VFO) to place the rect correctly.
@@ -289,8 +297,16 @@ export function PassbandOverlay({
 
   // Initial (pre-draw-bus) geometry; the callback refines it next frame.
   const cwOffset = mode === 'CWU' ? -cwPitchHz : mode === 'CWL' ? cwPitchHz : 0;
-  const passLowHz = selectedVfoHz + cwOffset + filterLowHz;
-  const passHighHz = selectedVfoHz + cwOffset + filterHighHz;
+  // Re-sign FreeDV's USB-positive stored passband to the convention sideband
+  // (LSB < 10 MHz) for display — same as the draw-bus path. No-op otherwise.
+  const { lowHz: dispLowHz, highHz: dispHighHz } = displayFilterEdgesHz(
+    mode,
+    selectedVfoHz,
+    filterLowHz,
+    filterHighHz,
+  );
+  const passLowHz = selectedVfoHz + cwOffset + dispLowHz;
+  const passHighHz = selectedVfoHz + cwOffset + dispHighHz;
   const leftPct = ((passLowHz - startHz) / spanHz) * 100;
   const rightPct = ((passHighHz - startHz) / spanHz) * 100;
   const widthPct = rightPct - leftPct;
