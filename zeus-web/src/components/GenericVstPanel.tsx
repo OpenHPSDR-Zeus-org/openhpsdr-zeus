@@ -11,6 +11,7 @@
 
 import { useEffect, useRef } from 'react';
 import { useVstEditor, type VstEditorRoute } from './useVstEditor';
+import { useAudioSuiteStore } from '../state/audio-suite-store';
 
 interface GenericVstPanelProps {
   pluginId: string;
@@ -19,11 +20,18 @@ interface GenericVstPanelProps {
 }
 
 export function GenericVstPanel({ pluginId, name, route = 'tx' }: GenericVstPanelProps) {
-  const { open, busy, error, toggle, openEditor } = useVstEditor(
+  const { open, busy, starting, crashed, error, toggle, openEditor } = useVstEditor(
     pluginId,
     true,
     route,
   );
+  const repairVstEngine = useAudioSuiteStore((s) => s.repairVstEngine);
+  const enginePhase = useAudioSuiteStore((s) => s.vstEngineInstall.phase);
+  const repairing =
+    enginePhase === 'downloading' ||
+    enginePhase === 'extracting' ||
+    enginePhase === 'staging' ||
+    enginePhase === 'configuring';
 
   // Selecting this VST's chip mounts the panel — auto-open its real
   // editor window so the chip click alone pops the GUI (no extra button
@@ -90,7 +98,7 @@ export function GenericVstPanel({ pluginId, name, route = 'tx' }: GenericVstPane
             fontFamily: 'inherit',
           }}
         >
-          {busy ? '…' : open ? 'Close Editor' : 'Open Editor'}
+          {busy ? (starting ? 'Starting…' : '…') : open ? 'Close Editor' : 'Open Editor'}
         </button>
         <span style={{ color: 'var(--fg-3)', fontSize: 10, lineHeight: 1.3, flex: 1, minWidth: 160 }}>
           Selecting this VST opens its real editor in a separate desktop
@@ -99,6 +107,51 @@ export function GenericVstPanel({ pluginId, name, route = 'tx' }: GenericVstPane
           processes audio either way.
         </span>
       </div>
+
+      {starting && (
+        <div
+          style={{
+            fontSize: 10,
+            color: 'var(--fg-2)',
+            background: 'var(--bg-2)',
+            border: '1px solid var(--line)',
+            borderRadius: 3,
+            padding: '5px 8px',
+            lineHeight: 1.4,
+          }}
+        >
+          VST engine starting&hellip; the editor opens automatically once it&rsquo;s
+          routing. This can take a few seconds on first use.
+        </div>
+      )}
+
+      {crashed && (
+        <button
+          type="button"
+          disabled={repairing}
+          onClick={async () => {
+            await repairVstEngine();
+            openEditor();
+          }}
+          title="Re-download the verified VST engine and retry"
+          style={{
+            alignSelf: 'flex-start',
+            padding: '5px 12px',
+            borderRadius: 4,
+            border: '1px solid var(--accent)',
+            background: repairing ? 'var(--bg-2)' : 'var(--accent)',
+            color: repairing ? 'var(--fg-2)' : '#fff',
+            cursor: repairing ? 'progress' : 'pointer',
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: 0.6,
+            textTransform: 'uppercase',
+            fontFamily: 'inherit',
+          }}
+        >
+          {repairing ? 'Repairing…' : 'Repair Engine'}
+        </button>
+      )}
 
       {error && (
         <div

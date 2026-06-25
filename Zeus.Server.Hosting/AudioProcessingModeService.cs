@@ -36,9 +36,18 @@ public sealed class AudioProcessingModeService : IHostedService
     private readonly VstEngineController _engine;
     private readonly PluginManager _manager;
     private readonly ChainOrderService _chainOrder;
+    private readonly VstEngineInstaller? _installer;
     private readonly ILogger<AudioProcessingModeService> _log;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private AudioProcessingMode _mode = AudioProcessingMode.Native;
+
+    // One-shot auto-repair guard. When the engine crash-loops (a stale/corrupt or
+    // protocol-incompatible binary that never handshakes), we re-download the
+    // known-good engine from the manifest exactly once; the supervisor's retry
+    // loop then picks up the freshly-staged binary. Reset on each explicit mode
+    // set so a manual VST re-select re-enables one more auto-repair.
+    private readonly object _repairLock = new();
+    private bool _autoRepairDone;
 
     // Out-of-process editor routing (host-consolidation step 1/2). When the
     // engine is active, the Audio Suite editor endpoints route here instead of
@@ -69,12 +78,16 @@ public sealed class AudioProcessingModeService : IHostedService
         VstEngineController engine,
         PluginManager manager,
         ChainOrderService chainOrder,
-        ILogger<AudioProcessingModeService> log)
+        ILogger<AudioProcessingModeService> log,
+        // Optional so unit tests can construct the service without an HTTP stack;
+        // DI always injects the registered singleton in the running host.
+        VstEngineInstaller? installer = null)
     {
         _store = store;
         _engine = engine;
         _manager = manager;
         _chainOrder = chainOrder;
+        _installer = installer;
         _log = log;
         _engine.StdErr += line => _log.LogDebug("vst-engine: {Line}", line);
         _engine.EngineEvent += OnEngineEvent;
@@ -86,8 +99,7 @@ public sealed class AudioProcessingModeService : IHostedService
         // the chain into the LIVE engine (re-instantiating plugins) without a process
         // recycle — same effect as a manual profile change. (zeus-umt6)
         _engine.ChainReloadRequested += OnChainReloadRequested;
-        _engine.Faulted += reason =>
-            _log.LogWarning("VST engine fault: {Reason}", reason);
+        _engine.Faulted += OnEngineFaulted;
         // Keep the live engine's loaded chain in sync with operator edits made
         // AFTER activation. LoadChainIntoEngine() runs once on activation; without
         // this subscription a VST added/removed/reordered later never reaches the
@@ -225,8 +237,62 @@ public sealed class AudioProcessingModeService : IHostedService
     /// <summary>True while the VST engine is live and routing TX audio.</summary>
     public bool EngineActive => _engine.IsActive;
 
+    /// <summary>Engine lifecycle state (Inactive / Activating / Active / Backoff /
+    /// Faulted) — surfaced so the UI can distinguish "still starting" from
+    /// "keeps crashing" instead of a vague "give it a moment".</summary>
+    public VstEngineState EngineState => _engine.State;
+
+    /// <summary>Human-readable last-fault reason (crash-loop / unavailable), or
+    /// null if the engine has never faulted. Drives the operator-facing message
+    /// when the engine won't route.</summary>
+    public string? EngineLastFault => _engine.LastFault;
+
+    /// <summary>Supervised relaunch count since activation — a climbing value with
+    /// no Active state is the signature of a crash-looping engine.</summary>
+    public long EngineRestartCount => _engine.RestartCount;
+
+    /// <summary>True when the engine is selected (VST mode) and installed but not
+    /// routing — i.e. it is starting up or crash-looping. Lets the editor/UI show
+    /// a precise state and a Repair affordance.</summary>
+    public bool EngineCrashLooping =>
+        _mode == AudioProcessingMode.Vst
+        && !_engine.IsActive
+        && FindEngineExe() is not null
+        && _engine.State == VstEngineState.Faulted;
+
     /// <summary>Resolve the engine exe without launching it; null = not installed.</summary>
     public static string? FindEngineExe() => VstEngineController.FindEngineExe();
+
+    /// <summary>
+    /// The engine supervisor gave up (crash-loop cap, or engine unavailable). When
+    /// the engine is installed but never handshakes — the classic stale/corrupt or
+    /// protocol-incompatible binary — re-download the known-good engine from the
+    /// manifest ONCE; the supervisor's retry loop then relaunches onto the freshly
+    /// staged binary with no operator action. A persistently bad manifest can't
+    /// loop us: we repair at most once per explicit mode set.
+    /// </summary>
+    private void OnEngineFaulted(string reason)
+    {
+        _log.LogWarning("VST engine fault: {Reason}", reason);
+
+        // Only the crash-loop case is auto-repairable: the engine IS installed but
+        // won't come up. An "unavailable" fault means no binary to repair onto.
+        var crashLooping = reason.Contains("crashed", StringComparison.OrdinalIgnoreCase);
+        if (!crashLooping || _mode != AudioProcessingMode.Vst) return;
+        if (FindEngineExe() is null) return;
+
+        lock (_repairLock)
+        {
+            if (_autoRepairDone) return;
+            _autoRepairDone = true;
+        }
+
+        _log.LogWarning(
+            "VST engine is crash-looping; auto-repairing by re-downloading the verified engine "
+            + "from the manifest. The supervisor will relaunch onto the repaired binary.");
+        try { _installer?.Start(force: true); }
+        catch (Exception ex) { _log.LogWarning(ex, "VST engine auto-repair could not start"); }
+    }
 
     /// <summary>
     /// Open the out-of-process engine's native editor window for the chain
@@ -320,6 +386,10 @@ public sealed class AudioProcessingModeService : IHostedService
             catch (Exception ex) { _log.LogWarning(ex, "AudioProcessingModeService persist threw"); }
 
             _mode = mode;
+
+            // A deliberate (re)selection of VST re-arms one auto-repair attempt —
+            // e.g. the operator retrying after a fixed engine manifest is published.
+            lock (_repairLock) _autoRepairDone = false;
 
             if (mode == AudioProcessingMode.Vst)
                 await ActivateEngineAsync(ct).ConfigureAwait(false);

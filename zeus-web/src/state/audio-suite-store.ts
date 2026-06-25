@@ -260,6 +260,10 @@ interface AudioSuiteState {
   processingMode: 'native' | 'vst';
   vstEngineAvailable: boolean;
   vstEngineActive: boolean;
+  // True when VST mode is selected and an engine is installed but it keeps
+  // crashing on startup (Faulted) rather than just still warming up. Drives the
+  // "Repair engine" affordance; the server also auto-repairs once on crash-loop.
+  vstEngineCrashLooping: boolean;
   rxVstEngineAvailable: boolean;
   rxVstEngineActive: boolean;
   rxVstActivePlugins: number;
@@ -287,7 +291,12 @@ interface AudioSuiteState {
     percent: number;
     message: string | null;
   };
-  installVstEngine(): Promise<void>;
+  // postUrl is an internal seam (install vs repair endpoint); callers use the
+  // no-arg form. Default is the install endpoint.
+  installVstEngine(postUrl?: string): Promise<void>;
+  // Force a re-download of the verified engine, replacing a stale/corrupt or
+  // crash-looping binary. Reuses the install status/polling lifecycle.
+  repairVstEngine(): Promise<void>;
 }
 
 type AudioSuitePersistedState = Pick<
@@ -368,6 +377,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       processingMode: 'native',
       vstEngineAvailable: false,
       vstEngineActive: false,
+      vstEngineCrashLooping: false,
       rxVstEngineAvailable: false,
       rxVstEngineActive: false,
       rxVstActivePlugins: 0,
@@ -1100,11 +1110,13 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
             mode?: string;
             engineAvailable?: boolean;
             engineActive?: boolean;
+            engineCrashLooping?: boolean;
           };
           set({
             processingMode: body.mode === 'vst' ? 'vst' : 'native',
             vstEngineAvailable: body.engineAvailable === true,
             vstEngineActive: body.engineActive === true,
+            vstEngineCrashLooping: body.engineCrashLooping === true,
           });
         } catch (err) {
 
@@ -1172,14 +1184,14 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         }
       },
 
-      installVstEngine: async () => {
+      installVstEngine: async (postUrl = '/api/tx-audio-suite/vst-engine/install') => {
         const phase = get().vstEngineInstall.phase;
         if (phase === 'downloading' || phase === 'extracting' || phase === 'staging') {
           return; // already running
         }
         set({ vstEngineInstall: { phase: 'downloading', percent: 0, message: 'Starting…' } });
         try {
-          const res = await fetch('/api/tx-audio-suite/vst-engine/install', {
+          const res = await fetch(postUrl, {
             method: 'POST',
           });
           if (!res.ok) {
@@ -1282,6 +1294,10 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           });
           console.warn('vst-engine install threw', err);
         }
+      },
+
+      repairVstEngine: async () => {
+        await get().installVstEngine('/api/tx-audio-suite/vst-engine/repair');
       },
     }),
     {

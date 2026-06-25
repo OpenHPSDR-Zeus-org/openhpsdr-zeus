@@ -220,26 +220,27 @@ public static class ZeusEndpoints
                 engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
             });
         });
-        app.MapGet("/api/tx-audio-suite/processing-mode", (AudioProcessingModeService svc) =>
+        // Processing-mode + engine health. The health fields let the frontend
+        // distinguish "engine still starting" (transient — wait) from "engine
+        // keeps crashing" (Faulted — offer Repair) instead of a vague hint.
+        static object TxModeDto(AudioProcessingModeService svc, AudioProcessingMode mode) => new
         {
-            return Results.Ok(new
-            {
-                mode = svc.Mode.ToString().ToLowerInvariant(),
-                engineActive = svc.EngineActive,
-                engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
-            });
-        });
+            mode = mode.ToString().ToLowerInvariant(),
+            engineActive = svc.EngineActive,
+            engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
+            engineState = svc.EngineState.ToString().ToLowerInvariant(),
+            engineCrashLooping = svc.EngineCrashLooping,
+            engineRestartCount = svc.EngineRestartCount,
+            engineLastFault = svc.EngineLastFault,
+        };
+        app.MapGet("/api/tx-audio-suite/processing-mode", (AudioProcessingModeService svc) =>
+            Results.Ok(TxModeDto(svc, svc.Mode)));
         app.MapPut("/api/tx-audio-suite/processing-mode", async (ProcessingModeSetRequest body, AudioProcessingModeService svc) =>
         {
             if (body?.Mode is null || !Enum.TryParse<AudioProcessingMode>(body.Mode, ignoreCase: true, out var mode))
                 return Results.BadRequest(new { error = "mode must be 'native' or 'vst'" });
             var applied = await svc.SetModeAsync(mode);
-            return Results.Ok(new
-            {
-                mode = applied.ToString().ToLowerInvariant(),
-                engineActive = svc.EngineActive,
-                engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
-            });
+            return Results.Ok(TxModeDto(svc, applied));
         });
 
         // VST engine provisioning — the in-app "Get VST Engine" flow. The engine
@@ -274,6 +275,20 @@ public static class ZeusEndpoints
         app.MapPost("/api/tx-audio-suite/vst-engine/install", (VstEngineInstaller installer) =>
         {
             installer.Start();
+            return Results.Ok(EngineInstallDto(installer));
+        });
+        // Repair/reinstall — force a re-download of the manifest's verified engine
+        // even when one is already present, replacing a stale/corrupt/crash-looping
+        // binary. Backs the "Repair engine" affordance the UI shows when the engine
+        // is Faulted; also runs automatically on crash-loop (AudioProcessingModeService).
+        app.MapPost("/api/audio-suite/vst-engine/repair", (VstEngineInstaller installer) =>
+        {
+            installer.Start(force: true);
+            return Results.Ok(EngineInstallDto(installer));
+        });
+        app.MapPost("/api/tx-audio-suite/vst-engine/repair", (VstEngineInstaller installer) =>
+        {
+            installer.Start(force: true);
             return Results.Ok(EngineInstallDto(installer));
         });
 
