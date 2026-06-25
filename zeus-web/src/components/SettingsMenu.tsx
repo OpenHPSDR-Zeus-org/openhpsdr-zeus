@@ -30,6 +30,7 @@ import { QrzSettingsPanel } from './QrzSettingsPanel';
 import { RadioOptionsPanel } from './RadioOptionsPanel';
 import { RadioSettingsPanel } from './RadioSettingsPanel';
 import { ReceiversPanel } from './ReceiversPanel';
+import { DiversityPanel } from './DiversityPanel';
 import { RotatorSettingsPanel } from './RotatorSettingsPanel';
 import { ServerUrlPanel } from './ServerUrlPanel';
 import { TciSettingsPanel } from './TciSettingsPanel';
@@ -63,6 +64,7 @@ export type SettingsTabId =
   | 'server'
   | 'radio'
   | 'receivers'
+  | 'diversity'
   | 'calibration'
   | 'updates'
   | 'about';
@@ -84,6 +86,7 @@ const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
   { id: 'server', label: 'SERVER' },
   { id: 'radio', label: 'RADIO' },
   { id: 'receivers', label: 'RECEIVERS' },
+  { id: 'diversity', label: 'DIVERSITY' },
   { id: 'calibration', label: 'CALIBRATION' },
   { id: 'updates', label: 'UPDATES' },
   { id: 'about', label: 'ABOUT' },
@@ -212,6 +215,7 @@ export function SettingsView({ initialTab, onClose }: Props) {
           {activeTab === 'spots' && <SpotsSettingsPanel />}
           {activeTab === 'server' && <ServerUrlPanel />}
           {activeTab === 'receivers' && <ReceiversPanel />}
+          {activeTab === 'diversity' && <DiversityPanel />}
           {activeTab === 'radio' && (
             <>
               <RadioSettingsPanel />

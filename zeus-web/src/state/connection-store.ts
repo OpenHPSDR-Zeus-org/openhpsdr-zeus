@@ -53,6 +53,7 @@ import {
   type AgcConfigDto,
   type BandpassWindow,
   type ConnectionStatus,
+  type DiversityConfigDto,
   type NrConfigDto,
   type RadioStateDto,
   type RxMode,
@@ -120,6 +121,10 @@ export type ConnectionState = {
   // DDC / receiver ceiling for this build (WireContract.MaxReceivers); the
   // RECEIVERS panel caps the exposed-count control against it.
   maxReceivers: number;
+  // Diversity combiner snapshot (Thetis DiversityForm). Null = combiner has
+  // never been touched this session (default-off); the panel uses
+  // DIVERSITY_CONFIG_DEFAULT as the seed in that case.
+  diversity: DiversityConfigDto | null;
   // Board kind only known from the discovery list at connect time — StateDto
   // doesn't echo it. Null after a page reload while already connected; the
   // preamp guard treats null as "show", which is the safe default (an HL2
@@ -210,6 +215,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   rx2Enabled: false,
   receivers: [],
   maxReceivers: 8,
+  diversity: null,
   txVfo: 'A',
   txReceiverIndex: 0,
   rxFocus: 'A',
@@ -270,6 +276,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
         // adopts all other server fields) until the optimistic window expires.
         receivers: mergeReceivers(prev.receivers, s.receivers, trustVfo),
         maxReceivers: s.maxReceivers ?? prev.maxReceivers,
+        diversity: s.diversity ?? null,
         txVfo: s.txVfo,
         txReceiverIndex: s.txReceiverIndex ?? prev.txReceiverIndex,
         rxFocus: s.rx2Enabled ? prev.rxFocus : 'A',

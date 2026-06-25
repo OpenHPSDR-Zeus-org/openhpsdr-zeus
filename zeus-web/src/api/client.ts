@@ -239,6 +239,24 @@ export type ZoomLevel = number;
 export const ZOOM_MIN: ZoomLevel = 1;
 export const ZOOM_MAX: ZoomLevel = 32;
 
+// Diversity-combiner config. Mirrors Zeus.Contracts DiversityConfig — two
+// phase-synchronous ADC streams are combined as out = rx[0] + r·e^{jθ}·rx[Source],
+// where r = gain (0..2, 1.0 unity) and θ = phaseDeg (−180..180). P2/ANAN-class
+// only (needs two ADCs). Ephemeral — re-armed each session like PureSignal.
+export type DiversityConfigDto = {
+  enabled: boolean;
+  gain: number;
+  phaseDeg: number;
+  sourceRx: number;
+};
+
+export const DIVERSITY_CONFIG_DEFAULT: DiversityConfigDto = {
+  enabled: false,
+  gain: 1.0,
+  phaseDeg: 0.0,
+  sourceRx: 1,
+};
+
 export type AdcProtectionConfigDto = {
   enabled: boolean;
   attackMs: number;
@@ -409,6 +427,10 @@ export type RadioStateDto = {
   wireVersion?: number;
   // DDC / receiver ceiling for this build (WireContract.MaxReceivers).
   maxReceivers?: number;
+  // Diversity combiner (Thetis DiversityForm / WDSP xdivEXT). Null = off
+  // (default); when present, the panel renders the live config and the DSP
+  // pipeline combines RX0 (ADC0) with the source receiver's IQ.
+  diversity?: DiversityConfigDto | null;
 };
 
 // Mirrors Zeus.Contracts.ReceiverDto — per-receiver (per-DDC) state. Index 0 is
@@ -2147,6 +2169,30 @@ export function normalizeAgc(raw: unknown): AgcConfigDto {
   };
 }
 
+// Diversity normaliser. Server sends `null` when the combiner has never been
+// touched in the session (default-off). When present, every field is clamped
+// to its server-side range so a stale/garbage payload can't push a slider out
+// of bounds.
+export function normalizeDiversity(raw: unknown): DiversityConfigDto | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const clampNum = (v: unknown, fallback: number, min: number, max: number) =>
+    typeof v === 'number' && Number.isFinite(v)
+      ? Math.max(min, Math.min(max, v))
+      : fallback;
+  const clampInt = (v: unknown, fallback: number, min: number, max: number) =>
+    typeof v === 'number' && Number.isFinite(v)
+      ? Math.max(min, Math.min(max, Math.round(v)))
+      : fallback;
+  return {
+    enabled: typeof r.enabled === 'boolean' ? r.enabled : false,
+    gain: clampNum(r.gain, DIVERSITY_CONFIG_DEFAULT.gain, 0, 2),
+    phaseDeg: clampNum(r.phaseDeg, DIVERSITY_CONFIG_DEFAULT.phaseDeg, -180, 180),
+    sourceRx: clampInt(r.sourceRx, DIVERSITY_CONFIG_DEFAULT.sourceRx, 1, 31),
+  };
+}
+
 // RX squelch normaliser. A null/garbage payload (older server, missing field)
 // collapses to the off default. `level` is clamped to 0..100 so a malformed
 // server value can never push the slider out of range.
@@ -2461,6 +2507,7 @@ export function normalizeState(raw: unknown): RadioStateDto {
       : undefined,
     wireVersion: typeof r.wireVersion === 'number' ? r.wireVersion : undefined,
     maxReceivers: typeof r.maxReceivers === 'number' ? r.maxReceivers : undefined,
+    diversity: normalizeDiversity(r.diversity),
   };
 }
 
@@ -5632,6 +5679,36 @@ export function setTxReceiver(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ index }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// Diversity combiner. Mirrors POST /api/rx/diversity — every field optional;
+// only the supplied ones change. The server clamps gain to 0..2, phase to
+// -180..180, and sourceRx to 1..MaxReceivers-1. Returns the canonical state
+// for `.then(applyState)`.
+export function setDiversity(
+  req: {
+    enabled?: boolean;
+    gain?: number;
+    phaseDeg?: number;
+    sourceRx?: number;
+  },
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/rx/diversity',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabled: req.enabled,
+        gain: req.gain,
+        phaseDeg: req.phaseDeg,
+        sourceRx: req.sourceRx,
+      }),
       signal,
     },
     normalizeState,
