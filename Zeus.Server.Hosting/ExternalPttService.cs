@@ -32,8 +32,13 @@ namespace Zeus.Server;
 /// State machine (per-connection):
 ///   • inbound rising AND host MOX/TUN/TwoTone off → claim MOX via
 ///     <c>TxService.TrySetMox(true)</c>, mark <c>_owned</c>.
-///   • inbound falling → arm a hang timer (<see cref="HangTime"/>). A rising
-///     edge inside the window cancels it (inter-character CW spaces).
+///   • inbound falling in a CW mode → arm a hang timer
+///     (<see cref="HangTime"/>). A rising edge inside the window cancels it
+///     (inter-character CW spaces).
+///   • inbound falling in a voice/data mode → release MOX immediately, no
+///     hang. Voice modes don't need an inter-character bridge and Thetis /
+///     deskHPSDR behave the same way; applying the hang unconditionally
+///     stretched every SSB TX→RX transition by 250 ms (issue #870).
 ///   • hang elapsed AND inbound still low AND <c>_owned</c> → release MOX.
 ///   • UI/TCI/trip drops MOX externally → <c>_owned</c> clears so the next
 ///     hang timer doesn't re-release what someone else changed.
@@ -47,8 +52,10 @@ public sealed class ExternalPttService : IHostedService, IDisposable
     // CW operators expect TX to bridge inter-character spaces. 250 ms matches
     // Thetis's default CW hang — long enough for a ~25 wpm character gap
     // (~80 ms) plus margin, short enough that releasing a straight key feels
-    // immediate. Not configurable yet; if operators ask for a knob it lives
-    // on the per-mode DSP settings panel alongside the CW pitch.
+    // immediate. CW-modes only: voice / data modes release MOX on the falling
+    // edge with no hang (issue #870). Not configurable yet; if operators ask
+    // for a knob it lives on the per-mode DSP settings panel alongside the CW
+    // pitch.
     private static readonly TimeSpan HangTime = TimeSpan.FromMilliseconds(250);
 
     /// <summary>Read-only hang time surfaced to the UI ("Hang: 250 ms") and the
@@ -315,10 +322,23 @@ public sealed class ExternalPttService : IHostedService, IDisposable
 
     private void HandleFalling()
     {
-        // Arm or re-arm the single-shot hang timer. If we don't own the MOX
-        // (UI is driving) the eventual fire will short-circuit via _owned=false
-        // — but we still arm so a subsequent UI-release after the external key
-        // returns to the steady "external is low, _owned is false" state.
+        // Voice / data modes: release MOX immediately on the falling edge.
+        // The hang exists to bridge CW inter-character spaces; applying it in
+        // SSB / AM / FM / DIG stretched every TX→RX transition by 250 ms,
+        // including the external PTT and amplifier sequencing lines that
+        // mirror the host MOX state (issue #870). Thetis and deskHPSDR both
+        // drop on the edge in non-CW modes.
+        if (!IsCwMode(_radio.Snapshot().Mode))
+        {
+            ReleaseOwnedMox();
+            return;
+        }
+
+        // CW: arm or re-arm the single-shot hang timer. If we don't own the
+        // MOX (UI is driving) the eventual fire will short-circuit via
+        // _owned=false — but we still arm so a subsequent UI-release after the
+        // external key returns to the steady "external is low, _owned is
+        // false" state.
         var timer = _hangTimer;
         if (timer is null)
         {
@@ -326,6 +346,29 @@ public sealed class ExternalPttService : IHostedService, IDisposable
             _hangTimer = timer;
         }
         timer.Change(HangTime, Timeout.InfiniteTimeSpan);
+    }
+
+    // Drop our hardware-owned MOX claim without going through the hang timer.
+    // Called from HandleFalling on the RX thread (voice modes) so the
+    // TrySetMox side-effects (broadcast, DSP pipeline) get pushed off the hot
+    // path via Task.Run — the same pattern HandleRising uses for the takeover.
+    private void ReleaseOwnedMox()
+    {
+        bool releaseNow;
+        lock (_sync) { releaseNow = _owned; _owned = false; }
+        if (!releaseNow) return;
+
+        _ = Task.Run(() =>
+        {
+            if (_tx.TrySetMox(false, MoxSource.Hardware, out var err))
+            {
+                _log.LogInformation("externalPtt.release.applied");
+            }
+            else
+            {
+                _log.LogWarning("externalPtt.release.rejected reason={Reason}", err);
+            }
+        });
     }
 
     private void OnHangElapsed(object? _)

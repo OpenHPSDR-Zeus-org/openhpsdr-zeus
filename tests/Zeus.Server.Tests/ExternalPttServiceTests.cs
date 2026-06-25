@@ -9,10 +9,13 @@
 // These tests drive the SHARED debounce/hang/_owned engine through the P1 and
 // P2 entry-point seams and assert:
 //   • P2 PttIn rising → MOX-on with MoxSource.Hardware.
-//   • P2 PttIn falling → 250 ms hang → MOX-off.
-//   • P1 path behaviour unchanged (rising→MOX, falling→hang→off).
+//   • P2 PttIn falling in a CW mode → 250 ms hang → MOX-off.
+//   • P2 PttIn falling in a voice / data mode → immediate MOX-off (issue
+//     #870): the hang exists to bridge CW inter-character gaps and must NOT
+//     stretch SSB / AM / FM / DIG TX→RX transitions.
+//   • P1 path behaviour unchanged (rising→MOX, falling→hang/immediate→off).
 //   • The lamp tracks the raw input per protocol.
-//   • A re-key inside the hang window cancels the release (CW inter-char gap).
+//   • A re-key inside the hang window (CW) cancels the release.
 //   • Hardware can never drop a UI/CWX-owned MOX (arbitration preserved → PS
 //     keying untouched).
 //   • The Enable gate stops MOX promotion but the lamp still tracks the input.
@@ -139,9 +142,10 @@ public class ExternalPttServiceTests : IDisposable
     }
 
     [Fact]
-    public void P2_PttInFalling_HoldsForHang_ThenReleases()
+    public void P2_PttInFalling_CwMode_HoldsForHang_ThenReleases()
     {
         using var h = new Harness(_dbPath, _pttDbPath);
+        h.Radio.SetMode(RxMode.CWU);
 
         h.Service.TestP2Telemetry(Ptt(true));
         Assert.True(WaitFor(() => h.Tx.IsMoxOn));
@@ -157,9 +161,32 @@ public class ExternalPttServiceTests : IDisposable
     }
 
     [Fact]
-    public void P2_ReKeyInsideHang_CancelsRelease()
+    public void P2_PttInFalling_VoiceMode_ReleasesImmediately()
+    {
+        // Issue #870: in SSB / AM / FM / DIG the hang must NOT apply — the
+        // operator wants TX→RX (and the sequenced external PTT line) to drop
+        // on the edge, the same way Thetis and deskHPSDR behave. Default mode
+        // on a fresh harness is USB so no SetMode call is needed; this also
+        // exercises the post-fix default.
+        using var h = new Harness(_dbPath, _pttDbPath);
+        Assert.Equal(RxMode.USB, h.Radio.Snapshot().Mode);
+
+        h.Service.TestP2Telemetry(Ptt(true));
+        Assert.True(WaitFor(() => h.Tx.IsMoxOn));
+
+        h.Service.TestP2Telemetry(Ptt(false));
+        // No hang in voice modes — MOX must drop without waiting 250 ms.
+        Assert.True(WaitFor(() => !h.Tx.IsMoxOn, timeoutMs: 200),
+            "voice-mode falling edge must release MOX without the CW hang");
+        Assert.Null(h.Tx.MoxOwner);
+        Assert.False(h.Service.IsKeyed);
+    }
+
+    [Fact]
+    public void P2_ReKeyInsideHang_CwMode_CancelsRelease()
     {
         using var h = new Harness(_dbPath, _pttDbPath);
+        h.Radio.SetMode(RxMode.CWU);
 
         h.Service.TestP2Telemetry(Ptt(true));
         Assert.True(WaitFor(() => h.Tx.IsMoxOn));
@@ -191,9 +218,10 @@ public class ExternalPttServiceTests : IDisposable
     }
 
     [Fact]
-    public void P1_PttInRising_KeysMox_WithHardwareSource_Unchanged()
+    public void P1_PttInRising_CwMode_KeysMox_WithHardwareSource_Unchanged()
     {
         using var h = new Harness(_dbPath, _pttDbPath);
+        h.Radio.SetMode(RxMode.CWU);
 
         h.Service.TestRawPttP1(true);
 
@@ -204,6 +232,24 @@ public class ExternalPttServiceTests : IDisposable
         h.Service.TestRawPttP1(false);
         Assert.True(h.Tx.IsMoxOn, "P1 MOX dropped before the hang elapsed");
         Assert.True(WaitFor(() => !h.Tx.IsMoxOn, timeoutMs: 2000));
+    }
+
+    [Fact]
+    public void P1_PttInFalling_VoiceMode_ReleasesImmediately()
+    {
+        // Mirror of the P2 voice-mode test through the P1 entry-point seam:
+        // a footswitch release in SSB must drop MOX on the edge so the
+        // external PTT / amplifier sequencing lines drop with it (issue #870).
+        using var h = new Harness(_dbPath, _pttDbPath);
+        Assert.Equal(RxMode.USB, h.Radio.Snapshot().Mode);
+
+        h.Service.TestRawPttP1(true);
+        Assert.True(WaitFor(() => h.Tx.IsMoxOn));
+
+        h.Service.TestRawPttP1(false);
+        Assert.True(WaitFor(() => !h.Tx.IsMoxOn, timeoutMs: 200),
+            "voice-mode P1 falling edge must release MOX without the CW hang");
+        Assert.Null(h.Tx.MoxOwner);
     }
 
     [Fact]
