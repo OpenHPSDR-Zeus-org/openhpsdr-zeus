@@ -74,6 +74,7 @@ import { FreeDvStationsPanel } from './panels/FreeDvStationsPanel';
 import { SpaceWeatherPanel } from './panels/SpaceWeatherPanel';
 import { UrlEmbedPanel } from './panels/UrlEmbedPanel';
 import { ChatPanel } from './panels/ChatPanel';
+import { LightningMapPanel } from './panels/LightningMapPanel';
 
 export type PanelCategory =
   | 'spectrum'
@@ -527,6 +528,19 @@ export const PANELS: Record<string, PanelDef> = {
     // Wants the whole workspace — it's a full dashboard embedded as an iframe.
     minW: 8,
     minH: 16,
+  },
+  lightning: {
+    id: 'lightning',
+    name: 'Lightning Map',
+    category: 'tools',
+    tags: ['lightning', 'strikes', 'storm', 'qrn', 'noise', 'blitzortung', 'thunderstorm', 'weather', 'map', 'realtime'],
+    component: LightningMapPanel,
+    // Leaflet map + a canvas strike overlay that reads container pixels every
+    // frame to reproject strikes — must render native (no CSS-transform scale),
+    // exactly like the Azimuth / HamClock map tiles.
+    fillNative: true,
+    minW: 6,
+    minH: 10,
   },
   spacewx: {
     id: 'spacewx',
