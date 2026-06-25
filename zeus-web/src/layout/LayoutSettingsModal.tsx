@@ -3,16 +3,25 @@
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
-// LayoutSettingsModal — edit the presentation metadata of a NamedLayout.
-// Replaces the double-click-to-rename interaction in the LeftLayoutBar with
-// a small modal that captures: short label (what shows under the icon), the
-// icon itself (an emoji selected from a quick palette or freely typed), and
-// a longer description used as the hover tooltip.
+// LayoutSettingsModal — create or manage saved layouts.
 //
-// The same modal is reused for "create new layout" — when no layout id is
-// supplied the parent treats Save as addLayout(name, {icon, description}).
+// Two shapes:
+//   • Create mode (no `manager` prop): a simple form that captures a label,
+//     icon, description, and lock state for a brand-new blank layout. Used by
+//     the LeftLayoutBar "+" slot.
+//   • Manager mode (`manager` prop supplied): the form is fronted by a "Saved
+//     layouts" dropdown listing every layout for the radio. Picking one
+//     switches the workspace to it and re-targets the editor. From here the
+//     operator gets the full CRUD set:
+//       - Save        → write the edited label/icon/description/lock to the
+//                        selected layout (its panel arrangement is already the
+//                        live one, so Save also commits the current layout).
+//       - Save as new → copy the CURRENT panel arrangement into a brand-new
+//                        saved layout under a new name.
+//       - Delete      → remove the selected layout (two-click confirm).
+//     Renaming is just editing the label and pressing Save.
 
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { useDialogFocusTrap } from './useDialogFocusTrap';
 
@@ -31,12 +40,39 @@ export interface LayoutSettingsValue {
   locked: boolean;
 }
 
+/** One entry in the manager dropdown. */
+export interface LayoutManagerEntry {
+  id: string;
+  name: string;
+  icon?: string;
+  locked: boolean;
+}
+
+/** Manager-mode controls. When supplied the modal renders the saved-layouts
+ *  dropdown plus the Delete / Save-as-new affordances. */
+export interface LayoutManagerControls {
+  /** All saved layouts for the current radio, in display order. */
+  layouts: LayoutManagerEntry[];
+  /** The layout currently being edited (also the active workspace). */
+  selectedId: string;
+  /** Switch to / edit another saved layout. */
+  onSelect: (id: string) => void;
+  /** Copy the current panel arrangement into a new saved layout. */
+  onSaveAsNew: (value: LayoutSettingsValue) => void;
+  /** Delete the selected layout. */
+  onDelete: (id: string) => void;
+  /** False when only one layout remains (the last can't be deleted). */
+  canDelete: boolean;
+}
+
 interface LayoutSettingsModalProps {
-  /** Modal title. "Layout settings" for edit, "New layout" for create. */
+  /** Modal title. "Layout settings" for manage, "New layout" for create. */
   title: string;
   initial: LayoutSettingsValue;
   onSave: (value: LayoutSettingsValue) => void;
   onClose: () => void;
+  /** When supplied, the modal is a saved-layouts manager (dropdown + CRUD). */
+  manager?: LayoutManagerControls;
 }
 
 export function LayoutSettingsModal({
@@ -44,12 +80,16 @@ export function LayoutSettingsModal({
   initial,
   onSave,
   onClose,
+  manager,
 }: LayoutSettingsModalProps) {
   const titleId = useId();
   const [name, setName] = useState(initial.name);
   const [icon, setIcon] = useState(initial.icon);
   const [description, setDescription] = useState(initial.description);
   const [locked, setLocked] = useState(initial.locked);
+  // Manager-only transient state.
+  const [newName, setNewName] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const nameRef = useRef<HTMLInputElement | null>(null);
 
@@ -58,6 +98,20 @@ export function LayoutSettingsModal({
     initialFocusRef: nameRef,
     onClose,
   });
+
+  // When the operator picks a different layout from the dropdown, the parent
+  // re-derives `initial` from the newly-selected layout — resync the editable
+  // fields to it. Keyed on the selection id so it never clobbers in-progress
+  // typing (the stored values only change on Save).
+  useEffect(() => {
+    setName(initial.name);
+    setIcon(initial.icon);
+    setDescription(initial.description);
+    setLocked(initial.locked);
+    setNewName('');
+    setConfirmDelete(false);
+    // Resync only when the managed selection changes, not on every keystroke.
+  }, [manager?.selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSave = () => {
     const trimmedName = name.trim();
@@ -68,6 +122,18 @@ export function LayoutSettingsModal({
       description: description.trim(),
       locked,
     });
+  };
+
+  const commitSaveAsNew = () => {
+    const trimmed = newName.trim();
+    if (!trimmed || !manager) return;
+    manager.onSaveAsNew({
+      name: trimmed,
+      icon: icon.trim(),
+      description: description.trim(),
+      locked,
+    });
+    setNewName('');
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -113,6 +179,28 @@ export function LayoutSettingsModal({
         </div>
 
         <div className="layout-settings-body">
+          {manager && (
+            <label className="layout-settings-field">
+              <span className="layout-settings-field-label">Saved layouts</span>
+              <select
+                className="layout-settings-input layout-settings-select"
+                value={manager.selectedId}
+                onChange={(e) => manager.onSelect(e.target.value)}
+                aria-label="Saved layouts"
+              >
+                {manager.layouts.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {(l.icon ? `${l.icon}  ` : '') + l.name}
+                    {l.locked ? '  🔒' : ''}
+                  </option>
+                ))}
+              </select>
+              <span className="layout-settings-field-hint">
+                Pick a layout to switch the workspace to it and edit it below.
+              </span>
+            </label>
+          )}
+
           <div className="layout-settings-preview" aria-hidden>
             <div className="layout-settings-preview-tile">
               <span className="layout-settings-preview-icon">
@@ -137,7 +225,7 @@ export function LayoutSettingsModal({
               aria-label="Layout label"
             />
             <span className="layout-settings-field-hint">
-              Short — appears below the icon.
+              Short — appears below the icon. Edit it and Save to rename.
             </span>
           </label>
 
@@ -224,14 +312,70 @@ export function LayoutSettingsModal({
               </span>
             </span>
           </label>
+
+          {manager && (
+            <div className="layout-settings-field layout-settings-saveas">
+              <span className="layout-settings-field-label">
+                Save as new layout
+              </span>
+              <div className="layout-settings-icon-row">
+                <input
+                  type="text"
+                  className="layout-settings-input"
+                  value={newName}
+                  maxLength={24}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      commitSaveAsNew();
+                    }
+                  }}
+                  placeholder="New layout name"
+                  aria-label="New layout name"
+                />
+                <button
+                  type="button"
+                  className="btn ghost sm"
+                  disabled={!newName.trim()}
+                  onClick={commitSaveAsNew}
+                  title="Copy the current panel arrangement into a new saved layout"
+                >
+                  Create
+                </button>
+              </div>
+              <span className="layout-settings-field-hint">
+                Copies the current panel arrangement into a new saved layout.
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="layout-settings-actions">
-          <button
-            type="button"
-            className="btn ghost"
-            onClick={onClose}
-          >
+          {manager && (
+            <button
+              type="button"
+              className="btn ghost layout-settings-delete"
+              disabled={!manager.canDelete}
+              onClick={() => {
+                if (!confirmDelete) {
+                  setConfirmDelete(true);
+                  return;
+                }
+                manager.onDelete(manager.selectedId);
+              }}
+              onBlur={() => setConfirmDelete(false)}
+              title={
+                manager.canDelete
+                  ? 'Delete this saved layout'
+                  : 'The last layout can’t be deleted'
+              }
+            >
+              {confirmDelete ? 'Confirm delete?' : 'Delete'}
+            </button>
+          )}
+          <span className="layout-settings-actions-spacer" />
+          <button type="button" className="btn ghost" onClick={onClose}>
             Cancel
           </button>
           <button

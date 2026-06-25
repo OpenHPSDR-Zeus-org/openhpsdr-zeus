@@ -1363,9 +1363,33 @@
 }
 .layout-settings-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
   padding: 10px 16px;
   border-top: 1px solid var(--panel-border);
   background: var(--bg-0);
+}
+/* Pushes the trailing Cancel/Save cluster to the right while Delete stays
+   pinned left in the manager footer. */
+.layout-settings-actions-spacer {
+  flex: 1 1 auto;
+}
+/* Native select styled to match the text inputs. */
+.layout-settings-select {
+  cursor: pointer;
+  appearance: auto;
+}
+/* "Save as new" group, set off from the metadata fields by a hairline rule. */
+.layout-settings-saveas {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--panel-border);
+}
+/* Delete reads as a destructive action — TX red on hover/focus, no palette
+   change to chrome at rest. */
+.layout-settings-delete:not(:disabled):hover,
+.layout-settings-delete:not(:disabled):focus-visible {
+  border-color: var(--tx);
+  color: var(--tx);
 }
