@@ -43,6 +43,32 @@ their normal layout.
   gets the same shell with a WSPR-appropriate decode table + map and no QSO
   state machine (beacon/spot oriented).
 
+## Mode engagement — what "selecting FT8" does (KB2UKA)
+
+"FT8" appears in the mode selector alongside USB/LSB/CW/etc. Selecting it:
+1. Under the hood, sets the radio to **USB demod** (FT8/FT4/WSPR are USB-audio
+   modes) — the operator never sees "set USB," they just pick FT8.
+2. **Auto-tunes the dial to the band's standard calling frequency** for the
+   current band, and shows it in the workspace's own VFO. Standard FT8 dial
+   frequencies (USB), auto-populated per band:
+
+   | Band | FT8 (MHz) | Band | FT8 (MHz) |
+   |---|---|---|---|
+   | 160m | 1.840 | 17m | 18.100 |
+   | 80m | 3.573 | 15m | 21.074 |
+   | 60m | 5.357 | 12m | 24.915 |
+   | 40m | 7.074 | 10m | 28.074 |
+   | 30m | 10.136 | 6m | 50.313 |
+   | 20m | 14.074 | 2m | 144.174 |
+
+   (FT4 and WSPR have their own per-band tables; WSPR e.g. 20m 14.0956.)
+3. Spawns/focuses the dedicated workspace tab (above) and starts the
+   `Ft8Service` decode pipeline on the RX audio.
+4. Leaving FT8 mode restores the prior mode + the operator's normal layout.
+
+So: **click FT8 → you're here, tuned, decoding — zero setup.** Changing band
+while in FT8 re-populates the dial to that band's FT8 frequency.
+
 ## Layout (from the target mockup)
 
 Three columns under a top status strip; status bar across the bottom.
