@@ -4,7 +4,7 @@
 **Branch:** `feature/extract-rf2k-plugin`
 **Removal commit:** `acd1a97` — *refactor(rf2k): remove RF2K-S amplifier integration from Zeus core*
 **Plugin id (replacement):** `com.openhpsdr.zeus.plugins.rf2k`
-**Plugin source:** [`openhpsdr-zeus-plugins`](https://github.com/Kb2uka/openhpsdr-zeus-plugins) repo, `samples/Rf2k/` (branch `feature/rf2k-plugin` at the time of writing).
+**Plugin source:** [`openhpsdr-zeus-plugins`](https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins) repo, `samples/Rf2k/` (branch `feature/rf2k-plugin` at the time of writing).
 
 ## What changed
 

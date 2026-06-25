@@ -16,7 +16,7 @@ namespace Zeus.Plugins.Host.Tests;
 /// and have it appear under <c>/api/plugins</c> with a working backend.
 ///
 /// Reference implementations live in the separate registry repo at
-/// <c>Kb2uka/openhpsdr-zeus-plugins/samples/</c>. These tests build
+/// <c>OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins/samples/</c>. These tests build
 /// shape-equivalent fixtures via Roslyn so the integration is
 /// exercised without pulling the registry repo into Zeus's reference
 /// graph.

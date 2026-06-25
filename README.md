@@ -40,7 +40,7 @@ long-running project a lot of the DSP heritage traces back to.
   — to interact with the map (pan / zoom), **press and hold the `M` key**.
   The experience isn't ideal yet and will improve over time.
 - **Radio discovery** on the LAN (Protocol-1 + Protocol-2 broadcast, in parallel)
-- **Plugin system** — operators install backend / UI / audio plugins from a curated registry or by URL. See [`docs/plugins/author-guide.md`](docs/plugins/author-guide.md); registry repo at [`Kb2uka/openhpsdr-zeus-plugins`](https://github.com/Kb2uka/openhpsdr-zeus-plugins).
+- **Plugin system** — operators install backend / UI / audio plugins from a curated registry or by URL. See [`docs/plugins/author-guide.md`](docs/plugins/author-guide.md); registry repo at [`OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins`](https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins).
 
 ## At a glance
 

@@ -112,7 +112,7 @@ public class HttpRegistryClientTests
     [Fact]
     public void DefaultSourceUrl_PointsAtBrianbruffRegistryRepo()
     {
-        Assert.Contains("Kb2uka/openhpsdr-zeus-plugins", HttpRegistryClient.DefaultUrl);
+        Assert.Contains("OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins", HttpRegistryClient.DefaultUrl);
         Assert.StartsWith("https://", HttpRegistryClient.DefaultUrl);
     }
 
