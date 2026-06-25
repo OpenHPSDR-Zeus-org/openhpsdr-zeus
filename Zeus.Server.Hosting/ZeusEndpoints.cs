@@ -1258,6 +1258,23 @@ public static class ZeusEndpoints
             return Results.Ok(r.SetRadioLo(req.Hz));
         });
 
+        // Per-receiver DDC-centre pan. Index 0 is RX1's hardware NCO (delegates to
+        // /api/radio/lo's setter); index >= 1 recentres a secondary DDC (the
+        // client keep-in-view autopan's analogue of SetRadioLo). No-op for P1
+        // secondaries (shared NCO) / CTUN-off / disabled — see RequestSecondaryLo.
+        app.MapPost("/api/receivers/{index:int}/lo", (int index, RadioLoSetRequest req, RadioService r, DspPipelineService pipe) =>
+        {
+            if (req.Hz < 0 || req.Hz > 60_000_000)
+            {
+                log.LogInformation("api.receivers.lo rejected index={Index} hz={Hz}", index, req.Hz);
+                return Results.BadRequest(new { error = "hz out of range [0, 60000000]" });
+            }
+            log.LogInformation("api.receivers.lo index={Index} hz={Hz}", index, req.Hz);
+            if (index <= 0) return Results.Ok(r.SetRadioLo(req.Hz));
+            pipe.RequestSecondaryLo(index, req.Hz);
+            return Results.Ok(r.Snapshot());
+        });
+
         // Toggle CTUN (click-tune / centred tuning). When enabled, panadapter
         // clicks move only the dial and leave the hardware NCO frozen so the
         // operator can tune off-centre; TX retunes to the dial on key-down.

@@ -513,7 +513,7 @@ function ReportSection({
             disabled={!canEnable || saving}
             onChange={(e) => persist({ reportEnabled: e.target.checked })}
           />
-          On the map
+          Enable
         </label>
 
         {reporting && (
