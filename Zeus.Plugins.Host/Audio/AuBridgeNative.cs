@@ -21,10 +21,10 @@ namespace Zeus.Plugins.Host.Audio;
 ///   argument carries the AU identity string
 ///   <c>"type:subtype:manufacturer"</c> (four-char codes), e.g.
 ///   <c>"aufx:lpas:appl"</c> for Apple's AULowpass.</item>
-///   <item>Editor methods are AUv2-out-of-scope for v1: <c>EditorOpen</c>
-///   returns <see cref="VstBridgeStatus.NotImplemented"/>, and
-///   <c>EditorIsOpen</c> returns false — matching the non-Windows VST3
-///   behaviour.</item>
+///   <item>Editor methods host the AU's native GUI (ABI v2): <c>EditorOpen</c>
+///   opens the vendor Cocoa view (or an AUGenericView fallback) in a
+///   bridge-owned NSWindow on the main thread, <c>EditorClose</c> tears it
+///   down, and <c>EditorIsOpen</c> reports the live window state.</item>
 /// </list>
 /// </summary>
 public sealed partial class AuBridgeNative : IVstBridgeNative
@@ -113,13 +113,35 @@ public sealed partial class AuBridgeNative : IVstBridgeNative
         return result;
     }
 
-    // AUv2 Cocoa-view editor hosting is a separate, later effort. v1 reports
-    // "not implemented" exactly like the VST3 bridge does off Windows.
-    public int EditorOpen(nint handle, string title) => VstBridgeStatus.NotImplemented;
+    // AUv2 Cocoa-view editor hosting (ABI v2). The native bridge opens the AU's
+    // vendor GUI — or an AUGenericView parameter editor as a fallback — in a
+    // bridge-owned NSWindow on the main thread. zau_status_t mirrors
+    // VstBridgeStatus value-for-value (Ok=0 … NotImplemented=8 … Other=255), so
+    // the native int is already a VstBridgeStatus and is returned verbatim. The
+    // DllNotFound/EntryPointNotFound guards mirror EnumerateEffects: on
+    // non-macOS (or an old/absent dylib) the library never resolves, so each
+    // call degrades to NotImplemented (open/close) or false (is-open) instead of
+    // throwing — the same graceful-degrade contract the VST3 bridge honours.
+    public int EditorOpen(nint handle, string title)
+    {
+        try { return zau_editor_open(handle, title); }
+        catch (DllNotFoundException) { return VstBridgeStatus.NotImplemented; }
+        catch (EntryPointNotFoundException) { return VstBridgeStatus.NotImplemented; }
+    }
 
-    public int EditorClose(nint handle) => VstBridgeStatus.Ok;
+    public int EditorClose(nint handle)
+    {
+        try { return zau_editor_close(handle); }
+        catch (DllNotFoundException) { return VstBridgeStatus.NotImplemented; }
+        catch (EntryPointNotFoundException) { return VstBridgeStatus.NotImplemented; }
+    }
 
-    public bool EditorIsOpen(nint handle) => false;
+    public bool EditorIsOpen(nint handle)
+    {
+        try { return zau_editor_is_open(handle) != 0; }
+        catch (DllNotFoundException) { return false; }
+        catch (EntryPointNotFoundException) { return false; }
+    }
 
     // --- P/Invoke imports ---------------------------------------------------
 
@@ -143,6 +165,15 @@ public sealed partial class AuBridgeNative : IVstBridgeNative
 
     [LibraryImport(LibraryName, EntryPoint = "zau_enumerate_effects")]
     private static partial int zau_enumerate_effects(byte[]? buffer, int bufferLen, out int outLen);
+
+    [LibraryImport(LibraryName, EntryPoint = "zau_editor_open", StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int zau_editor_open(nint handle, string title);
+
+    [LibraryImport(LibraryName, EntryPoint = "zau_editor_close")]
+    private static partial int zau_editor_close(nint handle);
+
+    [LibraryImport(LibraryName, EntryPoint = "zau_editor_is_open")]
+    private static partial int zau_editor_is_open(nint handle);
 }
 
 /// <summary>
@@ -152,6 +183,7 @@ public sealed partial class AuBridgeNative : IVstBridgeNative
 /// </summary>
 public static class AuBridgeAbi
 {
-    // v1: init / load / process / set_param / unload / shutdown (no editor).
-    public const int Current = 1;
+    // v1: init / load / process / set_param / unload / shutdown.
+    // v2: + editor hosting (zau_editor_open / zau_editor_close / zau_editor_is_open).
+    public const int Current = 2;
 }

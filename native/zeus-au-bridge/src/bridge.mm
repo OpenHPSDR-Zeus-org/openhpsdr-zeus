@@ -30,14 +30,45 @@
 #import <CoreFoundation/CoreFoundation.h>
 #import <Foundation/Foundation.h>
 
+// Editor hosting (AUv2 Cocoa view + AUGenericView fallback in an NSWindow) is
+// macOS-only and pulls in AppKit + CoreAudioKit. The whole bridge already only
+// compiles on Apple, but per the bridge's hard cross-platform rule every new
+// editor code path is explicitly guarded so the intent is unmistakable and a
+// hypothetical non-Apple compile of this .mm never touches AppKit.
+#if defined(__APPLE__)
+#import <AppKit/AppKit.h>
+#import <CoreAudioKit/CoreAudioKit.h>   // AUGenericView (always-works fallback)
+#import <AudioUnit/AUCocoaUIView.h>     // AUCocoaUIBase protocol (vendor views)
+#endif
+
 #include <atomic>
 #include <cstring>
+#include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
 namespace {
 
 std::atomic<int> g_init_count{0};
+
+#if defined(__APPLE__)
+// --- Live-handle registry (macOS-only; guards the editor's fire-and-forget
+// main-queue window build against a use-after-free). zau_editor_open dispatches
+// the AppKit window build to the main thread ASYNCHRONOUSLY and returns
+// immediately; if the operator then unloads the plugin before the run loop
+// drains that block, zau_unload would teardown+delete the LoadedAu while the
+// queued block still holds the raw pointer, and draining it later would
+// dereference freed memory. Every load registers its handle here and every
+// unload removes it UNDER THE LOCK before delete; the queued build re-validates
+// membership (holding the lock for its whole body) and bails if the handle is
+// gone — so a freed handle is never dereferenced. Lookups compare the pointer
+// VALUE only (a stale key is compared, never dereferenced), which is safe even
+// if the pointee has already been freed. ---
+struct LoadedAu; // forward decl: only the pointer type is needed here
+std::mutex g_registry_mutex;
+std::set<LoadedAu*> g_registry;
+#endif
 
 // Parse one four-character code from up to 4 bytes of `s`. Short codes are
 // space-padded on the right (the CoreAudio convention). Returns the OSType
@@ -73,16 +104,32 @@ static bool parse_identifier(const char* identifier,
 struct LoadedAu {
     AudioComponentInstance unit{nullptr};
 
+    // `channels` is the CALLER-facing channel count (the .NET contract: 1 or
+    // 2). `au_channels` is what the AU itself was negotiated to run at —
+    // usually equal, but Waves ships fixed mono- or stereo-ONLY components
+    // that reject a mismatched stream format with -10868
+    // (kAudioUnitErr_FormatNotSupported). When they differ the realtime path
+    // up/down-mixes between the two through au_out_scratch (no allocation).
     int32_t channels{1};
+    int32_t au_channels{1};
     int32_t sample_rate{48000};
     int32_t block_size{256};
 
     // Input buffer-list reused across render calls. Channel pointers are
     // re-pointed at the caller's planar buffer on every zau_process call;
-    // we never copy. Storage is sized at load.
+    // we never copy. Storage is sized at load for au_channels buffers.
     std::vector<uint8_t> input_abl_storage; // AudioBufferList + N AudioBuffer
     const float* current_input{nullptr};    // set per process() call
     int32_t      current_frames{0};
+
+    // Realtime up/down-mix scratch, sized once at load. au_out_scratch holds
+    // the AU's au_channels-wide render output before it is mixed to the
+    // caller's channel count; au_in_scratch holds the mono average when a
+    // multi-channel caller feeds a mono-only AU. Both stay empty (and the
+    // path stays zero-copy) when au_channels == channels. Touched solely by
+    // the audio thread.
+    std::vector<float> au_out_scratch;
+    std::vector<float> au_in_scratch;
 
     // Monotonic host sample-time cursor handed to AudioUnitRender. It MUST
     // advance by `frames` every block: time-based AUs (reverb / delay /
@@ -93,6 +140,23 @@ struct LoadedAu {
     // like AULowpass is unaffected. Owned by the realtime thread; the AU
     // serialises process/unload via the handle so no atomics are needed.
     Float64 render_sample_time{0.0};
+
+#if defined(__APPLE__)
+    // --- Editor state. Touched ONLY on the main thread (where all AppKit
+    // calls run) except `editor_open`, which is a lock-free flag the .NET
+    // control thread polls via zau_editor_is_open. ARC is OFF (see
+    // CMakeLists), so every Obj-C object here is manually retained on store
+    // and released on teardown; the NSWindow has releasedWhenClosed = NO so
+    // the bridge owns its lifetime explicitly. `id` typed to avoid leaking
+    // AppKit/CoreAudioKit types into the non-editor struct surface. ---
+    NSWindow* editor_window{nullptr}; // bridge-owned host window
+    NSView*   editor_view{nullptr};   // vendor Cocoa view or AUGenericView
+    id        editor_factory{nil};    // id<AUCocoaUIBase>; nil for AUGenericView
+    NSBundle* editor_bundle{nullptr}; // kept loaded while a vendor view lives
+    id        editor_delegate{nil};   // ZauEditorWindowDelegate (NSWindowDelegate)
+    std::atomic<bool> editor_open{false};
+    std::string editor_title;
+#endif
 
     AudioBufferList* input_abl() {
         return reinterpret_cast<AudioBufferList*>(input_abl_storage.data());
@@ -111,15 +175,43 @@ static OSStatus zau_input_callback(void* inRefCon,
     auto* p = static_cast<LoadedAu*>(inRefCon);
     if (!p || !ioData || !p->current_input) return kAudioUnitErr_InvalidParameter;
 
-    const int ch = p->channels;
-    const UInt32 frames = inNumberFrames;
-    for (int c = 0; c < ch && c < static_cast<int>(ioData->mNumberBuffers); ++c) {
-        // Non-interleaved: one channel per buffer. Point at the caller's
-        // planar slice (channel c starts at index c*frames).
-        ioData->mBuffers[c].mNumberChannels = 1;
-        ioData->mBuffers[c].mDataByteSize   = frames * sizeof(float);
-        ioData->mBuffers[c].mData =
-            const_cast<float*>(p->current_input + static_cast<size_t>(c) * p->current_frames);
+    const int auch  = p->au_channels;             // channels the AU expects
+    const int cch   = p->channels;                // channels the caller gave
+    const UInt32 frames = inNumberFrames;          // == p->current_frames
+    const size_t stride = static_cast<size_t>(p->current_frames);
+    const float* in = p->current_input;            // caller planar, stride `stride`
+    const int nbuf  = static_cast<int>(ioData->mNumberBuffers);
+
+    if (auch == cch) {
+        // Matched count — zero-copy fast path. Point each AU input buffer at
+        // the caller's planar slice (channel c starts at c*stride).
+        for (int c = 0; c < auch && c < nbuf; ++c) {
+            ioData->mBuffers[c].mNumberChannels = 1;
+            ioData->mBuffers[c].mDataByteSize   = frames * sizeof(float);
+            ioData->mBuffers[c].mData = const_cast<float*>(in + static_cast<size_t>(c) * stride);
+        }
+    } else if (cch == 1) {
+        // Up-mix mono caller -> multi-channel AU: every AU input buffer reads
+        // the SAME mono slice (L=R). Read-only aliasing, no copy.
+        for (int c = 0; c < auch && c < nbuf; ++c) {
+            ioData->mBuffers[c].mNumberChannels = 1;
+            ioData->mBuffers[c].mDataByteSize   = frames * sizeof(float);
+            ioData->mBuffers[c].mData = const_cast<float*>(in);
+        }
+    } else {
+        // Down-mix multi-channel caller -> mono AU (auch == 1): average the
+        // caller channels into the pre-sized mono input scratch.
+        float* dst = p->au_in_scratch.data();
+        for (UInt32 f = 0; f < frames; ++f) {
+            float acc = 0.0f;
+            for (int c = 0; c < cch; ++c) acc += in[static_cast<size_t>(c) * stride + f];
+            dst[f] = acc / static_cast<float>(cch);
+        }
+        if (nbuf > 0) {
+            ioData->mBuffers[0].mNumberChannels = 1;
+            ioData->mBuffers[0].mDataByteSize   = frames * sizeof(float);
+            ioData->mBuffers[0].mData = dst;
+        }
     }
     return noErr;
 }
@@ -138,6 +230,44 @@ static AudioStreamBasicDescription make_asbd(int channels, double sample_rate) {
     asbd.mChannelsPerFrame = static_cast<UInt32>(channels);
     asbd.mBitsPerChannel   = 8 * sizeof(float);
     return asbd;
+}
+
+// Does one AUChannelInfo entry permit running `count` channels in AND out?
+// A negative side (-1 "any", -2 "any, must match the other side") accepts any
+// count; a non-negative side accepts only an exact match. For our equal-in/out
+// insert-effect use this is sufficient: a wildcard entry ([-1,-1]) accepts the
+// caller's count, while a fixed entry ([2,2]) accepts only that count.
+static bool channel_entry_supports(const AUChannelInfo& e, int count) {
+    auto side_ok = [count](SInt16 v) { return v < 0 || v == static_cast<SInt16>(count); };
+    return side_ok(e.inChannels) && side_ok(e.outChannels);
+}
+
+// Negotiate the channel count the AU will actually run at. Waves ships
+// FIXED-channel components (separate mono/stereo variants) that report a rigid
+// kAudioUnitProperty_SupportedNumChannels and reject a mismatched stream
+// format with -10868 (kAudioUnitErr_FormatNotSupported). Apple AUs report
+// wildcards and accept whatever we set — which is why AUReverb2 always loads at
+// the caller's count and the Waves AUs do not. Strategy: honour the caller's
+// requested count if the AU supports it; otherwise prefer a stereo (2) fixed
+// layout, then mono (1); if the property is absent the AU is flexible and we
+// keep the caller's count (today's correct path for Apple AUs).
+static int negotiate_au_channels(AudioComponentInstance unit, int requested) {
+    UInt32 sz = 0;
+    OSStatus st = AudioUnitGetPropertyInfo(unit, kAudioUnitProperty_SupportedNumChannels,
+                                           kAudioUnitScope_Global, 0, &sz, nullptr);
+    if (st != noErr || sz < sizeof(AUChannelInfo))
+        return requested; // flexible / property absent — honour caller's count
+
+    int n = static_cast<int>(sz / sizeof(AUChannelInfo));
+    std::vector<AUChannelInfo> infos(static_cast<size_t>(n));
+    st = AudioUnitGetProperty(unit, kAudioUnitProperty_SupportedNumChannels,
+                              kAudioUnitScope_Global, 0, infos.data(), &sz);
+    if (st != noErr) return requested;
+
+    for (const auto& e : infos) if (channel_entry_supports(e, requested)) return requested;
+    for (const auto& e : infos) if (channel_entry_supports(e, 2)) return 2;
+    for (const auto& e : infos) if (channel_entry_supports(e, 1)) return 1;
+    return requested; // nothing matched — let the format set/initialise fail loudly
 }
 
 static void teardown(LoadedAu& p) {
@@ -176,15 +306,36 @@ static int do_load(LoadedAu& p, const char* identifier) {
     OSStatus st = AudioComponentInstanceNew(comp, &p.unit);
     if (st != noErr || !p.unit) { p.unit = nullptr; return ZAU_ACTIVATE_FAILED; }
 
-    // Set the non-interleaved float32 stream format on both scopes so the
-    // channel-major layout maps with no interleave shuffle.
-    AudioStreamBasicDescription asbd = make_asbd(p.channels, static_cast<double>(p.sample_rate));
+    // Negotiate the channel count the AU will actually run at. Fixed-channel
+    // AUs (e.g. Waves stereo-only HEQS/LA2S, mono-only LA2M) reject a
+    // mismatched stream format with -10868; honour the caller's count when the
+    // AU is flexible, otherwise adopt the AU's fixed layout and up/down-mix in
+    // the realtime path. `channels` stays the caller-facing count.
+    p.au_channels = negotiate_au_channels(p.unit, p.channels);
+
+    // Set the non-interleaved float32 stream format on both scopes (using the
+    // AU's negotiated channel count) so the channel-major layout maps with no
+    // interleave shuffle.
+    AudioStreamBasicDescription asbd = make_asbd(p.au_channels, static_cast<double>(p.sample_rate));
     st = AudioUnitSetProperty(p.unit, kAudioUnitProperty_StreamFormat,
                               kAudioUnitScope_Input, 0, &asbd, sizeof(asbd));
-    if (st != noErr) { teardown(p); return ZAU_ACTIVATE_FAILED; }
+    if (st != noErr) {
+        // Log what the AU rejected on the wire (control thread, not realtime):
+        // an OSStatus here is almost always -10868 (kAudioUnitErr_FormatNotSupported)
+        // from a channel-count mismatch the negotiation above could not resolve.
+        fprintf(stderr, "[zau] StreamFormat(input) rejected: OSStatus=%d "
+                "(req_ch=%d au_ch=%d)\n", (int)st, p.channels, p.au_channels);
+        teardown(p);
+        return ZAU_ACTIVATE_FAILED;
+    }
     st = AudioUnitSetProperty(p.unit, kAudioUnitProperty_StreamFormat,
                               kAudioUnitScope_Output, 0, &asbd, sizeof(asbd));
-    if (st != noErr) { teardown(p); return ZAU_ACTIVATE_FAILED; }
+    if (st != noErr) {
+        fprintf(stderr, "[zau] StreamFormat(output) rejected: OSStatus=%d "
+                "(req_ch=%d au_ch=%d)\n", (int)st, p.channels, p.au_channels);
+        teardown(p);
+        return ZAU_ACTIVATE_FAILED;
+    }
 
     // Bound the render block size so AudioUnitInitialize sizes internal
     // scratch for our worst case. Some AUs reject a slice larger than they
@@ -206,19 +357,233 @@ static int do_load(LoadedAu& p, const char* identifier) {
     if (st != noErr) { teardown(p); return ZAU_ACTIVATE_FAILED; }
 
     st = AudioUnitInitialize(p.unit);
-    if (st != noErr) { teardown(p); return ZAU_ACTIVATE_FAILED; }
+    if (st != noErr) {
+        fprintf(stderr, "[zau] AudioUnitInitialize failed: OSStatus=%d "
+                "(req_ch=%d au_ch=%d)\n", (int)st, p.channels, p.au_channels);
+        teardown(p);
+        return ZAU_ACTIVATE_FAILED;
+    }
 
-    // Pre-size the output AudioBufferList scratch: one AudioBuffer per
+    // Pre-size the render AudioBufferList scratch: one AudioBuffer per AU
     // channel (non-interleaved). AudioBufferList carries one mBuffers entry
-    // inline, so add (channels-1) more.
+    // inline, so add (au_channels-1) more.
     size_t ablBytes = sizeof(AudioBufferList) +
-                      (p.channels > 0 ? (p.channels - 1) : 0) * sizeof(AudioBuffer);
+                      (p.au_channels > 0 ? (p.au_channels - 1) : 0) * sizeof(AudioBuffer);
     p.input_abl_storage.assign(ablBytes, 0);
+
+    // Pre-size the up/down-mix scratch ONLY when the AU runs at a different
+    // channel count than the caller — the matched-count path stays zero-copy.
+    if (p.au_channels != p.channels) {
+        size_t n = static_cast<size_t>(p.au_channels) * static_cast<size_t>(p.block_size);
+        p.au_out_scratch.assign(n, 0.0f);
+        p.au_in_scratch.assign(n, 0.0f);
+    }
 
     return ZAU_OK;
 }
 
 } // namespace
+
+// ===========================================================================
+//  AUv2 editor hosting (macOS-only).
+//
+//  Hosts the AU's native GUI in a bridge-owned NSWindow: the vendor Cocoa view
+//  (kAudioUnitProperty_CocoaUI — what Waves and most third-party AUs ship) with
+//  CoreAudioKit's AUGenericView as the always-works fallback. ALL AppKit work
+//  runs on the process main thread (the desktop host's AppKit run loop); the
+//  realtime render path (zau_process / zau_input_callback) never touches any of
+//  this. ARC is OFF, so every Obj-C object is released by hand; the window has
+//  releasedWhenClosed = NO and the bridge owns its lifetime explicitly.
+// ===========================================================================
+#if defined(__APPLE__)
+
+// Run an AppKit block on the main thread. Inline when already there (the core
+// deadlock guard: a dispatch_sync to main from the main thread self-deadlocks).
+static void zau_run_on_main_sync(dispatch_block_t block) {
+    if ([NSThread isMainThread]) block();
+    else dispatch_sync(dispatch_get_main_queue(), block);
+}
+static void zau_run_on_main_async(dispatch_block_t block) {
+    if ([NSThread isMainThread]) block();
+    else dispatch_async(dispatch_get_main_queue(), block);
+}
+
+// Detach + release every editor-owned Obj-C object. MAIN THREAD ONLY. Uses
+// autorelease (not release) so it is safe to call from inside -windowWillose:
+// while AppKit is mid-close on the window or while `self` (the delegate) is the
+// running object — the actual deallocations defer to the end of the run loop.
+// Idempotent: nulls the struct pointers up front so a second call is a no-op.
+static void zau_editor_release_owned(LoadedAu* p) {
+    if (!p) return;
+    NSWindow* w   = p->editor_window;
+    NSView*   v   = p->editor_view;
+    id        fac = p->editor_factory;
+    NSBundle* b   = p->editor_bundle;
+    id        del = p->editor_delegate;
+
+    p->editor_window   = nullptr;
+    p->editor_view     = nullptr;
+    p->editor_factory  = nil;
+    p->editor_bundle   = nullptr;
+    p->editor_delegate = nil;
+    p->editor_open.store(false);
+
+    if (w) {
+        [w setDelegate:nil];     // stop further delegate callbacks
+        [w setContentView:nil];  // drop the window's retain on the view
+        [w autorelease];         // our +1 from alloc; deferred to run-loop end
+    }
+    if (v)   [v autorelease];
+    if (fac) [fac autorelease];
+    if (b)   [b autorelease];
+    if (del) [del autorelease];  // may be the running delegate — autorelease
+}
+
+// NSWindowDelegate so the operator clicking the window's red close button is
+// handled identically to a programmatic zau_editor_close.
+@interface ZauEditorWindowDelegate : NSObject <NSWindowDelegate> {
+@public
+    LoadedAu* _p;
+}
+- (instancetype)initWithLoadedAu:(LoadedAu*)p;
+@end
+
+@implementation ZauEditorWindowDelegate
+- (instancetype)initWithLoadedAu:(LoadedAu*)p {
+    if ((self = [super init])) { _p = p; }
+    return self;
+}
+- (void)windowWillClose:(NSNotification*)note {
+    (void)note;
+    // AppKit posts this on the main thread during -close. If we are already
+    // tearing down explicitly (pointers nulled), there is nothing to do.
+    if (_p && _p->editor_window) zau_editor_release_owned(_p);
+}
+@end
+
+// Build and present the editor window. MAIN THREAD ONLY.
+//
+// Dispatched fire-and-forget by zau_editor_open, so by the time the run loop
+// drains this block the handle may already have been unloaded+freed. The whole
+// body runs UNDER g_registry_mutex and bails immediately if `p` is no longer a
+// registered live handle: zau_unload erases the handle under the same lock
+// before deleting it, so either (a) this block ran first and zau_unload's erase
+// blocks until we finish, or (b) zau_unload erased first and we bail without
+// touching freed memory. The membership test compares the pointer value only.
+static void zau_editor_build_on_main(LoadedAu* p) {
+    std::lock_guard<std::mutex> reg(g_registry_mutex);
+    if (g_registry.find(p) == g_registry.end()) return; // handle freed/unloaded — bail
+    @autoreleasepool {
+        if (!p || !p->unit) return;
+        if (p->editor_window) { p->editor_open.store(true); return; } // already up
+
+        // Ensure an NSApplication exists (idempotent). NEVER call -run — the
+        // desktop host (Photino) owns the main run loop.
+        [NSApplication sharedApplication];
+
+        NSView*   view    = nil;   // +1 owned by us once set
+        id        factory = nil;   // +1 owned (vendor Cocoa factory) or nil
+        NSBundle* bundle  = nil;   // +1 owned (vendor bundle) or nil
+
+        // 1) Vendor Cocoa view (kAudioUnitProperty_CocoaUI) — what Waves ships.
+        UInt32 sz = 0; Boolean writable = false;
+        OSStatus st = AudioUnitGetPropertyInfo(p->unit, kAudioUnitProperty_CocoaUI,
+                          kAudioUnitScope_Global, 0, &sz, &writable);
+        if (st == noErr && sz >= sizeof(AudioUnitCocoaViewInfo)) {
+            AudioUnitCocoaViewInfo* info = (AudioUnitCocoaViewInfo*)calloc(1, sz);
+            if (info) {
+                st = AudioUnitGetProperty(p->unit, kAudioUnitProperty_CocoaUI,
+                         kAudioUnitScope_Global, 0, info, &sz);
+                if (st == noErr && info->mCocoaAUViewBundleLocation) {
+                    NSURL* url = (__bridge NSURL*)info->mCocoaAUViewBundleLocation;
+                    NSString* cls = info->mCocoaAUViewClass[0]
+                        ? (__bridge NSString*)info->mCocoaAUViewClass[0] : nil;
+                    NSBundle* b = [NSBundle bundleWithURL:url]; // autoreleased
+                    if (b && [b load] && cls) {
+                        Class fc = [b classNamed:cls];
+                        if (fc) {
+                            NSObject<AUCocoaUIBase>* f = [[fc alloc] init]; // +1
+                            if ([f respondsToSelector:@selector(uiViewForAudioUnit:withSize:)]) {
+                                NSView* v = [f uiViewForAudioUnit:p->unit
+                                                         withSize:NSZeroSize]; // autoreleased
+                                if (v) {
+                                    view    = [v retain]; // take our +1
+                                    factory = f;          // keep the factory +1
+                                    bundle  = [b retain];  // keep the bundle +1
+                                } else {
+                                    [f release];
+                                }
+                            } else {
+                                [f release];
+                            }
+                        }
+                    }
+                }
+                // The CocoaUI property hands back +1 CF references; release them.
+                if (info->mCocoaAUViewBundleLocation)
+                    CFRelease(info->mCocoaAUViewBundleLocation);
+                UInt32 nClasses = (UInt32)((sz - sizeof(CFURLRef)) / sizeof(CFStringRef));
+                for (UInt32 i = 0; i < nClasses; ++i)
+                    if (info->mCocoaAUViewClass[i]) CFRelease(info->mCocoaAUViewClass[i]);
+                free(info);
+            }
+        }
+
+        // 2) Fallback — AUGenericView. Always yields an editable parameter GUI
+        //    for ANY AU (incl. stereo-only Waves units), satisfying "edit
+        //    settings" even when no vendor view is present.
+        if (!view) {
+            factory = nil;
+            bundle  = nil;
+            view = [[AUGenericView alloc] initWithAudioUnit:p->unit]; // +1
+        }
+        if (!view) return; // pathological: nothing to host
+
+        // 3) Host the view in a titled, closable bridge-owned window.
+        NSRect vf = view.frame;
+        if (vf.size.width < 1.0 || vf.size.height < 1.0)
+            vf = NSMakeRect(0, 0, 480, 320);
+        NSRect frame = NSMakeRect(0, 0, vf.size.width, vf.size.height);
+        NSUInteger style = NSWindowStyleMaskTitled
+                         | NSWindowStyleMaskClosable
+                         | NSWindowStyleMaskMiniaturizable;
+        NSWindow* w = [[NSWindow alloc] initWithContentRect:frame
+                                                  styleMask:style
+                                                    backing:NSBackingStoreBuffered
+                                                      defer:NO]; // +1
+        w.releasedWhenClosed = NO; // bridge owns the lifetime
+        if (!p->editor_title.empty()) {
+            NSString* t = [NSString stringWithUTF8String:p->editor_title.c_str()];
+            if (t) w.title = t;
+        }
+        w.contentView = view; // window takes its own retain on the view
+        ZauEditorWindowDelegate* del =
+            [[ZauEditorWindowDelegate alloc] initWithLoadedAu:p]; // +1
+        w.delegate = del; // weak/assign
+        [w center];
+        [w makeKeyAndOrderFront:nil];
+        [NSApp activateIgnoringOtherApps:YES];
+
+        p->editor_window   = w;       // +1
+        p->editor_view     = view;    // +1
+        p->editor_factory  = factory; // +1 or nil
+        p->editor_bundle   = bundle;  // +1 or nil
+        p->editor_delegate = del;     // +1
+        p->editor_open.store(true);
+    } // @autoreleasepool
+}
+
+// Close the editor window if present. MAIN THREAD ONLY. -close fires
+// windowWillClose: synchronously, which releases the owned objects.
+static void zau_editor_close_on_main(LoadedAu* p) {
+    @autoreleasepool {
+        if (!p) return;
+        if (p->editor_window) [p->editor_window close]; // -> windowWillClose:
+        else                  zau_editor_release_owned(p); // straggler cleanup
+    }
+}
+
+#endif // __APPLE__
 
 extern "C" {
 
@@ -251,6 +616,15 @@ int32_t zau_load(
         delete p;
         return status;
     }
+#if defined(__APPLE__)
+    // Register BEFORE handing the handle out so any subsequent zau_editor_open →
+    // async build can validate liveness (see g_registry above). Paired with the
+    // erase in zau_unload.
+    {
+        std::lock_guard<std::mutex> reg(g_registry_mutex);
+        g_registry.insert(p);
+    }
+#endif
     *out_handle = static_cast<void*>(p);
     return ZAU_OK;
 }
@@ -270,13 +644,20 @@ int32_t zau_process(
     p->current_input  = input;
     p->current_frames = frames;
 
-    // Point the output AudioBufferList at the caller's planar output slices.
+    const int auch = p->au_channels;
+    const bool mismatched = (auch != p->channels);
+
+    // Point the render AudioBufferList at the AU's au_channels output. When the
+    // AU runs at the caller's count we render straight into the caller's planar
+    // output (zero-copy); otherwise we render into au_out_scratch and mix down
+    // below.
+    float* au_out = mismatched ? p->au_out_scratch.data() : output;
     AudioBufferList* abl = p->input_abl();
-    abl->mNumberBuffers = static_cast<UInt32>(p->channels);
-    for (int c = 0; c < p->channels; ++c) {
+    abl->mNumberBuffers = static_cast<UInt32>(auch);
+    for (int c = 0; c < auch; ++c) {
         abl->mBuffers[c].mNumberChannels = 1;
         abl->mBuffers[c].mDataByteSize   = static_cast<UInt32>(frames) * sizeof(float);
-        abl->mBuffers[c].mData = output + static_cast<size_t>(c) * frames;
+        abl->mBuffers[c].mData = au_out + static_cast<size_t>(c) * frames;
     }
 
     AudioUnitRenderActionFlags flags = 0;
@@ -287,6 +668,22 @@ int32_t zau_process(
     OSStatus st = AudioUnitRender(p->unit, &flags, &ts, 0,
                                   static_cast<UInt32>(frames), abl);
     p->current_input = nullptr;
+
+    // Mix the AU's au_channels output down/up to the caller's channel count.
+    if (st == noErr && mismatched) {
+        if (p->channels == 1) {
+            // AU stereo -> caller mono: take L. Symmetric (L==R) processing of
+            // a duplicated mono input makes take-L mono-safe (no phase
+            // cancellation) for the TX-vocal / RX chain.
+            std::memcpy(output, au_out, static_cast<size_t>(frames) * sizeof(float));
+        } else {
+            // AU mono -> caller stereo: duplicate the single AU channel to both
+            // caller planar slices.
+            std::memcpy(output, au_out, static_cast<size_t>(frames) * sizeof(float));
+            std::memcpy(output + static_cast<size_t>(frames), au_out,
+                        static_cast<size_t>(frames) * sizeof(float));
+        }
+    }
     // Advance the host clock by exactly the rendered frame count so the next
     // block continues seamlessly (monotonic, gap-free). Even on a soft render
     // failure we still advance: the slot emitted `frames` of passthrough audio,
@@ -341,6 +738,25 @@ int32_t zau_set_param(
 int32_t zau_unload(zau_handle_t handle) {
     if (!handle) return ZAU_OK;
     auto* p = static_cast<LoadedAu*>(handle);
+#if defined(__APPLE__)
+    // Remove from the live-handle registry FIRST, under the lock, so a queued
+    // editor-build block (dispatched fire-and-forget by zau_editor_open) that
+    // has not yet run will bail instead of dereferencing this about-to-be-freed
+    // handle. A build block already mid-flight holds the lock, so this erase
+    // blocks until it finishes — after which p->editor_window is set and the
+    // close path below tears it down. Either way no freed pointer is touched.
+    {
+        std::lock_guard<std::mutex> reg(g_registry_mutex);
+        g_registry.erase(p);
+    }
+    // Close the editor window (on the main thread) BEFORE disposing the unit:
+    // a live Cocoa view over a disposed AudioUnit would crash. The handle
+    // already serialises process-vs-unload, so no render runs concurrently.
+    if (p->editor_open.load() || p->editor_window) {
+        p->editor_open.store(false);
+        zau_run_on_main_sync(^{ zau_editor_close_on_main(p); });
+    }
+#endif
     teardown(*p);
     delete p;
     return ZAU_OK;
@@ -349,6 +765,53 @@ int32_t zau_unload(zau_handle_t handle) {
 int32_t zau_shutdown(void) {
     if (g_init_count.load() > 0) g_init_count.fetch_sub(1);
     return ZAU_OK;
+}
+
+// --- AUv2 editor entry points (ABI v2, additive). See editor machinery above.
+int32_t zau_editor_open(zau_handle_t handle, const char* title_utf8) {
+#if defined(__APPLE__)
+    if (!handle) return ZAU_INVALID_HANDLE;
+    auto* p = static_cast<LoadedAu*>(handle);
+    if (!p->unit) return ZAU_INVALID_HANDLE;
+    if (p->editor_open.load()) return ZAU_OK; // idempotent
+    p->editor_title = title_utf8 ? title_utf8 : "";
+    // Fire-and-forget on the main queue: the AUGenericView fallback guarantees a
+    // usable editor materialises, so we return OK optimistically and let
+    // zau_editor_is_open report the true visible state. Never blocks the caller.
+    zau_run_on_main_async(^{ zau_editor_build_on_main(p); });
+    return ZAU_OK;
+#else
+    (void)handle; (void)title_utf8;
+    return ZAU_NOT_IMPLEMENTED;
+#endif
+}
+
+int32_t zau_editor_close(zau_handle_t handle) {
+#if defined(__APPLE__)
+    if (!handle) return ZAU_OK;
+    auto* p = static_cast<LoadedAu*>(handle);
+    if (!p->editor_open.load() && !p->editor_window) return ZAU_OK; // idempotent
+    // Flip the flag BEFORE teardown so pollers never see "open" mid-close, then
+    // block (on the .NET control thread, not main) until the window is gone to
+    // honour the EditorClose "blocks until torn down" contract.
+    p->editor_open.store(false);
+    zau_run_on_main_sync(^{ zau_editor_close_on_main(p); });
+    return ZAU_OK;
+#else
+    (void)handle;
+    return ZAU_OK;
+#endif
+}
+
+int32_t zau_editor_is_open(zau_handle_t handle) {
+#if defined(__APPLE__)
+    if (!handle) return 0;
+    auto* p = static_cast<LoadedAu*>(handle);
+    return p->editor_open.load() ? 1 : 0; // lock-free, never blocks
+#else
+    (void)handle;
+    return 0;
+#endif
 }
 
 // Render an OSType four-char code into a std::string, trimming trailing

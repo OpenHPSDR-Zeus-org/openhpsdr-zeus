@@ -42,13 +42,21 @@ if(APPLE)
     # Foundation backs the Objective-C @autoreleasepool used to drain the
     # autoreleased CFString/AU temporaries during component enumeration.
     find_library(FOUNDATION_LIB      Foundation)
+    # Editor hosting: CoreAudioKit pulls AUGenericView (the always-works
+    # fallback parameter view); AppKit pulls NSWindow/NSView/NSApplication/
+    # NSBundle for hosting the AU's native Cocoa view. macOS-only — both are
+    # inside this if(APPLE) block so Windows/Linux configure stays a no-op.
+    find_library(COREAUDIOKIT_LIB    CoreAudioKit)
+    find_library(APPKIT_LIB          AppKit)
     target_link_libraries(zeus-au-bridge PRIVATE
         ${AUDIOTOOLBOX_LIB}
         ${AUDIOUNIT_LIB}
         ${AVFOUNDATION_LIB}
         ${COREFOUNDATION_LIB}
         ${COREAUDIO_LIB}
-        ${FOUNDATION_LIB})
+        ${FOUNDATION_LIB}
+        ${COREAUDIOKIT_LIB}
+        ${APPKIT_LIB})
 
     # Strip non-ABI symbols; keep AudioToolbox internals off the export table.
     set_target_properties(zeus-au-bridge PROPERTIES

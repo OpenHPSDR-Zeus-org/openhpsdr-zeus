@@ -44,10 +44,13 @@ extern "C" {
 #endif
 
 /* Bridge ABI version. Mirrors ZVST_ABI's role for the AU bridge.
- * v1: init / load / process / set_param / unload / shutdown. The editor
- * entry points present in the VST3 ABI v2 are intentionally omitted —
- * AUv2 Cocoa-view hosting is a separate, later effort. */
-#define ZAU_ABI 1
+ * v1: init / load / process / set_param / unload / shutdown.
+ * v2: additive editor entry points — zau_editor_open / zau_editor_close /
+ *     zau_editor_is_open. These host the AU's native Cocoa view (the vendor
+ *     GUI, e.g. Waves) with an AUGenericView parameter-editor fallback in a
+ *     bridge-owned NSWindow. All existing v1 signatures are unchanged, so the
+ *     bump is forward-compatible; the .NET AuBridgeAbi.Current must match. */
+#define ZAU_ABI 2
 
 /* Status codes — must match VstBridgeStatus in C# (shared with the VST3
  * bridge). The names below map onto the same integer values; the AU
@@ -167,6 +170,41 @@ ZAU_EXPORT int32_t zau_enumerate_effects(
     char* buffer,
     int32_t buffer_len,
     int32_t* out_len);
+
+/*
+ * Open the loaded AU's native editor GUI in a bridge-owned NSWindow titled
+ * with `title_utf8` (the plugin display name). The bridge first tries the
+ * AU's vendor Cocoa view (kAudioUnitProperty_CocoaUI — what Waves and most
+ * third-party AUs ship); if that property is absent or instantiation fails
+ * it falls back to CoreAudioKit's AUGenericView, which yields an editable
+ * parameter GUI for ANY AU, so "edit settings" is always satisfied.
+ *
+ * THREADING: all AppKit/window work runs on the process main thread (the
+ * desktop host's AppKit run loop). This call validates the handle
+ * synchronously then dispatches window creation to the main queue and
+ * returns ZAU_OK optimistically (the generic-view fallback guarantees a
+ * usable editor); the actual visible state is reported by
+ * zau_editor_is_open. Idempotent — a second open while one is up returns
+ * ZAU_OK. Returns ZAU_INVALID_HANDLE on a NULL handle or unloaded unit.
+ * MUST NOT be called from the realtime render path.
+ */
+ZAU_EXPORT int32_t zau_editor_open(zau_handle_t handle, const char* title_utf8);
+
+/*
+ * Close the loaded AU's editor window if open. Idempotent (ZAU_OK when no
+ * window is up). Runs the AppKit teardown on the main thread and blocks
+ * until the window has been torn down, honouring the .NET EditorClose
+ * "blocks until the editor UI thread has torn down" contract. MUST NOT be
+ * called from the realtime render path.
+ */
+ZAU_EXPORT int32_t zau_editor_close(zau_handle_t handle);
+
+/*
+ * Returns 1 if a live editor window is currently open for `handle`, 0
+ * otherwise (including a NULL/invalid handle). Lock-free atomic read — safe
+ * to poll from the .NET control thread; never dispatches or blocks.
+ */
+ZAU_EXPORT int32_t zau_editor_is_open(zau_handle_t handle);
 
 #ifdef __cplusplus
 }

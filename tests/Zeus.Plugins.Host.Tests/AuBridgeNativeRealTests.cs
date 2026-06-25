@@ -145,14 +145,25 @@ public class AuBridgeNativeRealTests
     }
 
     [SkippableFact]
-    public void Editor_IsNotImplementedForAu()
+    public void Editor_NullHandle_IsSafePerAbiV2()
     {
         Skip.If(SkipBecauseNoNative, SkipReason);
         var bridge = new AuBridgeNative();
-        // AUv2 Cocoa editor hosting is out of scope for v1 — matches the
-        // non-Windows VST3 behaviour.
-        Assert.Equal(VstBridgeStatus.NotImplemented, bridge.EditorOpen(0xABCD, "x"));
-        Assert.False(bridge.EditorIsOpen(0xABCD));
+        // ABI v2 hosts the AU's native editor in a bridge-owned NSWindow (the
+        // vendor Cocoa view, with an AUGenericView parameter editor as the
+        // always-works fallback). On a NULL handle every editor entry point
+        // degrades safely WITHOUT dispatching to the main thread or
+        // dereferencing the handle: open reports InvalidHandle, is-open is
+        // false, close is an idempotent no-op. We deliberately do NOT pass a
+        // bogus non-NULL handle here — the C ABI contract (shared with the
+        // VST3 bridge and the realtime process/set_param paths) is that a
+        // handle is one returned by zau_load, and zau_editor_open dereferences
+        // it just like the rest. A live open/close round-trip needs the
+        // desktop AppKit run loop draining the main dispatch queue, so it is
+        // exercised in the desktop app, not in this headless test host.
+        Assert.Equal(VstBridgeStatus.InvalidHandle, bridge.EditorOpen(IntPtr.Zero, "x"));
+        Assert.False(bridge.EditorIsOpen(IntPtr.Zero));
+        Assert.Equal(VstBridgeStatus.Ok, bridge.EditorClose(IntPtr.Zero));
     }
 
     [SkippableFact]
