@@ -597,7 +597,16 @@ export function getPanelDef(id: string): PanelDef | undefined {
 export function getAllPanels(): PanelDef[] {
   return [
     ...Object.values(PANELS),
-    ...listRegisteredPanels().map(pluginPanelDef),
+    // Scanned VST3 / Audio Unit effects belong ONLY in the Audio Suite (the
+    // in-process VST/AU host) rack — never as standalone workspace tiles in the
+    // Add Panel ("+") menu. Those are editor-backed synthetic panels (no
+    // first-party UI module; see pluginRuntime.maybeRegisterGenericAudioPanel),
+    // and a full AU-registry scan would otherwise flood the workspace picker
+    // with every system effect. First-party native audio-suite plugins ship
+    // real UI modules (not editor-backed) and still appear here.
+    ...listRegisteredPanels()
+      .filter((p) => !p.editorBacked)
+      .map(pluginPanelDef),
   ];
 }
 
