@@ -122,6 +122,8 @@ export const DEFAULT_TILE_SPAN: Record<string, { w: number; h: number }> = {
   metergroup: { w: 2, h: 12 },
   // HamClock fills the whole workspace (24×48) — it's an embedded dashboard.
   hamclock: { w: 24, h: 48 },
+  // LAN Browser frames a full device web UI — give it real estate.
+  lanbrowser: { w: 12, h: 20 },
 };
 
 const FALLBACK_SPAN = { w: 8, h: 8 };

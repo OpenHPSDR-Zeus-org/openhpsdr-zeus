@@ -343,6 +343,14 @@ public static class ZeusHost
         // Radio-side broker glue (Phase 3). Inert until a remote-access password
         // is set; then it keeps a "host" socket on the broker and answers offers.
         builder.Services.AddHostedService<Zeus.Server.Hosting.Remote.RemoteBrokerClient>();
+        // LAN Browser proxy: fetches private-LAN device web UIs on behalf of the
+        // panel (esp. for remote operators whose browser can't reach the radio's
+        // LAN). No auto-redirect — LanProxyService follows + re-validates each hop
+        // against the private-range rule itself.
+        builder.Services.AddHttpClient(LanProxyService.HttpClientName,
+                c => c.Timeout = TimeSpan.FromSeconds(15))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+        builder.Services.AddSingleton<LanProxyService>();
         // RX audio publish seam (Phase 1). DspPipelineService.PublishAudio
         // fans each AudioFrame across every registered IRxAudioSink.
         //

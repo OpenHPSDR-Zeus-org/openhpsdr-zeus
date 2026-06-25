@@ -73,6 +73,7 @@ import { SpotsPanel } from './panels/SpotsPanel';
 import { FreeDvStationsPanel } from './panels/FreeDvStationsPanel';
 import { SpaceWeatherPanel } from './panels/SpaceWeatherPanel';
 import { UrlEmbedPanel } from './panels/UrlEmbedPanel';
+import { LanBrowserPanel } from './panels/LanBrowserPanel';
 import { ChatPanel } from './panels/ChatPanel';
 import { LightningMapPanel } from './panels/LightningMapPanel';
 
@@ -562,6 +563,19 @@ export const PANELS: Record<string, PanelDef> = {
     multiInstance: true,
     // Headerless: the panel owns its header strip so the address bar can
     // live alongside the drag grip and close X.
+    headerless: true,
+    minW: 6,
+    minH: 8,
+  },
+  lanbrowser: {
+    id: 'lanbrowser',
+    name: 'LAN Browser',
+    category: 'tools',
+    tags: ['lan', 'browser', 'router', 'rotator', 'amplifier', 'device', 'web', 'remote', 'proxy', 'network'],
+    component: LanBrowserPanel,
+    // Multi-instance so an operator can keep several LAN devices open at once.
+    multiInstance: true,
+    // Headerless: owns its address-bar header strip (like URL Embed).
     headerless: true,
     minW: 6,
     minH: 8,
