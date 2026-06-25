@@ -387,6 +387,35 @@ public partial class Program
         var iconPath = Path.Combine(AppContext.BaseDirectory, iconFileName);
         var detachedWorkspaceWindows = new List<PhotinoWindow>();
 
+        // The dark placeholder loaded as StartString carries a tiny script that,
+        // once the page is live (i.e. WebView2 has finished initialising), posts a
+        // `zeus.placeholderReady` message back to the host. The host then navigates
+        // to the SPA from the WebMessageReceived handler below — a point where the
+        // native WebView2 control is provably ready to accept a navigation.
+        //
+        // This replaces the old approach of calling window.Load(startUrl) directly
+        // from the WindowCreated handler. WindowCreated fires *during* native window
+        // construction, before WebView2's CoreWebView2 is initialised; calling
+        // Photino_NavigateToUrl there dereferences a not-yet-created control and
+        // hard-crashes the process with a native access violation (0xc0000005 —
+        // an uncatchable corrupted-state exception, so no try/catch and no managed
+        // diagnostics handler can intercept it). Driving the SPA navigation off the
+        // placeholder-ready message keeps it on the live WebView2 while still
+        // happening AFTER the WindowCreated resize, so the no-reflow guarantee from
+        // #930 holds. If the host bridge is somehow absent the placeholder navigates
+        // itself as a fallback.
+        const string placeholderHtml =
+            "<!doctype html><meta name=\"color-scheme\" content=\"dark\">" +
+            "<body style=\"margin:0;height:100vh;background:#0a0a0c\">" +
+            "<script>(function(){function spa(){location.replace('__START_URL__');}" +
+            "try{var e=window.external;" +
+            "if(e&&typeof e.sendMessage==='function')" +
+            "e.sendMessage(JSON.stringify({type:'zeus.placeholderReady'}));" +
+            "else spa();}catch(_){spa();}})();</script>";
+        // Navigate to the SPA exactly once, even if the ready message arrives more
+        // than once (e.g. a placeholder reload).
+        var spaLoaded = false;
+
         // Window construction is where a missing WebView2 runtime throws — the
         // last phase marker in the log will be this one if that's the cause.
         StartupDiagnostics.Phase("desktop: creating Photino window (needs WebView2)");
@@ -401,6 +430,18 @@ public partial class Program
             .RegisterWebMessageReceivedHandler((sender, msg) =>
             {
                 if (sender is not PhotinoWindow owner) return;
+                // The dark placeholder reports it is live once WebView2 is ready.
+                // Navigate to the SPA here, not from WindowCreated — see the long
+                // note above placeholderHtml for why the WindowCreated path AVs.
+                if (IsPlaceholderReady(msg))
+                {
+                    if (spaLoaded) return;
+                    spaLoaded = true;
+                    StartupDiagnostics.Phase("desktop: placeholder ready, loading SPA");
+                    try { owner.Load(new Uri(startUrl)); }
+                    catch (Exception ex) { Console.Error.WriteLine($"window.spa.load failed: {ex.Message}"); }
+                    return;
+                }
                 if (TryReadWorkspaceWindowRequest(msg, out var request))
                 {
                     OpenWorkspaceWindow(owner, detachedWorkspaceWindows, request, iconPath);
@@ -414,12 +455,13 @@ public partial class Program
                     OpenExternalUrl(externalUrl);
             })
             // Deliberately load a dark placeholder, NOT the SPA, as the startup
-            // content. The real SPA navigation is deferred to the WindowCreated
-            // handler below so it happens AFTER the frame is resized to the saved
-            // geometry — see the comment there. The placeholder matches --bg-app
+            // content. The placeholder posts `zeus.placeholderReady` once WebView2
+            // is live; the WebMessageReceived handler above then navigates to the
+            // SPA — after the WindowCreated resize, so React's first layout measures
+            // the final viewport (no panel reflow). The placeholder matches --bg-app
             // (#0a0a0c) so the brief pre-size frame is invisible against the dark
             // chrome instead of flashing white.
-            .LoadRawString("<!doctype html><meta name=\"color-scheme\" content=\"dark\"><body style=\"margin:0;height:100vh;background:#0a0a0c\">");
+            .LoadRawString(placeholderHtml.Replace("__START_URL__", startUrl));
 
         // Remember the last NORMAL (non-maximized) frame size as resize events
         // arrive. This is only needed for the maximized-at-close case: when the
@@ -486,20 +528,14 @@ public partial class Program
                 StartupDiagnostics.Log($"[geometry] restore failed: {ex.Message}");
                 Console.Error.WriteLine($"window.geometry.restore failed: {ex.Message}");
             }
-            finally
-            {
-                // Navigate to the SPA only NOW — after the frame has been resized
-                // to the saved geometry. Loading it in the builder chain made
-                // WebView2 paint the SPA at the min-size opening frame (Photino
-                // frequently opens at SetMinWidth/Height and the resize lands a
-                // frame later), so React's first layout measured the small
-                // viewport and the panels visibly reflowed when the window grew.
-                // Deferring the load means React's first measurement is the final
-                // size and the panels don't jump. In a finally so a failed resize
-                // above can never strand the window on the dark placeholder.
-                try { window.Load(new Uri(startUrl)); }
-                catch (Exception ex) { Console.Error.WriteLine($"window.spa.load failed: {ex.Message}"); }
-            }
+            // NOTE: the SPA is NOT loaded here. Calling window.Load(startUrl) from
+            // this WindowCreated callback runs Photino_NavigateToUrl re-entrantly
+            // during native window construction — before CoreWebView2 exists — which
+            // crashes the process with a native access violation (0xc0000005). The
+            // navigation is driven instead by the `zeus.placeholderReady` web
+            // message (see placeholderHtml and the WebMessageReceived handler),
+            // which fires once WebView2 is live and still after this resize, so the
+            // no-reflow guarantee is preserved without the crash.
         });
 
         // Maximized and minimized are tracked separately: both must suppress
@@ -645,6 +681,22 @@ public partial class Program
             {
                 Console.Error.WriteLine($"window.geometry.center fallback failed: {inner.Message}");
             }
+        }
+    }
+
+    // The dark startup placeholder posts this once WebView2 is live, signalling
+    // that it is safe to navigate the window to the SPA. Kept deliberately narrow
+    // so it can never be confused with the SPA's own messages.
+    private static bool IsPlaceholderReady(string message)
+    {
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<WorkspaceWindowRequest>(message, WebMessageJsonOptions);
+            return parsed?.Type == "zeus.placeholderReady";
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 
