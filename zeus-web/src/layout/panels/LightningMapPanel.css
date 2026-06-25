@@ -146,3 +146,161 @@
   font-size: 9px;
 }
 .lightning-map .leaflet-control-attribution a { color: var(--fg-1); }
+
+/* Proximity-alert in-radius count flashes red while the alert is tripped. */
+.lightning-map .lm-hud-value.alert {
+  color: var(--tx, #ff4a59);
+  animation: lm-alert-blink 0.9s steps(1) infinite;
+}
+
+/* Alert banner — top-center, unmissable while a cell is closing in. */
+.lightning-map .lm-alert-banner {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 600;
+  padding: 7px 14px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: rgba(214, 40, 30, 0.92);
+  border: 1px solid var(--tx, #ff4a59);
+  border-radius: 4px;
+  box-shadow: 0 0 18px rgba(255, 74, 89, 0.5);
+  pointer-events: none;
+  white-space: nowrap;
+  animation: lm-alert-blink 1.1s steps(1) infinite;
+}
+
+@keyframes lm-alert-blink {
+  0%, 60% { opacity: 1; }
+  61%, 100% { opacity: 0.55; }
+}
+
+/* Alert settings — gear button bottom-right, above the recenter control. */
+.lightning-map .lm-settings-btn {
+  position: absolute;
+  right: 8px;
+  bottom: 50px;
+  z-index: 500;
+  padding: 4px 9px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-1);
+  background: rgba(6, 9, 16, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.lightning-map .lm-settings-btn:hover {
+  border-color: var(--power, #ffb13c);
+  color: var(--power, #ffb13c);
+}
+.lightning-map .lm-settings-btn.on {
+  border-color: var(--power, #ffb13c);
+  color: var(--power, #ffb13c);
+}
+
+/* Settings popover. */
+.lightning-map .lm-settings {
+  position: absolute;
+  right: 8px;
+  bottom: 78px;
+  z-index: 600;
+  width: 230px;
+  padding: 10px 11px 11px;
+  background: rgba(6, 9, 16, 0.92);
+  border: 1px solid rgba(255, 177, 60, 0.3);
+  border-radius: 5px;
+  backdrop-filter: blur(6px);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--fg-1);
+}
+
+.lightning-map .lm-settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 9px;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--power, #ffb13c);
+}
+.lightning-map .lm-settings-close {
+  background: none;
+  border: none;
+  color: var(--fg-2);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.lightning-map .lm-settings-close:hover { color: var(--fg-1); }
+
+.lightning-map .lm-set-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: var(--fg-1);
+}
+.lightning-map .lm-set-row > span:first-child { flex: 0 0 auto; }
+
+.lightning-map .lm-set-row input[type='number'] {
+  width: 52px;
+  margin-left: auto;
+  padding: 3px 5px;
+  font-family: inherit;
+  font-size: 11px;
+  text-align: right;
+  color: var(--fg-0, #fff);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.lightning-map .lm-set-row input[type='number']:focus {
+  outline: none;
+  border-color: var(--accent, #4a9eff);
+}
+
+.lightning-map .lm-set-unit {
+  flex: 0 0 auto;
+  width: 38px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+}
+
+.lightning-map .lm-set-unit-sel {
+  flex: 0 0 auto;
+  width: 44px;
+  padding: 3px 4px;
+  font-family: inherit;
+  font-size: 10px;
+  color: var(--fg-0, #fff);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+}
+
+.lightning-map .lm-set-toggle {
+  cursor: pointer;
+}
+.lightning-map .lm-set-toggle input { cursor: pointer; }
+.lightning-map .lm-set-toggle span { margin-right: auto; }
+
+.lightning-map .lm-set-hint {
+  margin-top: 4px;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--tx, #ff4a59);
+}

@@ -33,6 +33,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './LightningMapPanel.css';
 import { useWorkspace } from '../WorkspaceContext';
+import { distanceKm } from '../../components/design/geo';
 
 // CARTO dark basemap — free, no key, near-black land/ocean that lets the
 // amber strikes pop. Same family of tiles the public lightning viewers use.
@@ -58,6 +59,110 @@ interface Strike {
   lon: number;
   /** Wall-clock ms when we received it — drives the fade animation. */
   t: number;
+}
+
+// ── Proximity alert ─────────────────────────────────────────────────────────
+// The operator can ask to be warned when a storm cell is closing in: if at
+// least `threshold` strikes land within `radiusKm` of the home QTH inside a
+// rolling `windowMin`-minute window, the panel raises a visible (and optionally
+// audible) alert and pulses the radius ring red. Config is panel-local and
+// persisted to localStorage — same lightweight pattern the other panels use.
+const ALERT_STORAGE_KEY = 'zeus.lightning.alert';
+const KM_PER_MI = 1.609_344;
+// Panel-local strike-ramp colours (see CSS header) reused for the ring.
+const RING_AMBER = '#ffb13c';
+const RING_RED = '#ff4a59';
+
+interface AlertConfig {
+  enabled: boolean;
+  /** Strikes needed inside the window+radius to trip the alert. */
+  threshold: number;
+  /** Alert radius around home, stored canonically in km. */
+  radiusKm: number;
+  /** Rolling window (minutes) the strike count is measured over. */
+  windowMin: number;
+  /** Display/entry unit for the radius; storage stays km. */
+  unit: 'km' | 'mi';
+  /** Play a short chirp when the alert first trips. */
+  sound: boolean;
+}
+
+const DEFAULT_ALERT: AlertConfig = {
+  enabled: false,
+  threshold: 5,
+  radiusKm: 100,
+  windowMin: 10,
+  unit: 'km',
+  sound: true,
+};
+
+function readAlertConfig(): AlertConfig {
+  try {
+    if (typeof localStorage === 'undefined') return { ...DEFAULT_ALERT };
+    const raw = localStorage.getItem(ALERT_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_ALERT };
+    const p = JSON.parse(raw) as Partial<AlertConfig>;
+    return {
+      enabled: typeof p.enabled === 'boolean' ? p.enabled : DEFAULT_ALERT.enabled,
+      threshold:
+        typeof p.threshold === 'number' && Number.isFinite(p.threshold)
+          ? Math.max(1, Math.round(p.threshold))
+          : DEFAULT_ALERT.threshold,
+      radiusKm:
+        typeof p.radiusKm === 'number' && Number.isFinite(p.radiusKm) && p.radiusKm > 0
+          ? p.radiusKm
+          : DEFAULT_ALERT.radiusKm,
+      windowMin:
+        typeof p.windowMin === 'number' && Number.isFinite(p.windowMin) && p.windowMin > 0
+          ? p.windowMin
+          : DEFAULT_ALERT.windowMin,
+      unit: p.unit === 'mi' ? 'mi' : 'km',
+      sound: typeof p.sound === 'boolean' ? p.sound : DEFAULT_ALERT.sound,
+    };
+  } catch {
+    return { ...DEFAULT_ALERT };
+  }
+}
+
+function writeAlertConfig(c: AlertConfig): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(ALERT_STORAGE_KEY, JSON.stringify(c));
+  } catch {
+    // quota exceeded / private mode — accept silently.
+  }
+}
+
+// Lazily-created shared AudioContext for the alert chirp. Created on first use
+// (inside a user-gesture-driven render path) so browsers don't warn about an
+// autoplay context at module load.
+let alertAudioCtx: AudioContext | null = null;
+function playAlertChirp(): void {
+  try {
+    const Ctx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return;
+    if (!alertAudioCtx) alertAudioCtx = new Ctx();
+    const ctx = alertAudioCtx;
+    if (ctx.state === 'suspended') void ctx.resume().catch(() => {});
+    const t0 = ctx.currentTime;
+    // Two short rising chirps — distinct from normal radio/UI tones.
+    for (const [offset, freq] of [[0, 740], [0.18, 988]] as const) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, t0 + offset);
+      gain.gain.exponentialRampToValueAtTime(0.16, t0 + offset + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + offset + 0.14);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t0 + offset);
+      osc.stop(t0 + offset + 0.16);
+    }
+  } catch {
+    // No audio output / blocked — the visible alert still fires.
+  }
 }
 
 // Blitzortung obfuscates each WebSocket frame with an LZW-style dictionary
@@ -132,10 +237,27 @@ export function LightningMapPanel() {
   // the plotted ring (which is capped + expires).
   const rateRef = useRef<number[]>([]);
   const homeLayerRef = useRef<L.LayerGroup | null>(null);
+  const alertLayerRef = useRef<L.LayerGroup | null>(null);
+  // Receipt timestamps for in-radius strikes — drives the proximity alert,
+  // pruned to the configured window each stats tick.
+  const nearRef = useRef<number[]>([]);
+  const prevAlertingRef = useRef(false);
 
   const [conn, setConn] = useState<ConnState>('connecting');
   const [rate, setRate] = useState(0); // strikes/min over the last 60 s
   const [shown, setShown] = useState(0); // strikes currently on the map
+  const [alertCfg, setAlertCfg] = useState<AlertConfig>(readAlertConfig);
+  const [alerting, setAlerting] = useState(false); // threshold currently tripped
+  const [nearCount, setNearCount] = useState(0); // in-radius strikes in window
+  const [showSettings, setShowSettings] = useState(false);
+
+  // Live config for the mount-once WebSocket/render effects, which capture refs
+  // (not state) to avoid stale closures. Also mirrors config to localStorage.
+  const alertCfgRef = useRef(alertCfg);
+  useEffect(() => {
+    alertCfgRef.current = alertCfg;
+    writeAlertConfig(alertCfg);
+  }, [alertCfg]);
 
   // Home QTH for the initial view + a marker dot. Captured in a ref so the WS /
   // map init effect stays mount-once and doesn't tear down when home resolves.
@@ -175,6 +297,8 @@ export function LightningMapPanel() {
 
     L.control.zoom({ position: 'bottomleft' }).addTo(map);
 
+    // Alert radius ring sits below the home marker so the QTH dot stays on top.
+    alertLayerRef.current = L.layerGroup().addTo(map);
     homeLayerRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
 
@@ -186,6 +310,7 @@ export function LightningMapPanel() {
       map.remove();
       mapRef.current = null;
       homeLayerRef.current = null;
+      alertLayerRef.current = null;
     };
   }, []);
 
@@ -209,6 +334,33 @@ export function LightningMapPanel() {
       .addTo(layer);
   }, [effectiveHome]);
 
+  // ── Alert radius ring — amber dashed normally, solid red while tripped ─────
+  useEffect(() => {
+    const layer = alertLayerRef.current;
+    if (!layer) return;
+    layer.clearLayers();
+    if (!alertCfg.enabled || !effectiveHome) return;
+    const color = alerting ? RING_RED : RING_AMBER;
+    L.circle([effectiveHome.lat, effectiveHome.lon], {
+      radius: alertCfg.radiusKm * 1000, // Leaflet circle radius is in metres
+      color,
+      weight: alerting ? 2.5 : 1.5,
+      opacity: alerting ? 0.95 : 0.6,
+      fillColor: color,
+      fillOpacity: alerting ? 0.12 : 0.05,
+      dashArray: alerting ? undefined : '6 6',
+      interactive: false,
+    }).addTo(layer);
+  }, [effectiveHome, alertCfg.enabled, alertCfg.radiusKm, alerting]);
+
+  // ── Audible chirp on the rising edge of an alert ───────────────────────────
+  useEffect(() => {
+    if (alerting && !prevAlertingRef.current && alertCfgRef.current.sound) {
+      playAlertChirp();
+    }
+    prevAlertingRef.current = alerting;
+  }, [alerting]);
+
   // ── Blitzortung WebSocket — multi-server failover + reconnect ──────────────
   useEffect(() => {
     let ws: WebSocket | null = null;
@@ -223,6 +375,15 @@ export function LightningMapPanel() {
       ring.push({ lat, lon, t: now });
       if (ring.length > MAX_STRIKES) ring.splice(0, ring.length - MAX_STRIKES);
       rateRef.current.push(now);
+
+      // Proximity-alert bookkeeping: stamp strikes inside the alert radius so
+      // the render loop can count them over the rolling window. Reading config
+      // and home from refs keeps this mount-once effect free of stale closures.
+      const cfg = alertCfgRef.current;
+      const home = homeRef.current;
+      if (cfg.enabled && home && distanceKm(home.lat, home.lon, lat, lon) <= cfg.radiusKm) {
+        nearRef.current.push(now);
+      }
     };
 
     const handleFrame = (raw: string) => {
@@ -388,6 +549,20 @@ export function LightningMapPanel() {
         if (drop > 0) stamps.splice(0, drop);
         setRate(stamps.length);
         setShown(ring.length);
+
+        // Proximity alert: prune in-radius stamps to the window, then compare
+        // the count to the threshold. Latches on/off purely from the live count
+        // so it clears on its own once the cell moves off or quiets down.
+        const cfg = alertCfgRef.current;
+        const near = nearRef.current;
+        const winMs = cfg.windowMin * 60_000;
+        const winCutoff = now - winMs;
+        let nDrop = 0;
+        while (nDrop < near.length && near[nDrop]! < winCutoff) nDrop += 1;
+        if (nDrop > 0) near.splice(0, nDrop);
+        const active = cfg.enabled && !!homeRef.current;
+        setNearCount(active ? near.length : 0);
+        setAlerting(active && near.length >= cfg.threshold);
       }
     };
     raf = window.requestAnimationFrame(frame);
@@ -408,6 +583,21 @@ export function LightningMapPanel() {
 
   const statusText = conn === 'live' ? 'Live feed' : conn === 'connecting' ? 'Connecting…' : 'Reconnecting…';
 
+  // Radius in the operator's chosen display unit (storage stays km).
+  const radiusDisplay =
+    alertCfg.unit === 'mi' ? alertCfg.radiusKm / KM_PER_MI : alertCfg.radiusKm;
+  const radiusLabel = `${Math.round(radiusDisplay)} ${alertCfg.unit}`;
+
+  const patchAlert = (patch: Partial<AlertConfig>) => setAlertCfg((c) => ({ ...c, ...patch }));
+
+  const onRadiusInput = (raw: string) => {
+    const v = Number(raw);
+    if (!Number.isFinite(v) || v <= 0) return;
+    patchAlert({ radiusKm: alertCfg.unit === 'mi' ? v * KM_PER_MI : v });
+  };
+
+  const onUnitChange = (unit: 'km' | 'mi') => patchAlert({ unit });
+
   return (
     <div className="lightning-map">
       <div ref={hostRef} className="lm-host" />
@@ -422,11 +612,120 @@ export function LightningMapPanel() {
           <span className="lm-hud-label">On map</span>
           <span className="lm-hud-value sub">{shown}</span>
         </div>
+        {alertCfg.enabled && (
+          <div className="lm-hud-row">
+            <span className="lm-hud-label">Near ≤{radiusLabel}</span>
+            <span className={`lm-hud-value sub${alerting ? ' alert' : ''}`}>{nearCount}</span>
+          </div>
+        )}
         <div className="lm-status">
           <span className={`lm-dot ${conn}`} />
           <span className="lm-status-text">{statusText}</span>
         </div>
       </div>
+
+      {alerting && (
+        <div className="lm-alert-banner" role="status" aria-live="assertive">
+          ⚡ Lightning alert — {nearCount} strikes within {radiusLabel} of your QTH
+        </div>
+      )}
+
+      <button
+        type="button"
+        className={`lm-settings-btn${alertCfg.enabled ? ' on' : ''}`}
+        onClick={() => setShowSettings((v) => !v)}
+        title="Proximity alert settings"
+        aria-expanded={showSettings}
+      >
+        ⚙ Alert
+      </button>
+
+      {showSettings && (
+        <div className="lm-settings" role="dialog" aria-label="Lightning proximity alert">
+          <div className="lm-settings-head">
+            <span>Proximity Alert</span>
+            <button
+              type="button"
+              className="lm-settings-close"
+              onClick={() => setShowSettings(false)}
+              title="Close"
+            >
+              ×
+            </button>
+          </div>
+
+          <label className="lm-set-row lm-set-toggle">
+            <input
+              type="checkbox"
+              checked={alertCfg.enabled}
+              onChange={(e) => patchAlert({ enabled: e.target.checked })}
+            />
+            <span>Enable alert</span>
+          </label>
+
+          <label className="lm-set-row">
+            <span>Alert when</span>
+            <input
+              type="number"
+              min={1}
+              max={999}
+              value={alertCfg.threshold}
+              onChange={(e) => {
+                const v = Math.round(Number(e.target.value));
+                if (Number.isFinite(v) && v >= 1) patchAlert({ threshold: v });
+              }}
+            />
+            <span className="lm-set-unit">strikes</span>
+          </label>
+
+          <label className="lm-set-row">
+            <span>Within</span>
+            <input
+              type="number"
+              min={1}
+              max={9999}
+              value={Math.round(radiusDisplay)}
+              onChange={(e) => onRadiusInput(e.target.value)}
+            />
+            <select
+              className="lm-set-unit-sel"
+              value={alertCfg.unit}
+              onChange={(e) => onUnitChange(e.target.value === 'mi' ? 'mi' : 'km')}
+            >
+              <option value="km">km</option>
+              <option value="mi">mi</option>
+            </select>
+          </label>
+
+          <label className="lm-set-row">
+            <span>Over the last</span>
+            <input
+              type="number"
+              min={1}
+              max={1440}
+              value={alertCfg.windowMin}
+              onChange={(e) => {
+                const v = Math.round(Number(e.target.value));
+                if (Number.isFinite(v) && v >= 1) patchAlert({ windowMin: v });
+              }}
+            />
+            <span className="lm-set-unit">min</span>
+          </label>
+
+          <label className="lm-set-row lm-set-toggle">
+            <input
+              type="checkbox"
+              checked={alertCfg.sound}
+              onChange={(e) => patchAlert({ sound: e.target.checked })}
+            />
+            <span>Play sound</span>
+          </label>
+
+          {alertCfg.enabled && !effectiveHome && (
+            <div className="lm-set-hint">Set your home QTH to enable proximity alerts.</div>
+          )}
+        </div>
+      )}
 
       <button type="button" className="lm-recenter" onClick={recenter} title="Re-center on your QTH">
         ⌖ Recenter
