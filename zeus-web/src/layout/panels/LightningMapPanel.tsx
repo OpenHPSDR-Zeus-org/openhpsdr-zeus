@@ -155,7 +155,9 @@ export function LightningMapPanel() {
       zoom: home ? 5 : 3,
       minZoom: 2,
       maxZoom: 11,
-      zoomControl: true,
+      // Zoom control lives bottom-left so it clears the strikes/min HUD card
+      // pinned top-left.
+      zoomControl: false,
       attributionControl: true,
       worldCopyJump: true,
       maxBounds: L.latLngBounds([-85, -200], [85, 200]),
@@ -170,6 +172,8 @@ export function LightningMapPanel() {
     })
       .on('tileerror', (e) => console.warn('Lightning map tile error:', e))
       .addTo(map);
+
+    L.control.zoom({ position: 'bottomleft' }).addTo(map);
 
     homeLayerRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
