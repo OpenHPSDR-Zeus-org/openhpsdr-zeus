@@ -4100,6 +4100,45 @@ public class DspPipelineService : BackgroundService,
         rx.LoInit = true;
     }
 
+    /// <summary>
+    /// Pan a secondary receiver's DDC centre to <paramref name="hz"/> — the
+    /// client-side keep-in-view autopan's analogue of RX1's
+    /// <see cref="RadioService.SetRadioLo"/>. Under CTUN the centre is frozen and
+    /// the dial roams within the captured window, so the dial/filter can leave the
+    /// (much narrower) visible span long before <see cref="UpdateRxLo"/>'s
+    /// DDC-edge recentre fires; the client — which knows the visible span — calls
+    /// this to recentre before that happens.
+    ///
+    /// <para>Only meaningful for a true independent DDC (Protocol 2). P1 / synthetic
+    /// secondaries sub-receive RX1's shared NCO (their WDSP shift is RadioLoHz-
+    /// relative, see <see cref="ComputeSecondaryCtunShiftHz"/>), so their centre
+    /// can't move independently — no-op there. Also a no-op with CTUN off (the
+    /// centre follows the dial) or when the receiver is disabled.</para>
+    ///
+    /// <para>Re-applies the current state under <c>_engineLock</c> on the caller
+    /// thread, exactly like normal tuning via <see cref="RadioService.StateChanged"/>,
+    /// so the WDSP shift recompute and the P2 DDC retune land in lockstep with the
+    /// new centre. The new centre survives the <see cref="UpdateRxLo"/> calls inside
+    /// because the client keeps the dial within the captured window (visible span ⊆
+    /// DDC window), so the edge-recentre guard never trips.</para>
+    /// </summary>
+    public void RequestSecondaryLo(int rxIndex, long hz)
+    {
+        if (rxIndex < 1 || rxIndex >= MaxReceivers) return;
+        if (_p2Client is null) return; // P1 secondaries share RadioLoHz — not pannable
+        long clamped = Math.Clamp(hz, 0L, 60_000_000L);
+        lock (_engineLock)
+        {
+            var s = _radio.Snapshot();
+            if (!s.CtunEnabled || !SecondaryReceiverEnabled(rxIndex, s)) return;
+            var rx = _secondaryRx[rxIndex];
+            if (rx.LoInit && rx.LoHz == clamped) return; // already centred there
+            rx.LoHz = clamped;
+            rx.LoInit = true;
+            OnRadioStateChanged(s);
+        }
+    }
+
     internal static int ComputeRx2CtunShiftHz(
         StateDto s,
         long rx2LoHz,

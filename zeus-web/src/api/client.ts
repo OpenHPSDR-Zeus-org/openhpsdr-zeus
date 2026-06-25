@@ -5461,6 +5461,28 @@ export function setRadioLo(
   );
 }
 
+// Pan a receiver's DDC centre (the keep-in-view autopan lever). Index 0 is
+// RX1's hardware NCO (→ /api/radio/lo); index >= 1 recentres a secondary DDC
+// via /api/receivers/{index}/lo. The server no-ops the secondary path for P1
+// (shared NCO), CTUN-off, or a disabled receiver — see RequestSecondaryLo.
+export function setReceiverLo(
+  index: number,
+  hz: number,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  if (index <= 0) return setRadioLo(hz, signal);
+  return jsonFetch(
+    `/api/receivers/${index}/lo`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hz }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
 // Toggle CTUN (click-tune / centred tuning). Server returns the full updated
 // StateDto; on enable the hardware NCO is frozen at its current centre, on
 // disable it snaps back to the dial. See use-pan-tune-gesture.ts for how the
