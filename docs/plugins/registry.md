@@ -1,7 +1,7 @@
 # Plugin registry
 
 Openhpsdr-Zeus pulls its plugin catalog from a separate repository at
-**[Kb2uka/openhpsdr-zeus-plugins](https://github.com/Kb2uka/openhpsdr-zeus-plugins)**.
+**[OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins](https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins)**.
 
 The curator (Brian Keating, EI6LF) will transfer the repo to KB2UKA at
 a later date.
@@ -11,7 +11,7 @@ a later date.
 Default catalog URL:
 
 ```
-https://raw.githubusercontent.com/Kb2uka/openhpsdr-zeus-plugins/main/registry.json
+https://raw.githubusercontent.com/OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins/main/registry.json
 ```
 
 This is hard-coded as `HttpRegistryClient.DefaultUrl` in

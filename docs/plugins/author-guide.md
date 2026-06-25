@@ -184,7 +184,7 @@ If you need custom DSP instead, implement `IAudioPlugin` — see `docs/plugins/a
 
 ## 7. Publishing to the registry
 
-PR your plugin entry to `github.com/Kb2uka/openhpsdr-zeus-plugins`:
+PR your plugin entry to `github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins`:
 
 ```json
 {
@@ -231,4 +231,4 @@ Authors who want to skip the registry can ship a direct URL and instruct operato
 - `docs/plugins/capabilities.md` — what each capability gates
 - `docs/plugins/audio-plugins.md` — `IAudioPlugin` deep dive
 - `docs/plugins/registry.md` — registry contract and PR flow
-- [`Kb2uka/openhpsdr-zeus-plugins/samples/`](https://github.com/Kb2uka/openhpsdr-zeus-plugins/tree/main/samples) — `HelloWorld` and `Amplifier` reference implementations in the plugin registry repo
+- [`OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins/samples/`](https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins/tree/main/samples) — `HelloWorld` and `Amplifier` reference implementations in the plugin registry repo

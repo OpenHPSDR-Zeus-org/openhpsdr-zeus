@@ -28,7 +28,7 @@ Explicit non-v1 (worth surfacing to KB2UKA as "want to add these?" rather than p
 
 ### Deployment model — each block is a registry plugin
 
-Per Brian's plugin system rebuild ([PR #368](https://github.com/Kb2uka/openhpsdr-zeus/pull/368), merged to `develop` at `a5f5df4` 2026-05-17), each of the five blocks ships as a **separate Zeus-native registry plugin**, NOT as code baked into Zeus core. The blocks are managed .NET assemblies authored by Zeus contributors and distributed through `Kb2uka/openhpsdr-zeus-plugins`. They are **not VST3 plugins** and have no relationship to the Steinberg ecosystem; the operational "MaxxBass" / "Aphex 204" / "Aural Exciter" naming refers to the well-known *processing techniques* we reimplement, not to any third-party plugin product.
+Per Brian's plugin system rebuild ([PR #368](https://github.com/Kb2uka/openhpsdr-zeus/pull/368), merged to `develop` at `a5f5df4` 2026-05-17), each of the five blocks ships as a **separate Zeus-native registry plugin**, NOT as code baked into Zeus core. The blocks are managed .NET assemblies authored by Zeus contributors and distributed through `OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins`. They are **not VST3 plugins** and have no relationship to the Steinberg ecosystem; the operational "MaxxBass" / "Aphex 204" / "Aural Exciter" naming refers to the well-known *processing techniques* we reimplement, not to any third-party plugin product.
 
 Each block implements:
 
