@@ -105,6 +105,30 @@ public class AudioToolsPlatformAffordanceEndpointTests
             Assert.Equal(HttpStatusCode.OK, res.StatusCode);
     }
 
+    // Windows-parity regression for the editor-guard skip (Bug 1): the TX and
+    // generic POST editor routes skip the "install the VST engine" guard only
+    // when the in-process bridge natively hosts the plugin
+    // (AudioPluginBridge.HostsPlugin). For an id the bridge does NOT host —
+    // which is every engine-routed plugin on Windows, and any unknown id — the
+    // guard must still fire and return the curated 409 "Download VST Engine"
+    // message, exactly as before the macOS in-process fallback was added.
+    [Theory]
+    [InlineData("/api/tx-audio-suite/plugins/com.example.unhosted/editor")]
+    [InlineData("/api/audio-suite/plugins/com.example.unhosted/editor")]
+    public async Task EditorOpen_ForPluginTheBridgeDoesNotHost_StillReturnsEngineGuard(string url)
+    {
+        using var client = _factory.CreateClient();
+
+        var res = await client.PostAsJsonAsync(url, new { });
+
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        using var json = await res.Content.ReadFromJsonAsync<JsonDocument>();
+        Assert.NotNull(json);
+        var error = json!.RootElement.GetProperty("error").GetString();
+        Assert.NotNull(error);
+        Assert.Contains("VST engine", error, StringComparison.OrdinalIgnoreCase);
+    }
+
     public sealed class Factory : IsolatedPrefsFactory
     {
     }

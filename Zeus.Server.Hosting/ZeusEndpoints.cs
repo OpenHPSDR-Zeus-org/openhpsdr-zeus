@@ -819,7 +819,12 @@ public static class ZeusEndpoints
                 // processing mode; only the TX path is gated on the VST engine.
                 if (rxVst.HasEngineSlot(id))
                     return MapEditorResult(rxVst.OpenEditor(id), open: true);
-                if (VstEngineEditorGuard(id, mode) is { } guard)
+                // Skip the "install the VST engine" guard when the bridge hosts
+                // this plugin in-process (a natively-loaded AU/VST3) — the editor
+                // opens via bridge.OpenEditor below. Engine-routed plugins are not
+                // natively loaded, so HostsPlugin is false and the guard still
+                // fires for them (Windows path unchanged).
+                if (!bridge.HostsPlugin(id) && VstEngineEditorGuard(id, mode) is { } guard)
                     return guard;
                 var result = mode.EngineActive && mode.HasEngineSlot(id)
                     ? mode.OpenEditor(id)
@@ -849,7 +854,12 @@ public static class ZeusEndpoints
         app.MapPost("/api/tx-audio-suite/plugins/{id}/editor",
             (string id, AudioPluginBridge bridge, AudioProcessingModeService mode) =>
             {
-                if (VstEngineEditorGuard(id, mode) is { } guard)
+                // As with the generic route: a bridge-hosted in-process plugin
+                // (natively-loaded AU/VST3) opens via bridge.OpenEditor and must
+                // not be blocked by the engine guard. Engine-routed TX VSTs are
+                // not natively loaded, so HostsPlugin is false and the guard fires
+                // exactly as today (Windows path unchanged).
+                if (!bridge.HostsPlugin(id) && VstEngineEditorGuard(id, mode) is { } guard)
                     return guard;
                 var result = mode.EngineActive && mode.HasEngineSlot(id)
                     ? mode.OpenEditor(id)

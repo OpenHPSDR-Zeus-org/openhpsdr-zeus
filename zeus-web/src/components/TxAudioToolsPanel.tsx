@@ -565,6 +565,9 @@ function TxChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) 
   const loadProcessingModeFromServer = useAudioSuiteStore(
     (s) => s.loadProcessingModeFromServer,
   );
+  const loadEngineSupportFromServer = useAudioSuiteStore(
+    (s) => s.loadEngineSupportFromServer,
+  );
 
   const vstMode = processingMode === 'vst';
   const vstSlots = useMemo(() => {
@@ -599,7 +602,8 @@ function TxChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) 
   useEffect(() => {
     loadMasterBypassFromServer();
     loadProcessingModeFromServer();
-  }, [loadMasterBypassFromServer, loadProcessingModeFromServer]);
+    loadEngineSupportFromServer();
+  }, [loadMasterBypassFromServer, loadProcessingModeFromServer, loadEngineSupportFromServer]);
 
   return (
     <RouteRail
@@ -678,6 +682,9 @@ function RxChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) 
   const loadRxProcessingModeFromServer = useAudioSuiteStore(
     (s) => s.loadRxProcessingModeFromServer,
   );
+  const loadEngineSupportFromServer = useAudioSuiteStore(
+    (s) => s.loadEngineSupportFromServer,
+  );
 
   const engineSupported = useAudioSuiteStore((s) => s.engineSupported);
   const engineSupportLoaded = useAudioSuiteStore((s) => s.engineSupportLoaded);
@@ -709,7 +716,13 @@ function RxChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) 
     loadRxChainOrderFromServer();
     loadRxMasterBypassFromServer();
     loadRxProcessingModeFromServer();
-  }, [loadRxChainOrderFromServer, loadRxMasterBypassFromServer, loadRxProcessingModeFromServer]);
+    loadEngineSupportFromServer();
+  }, [
+    loadRxChainOrderFromServer,
+    loadRxMasterBypassFromServer,
+    loadRxProcessingModeFromServer,
+    loadEngineSupportFromServer,
+  ]);
 
   return (
     <RouteRail

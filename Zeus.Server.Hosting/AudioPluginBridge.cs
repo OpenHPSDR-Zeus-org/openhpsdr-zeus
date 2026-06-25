@@ -348,6 +348,21 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         return vst;
     }
 
+    /// <summary>
+    /// True when the in-process bridge actually hosts a <em>natively-loaded</em>
+    /// plugin (TX or RX) for this id — i.e. there is a real plugin instance
+    /// behind the handle whose editor the bridge can open in-process. This
+    /// gates strictly on <see cref="VstHostAudioPlugin.IsNativelyLoaded"/>, not
+    /// bare map membership: engine-routed VSTs (the Windows out-of-process VST
+    /// path, and the opt-in-gated TX slot) live in the bridge maps but were
+    /// never natively loaded, so they return false here and the editor guard /
+    /// engine routing stays exactly as before for them. Used by the editor
+    /// endpoints to skip the "install the VST engine" guard for AU/VST3 plugins
+    /// the bridge genuinely hosts in-process (the only host on macOS).
+    /// </summary>
+    public bool HostsPlugin(string pluginId) =>
+        ResolveVst(pluginId, out _) is { IsNativelyLoaded: true };
+
     public Task StartAsync(CancellationToken ct)
     {
         _manager.PluginActivated   += OnPluginActivated;
