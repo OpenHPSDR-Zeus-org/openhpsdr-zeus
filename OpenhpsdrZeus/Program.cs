@@ -452,18 +452,38 @@ public partial class Program
         {
             try
             {
+                // Record the full display topology + the geometry we're about to
+                // restore. This is the smoking gun for "window flashes and never
+                // appears" reports where the startup log otherwise reaches
+                // "entering message loop" cleanly (the window IS created — it just
+                // lands off the visible desktop or comes up minimized).
+                try
+                {
+                    foreach (var mon in window.Monitors)
+                        StartupDiagnostics.Log(
+                            $"[geometry] monitor area=({mon.MonitorArea.X},{mon.MonitorArea.Y} {mon.MonitorArea.Width}x{mon.MonitorArea.Height}) " +
+                            $"work=({mon.WorkArea.X},{mon.WorkArea.Y} {mon.WorkArea.Width}x{mon.WorkArea.Height}) scale={mon.Scale}");
+                    StartupDiagnostics.Log(
+                        $"[geometry] saved width={savedGeometry.Width} height={savedGeometry.Height} maximized={savedGeometry.Maximized}");
+                }
+                catch (Exception ex) { StartupDiagnostics.Log($"[geometry] monitor enumerate failed: {ex.Message}"); }
+
+                // Always seat a sane on-screen normal size + position first — even
+                // when restoring maximized — so un-maximizing later lands on the
+                // visible desktop rather than wherever the saved bytes pointed.
+                PlaceWindowOnVisibleWorkArea(window, initialWidth, initialHeight);
                 if (savedGeometry.Maximized)
-                {
                     window.Maximized = true;
-                }
-                else
-                {
-                    window.Size = new System.Drawing.Size(initialWidth, initialHeight);
-                    window.Center();
-                }
+
+                // A frame that comes up minimized is indistinguishable from "no
+                // window" to the operator; some Windows builds have been observed
+                // to open this way after a restore. Force it back to normal.
+                if (window.Minimized)
+                    window.Minimized = false;
             }
             catch (Exception ex)
             {
+                StartupDiagnostics.Log($"[geometry] restore failed: {ex.Message}");
                 Console.Error.WriteLine($"window.geometry.restore failed: {ex.Message}");
             }
             finally
@@ -569,6 +589,63 @@ public partial class Program
         Console.WriteLine("Window closed; stopping backend.");
         app.StopAsync().GetAwaiter().GetResult();
         return 0;
+    }
+
+    // Photino occasionally opens the frame off the visible desktop on
+    // multi-monitor / fractional-DPI setups: the window IS created and the
+    // message loop runs (the startup log reaches "entering message loop"), but
+    // the operator sees only a brief flash because the frame landed beyond the
+    // work area, or larger than the monitor, or centred using a different
+    // monitor's metrics. Clamp the desired size to the monitor work area and
+    // force the position back inside it so a visible frame is guaranteed.
+    //
+    // Best-effort and self-contained: any failure falls back to Photino's own
+    // SetSize + Center so a quirky monitor query can never strand the window.
+    private static void PlaceWindowOnVisibleWorkArea(PhotinoWindow window, int desiredWidth, int desiredHeight)
+    {
+        try
+        {
+            var work = window.MainMonitor.WorkArea; // System.Drawing.Rectangle, OS pixels
+            // No usable monitor reported — let Photino place it and bail.
+            if (work.Width <= 0 || work.Height <= 0)
+            {
+                window.Size = new System.Drawing.Size(desiredWidth, desiredHeight);
+                window.Center();
+                return;
+            }
+
+            // Never open larger than the visible work area: a size saved on a
+            // bigger monitor would otherwise hang the frame off the edges.
+            var w = Math.Min(desiredWidth, work.Width);
+            var h = Math.Min(desiredHeight, work.Height);
+            window.Size = new System.Drawing.Size(w, h);
+
+            // Centre within the work area, then clamp so the title bar is always
+            // reachable even when the monitor origin is negative (a display to
+            // the left of / above the primary).
+            var left = work.X + (work.Width - w) / 2;
+            var top = work.Y + (work.Height - h) / 2;
+            left = Math.Max(work.X, Math.Min(left, work.X + work.Width - w));
+            top = Math.Max(work.Y, Math.Min(top, work.Y + work.Height - h));
+            window.Location = new System.Drawing.Point(left, top);
+
+            StartupDiagnostics.Log(
+                $"[geometry] placed at ({left},{top}) size {w}x{h} within work " +
+                $"({work.X},{work.Y} {work.Width}x{work.Height})");
+        }
+        catch (Exception ex)
+        {
+            StartupDiagnostics.Log($"[geometry] place-on-work-area failed, using Center(): {ex.Message}");
+            try
+            {
+                window.Size = new System.Drawing.Size(desiredWidth, desiredHeight);
+                window.Center();
+            }
+            catch (Exception inner)
+            {
+                Console.Error.WriteLine($"window.geometry.center fallback failed: {inner.Message}");
+            }
+        }
     }
 
     private static bool TryReadWorkspaceWindowRequest(string message, out WorkspaceWindowRequest request)
