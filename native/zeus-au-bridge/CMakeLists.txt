@@ -39,12 +39,16 @@ if(APPLE)
     find_library(AVFOUNDATION_LIB    AVFoundation)
     find_library(COREFOUNDATION_LIB  CoreFoundation)
     find_library(COREAUDIO_LIB       CoreAudio)
+    # Foundation backs the Objective-C @autoreleasepool used to drain the
+    # autoreleased CFString/AU temporaries during component enumeration.
+    find_library(FOUNDATION_LIB      Foundation)
     target_link_libraries(zeus-au-bridge PRIVATE
         ${AUDIOTOOLBOX_LIB}
         ${AUDIOUNIT_LIB}
         ${AVFOUNDATION_LIB}
         ${COREFOUNDATION_LIB}
-        ${COREAUDIO_LIB})
+        ${COREAUDIO_LIB}
+        ${FOUNDATION_LIB})
 
     # Strip non-ABI symbols; keep AudioToolbox internals off the export table.
     set_target_properties(zeus-au-bridge PROPERTIES

@@ -28,6 +28,7 @@
 
 #import <AudioToolbox/AudioToolbox.h>
 #import <CoreFoundation/CoreFoundation.h>
+#import <Foundation/Foundation.h>
 
 #include <atomic>
 #include <cstring>
@@ -82,6 +83,16 @@ struct LoadedAu {
     std::vector<uint8_t> input_abl_storage; // AudioBufferList + N AudioBuffer
     const float* current_input{nullptr};    // set per process() call
     int32_t      current_frames{0};
+
+    // Monotonic host sample-time cursor handed to AudioUnitRender. It MUST
+    // advance by `frames` every block: time-based AUs (reverb / delay /
+    // chorus / tremolo and any LFO-driven effect) read the render timestamp
+    // as their clock. Pinning it to 0 every block — as this bridge originally
+    // did — makes those effects reset or stutter at every block boundary
+    // (audible as garbled / modulated output), even though a static filter
+    // like AULowpass is unaffected. Owned by the realtime thread; the AU
+    // serialises process/unload via the handle so no atomics are needed.
+    Float64 render_sample_time{0.0};
 
     AudioBufferList* input_abl() {
         return reinterpret_cast<AudioBufferList*>(input_abl_storage.data());
@@ -176,10 +187,15 @@ static int do_load(LoadedAu& p, const char* identifier) {
     if (st != noErr) { teardown(p); return ZAU_ACTIVATE_FAILED; }
 
     // Bound the render block size so AudioUnitInitialize sizes internal
-    // scratch for our worst case.
+    // scratch for our worst case. Some AUs reject a slice larger than they
+    // support; treat a failure here as a hard load failure (consistent with
+    // the other property sets above) rather than silently initialising with
+    // an unknown slice ceiling, which could let AudioUnitRender be driven past
+    // the buffers it sized for.
     UInt32 maxFrames = static_cast<UInt32>(p.block_size);
-    AudioUnitSetProperty(p.unit, kAudioUnitProperty_MaximumFramesPerSlice,
-                         kAudioUnitScope_Global, 0, &maxFrames, sizeof(maxFrames));
+    st = AudioUnitSetProperty(p.unit, kAudioUnitProperty_MaximumFramesPerSlice,
+                              kAudioUnitScope_Global, 0, &maxFrames, sizeof(maxFrames));
+    if (st != noErr) { teardown(p); return ZAU_ACTIVATE_FAILED; }
 
     // Wire the input render callback so the AU pulls our planar buffers.
     AURenderCallbackStruct cb{};
@@ -266,11 +282,16 @@ int32_t zau_process(
     AudioUnitRenderActionFlags flags = 0;
     AudioTimeStamp ts{};
     ts.mFlags       = kAudioTimeStampSampleTimeValid;
-    ts.mSampleTime  = 0;
+    ts.mSampleTime  = p->render_sample_time;
 
     OSStatus st = AudioUnitRender(p->unit, &flags, &ts, 0,
                                   static_cast<UInt32>(frames), abl);
     p->current_input = nullptr;
+    // Advance the host clock by exactly the rendered frame count so the next
+    // block continues seamlessly (monotonic, gap-free). Even on a soft render
+    // failure we still advance: the slot emitted `frames` of passthrough audio,
+    // so the AU's notion of elapsed time must match the audio that left.
+    p->render_sample_time += static_cast<Float64>(frames);
     if (st != noErr) {
         // Soft fail — copy input to output. The .NET wrapper downgrades the
         // chain to pass-through (mirrors the VST3 bridge's ZVST_OTHER path).
@@ -358,6 +379,12 @@ int32_t zau_enumerate_effects(char* buffer, int32_t buffer_len, int32_t* out_len
     const OSType effectTypes[] = { kAudioUnitType_Effect, kAudioUnitType_MusicEffect };
 
     std::string acc;
+    // AudioComponentCopyName + the CFString helpers below hand back
+    // autoreleased temporaries. This entry point is called from the .NET
+    // control thread, which has no ambient autorelease pool, so without an
+    // explicit one those temporaries accumulate for the life of the process
+    // and leak on every scan. Drain them here.
+    @autoreleasepool {
     for (OSType effectType : effectTypes) {
     AudioComponentDescription query{};
     query.componentType = effectType;
@@ -401,6 +428,7 @@ int32_t zau_enumerate_effects(char* buffer, int32_t buffer_len, int32_t* out_len
         acc += '\n';
     }
     } // for effectType
+    } // @autoreleasepool
 
     int32_t needed = static_cast<int32_t>(acc.size());
     *out_len = needed;
