@@ -98,6 +98,16 @@ const NOTCH_CLICK_WIDTH_HZ = 150;
 const WHEEL_NOTCH_PX = 40;
 const SPECTRUM_TUNE_CURSOR = 'var(--spectrum-tune-cursor, default)';
 
+// Shared "a spectrum pan/tune drag is in progress" signal. filter-autopan reads
+// this so it never recentres the view mid-drag — a CTUN-sweep drag maps the
+// cursor against the frozen grab-time centre, and a ruler-pan drag IS the user
+// moving the view, so autopan must stay out of both and recover on release. A
+// depth counter tolerates overlapping gestures across receiver panes.
+let spectrumDragDepth = 0;
+export function isSpectrumDragActive(): boolean {
+  return spectrumDragDepth > 0;
+}
+
 // Grid snap helper for ordinary click/drag tuning. Snap-to-signal goes through
 // resolvePanTuneTarget so click and hover share the same carrier target.
 export function snapHz(hz: number): number {
@@ -364,6 +374,17 @@ export function usePanTuneGesture(
       raf: number;
     };
     let drag: Drag | null = null;
+    // Reflect this instance's drag state into the shared depth counter exactly
+    // once per transition, so filter-autopan can suppress recentring mid-drag.
+    let dragHeld = false;
+    const setDrag = (d: Drag | null) => {
+      drag = d;
+      const held = d !== null;
+      if (held !== dragHeld) {
+        dragHeld = held;
+        spectrumDragDepth += held ? 1 : -1;
+      }
+    };
     // Notch painting: while NOTCH is armed, a pointer drag defines a notch
     // band (start..current frequency) instead of tuning. startHz is captured
     // at pointerdown; the live preview is published to the notch store for
@@ -600,7 +621,7 @@ export function usePanTuneGesture(
       // single-pointer drag; we drop the drag state so the lifted finger
       // doesn't snap-tune on release.
       if (pointers.size >= 2) {
-        if (drag) drag = null;
+        if (drag) setDrag(null);
         if (mapDrag) mapDrag = null;
         canvas.style.cursor = '';
         if (!pinch) {
@@ -628,6 +649,17 @@ export function usePanTuneGesture(
         canvas.style.cursor = 'grabbing';
         return;
       }
+      // Focus the receiver whose pane you're interacting with, so the global
+      // mode / band / AF toolbar acts on it. Without this, those controls always
+      // targeted whatever the RX mixer last focused (RX1 by default), so RX2/RX3
+      // and the Kiwi slice couldn't have their mode changed by clicking into
+      // their pane — only via the mixer's focus button. Gated below the pinch/
+      // alt-drag early-returns so multi-touch zoom and map-drag are unaffected.
+      {
+        const tuneIdx = rxIndexOf(tuneReceiver);
+        if (useConnectionStore.getState().focusedRxIndex !== tuneIdx)
+          useConnectionStore.getState().setFocusedRxIndex(tuneIdx);
+      }
       const view = readView(receiver);
       if (!view) return;
       // NOTCH armed: paint a notch band instead of tuning. Capture the start
@@ -649,13 +681,13 @@ export function usePanTuneGesture(
       } catch {
         /* synthetic events don't have an active pointer; real mouse/touch does */
       }
-      drag = {
+      setDrag({
         startX: e.clientX,
         startHz: dragView.centerHz,
         spanHz: dragView.spanHz,
         moved: false,
         mode: dragMode,
-      };
+      });
       canvas.style.cursor = dragMode === 'ruler-pan' ? 'grabbing' : SPECTRUM_TUNE_CURSOR;
     };
 
@@ -802,7 +834,7 @@ export function usePanTuneGesture(
       }
       const d = drag;
       if (!d) return;
-      drag = null;
+      setDrag(null);
       canvas.style.cursor = idleCursor();
       if (canvas.hasPointerCapture(e.pointerId)) {
         canvas.releasePointerCapture(e.pointerId);
@@ -903,6 +935,8 @@ export function usePanTuneGesture(
     canvas.addEventListener('wheel', onWheel, { passive: false });
 
     return () => {
+      // Release any drag depth this instance still holds (unmount mid-drag).
+      setDrag(null);
       if (pendingRaf !== 0) cancelAnimationFrame(pendingRaf);
       if (pendingPanRaf !== 0) cancelAnimationFrame(pendingPanRaf);
       cancelPinchRaf();
