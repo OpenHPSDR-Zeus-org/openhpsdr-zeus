@@ -44,6 +44,7 @@ function makeProfile(id: string, name: string, mode: 'native' | 'vst' = 'native'
 describe('tx-audio-profile-store', () => {
   beforeEach(() => {
     useTxAudioProfileStore.setState({ profiles: [], loaded: false, lastLoadedId: null, busy: false });
+    useAudioSuiteStore.setState(useAudioSuiteStore.getInitialState(), true);
     vi.restoreAllMocks();
   });
 
@@ -119,6 +120,7 @@ describe('tx-audio-profile-store', () => {
     expect(audio.chainOrder).toEqual(['comp', 'eq']);
     expect(audio.processingMode).toBe('vst');
     expect(audio.masterBypassed).toBe(true);
+    expect(audio.pluginSettingsRevision).toBe(1);
   });
 
   it('remove() drops the row and clears a matching selection', async () => {
@@ -142,6 +144,7 @@ describe('tx-audio-profile-store — dirty tracking', () => {
     useTxAudioProfileStore.setState({
       profiles: [], loaded: false, lastLoadedId: null, busy: false, dirty: false, baseline: null,
     });
+    useAudioSuiteStore.setState(useAudioSuiteStore.getInitialState(), true);
     // Deterministic clean live state for the snapshot to read.
     useTxStore.setState({ micGainDb: 0, levelerMaxGainDb: 8 });
     vi.restoreAllMocks();

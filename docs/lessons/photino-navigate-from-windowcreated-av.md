@@ -73,8 +73,11 @@ the `zeus.placeholderReady` branch in the WebMessageReceived handler).
   `WindowCreated` both fire too early to navigate. The earliest safe signal is a
   web message (or `LocationChanged`) from already-loaded content.
 - An `0xc0000005` with a clean `zeus-startup.log` is a native crash **after** the
-  last phase marker — read the **Windows Event Log (Event 1026)** for the managed
-  stack; the diagnostics handlers cannot catch corrupted-state exceptions.
+  last phase marker. Current builds snapshot recent Windows Application crash
+  events (`.NET Runtime` 1026 and `Application Error` 1000) into
+  `%LOCALAPPDATA%\Zeus\zeus-startup.log` and write best-effort minidumps under
+  `%LOCALAPPDATA%\Zeus\crash-dumps\`. Ask the user for both when the app can no
+  longer reopen.
 - To reproduce/verify headlessly, launch `--desktop`, then check that the process
   survives and that **no new Event 1026** appears (a crash leaves the process hung
   on the modal error dialog, so "still running" alone is not proof — check the

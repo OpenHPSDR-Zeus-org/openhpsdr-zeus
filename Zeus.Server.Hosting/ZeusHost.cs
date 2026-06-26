@@ -388,6 +388,16 @@ public static class ZeusHost
             builder.Services.AddSingleton<NativeAudioSink>();
             builder.Services.AddSingleton<IRxAudioSink>(sp =>
                 sp.GetRequiredService<NativeAudioSink>());
+            // On a Saturn/G2 appliance Linux may expose no physical ALSA
+            // playback card at all. When Zeus is connected to a radio endpoint
+            // hosted on this same machine, mirror DeskHPSDR and feed p2app's
+            // speaker/headphone path directly instead of depending on the OS
+            // desktop-audio graph.
+            builder.Services.AddSingleton<SaturnSpeakerAudioSink>();
+            builder.Services.AddSingleton<IRxAudioSink>(sp =>
+                sp.GetRequiredService<SaturnSpeakerAudioSink>());
+            builder.Services.AddHostedService(sp =>
+                sp.GetRequiredService<SaturnSpeakerAudioSink>());
             // Same singleton serves local mono side-channel playback
             // (currently WAV/local monitor paths) in the same playback path
             // the operator already hears RX audio through. Browser mode (the

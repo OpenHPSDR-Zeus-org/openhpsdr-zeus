@@ -45,6 +45,7 @@ public sealed class G2PanelActionRouter
     private readonly RadioService _radio;
     private readonly TxService _tx;
     private readonly BandMemoryStore _bandMemory;
+    private readonly ToolbarSettingsStore _toolbarSettings;
     private readonly ILogger _log;
 
     // Per-panel push-button transition tracking. The panel reports a button
@@ -56,11 +57,24 @@ public sealed class G2PanelActionRouter
     // cycles which parameter the MULTI encoder adjusts.
     private int _multiIndex;
 
-    // Tuning granularity for the main VFO knob, in Hz per (accelerated) step.
-    // The panel's own acceleration curve is already applied upstream.
-    private const long VfoStepHz = 10;
+    // Net VFO-knob movement accumulated since the last service flush. These are
+    // accelerated encoder ticks from the panel, not final Hz-step detents. The
+    // serial read path only adds to this counter; RadioService retunes happen
+    // off that path so a fast spin cannot backlog serial reads behind state
+    // broadcasts.
+    private long _pendingVfoTicks;
+
+    // DeskHPSDR's action layer keeps a VFO accumulator and divides by
+    // vfo_encoder_divisor before calling vfo_step(). Zeus computes the divisor
+    // from the selected toolbar step so coarse steps stay controllable while
+    // 1 Hz / 10 Hz steps remain responsive.
+    private long _vfoTickAccumulator;
+
     // Encoder step sizes.
     private const int FilterStepHz = 50;
+    private const int VfoEncoderReferenceStepHz = 10;
+    private const int MinVfoEncoderDivisor = 1;
+    private const int MaxVfoEncoderDivisor = 60;
     private const long RitStepHz = 10;
     private const long RitXitMax = 99_999; // Thetis udRIT/udXIT range
     private const double AfGainStepDb = 1.0;
@@ -91,11 +105,17 @@ public sealed class G2PanelActionRouter
     // Index cycled by the MULTI push-button; the MULTI encoder calls Apply.
     private readonly (string Name, Action<int> Apply)[] _multi;
 
-    public G2PanelActionRouter(RadioService radio, TxService tx, BandMemoryStore bandMemory, ILogger log)
+    public G2PanelActionRouter(
+        RadioService radio,
+        TxService tx,
+        BandMemoryStore bandMemory,
+        ToolbarSettingsStore toolbarSettings,
+        ILogger log)
     {
         _radio = radio;
         _tx = tx;
         _bandMemory = bandMemory;
+        _toolbarSettings = toolbarSettings;
         _log = log;
 
         _multi = new (string, Action<int>)[]
@@ -134,8 +154,63 @@ public sealed class G2PanelActionRouter
 
     private void HandleVfo(int steps)
     {
-        var s = _radio.Snapshot();
-        _radio.SetVfo(s.VfoHz + steps * VfoStepHz);
+        Interlocked.Add(ref _pendingVfoTicks, steps);
+    }
+
+    public void FlushPendingVfo()
+    {
+        long ticks = Interlocked.Exchange(ref _pendingVfoTicks, 0);
+        if (ticks == 0) return;
+
+        try
+        {
+            int stepHz = _toolbarSettings.CurrentStepHz;
+            var divided = DivideVfoEncoderTicks(_vfoTickAccumulator, ticks, stepHz);
+            _vfoTickAccumulator = divided.RemainderTicks;
+            if (divided.LogicalSteps == 0) return;
+
+            var s = _radio.Snapshot();
+            _radio.SetVfo(ApplyVfoSteps(s.VfoHz, divided.LogicalSteps, stepHz));
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "g2panel.vfo.flush.error ticks={Ticks}", ticks);
+        }
+    }
+
+    internal static int VfoEncoderDivisorForStep(int stepHz)
+    {
+        int step = ToolbarSettingsStore.NormalizeStepHz(stepHz);
+        int divisor = (step + VfoEncoderReferenceStepHz - 1) / VfoEncoderReferenceStepHz;
+        return Math.Clamp(divisor, MinVfoEncoderDivisor, MaxVfoEncoderDivisor);
+    }
+
+    internal static (long LogicalSteps, long RemainderTicks) DivideVfoEncoderTicks(
+        long accumulatedTicks,
+        long incomingTicks,
+        int stepHz)
+    {
+        int divisor = VfoEncoderDivisorForStep(stepHz);
+        long total = accumulatedTicks + incomingTicks;
+        long logicalSteps = total / divisor;
+        return (logicalSteps, total - logicalSteps * divisor);
+    }
+
+    internal static long ApplyVfoSteps(long currentHz, long steps, int stepHz)
+    {
+        int step = ToolbarSettingsStore.NormalizeStepHz(stepHz);
+        long target = currentHz + steps * step;
+        return RoundToStep(target, step);
+    }
+
+    private static long RoundToStep(long hz, int stepHz)
+    {
+        if (hz <= 0) return 0;
+        if (stepHz <= 1) return hz;
+
+        long quotient = Math.DivRem(hz, stepHz, out long remainder);
+        if (remainder * 2 >= stepHz) quotient++;
+        return quotient > long.MaxValue / stepHz ? long.MaxValue : quotient * stepHz;
     }
 
     // ---- Buttons (G2-Ultra map; Thetis MakeNewG2PanelDataset) ---------------

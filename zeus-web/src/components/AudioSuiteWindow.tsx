@@ -1049,6 +1049,7 @@ export function AudioSuiteWindow({
   const loadRxMasterBypassFromServer = useAudioSuiteStore(
     (s) => s.loadRxMasterBypassFromServer,
   );
+  const pluginSettingsRevision = useAudioSuiteStore((s) => s.pluginSettingsRevision);
   const setPosition = useCallback(
     (nextX: number, nextY: number) => setWindowPosition(route, nextX, nextY),
     [route, setWindowPosition],
@@ -2074,7 +2075,9 @@ export function AudioSuiteWindow({
         }}
       >
         {SelectedComponent ? (
-          <SelectedComponent />
+          <SelectedComponent
+            key={`${selectedPanel!.pluginId}::${selectedPanel!.panelId}::${pluginSettingsRevision}`}
+          />
         ) : (
           <span
             style={{ color: 'var(--fg-3)', fontSize: 12, fontStyle: 'italic' }}

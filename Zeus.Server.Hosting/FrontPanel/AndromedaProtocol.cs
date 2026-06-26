@@ -37,8 +37,9 @@ public abstract record PanelEvent
     /// since the last report (1..9).</summary>
     public sealed record Encoder(int Id, int Ticks) : PanelEvent;
 
-    /// <summary>Main VFO dial. <see cref="Steps"/> is signed tuning steps,
-    /// already run through the ANDROMEDA acceleration curve.</summary>
+    /// <summary>Main VFO dial. <see cref="Steps"/> is signed accelerated
+    /// encoder ticks. The action router divides these into logical VFO steps
+    /// before applying the operator's selected Hz step.</summary>
     public sealed record Vfo(int Steps) : PanelEvent;
 
     /// <summary>The panel announced its identity (response to <c>ZZZS;</c>).
