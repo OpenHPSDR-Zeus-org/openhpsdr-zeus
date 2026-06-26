@@ -30,7 +30,10 @@
 //   against its OWN displayed view, so a stitched/multi-RX layout keeps each
 //   half in view independently. RX1 pans its hardware NCO; secondaries pan
 //   their own DDC centre (panReceiverCenterTo → /api/receivers/{i}/lo, which is
-//   a true independent DDC on Protocol 2 and a no-op on P1's shared NCO).
+//   a true independent DDC on Protocol 2 and a no-op on P1's shared NCO). The
+//   Kiwi slice receiver routes the same /lo call to its waterfall centre
+//   (KiwiSdrService.SetCenter), so the Kiwi waterfall keeps the crosshair in
+//   view exactly like the hardware panes.
 //   Outside CTUN the view already tracks the dial (offset ~0), so the geometry
 //   never asks for a pan there — but we still gate on ctunEnabled to keep the
 //   intent explicit.
@@ -38,14 +41,18 @@
 //   never by a view-centre (radioLo) pan — so a deliberate ruler-pan away from
 //   the RX to inspect other spectrum is preserved; only re-tuning pulls the
 //   filter back into view.
-// - Trailing debounce: a continuous CTUN drag rewrites vfo every frame and maps
-//   the cursor against the frozen grab-time centre, so recentring mid-drag would
-//   fight the gesture. Waiting for tuning to settle (SETTLE_MS) fires the autopan
-//   after a drag releases and after each discrete wheel/key/CAT step.
+// - Evaluated per display frame (draw bus), so a continuous wheel/keyboard tune
+//   follows live instead of only catching up when the operator stops. It is
+//   suppressed only while an actual pointer DRAG is in progress
+//   (isSpectrumDragActive): a CTUN-sweep drag maps the cursor against the frozen
+//   grab-time centre, and a ruler-pan drag IS the user moving the view, so
+//   autopan stays out of both and recovers on release (the commit + view glide
+//   re-trigger it).
 
 import { useEffect } from 'react';
 import { selectDisplaySliceByRxId, useDisplayStore } from '../state/display-store';
 import { useConnectionStore } from '../state/connection-store';
+import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import {
   getReceiverFilterHighHz,
   getReceiverFilterLowHz,
@@ -54,14 +61,22 @@ import {
 } from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
 import { panReceiverCenterTo } from './ctun-zoom-center';
+import { isSpectrumDragActive } from './use-pan-tune-gesture';
 
 // Keep this fraction of the span between the dial/filter extent and the view
 // edge, so the passband never sits flush against the rail.
 const AUTOPAN_MARGIN_FRAC = 0.06;
-// Trailing settle window after the last tuning event before autopan fires.
-// Long enough that a continuous pointer drag (vfo changes every frame) does not
-// recentre mid-gesture; short enough to feel immediate after a wheel/key step.
-const SETTLE_MS = 90;
+// Min interval between actual recentres per receiver. Detection runs every
+// frame, but each pan posts a LO/DDC retune, so rate-limit the network side;
+// the view-centre tween glides smoothly to the latest target in between, so a
+// throttled follow still looks continuous during a sustained tune.
+const PAN_THROTTLE_MS = 80;
+// Highest receiver index the view-centre-motion subscription covers: RX1 (0),
+// the hardware secondaries, and the reserved Kiwi slice slot (7), so the Kiwi
+// waterfall is kept in view exactly like the hardware panes once that feature
+// is present. Subscribing to inactive indices is free — their view-centre
+// controller stays idle and never glides, so the listener never fires.
+const MAX_AUTOPAN_RX_INDEX = 7;
 
 /**
  * Pure geometry: given the current view centre, span, dial, and filter, return
@@ -116,16 +131,18 @@ export function computeAutopanCenterHz(p: {
 
 /**
  * Global hook: keeps each receiver's filter + dial crosshair inside its own
- * panadapter/waterfall view under CTUN by gliding the frozen centre when tuning
- * walks them off the edge. Covers RX1 and every active secondary. Mount once
- * (App / MobileApp).
+ * panadapter/waterfall view under CTUN. Evaluated per display frame so a
+ * continuous tune follows live; suppressed only during an active pointer drag.
+ * Covers RX1 and every active secondary. Mount once (App / MobileApp).
  */
 export function useFilterAutopan(): void {
   useEffect(() => {
-    let timer: number | null = null;
-
+    // Last recentre time per receiver index, for PAN_THROTTLE_MS rate-limiting.
+    const lastPanMs = new Map<number, number>();
     const check = () => {
-      timer = null;
+      // A ruler-pan / CTUN-sweep drag owns the view while held — recover on
+      // release (the commit + view glide re-trigger this check).
+      if (isSpectrumDragActive()) return;
       const conn = useConnectionStore.getState();
       // Only CTUN roams the dial off the view centre; otherwise the view
       // already follows the dial and there is nothing to keep in view.
@@ -153,18 +170,19 @@ export function useFilterAutopan(): void {
           cwPitchHz: conn.cwPitchHz,
           marginHz: spanHz * AUTOPAN_MARGIN_FRAC,
         });
-        if (next != null) panReceiverCenterTo(idx, next);
+        if (next == null) continue;
+        const nowMs = performance.now();
+        if (nowMs - (lastPanMs.get(idx) ?? 0) < PAN_THROTTLE_MS) continue;
+        lastPanMs.set(idx, nowMs);
+        panReceiverCenterTo(idx, next);
       }
     };
 
-    const schedule = () => {
-      if (timer !== null) window.clearTimeout(timer);
-      timer = window.setTimeout(check, SETTLE_MS);
-    };
+    // Coalesce to one evaluation per display frame (the draw bus dedupes repeat
+    // requests for the same callback).
+    const schedule = () => requestDrawBusFrame(check);
 
-    // Tuning / geometry only — deliberately NOT radioLoHz / view-centre, so a
-    // ruler-pan away from the RX is left where the operator put it. `receivers`
-    // reference changes on any secondary vfo/filter/mode edit.
+    // Tuning edits (vfo/filter/mode/cw-pitch) and CTUN/receiver-set changes.
     const unsubConn = useConnectionStore.subscribe((s, prev) => {
       if (
         s.vfoHz !== prev.vfoHz ||
@@ -189,11 +207,23 @@ export function useFilterAutopan(): void {
         schedule();
       }
     });
+    // View-centre motion for every receiver index, including the reserved Kiwi
+    // slice slot (MAX_AUTOPAN_RX_INDEX) whose waterfall pans its own centre via
+    // SetCenter: catches a glide easing toward the dial and, crucially, a
+    // ruler-pan that scrolled the dial off-screen — so the crosshair is
+    // recovered once the drag releases on ANY pane, not only on the next tune.
+    // Subscribing to inactive indices is free: their view-centre never glides,
+    // so the listener never fires.
+    const unsubVcs: Array<() => void> = [];
+    for (let i = 0; i <= MAX_AUTOPAN_RX_INDEX; i++) {
+      unsubVcs.push(viewCenter.viewCenterFor(i).subscribe(schedule));
+    }
 
     return () => {
-      if (timer !== null) window.clearTimeout(timer);
       unsubConn();
       unsubDisplay();
+      for (const u of unsubVcs) u();
+      cancelDrawBusFrame(check);
     };
   }, []);
 }

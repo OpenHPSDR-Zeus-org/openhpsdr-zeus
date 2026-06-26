@@ -58,6 +58,18 @@ import {
  *  RX3+); `'A'`/`'B'` are legacy aliases for 0/1. */
 export type ReceiverKey = 'A' | 'B' | number;
 
+/** Reserved high index for the KiwiSDR slice receiver (mirrors
+ *  WireContract.KiwiReceiverIndex = MaxReceivers-1 = 7). It is a software
+ *  receiver, not a hardware DDC — it never counts toward the multi-RX count
+ *  stepper or the ADC-source list. */
+export const KIWI_RECEIVER_INDEX = 7;
+
+/** Operator-facing label for a receiver. Hardware DDCs carry no name and fall
+ *  back to "RX{n}" (1-based); the Kiwi slice receiver carries "Kiwi". */
+export function receiverLabel(r: { index: number; name?: string | null }): string {
+  return r.name ?? `RX${r.index + 1}`;
+}
+
 /** 0-based receiver index for a key. A → 0, B → 1, number → itself. */
 export function rxIndexOf(key: ReceiverKey): number {
   if (key === 'A') return 0;
@@ -116,6 +128,32 @@ export function getReceiverFilterHighHz(state: ConnState, key: ReceiverKey): num
   const idx = rxIndexOf(key);
   if (idx === 0) return state.filterHighHz;
   return receiverEntry(state, idx)?.filterHighHz ?? state.filterHighHz;
+}
+
+// FreeDV carries no sideband of its own: the radio runs a real SSB demod
+// underneath on the FreeDV band convention — LSB below 10 MHz, USB at/above —
+// and the backend re-signs the WDSP bandpass to match at the engine seam. It
+// deliberately leaves the STORED filterLow/HighHz USB-positive so a dial that
+// crosses 10 MHz while parked in FreeDV doesn't have to rewrite state on every
+// retune. Display overlays must therefore apply the same convention themselves,
+// or the passband/cursor draws on the USB (positive) side even when the demod
+// is LSB (operator report: "waterfall crosshair shows USB" at 7.18 MHz). This
+// mirrors RadioService.EffectiveEngineMode + SignedFilterForMode on the server
+// and is a no-op for every non-FreeDV mode (whose stored width is already
+// correctly signed for its sideband).
+export const FREEDV_USB_THRESHOLD_HZ = 10_000_000;
+export function displayFilterEdgesHz(
+  mode: RxMode,
+  vfoHz: number,
+  lowHz: number,
+  highHz: number,
+): { lowHz: number; highHz: number } {
+  if (mode !== 'FREEDV') return { lowHz, highHz };
+  const loAbs = Math.min(Math.abs(lowHz), Math.abs(highHz));
+  const hiAbs = Math.max(Math.abs(lowHz), Math.abs(highHz));
+  return vfoHz < FREEDV_USB_THRESHOLD_HZ
+    ? { lowHz: -hiAbs, highHz: -loAbs } // LSB: negative-frequency passband
+    : { lowHz: loAbs, highHz: hiAbs }; // USB: positive-frequency passband
 }
 
 /** Read a receiver's VFO out of a server RadioStateDto (e.g. to reconcile the
