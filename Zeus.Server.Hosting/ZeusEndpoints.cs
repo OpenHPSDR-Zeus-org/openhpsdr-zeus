@@ -3466,6 +3466,32 @@ public static class ZeusEndpoints
             return Results.Ok(result);
         });
 
+        // Serial CAT ports (Thetis CAT1–4). GET returns per-port config + live
+        // open/error status plus the host's enumerable serial devices (UI
+        // suggestions; pty/com0com pairs aren't enumerable so the field is
+        // free-form). PUT replaces all four port configs and hot-reconnects (no
+        // restart). POST /test probe-opens one port to verify it's usable.
+        app.MapGet("/api/cat/serial/status",
+            (Zeus.Server.Cat.CatSerialService svc) => Results.Ok(svc.Snapshot()));
+
+        app.MapPut("/api/cat/serial/config",
+            (CatSerialConfig req, CatSerialConfigStore store, Zeus.Server.Cat.CatSerialService svc) =>
+        {
+            var ports = req?.Ports ?? Array.Empty<CatSerialPortConfig>();
+            log.LogInformation("api.cat.serial.config ports=[{Ports}]",
+                string.Join(", ", ports.Select((p, i) => $"#{i + 1} {(p.Enabled ? $"{p.PortName}@{p.BaudRate}" : "off")}")));
+            store.Set(ports);
+            return Results.Ok(svc.Snapshot());
+        });
+
+        app.MapPost("/api/cat/serial/test",
+            (CatSerialTestRequest req, Zeus.Server.Cat.CatSerialService svc) =>
+        {
+            if (string.IsNullOrWhiteSpace(req?.PortName))
+                return Results.BadRequest(new { error = "portName required" });
+            return Results.Ok(svc.TestPort(req));
+        });
+
         app.Map("/ws", async (HttpContext ctx, StreamingHub hub) =>
         {
             if (!ctx.WebSockets.IsWebSocketRequest)
