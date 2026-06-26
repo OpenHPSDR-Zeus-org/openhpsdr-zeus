@@ -221,7 +221,7 @@ public sealed class G2FrontPanelService : BackgroundService
         Send("ZZZS;");
 
         var ledLoop = LedPollLoop(ct);
-        var vfoLoop = VfoFlushLoop(ct);
+        var panelFlushLoop = PanelFlushLoop(ct);
         try
         {
             await ReadLoop(port, ct);
@@ -229,16 +229,17 @@ public sealed class G2FrontPanelService : BackgroundService
         finally
         {
             try { await ledLoop; } catch { /* surfaced by ReadLoop */ }
-            try { await vfoLoop; } catch { /* surfaced by ReadLoop */ }
+            try { await panelFlushLoop; } catch { /* surfaced by ReadLoop */ }
         }
     }
 
-    private async Task VfoFlushLoop(CancellationToken ct)
+    private async Task PanelFlushLoop(CancellationToken ct)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(16));
         while (await timer.WaitForNextTickAsync(ct))
         {
-            if (_panelType == 5) _router.FlushPendingVfo();
+            if (_panelType == 5 && _router.FlushPendingPanelWork())
+                RefreshLeds();
         }
     }
 
