@@ -56,6 +56,11 @@ public sealed class G2PanelActionRouter
     // cycles which parameter the MULTI encoder adjusts.
     private int _multiIndex;
 
+    // Net VFO-knob movement accumulated since the last service flush. The serial
+    // read path only adds to this counter; RadioService retunes happen off that
+    // path so a fast spin cannot backlog serial reads behind state broadcasts.
+    private long _pendingVfoSteps;
+
     // Tuning granularity for the main VFO knob, in Hz per (accelerated) step.
     // The panel's own acceleration curve is already applied upstream.
     private const long VfoStepHz = 10;
@@ -134,8 +139,23 @@ public sealed class G2PanelActionRouter
 
     private void HandleVfo(int steps)
     {
-        var s = _radio.Snapshot();
-        _radio.SetVfo(s.VfoHz + steps * VfoStepHz);
+        Interlocked.Add(ref _pendingVfoSteps, steps);
+    }
+
+    public void FlushPendingVfo()
+    {
+        long steps = Interlocked.Exchange(ref _pendingVfoSteps, 0);
+        if (steps == 0) return;
+
+        try
+        {
+            var s = _radio.Snapshot();
+            _radio.SetVfo(s.VfoHz + steps * VfoStepHz);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "g2panel.vfo.flush.error steps={Steps}", steps);
+        }
     }
 
     // ---- Buttons (G2-Ultra map; Thetis MakeNewG2PanelDataset) ---------------

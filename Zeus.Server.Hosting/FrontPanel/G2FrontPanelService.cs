@@ -220,6 +220,7 @@ public sealed class G2FrontPanelService : BackgroundService
         Send("ZZZS;");
 
         var ledLoop = LedPollLoop(ct);
+        var vfoLoop = VfoFlushLoop(ct);
         try
         {
             await ReadLoop(port, ct);
@@ -227,6 +228,16 @@ public sealed class G2FrontPanelService : BackgroundService
         finally
         {
             try { await ledLoop; } catch { /* surfaced by ReadLoop */ }
+            try { await vfoLoop; } catch { /* surfaced by ReadLoop */ }
+        }
+    }
+
+    private async Task VfoFlushLoop(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(16));
+        while (await timer.WaitForNextTickAsync(ct))
+        {
+            if (_panelType == 5) _router.FlushPendingVfo();
         }
     }
 
@@ -269,8 +280,10 @@ public sealed class G2FrontPanelService : BackgroundService
         if (_panelType != 5) return;
 
         _router.Dispatch(ev);
-        // Immediate LED feedback after an action (e.g. MOX/TUNE/CTUN edge).
-        RefreshLeds();
+        // VFO ticks do not change LED state, and retunes are flushed off the
+        // serial read path. Other controls still get immediate LED feedback.
+        if (ev is not PanelEvent.Vfo)
+            RefreshLeds();
     }
 
     private async Task LedPollLoop(CancellationToken ct)

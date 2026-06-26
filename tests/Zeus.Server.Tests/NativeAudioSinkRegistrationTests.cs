@@ -42,6 +42,7 @@ public class NativeAudioSinkRegistrationTests
         // Native capture must never be registered in server mode.
         var hosted = app.Services.GetServices<IHostedService>().ToArray();
         Assert.DoesNotContain(hosted, h => h.GetType().Name == "NativeAudioSink");
+        Assert.DoesNotContain(hosted, h => h.GetType().Name == "SaturnSpeakerAudioSink");
         Assert.DoesNotContain(hosted, h => h.GetType().Name == "NativeMicCapture");
 
         await app.DisposeAsync();
@@ -64,6 +65,7 @@ public class NativeAudioSinkRegistrationTests
         // Desktop mode swaps in the native sink so RX audio goes straight to
         // the OS default output device (Phase 2b).
         Assert.Contains(sinks, sink => sink.GetType().Name == "NativeAudioSink");
+        Assert.Contains(sinks, sink => sink.GetType().Name == "SaturnSpeakerAudioSink");
         Assert.Contains(sinks, sink => sink.GetType().Name == "GatedWebSocketAudioSink");
         Assert.DoesNotContain(sinks, sink => sink.GetType().Name == "WebSocketAudioSink");
 
@@ -71,6 +73,7 @@ public class NativeAudioSinkRegistrationTests
         // service so its StartAsync opens the playback device.
         var hosted = app.Services.GetServices<IHostedService>().ToArray();
         Assert.Contains(hosted, h => h.GetType().Name == "NativeAudioSink");
+        Assert.Contains(hosted, h => h.GetType().Name == "SaturnSpeakerAudioSink");
         Assert.Contains(hosted, h => h.GetType().Name == "NativeMicCapture");
 
         // Local side-channel playback: desktop mode binds IPreviewAudioSink
