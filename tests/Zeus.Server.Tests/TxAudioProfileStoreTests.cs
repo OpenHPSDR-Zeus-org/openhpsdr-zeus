@@ -7,16 +7,21 @@ namespace Zeus.Server.Tests;
 
 public class TxAudioProfileStoreTests : IDisposable
 {
+    private readonly string _root;
     private readonly string _dbPath;
 
     public TxAudioProfileStoreTests()
     {
-        _dbPath = Path.Combine(Path.GetTempPath(), $"zeus-prefs-txaudioprofiles-{Guid.NewGuid():N}.db");
+        // Per-test directory so the on-disk profile mirror folder
+        // (<dir>/tx-audio-profiles) is isolated and cleaned with the test.
+        _root = Path.Combine(Path.GetTempPath(), $"zeus-txaudioprofiles-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_root);
+        _dbPath = Path.Combine(_root, "zeus-prefs.db");
     }
 
     public void Dispose()
     {
-        try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { }
+        try { Directory.Delete(_root, recursive: true); } catch { }
     }
 
     private TxAudioProfileStore NewStore() =>
@@ -124,5 +129,59 @@ public class TxAudioProfileStoreTests : IDisposable
         store.SetLastLoadedId("studio-ssb");
         store.SetLastLoadedId(null);
         Assert.Null(store.GetLastLoadedId());
+    }
+
+    [Fact]
+    public void Upsert_MirrorsProfileToFolder()
+    {
+        using var store = NewStore();
+        store.Upsert(Sample("studio-ssb", "Studio SSB"));
+
+        var file = Path.Combine(store.ProfileFolder, "studio-ssb.json");
+        Assert.True(File.Exists(file));
+        Assert.Contains("Studio SSB", File.ReadAllText(file));
+    }
+
+    [Fact]
+    public void Delete_RemovesProfileFile()
+    {
+        using var store = NewStore();
+        store.Upsert(Sample("dx-punch", "DX Punch"));
+        var file = Path.Combine(store.ProfileFolder, "dx-punch.json");
+        Assert.True(File.Exists(file));
+
+        Assert.True(store.Delete("dx-punch"));
+        Assert.False(File.Exists(file));
+    }
+
+    [Fact]
+    public void NewStore_SyncsExistingProfilesToFolder()
+    {
+        using (var first = NewStore())
+            first.Upsert(Sample("essb-wide", "eSSB Wide"));
+
+        // Wipe the mirror folder, then re-open: the ctor must re-materialize it
+        // from the DB rows.
+        var folder = Path.Combine(_root, "tx-audio-profiles");
+        if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+
+        using var second = NewStore();
+        Assert.True(File.Exists(Path.Combine(second.ProfileFolder, "essb-wide.json")));
+    }
+
+    [Fact]
+    public void ParseJson_RoundTripsAndRejectsGarbage()
+    {
+        using var store = NewStore();
+        var saved = store.Upsert(Sample("studio-ssb", "Studio SSB", mic: -4));
+        var json = File.ReadAllText(Path.Combine(store.ProfileFolder, "studio-ssb.json"));
+
+        var parsed = TxAudioProfileStore.ParseJson(json);
+        Assert.NotNull(parsed);
+        Assert.Equal("studio-ssb", parsed!.Id);
+        Assert.Equal(-4, parsed.MicGainDb);
+
+        Assert.Null(TxAudioProfileStore.ParseJson("not json"));
+        Assert.Null(TxAudioProfileStore.ParseJson(""));
     }
 }
