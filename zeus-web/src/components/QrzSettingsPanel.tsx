@@ -166,7 +166,15 @@ export function QrzSettingsPanel() {
                 color: 'var(--fg-3)',
               }}
             >
-              Required for publishing QSOs to QRZ logbook
+              Required for publishing QSOs to QRZ logbook.{' '}
+              <a
+                href="https://www.qrz.com/docs/logbook30/api"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: 'var(--accent)' }}
+              >
+                Find your API key
+              </a>
             </div>
           </div>
 
