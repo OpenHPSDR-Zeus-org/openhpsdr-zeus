@@ -36,7 +36,7 @@ REM settings) stays stable across every launch. Server-side settings live in
 REM zeus-prefs.db and persist regardless; this keeps the UI side stable too.
 set "ZEUS_DESKTOP_PORT=6061"
 
-REM Launch detached. The app self-detaches its console in --desktop mode
-REM (FreeConsole), so no console window lingers behind the UI.
+REM Launch detached. The app is a GUI-subsystem binary (WinExe), so Windows
+REM never allocates a console for it — no console window behind the UI.
 start "Zeus" "%EXE%" --desktop
 exit /b 0
