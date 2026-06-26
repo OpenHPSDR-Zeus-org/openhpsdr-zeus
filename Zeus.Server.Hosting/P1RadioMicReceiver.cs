@@ -22,10 +22,14 @@ namespace Zeus.Server;
 /// <c>PacketParser.ExtractMicSamples</c>). Each EP6 packet carries 126 mic
 /// samples; the codec rate is always 48 kHz, so at IQ rates above 48 kHz the
 /// gateware duplicates each mic sample N = iqRateHz / 48000 times across
-/// consecutive sample groups (Hermes USB protocol V1.58 NOTE 2).
+/// consecutive sample groups (Hermes USB protocol V1.58 NOTE 2). The
+/// decimation phase is carried across packets (matching Thetis's persistent
+/// mic_decimation_count) — 126 is not a multiple of the 2/4/8 factors, so a
+/// per-packet phase reset would inflate the output rate above 48 kHz.
 ///
 /// Responsibilities:
-///   - decimate raw 126-sample packets back to 48 kHz mono int16,
+///   - decimate raw 126-sample packets back to 48 kHz mono int16 (continuous
+///     decimation phase, matching Thetis),
 ///   - convert int16 → f32 with the same 1/32768 scale Protocol-2 uses,
 ///   - accumulate into 960-sample (20 ms @ 48 kHz) blocks for
 ///     <see cref="TxAudioIngest.OnMicPcmBytesFromRadioMic"/>, which hard-rejects
@@ -58,6 +62,17 @@ internal sealed class P1RadioMicReceiver
     private int _monoFill;
     private readonly byte[] _outputBuffer = new byte[OutputBlockBytes];
 
+    // Decimation phase carried ACROSS packets (Thetis parity). Thetis runs one
+    // persistent mic_decimation_count over the whole stream (ChannelMaster
+    // networkproto1.c:397-400) and only zeroes it on a sample-rate change
+    // (netInterface.c). Resetting the phase every packet would round each
+    // packet's yield up to ceil(126 / decim) — e.g. 32 instead of 31.5 at
+    // 192 kHz — inflating the decimated stream to ~48762 Hz instead of an exact
+    // 48 kHz, because 126 is not a multiple of the 2/4/8 decimation factors.
+    // Carrying the phase keeps the output rate exactly iqRateHz / decim = 48 kHz.
+    private int _decimPhase;
+    private int _lastDecim = 1;
+
     private long _totalSamplesAccepted;
     private long _totalSamplesDropped;
     private long _totalBlocksForwarded;
@@ -85,8 +100,21 @@ internal sealed class P1RadioMicReceiver
 
         lock (_sync)
         {
-            for (int src = 0; src < samples.Length; src += decim)
+            // Zero the phase only on a decimation-factor (sample-rate) change,
+            // exactly as Thetis zeroes mic_decimation_count on a rate change.
+            // Within a steady rate the phase carries across packets so the
+            // decimated output stays exactly 48 kHz.
+            if (decim != _lastDecim) { _decimPhase = 0; _lastDecim = decim; }
+
+            for (int src = 0; src < samples.Length; src++)
             {
+                // Thetis networkproto1.c:397-400 — advance the running counter
+                // and only keep the factor-th sample. Duplicates within a group
+                // are identical, so which index we keep is immaterial; carrying
+                // the count across packet boundaries is what preserves the rate.
+                if (++_decimPhase < decim) continue;
+                _decimPhase = 0;
+
                 if (_monoFill >= _monoAccumulator.Length)
                 {
                     // Producer outran the WDSP consumer — flush + drop the
@@ -128,6 +156,12 @@ internal sealed class P1RadioMicReceiver
     /// the post-switch source.</summary>
     public void Reset()
     {
-        lock (_sync) _monoFill = 0;
+        lock (_sync)
+        {
+            _monoFill = 0;
+            // A source switch is a stream discontinuity — re-zero the decimation
+            // phase so the post-switch stream starts clean.
+            _decimPhase = 0;
+        }
     }
 }
