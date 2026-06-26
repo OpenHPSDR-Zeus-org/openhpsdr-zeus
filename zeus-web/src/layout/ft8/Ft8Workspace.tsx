@@ -15,18 +15,10 @@ import { useFt8Store, type Ft8Row } from '../../state/ft8-store';
 import { useConnectionStore } from '../../state/connection-store';
 import { useOperatorStore } from '../../state/operator-store';
 import { DIGITAL_BANDS } from '../../dsp/digital-segments';
-import { parseFt8Message, type Ft8Message } from '../../dsp/ft8-message';
-import {
-  answerCq,
-  currentOutgoing,
-  genTx2,
-  genTx3,
-  genTx4,
-  genTx5,
-  slotOf,
-  type QsoState,
-} from '../../dsp/ft8-sequencer';
+import { slotOf } from '../../dsp/ft8-sequencer';
+import { useFt8TxRunner } from '../../dsp/ft8-tx-runner';
 import { Ft8DecodeTable } from './Ft8DecodeTable';
+import { Ft8TxControl } from './Ft8TxControl';
 import '../../styles/ft8-theme.css';
 
 export interface Ft8WorkspaceProps {
@@ -66,7 +58,14 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
   const setCall = useOperatorStore((s) => s.setCall);
   const setGrid = useOperatorStore((s) => s.setGrid);
 
-  const [staged, setStaged] = useState<QsoState | null>(null);
+  // Live TX runner: owns the QSO sequencer + backend keyer, driven once per slot.
+  const tx = useFt8TxRunner({
+    myCall,
+    myGrid: myGrid || null,
+    mode: protocol,
+    active: true,
+    band,
+  });
 
   // Esc closes the workspace.
   useEffect(() => {
@@ -81,19 +80,12 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
 
-  // Click a decode → stage a QSO answering that station.
+  // Click a decode → start calling that station (we reply in the opposite slot).
   const onRowClick = (row: Ft8Row) => {
     if (!myCall) return; // need an operator call to generate Tx messages
-    const parsed = parseFt8Message(row.text, myCall);
-    if (!parsed.deCall) return;
-    // The slot the heard station transmitted in (FT8 15 s / FT4 7.5 s) — we
-    // answer in the opposite slot.
     const secs = new Date(row.slotStartUnixMs).getUTCSeconds();
     const senderSlot = slotOf(secs, protocol);
-    // Treat any clicked station as a CQ to answer (start with our grid reply).
-    const asCq: Ft8Message = { ...parsed, kind: 'cq' };
-    const next = answerCq({ myCall, myGrid4: myGrid || null, mode: protocol }, asCq, senderSlot);
-    if (next) setStaged(next);
+    tx.callStation(row.text, senderSlot);
   };
 
   const bandsForProtocol = useMemo(
@@ -205,7 +197,7 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
           <section className="ft8-region ft8-region--grow">
             <div className="ft8-region__head">TX control · QSO</div>
             <div className="ft8-region__body">
-              <QsoPanel staged={staged} onClear={() => setStaged(null)} />
+              <Ft8TxControl runner={tx} myCall={myCall} myGrid={myGrid} />
             </div>
           </section>
           <section className="ft8-region">
@@ -225,55 +217,6 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
           {protocol} native · {band}
         </span>
       </footer>
-    </div>
-  );
-}
-
-/** Staged-QSO preview: the message ladder we WOULD transmit. Keying is
- *  bench-gated — Enable Tx is intentionally inert until verified on the G2. */
-function QsoPanel({ staged, onClear }: { staged: QsoState | null; onClear: () => void }) {
-  if (!staged || !staged.dxCall) {
-    return (
-      <div className="ft8-qso ft8-qso--empty">
-        Click a decoded station to stage a QSO. The auto-sequence preview appears here.
-      </div>
-    );
-  }
-  const his = staged.dxCall;
-  const mine = staged.myCall;
-  const ladder: { label: string; msg: string }[] = [
-    { label: 'Tx1', msg: currentOutgoing(staged) ?? '' },
-    { label: 'Tx2', msg: genTx2(his, mine, -10) },
-    { label: 'Tx3', msg: genTx3(his, mine, -10) },
-    { label: 'Tx4', msg: genTx4(his, mine, staged.txAck) },
-    { label: 'Tx5', msg: genTx5(his, mine) },
-  ];
-  return (
-    <div className="ft8-qso">
-      <div className="ft8-qso__dx">
-        Calling <strong>{his}</strong>
-        {staged.dxGrid4 ? ` · ${staged.dxGrid4}` : ''} · slot {staged.txSlot}
-      </div>
-      <ol className="ft8-qso__ladder">
-        {ladder.map((l) => (
-          <li key={l.label}>
-            <span className="ft8-qso__slot">{l.label}</span>
-            <span className="ft8-qso__msg">{l.msg}</span>
-          </li>
-        ))}
-      </ol>
-      <div className="ft8-qso__bench" role="note">
-        ⚠ TX keying is bench-gated — Enable Tx is disabled until verified on the G2. This panel
-        previews the sequence only.
-      </div>
-      <div className="ft8-qso__actions">
-        <button type="button" className="ft8-qso__btn" disabled title="Bench-gated">
-          Enable Tx
-        </button>
-        <button type="button" className="ft8-qso__btn" onClick={onClear}>
-          Clear
-        </button>
-      </div>
     </div>
   );
 }

@@ -8,7 +8,9 @@
 import { useEffect, useState } from 'react';
 import { useWsprStore, type WsprRow } from '../../state/wspr-store';
 import { useConnectionStore } from '../../state/connection-store';
+import { useOperatorStore } from '../../state/operator-store';
 import { DIGITAL_BANDS } from '../../dsp/digital-segments';
+import { WsprTxControl } from './WsprTxControl';
 import '../../styles/ft8-theme.css';
 
 function useUtcClock(): string {
@@ -36,6 +38,10 @@ export function WsprWorkspace({ onClose }: { onClose?: () => void }) {
   const error = useWsprStore((s) => s.error);
   const qsyBand = useWsprStore((s) => s.qsyBand);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
+  const myCall = useOperatorStore((s) => s.call);
+  const myGrid = useOperatorStore((s) => s.grid);
+  const setCall = useOperatorStore((s) => s.setCall);
+  const setGrid = useOperatorStore((s) => s.setGrid);
 
   useEffect(() => {
     if (!onClose) return;
@@ -55,6 +61,26 @@ export function WsprWorkspace({ onClose }: { onClose?: () => void }) {
     <div className="ft8-workspace" role="region" aria-label="WSPR workspace">
       <header className="ft8-ws-header">
         <span className="ft8-ws-title">WSPR · BEACON MONITOR</span>
+        <label className="ft8-ws-id">
+          <span>Call</span>
+          <input
+            value={myCall}
+            onChange={(e) => setCall(e.target.value)}
+            placeholder="MYCALL"
+            spellCheck={false}
+            size={8}
+          />
+        </label>
+        <label className="ft8-ws-id">
+          <span>Grid</span>
+          <input
+            value={myGrid}
+            onChange={(e) => setGrid(e.target.value)}
+            placeholder="FN42"
+            spellCheck={false}
+            size={6}
+          />
+        </label>
         <span className="ft8-ws-clock">{clock}</span>
         {onClose && (
           <button type="button" className="ft8-ws-close" onClick={onClose}>
@@ -84,11 +110,16 @@ export function WsprWorkspace({ onClose }: { onClose?: () => void }) {
               ))}
             </div>
           </section>
+          <section className="ft8-region">
+            <div className="ft8-region__head">TX control · beacon</div>
+            <div className="ft8-region__body">
+              <WsprTxControl myCall={myCall} myGrid={myGrid} />
+            </div>
+          </section>
           <section className="ft8-region ft8-region--grow">
             <div className="ft8-region__head">About</div>
             <div className="ft8-placeholder">
-              WSPR beacon spots received here. WSPRnet upload + WSPR TX are
-              follow-ups.
+              WSPR is a 2-minute beacon mode. WSPRnet upload is a follow-up.
             </div>
           </section>
         </div>

@@ -892,6 +892,22 @@ public sealed class StreamingHub
     }
 
     /// <summary>
+    /// Broadcasts a pre-encoded Ft8TxStatus (0x3A) frame ([type][UTF-8 JSON of
+    /// <see cref="Zeus.Contracts.Ft8TxStatusDto"/>]) to every connected client.
+    /// One frame per FT8/FT4/WSPR keyer arm/stage/transmit edge — same fan-out
+    /// shape as <see cref="BroadcastFt8Decode"/>; called by Ft8TxService /
+    /// WsprTxService.
+    /// </summary>
+    public void BroadcastFt8TxStatus(byte[] payload)
+    {
+        if (_clients.IsEmpty) return;
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
+    }
+
+    /// <summary>
     /// Broadcasts a pre-encoded DiagnosticsHealth (0x36) frame
     /// ([type][UTF-8 JSON of <see cref="Zeus.Contracts.DiagnosticsHealthDto"/>]) to every
     /// connected client and caches it for push-on-attach. Same fan-out shape as

@@ -108,6 +108,11 @@ public static class ZeusEndpoints
                     : Results.Ok(new { enabled = false, nativeAvailable = ft8.NativeAvailable });
             });
 
+        // FT8/FT4 + WSPR ARMED auto-sequence TX keyer control surface (arm /
+        // stage / halt / status). Kept in its own extension file so this one
+        // stays manageable.
+        app.MapFt8TxEndpoints();
+
         app.MapPost("/api/ft8/disable", (Ft8Service ft8) =>
         {
             ft8.Disable();
