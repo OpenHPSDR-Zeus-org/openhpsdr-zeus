@@ -514,10 +514,13 @@ public static class ZeusHost
         // seams remain in core: AudioTapBridge (RX tap), RadioStateReader,
         // PluginQrzLookup, and the voyeur-engines-v1 build workflow.
         // WAV recorder/player: taps DspPipelineService RX + TX-monitor audio to
-        // record float32 WAVs (default save folder = Downloads) and plays them
-        // back locally via the preview sink. Over-the-air playback is layered
-        // on later. Singleton resolved on first /api/wav call; its ctor wires
-        // the pipeline event subscriptions.
+        // record float32 WAVs under the managed root (<Downloads>/Zeus
+        // Recordings) and plays them back either locally via the preview sink
+        // or over the air (keying MoxSource.Wav when the rig is unkeyed).
+        // Singleton resolved on first /api/wav call; its ctor wires the
+        // pipeline event subscriptions and runs the one-time loose-file
+        // migration. The optional recordingsRootOverride ctor param defaults to
+        // null here (Downloads-based) — tests inject a temp root.
         builder.Services.AddSingleton<Zeus.Server.Wav.WavRecorderService>();
         // PS auto-attenuate timer2code-equivalent: ramps the radio's TX step
         // attenuator (Protocol2 only today) when calcc feedback level lands outside

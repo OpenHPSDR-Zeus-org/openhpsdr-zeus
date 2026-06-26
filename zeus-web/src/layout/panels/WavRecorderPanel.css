@@ -1,134 +1,738 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Zeus — reel-to-reel tape-deck skin for the WAV recorder panel.
- * Skeuomorphic deck styling. Material colours (tape/flange/hub) are local to
- * this deck, not global palette tokens; chrome borrows --panel-top/--panel-bot
- * and accents (--accent/--tx/--amber) so it sits in the Zeus look.
+ * Zeus — ZEUS Digital Recorder panel.
+ * Rack-mount digital-recorder skin: dark wells, lit segmented LED meter,
+ * round transport buttons, waveform strip, folder/file browser, info column.
+ * Token-only palette (zeus-web/src/styles/tokens.css). No raw hex except a few
+ * neutral shadow/overlay rgba()s that have no token equivalent.
  */
 
-.reel-deck {
-  --deck-face: linear-gradient(180deg, var(--panel-top, #2a2d31), var(--panel-bot, #161719));
-  --tape: #4a3b2f;          /* spooled tape */
-  --tape-edge: #6b5946;
-  --flange: #d9dde2;        /* bright metal reel flange */
-  --flange-shade: #9aa1a8;
-  --hub: #3a3f45;
-  padding: 10px;
-  width: 100%;
-  color: var(--text);
-  font-size: 13px;
-}
-
-.reel-deck__deck {
-  background: var(--deck-face);
-  border: 1px solid var(--line, #000);
-  border-radius: 8px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 6px rgba(0, 0, 0, 0.4);
-  padding: 14px 16px 12px;
-}
-
-/* Two reels with the tape spanning between them. */
-.reel-deck__reels {
+.zdr {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  position: relative;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
   gap: 8px;
+  padding: 8px;
+  color: var(--fg-1);
+  font-size: 12px;
+  overflow: auto;
 }
 
-.reel-deck__tape-path {
-  position: absolute;
-  left: 18%;
-  right: 18%;
-  top: 12px;
-  height: 3px;
-  background: linear-gradient(90deg, transparent, var(--tape-edge) 12%, var(--tape-edge) 88%, transparent);
-  opacity: 0.7;
+/* Three columns at width: file tree | center console | meter+info rail.
+ * Uses flex-wrap so the rail (then the tree) drops to its own row as the
+ * panel narrows, before the explicit narrow breakpoint forces a full stack. */
+.zdr__body {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
-.reel {
-  width: 84px;
-  height: 84px;
+/* Narrow: full vertical stack, meter/transport/waveform first. */
+.zdr--narrow .zdr__body {
+  flex-wrap: nowrap;
+  flex-direction: column;
+}
+.zdr--narrow .zdr__center {
+  order: 0;
+}
+.zdr--narrow .zdr__library {
+  order: 1;
+  max-height: 240px;
+}
+.zdr--narrow .zdr__rail {
+  order: 2;
+}
+
+/* ============================ Library (file system) ===================== */
+
+.zdr__library {
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  flex: 1 1 220px;
+  min-height: 120px;
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+.zdr__libhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-1);
+}
+
+.zdr__crumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+  gap: 1px;
+  font-size: 11px;
+}
+.zdr__crumb-sep {
+  color: var(--fg-3);
+  margin: 0 2px;
+}
+.zdr__crumb {
+  color: var(--fg-2);
+  font-weight: 600;
+  padding: 1px 3px;
+  border-radius: var(--r-xs);
+  background: transparent;
+  letter-spacing: 0.02em;
+}
+.zdr__crumb:hover {
+  color: var(--fg-0);
+  background: var(--bg-3);
+}
+.zdr__crumb.is-current {
+  color: var(--accent-bright);
+  cursor: default;
+}
+
+.zdr__libactions {
+  display: flex;
+  gap: 3px;
   flex: 0 0 auto;
 }
 
-.reel__spin {
-  transform-origin: 50% 50%;
-}
-
-/* Recording spins forward; playback spins forward a touch faster; idle holds.
-   prefers-reduced-motion users get a still deck. */
-.reel__spin.is-rec {
-  animation: reel-turn 2.4s linear infinite;
-}
-.reel__spin.is-play {
-  animation: reel-turn 1.7s linear infinite;
-}
-
-@keyframes reel-turn {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .reel__spin.is-rec,
-  .reel__spin.is-play { animation: none; }
-}
-
-/* Mechanical seconds counter. */
-.reel-deck__counter {
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 2px;
-  background: #0c0d0e;
-  color: var(--amber, #ffa028);
-  border: 1px solid #000;
-  border-radius: 3px;
-  padding: 2px 8px;
-  font-size: 14px;
-  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.8);
-}
-.reel-deck__counter.is-rec { color: var(--tx, #e63a2b); }
-
-.reel-deck__transport {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-top: 12px;
-}
-
-.reel-btn {
-  background: var(--bg-2, #2c2f33);
-  color: var(--text);
-  border: 1px solid var(--line, #000);
-  border-radius: 4px;
-  padding: 5px 11px;
-  font-family: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.reel-btn:disabled { opacity: 0.45; cursor: default; }
-.reel-btn.is-rec-active { background: var(--tx, #e63a2b); color: #fff; }
-.reel-btn.is-on { background: var(--accent, #4a9eff); color: #fff; }
-
-.reel-deck__list {
+.zdr__filelist {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  margin-top: 10px;
+  gap: 2px;
 }
-.reel-deck__row {
+
+.zdr__folderrow,
+.zdr__filerow {
   display: flex;
-  gap: 6px;
   align-items: center;
-  padding: 3px 4px;
-  border-radius: 4px;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
 }
-.reel-deck__row.is-playing { background: var(--bg-2, #2c2f33); }
-.reel-deck__name {
-  flex: 1;
+.zdr__filerow.is-selected {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+.zdr__filerow.is-playing {
+  background: var(--ok-soft);
+  border-color: var(--green-soft);
+}
+
+.zdr__folderbtn,
+.zdr__filebtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  color: var(--fg-1);
+  background: transparent;
+  font-size: 12px;
+}
+.zdr__folderbtn:hover,
+.zdr__filebtn:hover {
+  color: var(--fg-0);
+}
+
+.zdr__glyph {
+  flex: 0 0 auto;
+  font-size: 12px;
+  line-height: 1;
+}
+.zdr__folder-name,
+.zdr__file-name {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.reel-deck__hint { margin-top: 8px; font-size: 11px; opacity: 0.5; }
+.zdr__folder-name {
+  font-weight: 600;
+}
+
+.zdr__file-meta {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.zdr__src {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 3px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--line-strong);
+  color: var(--fg-3);
+}
+.zdr__src--rx {
+  color: var(--accent-bright);
+  border-color: var(--accent-line);
+}
+.zdr__src--tx {
+  color: var(--tx);
+  border-color: var(--tx);
+}
+
+.zdr__rowmenu,
+.zdr__confirm {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.zdr__iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 4px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-size: 11px;
+  line-height: 1;
+}
+.zdr__iconbtn:hover {
+  background: var(--bg-3);
+  color: var(--fg-0);
+}
+.zdr__iconbtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.zdr__iconbtn.is-danger {
+  border-color: var(--tx);
+  color: var(--tx);
+}
+.zdr__rowdel:hover {
+  border-color: var(--tx);
+  color: var(--tx);
+}
+
+.zdr__renameinput,
+.zdr__moveselect {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--fg-0);
+  background: var(--bg-0);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-sm);
+  outline: none;
+}
+.zdr__moveselect {
+  background: var(--bg-2);
+  border-color: var(--line-strong);
+}
+
+.zdr__empty {
+  padding: 10px 8px;
+  color: var(--fg-3);
+  font-size: 11px;
+  text-align: center;
+}
+
+/* ============================ Center console ============================ */
+
+.zdr__center {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 2 1 340px;
+  min-width: 280px;
+}
+
+/* ---- Level meter ---- */
+
+.zdr__meter {
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 7px 9px 8px;
+}
+.zdr__meterhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.zdr__meterlabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--fg-2);
+  margin-right: auto;
+}
+.zdr__clip {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--line-strong);
+  color: var(--fg-4);
+  background: var(--bg-meter);
+}
+.zdr__clip.is-clip {
+  color: #fff;
+  background: var(--tx);
+  border-color: var(--tx);
+  box-shadow: 0 0 10px var(--tx-soft);
+}
+
+.zdr__metercanvas {
+  display: block;
+  width: 100%;
+  height: 40px;
+  border-radius: var(--r-sm);
+}
+
+.zdr__lcd {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  background: var(--bg-meter);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.8);
+}
+.zdr__lcd small {
+  font-size: 0.62em;
+  font-weight: 600;
+  opacity: 0.7;
+  margin-left: 3px;
+}
+.zdr__lcd--peak,
+.zdr__lcd--hold {
+  font-size: 14px;
+  padding: 2px 7px;
+  color: var(--amber);
+}
+.zdr__lcd--hold {
+  color: var(--fg-2);
+}
+.zdr__lcd--big {
+  font-size: 22px;
+  padding: 3px 10px;
+  color: var(--amber);
+}
+
+/* ---- Transport ---- */
+
+.zdr__transport {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+}
+
+.zdr__xport {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 58px;
+  flex: 0 0 auto;
+}
+.zdr__xport-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 32%, var(--bg-3), var(--bg-0) 78%);
+  border: 1px solid var(--line-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 2px 5px rgba(0, 0, 0, 0.5);
+  color: var(--fg-2);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.zdr__xport:hover:not(:disabled) .zdr__xport-glyph {
+  transform: translateY(-1px);
+}
+.zdr__xport:active:not(:disabled) .zdr__xport-glyph {
+  transform: translateY(1px);
+}
+.zdr__xport:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.zdr__xport-text {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+}
+.zdr__xport:focus-visible {
+  outline: none;
+}
+.zdr__xport:focus-visible .zdr__xport-glyph {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 2px;
+}
+
+/* RECORD — red dot */
+.zdr__glyph-rec {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+}
+.zdr__xport--rec .zdr__glyph-rec {
+  background: var(--tx);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4) inset;
+}
+.zdr__xport--rec.is-on .zdr__xport-glyph {
+  border-color: var(--tx);
+  box-shadow:
+    0 0 14px var(--tx-soft),
+    inset 0 0 8px var(--tx-soft);
+}
+.zdr__xport--rec.is-on .zdr__xport-text {
+  color: var(--tx);
+}
+
+/* PLAY — blue triangle */
+.zdr__glyph-play {
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 9px 0 9px 15px;
+  border-color: transparent transparent transparent var(--accent-bright);
+  margin-left: 3px;
+}
+.zdr__xport--play.is-on .zdr__xport-glyph {
+  border-color: var(--accent-bright);
+  box-shadow:
+    0 0 14px var(--accent-soft),
+    inset 0 0 8px var(--accent-soft);
+}
+.zdr__xport--play.is-on .zdr__xport-text {
+  color: var(--accent-bright);
+}
+
+/* TRANSMIT — green antenna */
+.zdr__xport--air .zdr__xport-glyph {
+  color: var(--green-soft);
+}
+.zdr__xport--air.is-on .zdr__xport-glyph {
+  color: #fff;
+  background: radial-gradient(circle at 38% 32%, var(--green-soft), var(--bg-0) 92%);
+  border-color: var(--green-soft);
+  box-shadow:
+    0 0 16px var(--ok-soft),
+    inset 0 0 10px var(--ok-soft);
+}
+.zdr__xport--air.is-on .zdr__xport-text {
+  color: var(--ok);
+}
+
+/* STOP — square */
+.zdr__glyph-stop {
+  width: 15px;
+  height: 15px;
+  border-radius: 2px;
+  background: var(--fg-1);
+}
+
+.zdr__xport-side {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  margin-left: auto;
+  min-width: 96px;
+}
+.zdr__lcd--clock {
+  font-size: 17px;
+  text-align: center;
+  padding: 3px 10px;
+  color: var(--amber);
+  letter-spacing: 0.04em;
+}
+
+.zdr__srctoggle {
+  display: flex;
+  gap: 2px;
+  justify-content: center;
+}
+.zdr__srcbtn {
+  flex: 1 1 0;
+  padding: 3px 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--fg-2);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+.zdr__srcbtn.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.zdr__srcbtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---- Waveform ---- */
+
+.zdr__wavewrap {
+  position: relative;
+  flex: 1 1 70px;
+  min-height: 64px;
+  background: var(--bg-meter);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+.zdr__wavecanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.zdr__waveempty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-3);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+/* ---- File info ---- */
+
+.zdr__info {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 7px 9px;
+  flex: 0 0 auto;
+}
+.zdr__info-title {
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--fg-0);
+  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zdr__info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+.zdr__info-grid div {
+  min-width: 0;
+}
+.zdr__info-wide {
+  grid-column: 1 / -1;
+}
+.zdr__info-grid dt {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.zdr__info-grid dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============================ Right rail ================================ */
+
+.zdr__rail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 200px;
+  min-width: 180px;
+}
+
+.zdr__railhead {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--fg-3);
+  margin-bottom: 6px;
+}
+
+.zdr__vmeters {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 150px;
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 7px 9px 8px;
+}
+.zdr__vmeterbody {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 90px;
+  gap: 3px;
+}
+.zdr__vmetercanvas {
+  display: block;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 80px;
+}
+.zdr__vmeterscale {
+  display: flex;
+  justify-content: space-around;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--fg-3);
+}
+
+.zdr__railreadouts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.zdr__railchips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 7px;
+}
+.zdr__chip {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--line-strong);
+  color: var(--fg-2);
+  background: var(--bg-2);
+}
+
+/* ============================ Status bar ================================ */
+
+.zdr__statusbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  font-size: 11px;
+}
+.zdr__statepill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 2px 8px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--line-strong);
+  color: var(--fg-2);
+}
+.zdr__statepill--recording {
+  color: var(--tx);
+  border-color: var(--tx);
+}
+.zdr__statepill--playing {
+  color: var(--accent-bright);
+  border-color: var(--accent-line);
+}
+
+.zdr__onair {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--fg-3);
+}
+.zdr__onair-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-4);
+}
+.zdr__onair.is-on {
+  color: var(--ok);
+}
+.zdr__onair.is-on .zdr__onair-dot {
+  background: var(--green-soft);
+  box-shadow: 0 0 8px var(--ok-soft);
+}
+
+.zdr__errmsg {
+  margin-left: auto;
+  color: var(--tx);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============================ Reduced motion ============================ */
+
+@media (prefers-reduced-motion: reduce) {
+  .zdr__xport-glyph {
+    transition: none;
+  }
+}
