@@ -73,6 +73,7 @@ import { MoxButton } from './components/MoxButton';
 import { PreampButton } from './components/PreampButton';
 import { PsToggleButton } from './components/PsToggleButton';
 import { PaTempChip } from './components/PaTempChip';
+import { WorkspaceZoomControls } from './components/WorkspaceZoomControls';
 import { QrzStatusPill } from './components/QrzStatusPill';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
 import ReportProblemButton from './components/report-problem/ReportProblemButton';
@@ -1157,6 +1158,7 @@ export default function App() {
         <button type="button" className="btn ghost hide-mobile">RIT</button>
         <button type="button" className="btn ghost hide-mobile">SAVE MEM</button>
         <div className="spacer" style={{ flex: 1 }} />
+        <WorkspaceZoomControls />
         <PaTempChip />
         <div className="chip hide-mobile">
           <span className="k">PRE</span>
