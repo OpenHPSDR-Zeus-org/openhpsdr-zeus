@@ -129,14 +129,15 @@ public sealed class QrzService
                 return new QrzStatus(false, false, null, "QRZ login failed");
             }
 
-            // Look up the user's own callsign to populate home station info. Success here
-            // is also proof the account has an active XML subscription (the session key
-            // alone doesn't guarantee lookup rights).
+            // _hasXmlSubscription was set authoritatively from the Session <SubExp>
+            // field during AcquireSessionKeyAsync — that is the only reliable signal
+            // of an active XML subscription. QRZ returns basic callsign data to
+            // non-subscribers as well, so lookup success does NOT prove a subscription.
+            // Look up the user's own callsign only to populate home station info.
             try
             {
                 var home = await LookupInternalAsync(username, ct);
                 _home = home;
-                _hasXmlSubscription = home != null;
 
                 // Persist credentials on successful login
                 await _credStore.SetAsync(ServiceName, username, password, ct);
@@ -319,7 +320,48 @@ public sealed class QrzService
 
         _sessionKey = Get(session, "Key");
         _sessionExpiry = DateTime.UtcNow.AddHours(1);
+
+        // <SubExp> is QRZ's authoritative subscription signal: the literal
+        // "non-subscriber" for accounts without an active XML subscription, an
+        // expiration date string (e.g. "Wed Dec 31 23:59:59 2025") otherwise.
+        _hasXmlSubscription = IsActiveSubscription(Get(session, "SubExp"));
+
         return _sessionKey;
+    }
+
+    // QRZ stamps <SubExp> in Unix asctime form, e.g. "Wed Dec 31 23:59:59 2025"
+    // (single-digit days are space-padded → "Wed Dec  1 ..."). Whitespace is
+    // collapsed before matching so both paddings parse with one format. A plain
+    // DateTime.TryParse does NOT recognise this layout — use TryParseExact.
+    private static readonly string[] QrzSubExpFormats =
+    {
+        "ddd MMM d HH:mm:ss yyyy",
+        "ddd MMM d yyyy",
+    };
+
+    // Determines whether QRZ's <SubExp> field reflects an active XML subscription.
+    // "non-subscriber" (or an expiration date in the past) → false; a future
+    // expiration date → true. Internal for unit testing.
+    internal static bool IsActiveSubscription(string? subExp)
+    {
+        if (string.IsNullOrWhiteSpace(subExp)) return false;
+
+        // Collapse runs of whitespace so asctime's space-padded day matches a
+        // single-space format.
+        var t = System.Text.RegularExpressions.Regex.Replace(subExp.Trim(), @"\s+", " ");
+        if (t.Contains("non-subscriber", StringComparison.OrdinalIgnoreCase)) return false;
+
+        const System.Globalization.DateTimeStyles styles =
+            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal;
+        if (DateTime.TryParseExact(t, QrzSubExpFormats, System.Globalization.CultureInfo.InvariantCulture, styles, out var expiry) ||
+            DateTime.TryParse(t, System.Globalization.CultureInfo.InvariantCulture, styles, out expiry))
+        {
+            return expiry > DateTime.UtcNow;
+        }
+
+        // QRZ returned a non-empty SubExp that isn't "non-subscriber" yet doesn't
+        // parse as a date — treat as subscribed rather than locking out a paying user.
+        return true;
     }
 
     private static string? Get(XElement? parent, string name)
