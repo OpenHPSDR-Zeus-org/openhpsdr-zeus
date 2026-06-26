@@ -36,21 +36,35 @@ set(WSPR_ENCODE_SRC
     ${WSPR_VENDOR}/tab.c
 )
 
-add_library(zeus_wspr SHARED
-    zeus_wspr.c
-    ${WSPR_ENCODE_SRC}
+# Decoder source set (adds wsprd.c's CLI driver renamed to a callable entry +
+# the Fano/Jelinek/OSD-stub/FFT files). The shared lib exposes zeus_wspr_decode
+# on POSIX; Windows ships encode+synth only until the MSVC port (wsprd.c uses
+# getopt/unistd and zeus_wspr_decode.c uses mkdtemp/pthreads).
+set(WSPR_DECODE_SRC
+    zeus_wspr_decode.c
+    osdwspr_stub.c
+    ${WSPR_VENDOR}/wsprd.c
+    ${WSPR_VENDOR}/jelinek.c
+    ${WSPR_VENDOR}/metric_tables.c
+    ${WSPR_VENDOR}/pffft.c
 )
 
-target_include_directories(zeus_wspr PRIVATE ${WSPR_VENDOR})
+# Rename wsprd.c's CLI main() to an internal callable entry (hidden visibility
+# keeps it unexported; only zeus_wspr_* are public).
+set_source_files_properties(${WSPR_VENDOR}/wsprd.c
+    PROPERTIES COMPILE_DEFINITIONS "main=wsprd_cli_main")
 
 if(WIN32)
+    add_library(zeus_wspr SHARED zeus_wspr.c ${WSPR_ENCODE_SRC})
+    target_include_directories(zeus_wspr PRIVATE ${WSPR_VENDOR})
     set_target_properties(zeus_wspr PROPERTIES OUTPUT_NAME "zeus_wspr" PREFIX "")
-    # MSVC: M_PI guard + POSIX shims (unistd.h etc.) via a force-included header,
-    # and ClangCL for any C99 VLAs in the vendored decoder — wired in the CI
-    # build step alongside the FT8 lib when decode lands.
     target_compile_definitions(zeus_wspr PRIVATE _USE_MATH_DEFINES _CRT_SECURE_NO_WARNINGS)
 else()
-    target_link_libraries(zeus_wspr PRIVATE m)
+    find_package(Threads REQUIRED)
+    add_library(zeus_wspr SHARED zeus_wspr.c ${WSPR_ENCODE_SRC} ${WSPR_DECODE_SRC})
+    target_include_directories(zeus_wspr PRIVATE ${WSPR_VENDOR})
+    target_compile_definitions(zeus_wspr PRIVATE ZEUS_WSPR_LINK_WSPRD)
+    target_link_libraries(zeus_wspr PRIVATE m Threads::Threads)
     set_target_properties(zeus_wspr PROPERTIES OUTPUT_NAME "zeus_wspr" PREFIX "${CMAKE_SHARED_LIBRARY_PREFIX}")
 endif()
 
@@ -76,22 +90,14 @@ if(ZEUS_WSPR_TESTS)
     # a callable entry, plus the no-op OSD stub (osdwspr.f90 is Fortran/optional).
     # Proves encode -> synth -> decode recovers the message.
     if(NOT WIN32)
-        find_package(Threads REQUIRED)
         add_executable(zeus_wspr_roundtrip
             test/zeus_wspr_roundtrip.c
             zeus_wspr.c
-            zeus_wspr_decode.c
-            osdwspr_stub.c
             ${WSPR_ENCODE_SRC}
-            ${WSPR_VENDOR}/wsprd.c
-            ${WSPR_VENDOR}/jelinek.c
-            ${WSPR_VENDOR}/metric_tables.c
-            ${WSPR_VENDOR}/pffft.c
+            ${WSPR_DECODE_SRC}
         )
         target_include_directories(zeus_wspr_roundtrip PRIVATE ${WSPR_VENDOR})
-        # Rename wsprd.c's main() to a callable entry (only on that source).
-        set_source_files_properties(${WSPR_VENDOR}/wsprd.c
-            PROPERTIES COMPILE_DEFINITIONS "main=wsprd_cli_main")
+        # wsprd.c's main() is already renamed via set_source_files_properties above.
         # zeus_wspr.c must NOT also define printdata here (wsprd.c owns it).
         target_compile_definitions(zeus_wspr_roundtrip PRIVATE ZEUS_WSPR_LINK_WSPRD)
         target_link_libraries(zeus_wspr_roundtrip PRIVATE m Threads::Threads)
