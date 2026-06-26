@@ -1,0 +1,78 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * FT8 workspace dark-HUD theme — KB2UKA-approved (Option A) token LAYER scoped
+ * to .ft8-workspace, extending the global tokens in tokens.css. Defined as its
+ * own variable set so the look can later be promoted app-wide by re-pointing
+ * root tokens, without rewriting components (see docs/designs/ft8-ui.md).
+ *
+ * Components consume ONLY these --hud-* variables, never raw hex. The amber
+ * panadapter trace (#FFA028) stays signal-visualisation-only and is not
+ * repurposed here.
+ */
+
+.ft8-workspace {
+  /* Surfaces — near-black navy with a faint cyan cast. */
+  --hud-bg:        #05080d;
+  --hud-panel:     #0a0f17;
+  --hud-panel-2:   #0e141d;
+  --hud-inset:     #04070b;
+  --hud-grid:      rgba(64, 160, 200, 0.08);
+
+  /* Glow + lines — the cyan/teal HUD signature. */
+  --hud-cyan:      #38d6f0;
+  --hud-cyan-soft: rgba(56, 214, 240, 0.14);
+  --hud-cyan-line: rgba(56, 214, 240, 0.45);
+  --hud-line:      rgba(120, 160, 190, 0.16);
+
+  /* Text. */
+  --hud-text:      #c8e4ef;
+  --hud-text-dim:  #6f8a98;
+
+  /* Decode-row classes (color-coded message table). */
+  --hud-cq:        #45e08a;  /* CQ calls — green */
+  --hud-me:        #ffd23a;  /* directed at my call — amber-gold */
+  --hud-worked:    #6f8a98;  /* worked-before — muted */
+  --hud-eu:        #d06bff;  /* EU continent tint (band-map parity) */
+  --hud-new:       #38d6f0;  /* new DXCC/grid — cyan */
+
+  color: var(--hud-text);
+  background: var(--hud-bg);
+}
+
+/* Decode table */
+.ft8-decode-table {
+  font-family: var(--font-mono, 'Archivo Narrow', monospace);
+  font-size: 12px;
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--hud-panel);
+}
+.ft8-decode-table th {
+  position: sticky;
+  top: 0;
+  text-align: left;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--hud-text-dim);
+  background: var(--hud-panel-2);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--hud-cyan-line);
+}
+.ft8-decode-table td {
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--hud-line);
+  white-space: nowrap;
+}
+.ft8-decode-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.ft8-row--cq     { color: var(--hud-cq); }
+.ft8-row--me     { color: var(--hud-me); background: var(--hud-cyan-soft); }
+.ft8-row--worked { color: var(--hud-worked); }
+.ft8-row--new    { color: var(--hud-new); }
+
+.ft8-decode-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--hud-text-dim);
+}
