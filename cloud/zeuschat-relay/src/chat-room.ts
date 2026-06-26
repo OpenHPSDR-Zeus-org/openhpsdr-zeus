@@ -7,8 +7,10 @@ import {
   type RoomInfo,
   type RoomKind,
   type Msg,
+  type Attachment,
   type PresenceStatus,
   MAX_MESSAGE_LEN,
+  MAX_ATTACHMENT_DATAURL_LEN,
   PUBLIC_ROOM,
   PUBLIC_RETENTION_MS,
   PRIVATE_RETENTION_MS,
@@ -201,9 +203,10 @@ export class ChatRoom extends DurableObject<Env> {
           return;
         }
         const text = (msg.text ?? '').slice(0, MAX_MESSAGE_LEN);
-        if (!text.trim()) return;
+        const attachment = sanitizeAttachment(msg.attachment);
+        if (!text.trim() && !attachment) return; // nothing to send
         if (!this.checkRate(ws, att)) return;
-        await this.postMessage(room, me, text);
+        await this.postMessage(room, me, text, attachment);
         return;
       }
 
@@ -212,10 +215,11 @@ export class ChatRoom extends DurableObject<Env> {
         const to = norm(msg.to ?? '');
         if (!to || to === me || this.bans.has(to)) return;
         const text = (msg.text ?? '').slice(0, MAX_MESSAGE_LEN);
-        if (!text.trim()) return;
+        const attachment = sanitizeAttachment(msg.attachment);
+        if (!text.trim() && !attachment) return;
         if (!this.checkRate(ws, att)) return;
         const room = await this.ensureDm(me, to);
-        await this.postMessage(room, me, text);
+        await this.postMessage(room, me, text, attachment);
         return;
       }
 
@@ -362,8 +366,14 @@ export class ChatRoom extends DurableObject<Env> {
 
   // --- messages --------------------------------------------------------------
 
-  private async postMessage(room: string, from: string, text: string): Promise<void> {
+  private async postMessage(
+    room: string,
+    from: string,
+    text: string,
+    attachment?: Attachment,
+  ): Promise<void> {
     const msg: Msg = { id: crypto.randomUUID(), from, text, ts: Date.now(), room };
+    if (attachment) msg.attachment = attachment;
     const key = `m:${room}:${String(msg.ts).padStart(15, '0')}:${crypto.randomUUID().slice(0, 8)}`;
     await this.ctx.storage.put(key, msg);
     this.deliverToRoom(room, { t: 'msg', ...msg });
@@ -712,6 +722,28 @@ export class ChatRoom extends DurableObject<Env> {
       this.send(ws, { t: 'roster', roster: this.rosterFor(att.callsign) });
     }
   }
+}
+
+/**
+ * Validate and normalize an inbound attachment. Returns a clean Attachment, or
+ * undefined when absent/malformed/oversized/not-an-image — in which case the
+ * message still delivers as text. Defensive: a backend or hostile client could
+ * send anything, and the result is persisted + broadcast to the whole room, so
+ * enforce the image-only + size invariants here regardless of the C# guard.
+ */
+function sanitizeAttachment(a: Attachment | undefined): Attachment | undefined {
+  if (!a || typeof a !== 'object') return undefined;
+  const mime = typeof a.mime === 'string' ? a.mime : '';
+  const dataUrl = typeof a.dataUrl === 'string' ? a.dataUrl : '';
+  if (!mime.startsWith('image/')) return undefined;
+  if (!dataUrl.startsWith('data:image/')) return undefined;
+  if (dataUrl.length > MAX_ATTACHMENT_DATAURL_LEN) return undefined;
+  const clean: Attachment = { kind: 'image', mime, dataUrl };
+  if (typeof a.name === 'string' && a.name) clean.name = a.name.slice(0, 200);
+  if (typeof a.width === 'number' && Number.isFinite(a.width)) clean.width = a.width;
+  if (typeof a.height === 'number' && Number.isFinite(a.height)) clean.height = a.height;
+  if (typeof a.size === 'number' && Number.isFinite(a.size)) clean.size = a.size;
+  return clean;
 }
 
 function addTo(map: Map<string, Set<string>>, key: string, value: string): void {

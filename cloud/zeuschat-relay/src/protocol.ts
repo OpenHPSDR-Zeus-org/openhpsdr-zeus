@@ -51,6 +51,29 @@ export interface RoomInfo {
   members: string[];
 }
 
+/**
+ * An inline media attachment carried with a message. Photos are sent "like a
+ * text message": the bytes ride inside the message as a base64 data URL rather
+ * than via out-of-band blob storage. The Zeus web client downscales/compresses
+ * so `dataUrl` stays under MAX_ATTACHMENT_DATAURL_LEN — the whole message is
+ * stored in a single Durable-Object value (128 KiB cap), so it must fit with
+ * headroom. `kind` is "image" for now; unknown kinds are ignored by clients.
+ */
+export interface Attachment {
+  kind: string;
+  /** MIME type, e.g. "image/jpeg". Must start with "image/". */
+  mime: string;
+  /** Base64 data URL, e.g. "data:image/jpeg;base64,…". */
+  dataUrl: string;
+  /** Original filename, if known. */
+  name?: string;
+  /** Pixel dimensions, if known. */
+  width?: number;
+  height?: number;
+  /** Decoded byte size, if known. */
+  size?: number;
+}
+
 /** A stored/relayed chat message. */
 export interface Msg {
   id: string;
@@ -60,6 +83,8 @@ export interface Msg {
   ts: number;
   /** Room id this message belongs to. */
   room: string;
+  /** Optional inline photo (absent for the common text-only case). */
+  attachment?: Attachment;
 }
 
 /** Messages sent by a backend chat node TO the relay. */
@@ -80,10 +105,11 @@ export type ClientToRelay =
     }
   // Live presence update (frequency / mode / status / freq-visibility changed).
   | { t: 'presence'; freq?: number; mode?: string; status?: PresenceStatus; freqPublic?: boolean }
-  // Outgoing chat message to a room (defaults to the public lobby).
-  | { t: 'msg'; text: string; room?: string }
+  // Outgoing chat message to a room (defaults to the public lobby). `text` may
+  // be empty when an `attachment` (inline photo) is present.
+  | { t: 'msg'; text: string; room?: string; attachment?: Attachment }
   // Send a direct message to another operator (creates the DM room on demand).
-  | { t: 'dm'; to: string; text: string }
+  | { t: 'dm'; to: string; text: string; attachment?: Attachment }
   // Request recent history for a room the operator can see.
   | { t: 'history'; room: string }
   // --- friends (consent graph) ---------------------------------------------
@@ -122,7 +148,7 @@ export type RelayToClient =
   // join). Ordered oldest→newest.
   | { t: 'history'; room: string; messages: Msg[] }
   // A chat message in a room the operator is a member of (including own echo).
-  | { t: 'msg'; id: string; from: string; text: string; ts: number; room: string }
+  | { t: 'msg'; id: string; from: string; text: string; ts: number; room: string; attachment?: Attachment }
   // A room's history was wiped by an admin — clients should drop their scrollback.
   | { t: 'cleared'; room: string }
   // A one-off global announcement from an admin, shown to everyone regardless of
@@ -142,6 +168,15 @@ export type RelayToClient =
 
 /** Max accepted chat message length (characters); longer is truncated. */
 export const MAX_MESSAGE_LEN = 2000;
+
+/**
+ * Max accepted length of an attachment's base64 data URL (characters). Sized to
+ * leave headroom under the Durable-Object 128 KiB per-value storage cap once the
+ * surrounding message JSON is added. An attachment over this is dropped (the
+ * message still delivers as text). Mirrors ChatAttachment.MaxDataUrlLength on
+ * the C# side; keep the two in sync.
+ */
+export const MAX_ATTACHMENT_DATAURL_LEN = 120_000;
 
 /** The single room used in P0. Kept as an alias of PUBLIC_ROOM. */
 export const DEFAULT_ROOM = PUBLIC_ROOM;

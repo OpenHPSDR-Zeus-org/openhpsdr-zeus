@@ -191,24 +191,58 @@ public sealed class ChatService : BackgroundService
     /// <see cref="ArgumentException"/> when the text is empty — the endpoint
     /// maps these to 409 / 400.
     /// </summary>
-    public async Task SendMessageAsync(string text, string? room, CancellationToken ct)
+    public async Task SendMessageAsync(string text, string? room, ChatAttachment? attachment, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(text))
+        attachment = ValidateAttachment(attachment);
+        // An attachment may stand on its own (image-only message); only require
+        // text when there is no attachment.
+        if (string.IsNullOrWhiteSpace(text) && attachment is null)
             throw new ArgumentException("message text is empty", nameof(text));
 
         var socket = RequireSocket();
         var roomId = string.IsNullOrWhiteSpace(room) ? "lobby" : room.Trim();
-        await SendFrameAsync(socket, new { t = "msg", text, room = roomId }, ct);
+        await SendFrameAsync(socket, attachment is null
+            ? new { t = "msg", text, room = roomId }
+            : new { t = "msg", text, room = roomId, attachment }, ct);
     }
 
     /// <summary>Sends a direct message to <paramref name="to"/> (creates the DM on demand).</summary>
-    public async Task SendDmAsync(string to, string text, CancellationToken ct)
+    public async Task SendDmAsync(string to, string text, ChatAttachment? attachment, CancellationToken ct)
     {
         var call = (to ?? string.Empty).Trim().ToUpperInvariant();
         if (call.Length == 0) throw new ArgumentException("recipient is empty", nameof(to));
-        if (string.IsNullOrWhiteSpace(text)) throw new ArgumentException("message text is empty", nameof(text));
+        attachment = ValidateAttachment(attachment);
+        if (string.IsNullOrWhiteSpace(text) && attachment is null)
+            throw new ArgumentException("message text is empty", nameof(text));
         var socket = RequireSocket();
-        await SendFrameAsync(socket, new { t = "dm", to = call, text }, ct);
+        await SendFrameAsync(socket, attachment is null
+            ? new { t = "dm", to = call, text }
+            : new { t = "dm", to = call, text, attachment }, ct);
+    }
+
+    /// <summary>
+    /// Validates an outgoing attachment: image kind, image/* MIME, non-empty
+    /// data URL within <see cref="ChatAttachment.MaxDataUrlLength"/>. Returns the
+    /// attachment unchanged (passthrough) or null when none was supplied. Throws
+    /// <see cref="ArgumentException"/> (mapped to 400 by the endpoint) on a bad
+    /// or oversized attachment so a buggy/hostile client can't push payloads the
+    /// relay would store. The web client downscales to fit before sending; this
+    /// is the backend guardrail, not the primary size control.
+    /// </summary>
+    private static ChatAttachment? ValidateAttachment(ChatAttachment? attachment)
+    {
+        if (attachment is null) return null;
+        if (!string.Equals(attachment.Kind, "image", StringComparison.Ordinal))
+            throw new ArgumentException("unsupported attachment kind", nameof(attachment));
+        if (string.IsNullOrEmpty(attachment.Mime) ||
+            !attachment.Mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("attachment must be an image", nameof(attachment));
+        if (string.IsNullOrEmpty(attachment.DataUrl) ||
+            !attachment.DataUrl.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("attachment data is empty or malformed", nameof(attachment));
+        if (attachment.DataUrl.Length > ChatAttachment.MaxDataUrlLength)
+            throw new ArgumentException("attachment is too large", nameof(attachment));
+        return attachment;
     }
 
     /// <summary>Asks the relay for recent history of a room (pushed back as a 0x35 frame).</summary>
@@ -612,7 +646,33 @@ public sealed class ChatService : BackgroundService
         From: ReadString(root, "from") ?? string.Empty,
         Text: ReadString(root, "text") ?? string.Empty,
         Ts: ReadLong(root, "ts") ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-        Room: ReadString(root, "room") ?? "lobby");
+        Room: ReadString(root, "room") ?? "lobby",
+        Attachment: ParseAttachment(root));
+
+    /// <summary>
+    /// Parses an optional <c>attachment</c> object out of a relay message frame.
+    /// Returns null when absent, malformed, not an image, or oversized — a bad
+    /// attachment degrades to a plain message rather than dropping it. Internal
+    /// for unit tests.
+    /// </summary>
+    internal static ChatAttachment? ParseAttachment(JsonElement root)
+    {
+        if (!root.TryGetProperty("attachment", out var a) || a.ValueKind != JsonValueKind.Object)
+            return null;
+        var dataUrl = ReadString(a, "dataUrl");
+        var mime = ReadString(a, "mime");
+        if (string.IsNullOrEmpty(dataUrl) || string.IsNullOrEmpty(mime)) return null;
+        if (!dataUrl.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase)) return null;
+        if (dataUrl.Length > ChatAttachment.MaxDataUrlLength) return null;
+        return new ChatAttachment(
+            Kind: ReadString(a, "kind") ?? "image",
+            Mime: mime,
+            DataUrl: dataUrl,
+            Name: ReadString(a, "name"),
+            Width: (int?)ReadLong(a, "width"),
+            Height: (int?)ReadLong(a, "height"),
+            Size: (int?)ReadLong(a, "size"));
+    }
 
     /// <summary>
     /// Parses the <paramref name="property"/> roster array out of a relay
