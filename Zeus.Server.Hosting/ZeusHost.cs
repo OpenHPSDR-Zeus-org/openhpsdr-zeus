@@ -300,6 +300,22 @@ public static class ZeusHost
         builder.Services.AddSingleton<Zeus.Protocol1.TxIqRing>();
         builder.Services.AddSingleton<Zeus.Protocol1.ITxIqSource>(sp =>
             sp.GetRequiredService<Zeus.Protocol1.TxIqRing>());
+        // RX-audio → radio codec speaker path (Protocol-1). RxAudioRing is the RX
+        // counterpart of TxIqRing on the same EP2 frame: RadioSpeakerAudioSink
+        // writes demodulated RX audio into it and Protocol1Client (constructed
+        // inside RadioService) drains it into the frame's L/R slots so the radio's
+        // onboard codec drives its speaker/headphone/line-out jacks. Registered
+        // before RadioService so the latter's optional IRxAudioSource? ctor param
+        // resolves. The IRxAudioSink mapping is added unconditionally (both host
+        // modes) and self-gates per frame; the Protocol-2 Saturn/G2 appliance
+        // speaker path is separate (SaturnSpeakerAudioSink) and untouched here.
+        builder.Services.AddSingleton<Zeus.Protocol1.RxAudioRing>();
+        builder.Services.AddSingleton<Zeus.Protocol1.IRxAudioSource>(sp =>
+            sp.GetRequiredService<Zeus.Protocol1.RxAudioRing>());
+        builder.Services.AddSingleton<RadioSpeakerSettingsStore>();
+        builder.Services.AddSingleton<RadioSpeakerAudioSink>();
+        builder.Services.AddSingleton<IRxAudioSink>(sp =>
+            sp.GetRequiredService<RadioSpeakerAudioSink>());
         // Global (per-radio) TX-audio source store (external-audio-jacks
         // re-port). Registered before RadioService so the latter's optional
         // AudioSettingsStore? ctor param resolves it and wires the Changed →

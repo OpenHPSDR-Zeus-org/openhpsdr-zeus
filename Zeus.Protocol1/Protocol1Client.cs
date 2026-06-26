@@ -170,11 +170,16 @@ public sealed class Protocol1Client : IProtocol1Client
     // the built-in test-tone when caller wants a bring-up carrier. Default is
     // the tone so legacy callers (tests, tools/zeus-dump) keep working.
     private readonly ITxIqSource _txIqSource;
+    // Optional RX-audio source for the EP2 L/R slots. Null = never carry RX audio
+    // to the radio codec (legacy behaviour). Drained only during RX in
+    // ControlFrame.WriteUsbFrame; see RxAudioRing.
+    private readonly IRxAudioSource? _rxAudioSource;
 
-    public Protocol1Client(ILogger<Protocol1Client>? logger = null, ITxIqSource? iqSource = null)
+    public Protocol1Client(ILogger<Protocol1Client>? logger = null, ITxIqSource? iqSource = null, IRxAudioSource? rxAudioSource = null)
     {
         _log = logger ?? NullLogger<Protocol1Client>.Instance;
         _txIqSource = iqSource ?? new TestToneGenerator();
+        _rxAudioSource = rxAudioSource;
         _channel = Channel.CreateBounded<IqFrame>(new BoundedChannelOptions(DefaultFrameChannelCapacity)
         {
             FullMode = BoundedChannelFullMode.DropOldest,
@@ -1300,7 +1305,7 @@ public sealed class Protocol1Client : IProtocol1Client
                 bool psArmed = state.PsEnabled && state.Board == HpsdrBoardKind.HermesLite2;
                 var (first, second) = PhaseRegisters(phase, state.Mox, psArmed);
                 phase = psArmed ? ((phase + 1) & 0xF) : ((phase + 1) % 5);
-                ControlFrame.BuildDataPacket(buf, sendSeq++, first, second, in state, _txIqSource);
+                ControlFrame.BuildDataPacket(buf, sendSeq++, first, second, in state, _txIqSource, _rxAudioSource);
                 rateWindowPkts++;
                 var nowUtc = DateTime.UtcNow;
                 var elapsed = nowUtc - rateWindowStart;

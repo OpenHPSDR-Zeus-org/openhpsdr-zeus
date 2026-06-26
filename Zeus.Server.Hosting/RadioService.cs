@@ -356,13 +356,19 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
+    // Optional RX-audio source for the Protocol-1 EP2 L/R slots (radio-codec
+    // speaker output). Drained by Protocol1Client during RX; fed host-side by
+    // RadioSpeakerAudioSink. Null in tests / hosts without the feature wired,
+    // in which case P1 frames carry no RX audio (legacy behaviour).
+    private readonly Zeus.Protocol1.IRxAudioSource? _rxAudioSource;
+
     // Optional non-hardware KiwiSDR slice receiver. When present its entry is
     // appended to the projected receiver list (reserved index
     // WireContract.KiwiReceiverIndex) and a change re-broadcasts state. Null in
     // tests / hosts without the Kiwi feature wired.
     private readonly IKiwiReceiverProvider? _kiwiReceiverProvider;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null, Nr3ModelStore? nr3ModelStore = null, Hl2GpioSettingsStore? hl2GpioStore = null, BandMemoryStore? bandMemoryStore = null, IKiwiReceiverProvider? kiwiReceiverProvider = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null, Nr3ModelStore? nr3ModelStore = null, Hl2GpioSettingsStore? hl2GpioStore = null, BandMemoryStore? bandMemoryStore = null, IKiwiReceiverProvider? kiwiReceiverProvider = null, Zeus.Protocol1.IRxAudioSource? rxAudioSource = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
@@ -403,6 +409,7 @@ public sealed class RadioService : IDisposable
         if (_kiwiReceiverProvider is not null)
             _kiwiReceiverProvider.KiwiReceiverChanged += () => StateChanged?.Invoke(Snapshot());
         _txIqSource = txIqSource;
+        _rxAudioSource = rxAudioSource;
         // Seed the on-board CW keyer config from persisted settings so a
         // reconnect after restart re-applies the operator's mode/speed
         // before they touch the panel — otherwise a paddle op who saved
@@ -800,6 +807,23 @@ public sealed class RadioService : IDisposable
         get { lock (_sync) return _activeClient is not null || _p2Active; }
     }
 
+    /// <summary>True while a Protocol-1 client owns the connection — i.e. the
+    /// EP2 TX loop (and its RX-audio L/R slots) is live. RadioSpeakerAudioSink
+    /// gates on this so it only feeds the P1 RxAudioRing when something will
+    /// actually drain it.</summary>
+    internal bool IsProtocol1Active
+    {
+        get { lock (_sync) return _activeClient is not null; }
+    }
+
+    /// <summary>Cheap MOX accessor (no Receivers projection, unlike Snapshot).
+    /// Used on the per-AudioFrame path to skip feeding RX audio to the radio
+    /// codec while transmitting.</summary>
+    internal bool IsMox
+    {
+        get { lock (_sync) return _mox; }
+    }
+
     public StateDto Snapshot() { lock (_sync) return _state with { Receivers = ProjectReceivers(_state), MaxReceivers = EffectiveMaxReceivers }; }
 
     /// <summary>Current operator preamp toggle. PreampOn isn't on the
@@ -904,9 +928,13 @@ public sealed class RadioService : IDisposable
             if (_activeClient is not null)
                 throw new InvalidOperationException("Already connected. Disconnect first.");
 
+            // Drop any RX-audio buffered from a previous session so a fresh
+            // P1 connect starts from silence rather than replaying a stale tail.
+            (_rxAudioSource as Zeus.Protocol1.RxAudioRing)?.Clear();
             client = new Protocol1Client(
                 _loggerFactory.CreateLogger<Protocol1Client>(),
-                _txIqSource);
+                _txIqSource,
+                _rxAudioSource);
             client.AdcOverloadObserved += OnAdcOverload;
             client.Disconnected += OnClientDisconnected;
             _activeClient = client;

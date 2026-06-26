@@ -2826,6 +2826,32 @@ public static class ZeusEndpoints
                 resolved.LineInGain));
         });
 
+        // Radio-side speaker output (Protocol-1 codec radios). GET reports the
+        // persisted opt-in plus whether it's currently effective for the connected
+        // board (a P1 codec radio, not the codec-less HL2, and not a P2 board —
+        // the Saturn/G2 appliance speaker path is independent). The frontend
+        // refetches this on connect to hydrate the toggle without touching the
+        // StateDto wire format.
+        app.MapGet("/api/radio/speaker-output", (RadioSpeakerSettingsStore store, RadioSpeakerAudioSink sink) =>
+            Results.Ok(new RadioSpeakerOutputDto(
+                Enabled: store.Enabled,
+                Available: sink.AvailableForConnectedBoard())));
+
+        // PUT the opt-in. Persisted globally; the store's Changed event clears the
+        // RX-audio ring when turned off so a later RX never replays a stale tail.
+        // The sink self-gates per frame (board + MOX + mono/48k), so the toggle is
+        // safe to flip at any time, including mid-session.
+        app.MapPut("/api/radio/speaker-output", (RadioSpeakerOutputSetRequest req, RadioSpeakerSettingsStore store, RadioSpeakerAudioSink sink) =>
+        {
+            if (req is null)
+                return Results.BadRequest(new { error = "body required" });
+
+            store.Set(req.Enabled);
+            return Results.Ok(new RadioSpeakerOutputDto(
+                Enabled: store.Enabled,
+                Available: sink.AvailableForConnectedBoard()));
+        });
+
         app.MapGet("/api/radio/power-calibration", (HardwareDiagnosticsService diag) =>
         {
             return Results.Ok(diag.PowerCalibrationSnapshot());

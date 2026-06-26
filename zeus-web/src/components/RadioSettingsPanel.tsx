@@ -28,6 +28,7 @@ import { useEffect, useState } from 'react';
 import { usePttStore } from '../state/ptt-store';
 import { useG2PanelStore } from '../state/g2panel-store';
 import { useAudioStore, type TxAudioSource } from '../state/audio-store';
+import { useRadioSpeakerStore } from '../state/radio-speaker-store';
 import {
   useAntennaStore,
   type AntennaName,
@@ -85,6 +86,11 @@ export function RadioSettingsPanel() {
   const loadAudio = useAudioStore((s) => s.load);
   const updateAudio = useAudioStore((s) => s.update);
 
+  const speaker = useRadioSpeakerStore((s) => s.settings);
+  const speakerInflight = useRadioSpeakerStore((s) => s.inflight);
+  const loadSpeaker = useRadioSpeakerStore((s) => s.load);
+  const setSpeakerEnabled = useRadioSpeakerStore((s) => s.setEnabled);
+
   const antSettings = useAntennaStore((s) => s.settings);
   const antInflight = useAntennaStore((s) => s.inflight);
   const loadAntenna = useAntennaStore((s) => s.load);
@@ -99,9 +105,10 @@ export function RadioSettingsPanel() {
     void loadPtt();
     void loadG2();
     void loadAudio();
+    void loadSpeaker();
     void loadAntenna();
     void loadGpio();
-  }, [loadPtt, loadG2, loadAudio, loadAntenna, loadGpio]);
+  }, [loadPtt, loadG2, loadAudio, loadSpeaker, loadAntenna, loadGpio]);
 
   // Poll the front-panel bridge status while this tab is mounted so the
   // connected lamp reflects plug/unplug without a manual reload.
@@ -476,6 +483,44 @@ export function RadioSettingsPanel() {
           )}
         </div>
       ) : null}
+
+      {/* Audio Output — radio-side speaker/headphone/line-out (Protocol-1 codec
+          radios). Only shown when a P1 codec board is connected (server reports
+          `available`); the codec-less HL2 and the Protocol-2 Saturn/G2 appliance
+          path never surface here. Default OFF so an operator already hearing RX
+          audio host-side isn't surprised by doubled audio. */}
+      {speaker.available ? (
+        <div className="ps-card">
+          <h4>
+            <svg className="ps-ic-sm" viewBox="0 0 12 12">
+              <path d="M2 4.5h2L6.5 2v8L4 7.5H2zM8.5 4a3 3 0 0 1 0 4M10 2.5a5 5 0 0 1 0 7" />
+            </svg>
+            Audio Output
+            <span className="ps-card-hint">radio speaker</span>
+          </h4>
+          <div className="ps-field">
+            <div className="ps-name">
+              Radio Speaker / Headphone
+              <em>
+                Send RX audio to the radio&apos;s own speaker / headphone /
+                line-out jacks. Leave off if you only listen through this
+                computer — turning it on plays audio from both at once.
+              </em>
+            </div>
+            <label className="ps-check">
+              <input
+                type="checkbox"
+                checked={speaker.enabled}
+                disabled={speakerInflight}
+                onChange={(e) => void setSpeakerEnabled(e.target.checked)}
+              />
+              <span className="ps-check-box" />
+              <span>{speaker.enabled ? 'On' : 'Off (default)'}</span>
+            </label>
+          </div>
+        </div>
+      ) : null}
+
       {showAntenna && (
         <div className="ps-card">
           <h4>
