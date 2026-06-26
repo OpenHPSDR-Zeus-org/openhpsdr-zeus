@@ -18,6 +18,7 @@
 // via chat-store REST calls and kept live by 0x35 push frames.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import {
   useChatStore,
   dmOther,
@@ -961,6 +962,58 @@ function TabItem({ id: _id, label, isPrivate, isActive, unread, closable, onClic
   );
 }
 
+/**
+ * Chevron button that scrolls the tab bar when the tabs overflow horizontally —
+ * mirrors the topbar-controls scroll affordance. Both arrows appear together
+ * whenever overflow exists (`show`); the direction with nothing left to scroll
+ * keeps its column reserved (visibility) so the tab strip doesn't reflow as you
+ * page through it.
+ */
+function TabScrollButton({
+  direction,
+  show,
+  enabled,
+  onClick,
+}: {
+  direction: -1 | 1;
+  show: boolean;
+  enabled: boolean;
+  onClick: () => void;
+}) {
+  const left = direction < 0;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!enabled}
+      aria-label={left ? 'Scroll tabs left' : 'Scroll tabs right'}
+      title={left ? 'Scroll tabs left' : 'Scroll tabs right'}
+      style={{
+        display: show ? 'inline-flex' : 'none',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flex: '0 0 22px',
+        width: 22,
+        height: '100%',
+        padding: 0,
+        background: 'var(--bg-1)',
+        border: 'none',
+        borderRight: left ? '1px solid var(--line)' : 'none',
+        borderLeft: left ? 'none' : '1px solid var(--line)',
+        color: enabled ? 'var(--fg-0)' : 'var(--fg-4)',
+        cursor: enabled ? 'pointer' : 'default',
+        visibility: enabled ? 'visible' : 'hidden',
+      }}
+    >
+      {left ? (
+        <ChevronLeft size={14} strokeWidth={2.25} aria-hidden />
+      ) : (
+        <ChevronRight size={14} strokeWidth={2.25} aria-hidden />
+      )}
+    </button>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Group room management strip (admin only)
 // ---------------------------------------------------------------------------
@@ -1577,6 +1630,52 @@ export function ChatPanel() {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Horizontal scroll affordance for the room tab bar — when the tabs overflow,
+  // page them with chevron buttons just like the topbar-controls strip.
+  const tabBarRef = useRef<HTMLDivElement | null>(null);
+  const [tabScroll, setTabScroll] = useState({ canLeft: false, canRight: false });
+
+  const syncTabScroll = useCallback(() => {
+    const el = tabBarRef.current;
+    if (!el) return;
+    const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
+    const next = {
+      canLeft: el.scrollLeft > 1,
+      canRight: maxScroll > 1 && el.scrollLeft < maxScroll - 1,
+    };
+    setTabScroll((prev) =>
+      prev.canLeft === next.canLeft && prev.canRight === next.canRight ? prev : next,
+    );
+  }, []);
+
+  const scrollTabs = useCallback(
+    (direction: -1 | 1) => {
+      const el = tabBarRef.current;
+      if (!el) return;
+      const amount = Math.max(120, Math.floor(el.clientWidth * 0.75));
+      el.scrollBy({ left: direction * amount, behavior: 'smooth' });
+      window.setTimeout(syncTabScroll, 180);
+    },
+    [syncTabScroll],
+  );
+
+  // Re-evaluate the arrows every render (tabs are added/removed as DMs and
+  // groups open/close) and on container resize.
+  useEffect(() => {
+    syncTabScroll();
+  });
+  useEffect(() => {
+    const el = tabBarRef.current;
+    if (!el) return;
+    window.addEventListener('resize', syncTabScroll);
+    const ro =
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(syncTabScroll) : null;
+    ro?.observe(el);
+    return () => {
+      window.removeEventListener('resize', syncTabScroll);
+      ro?.disconnect();
+    };
+  }, [syncTabScroll]);
 
   // Auto-grow textarea
   useEffect(() => {
@@ -2107,41 +2206,60 @@ export function ChatPanel() {
 
           {/* ── Tab bar ── */}
           <div
-            role="tablist"
-            aria-label="Chat rooms"
             style={{
               display: 'flex',
               alignItems: 'stretch',
               height: 30,
               borderBottom: '1px solid var(--panel-border)',
               background: 'var(--bg-1)',
-              overflowX: 'auto',
-              overflowY: 'hidden',
               flexShrink: 0,
             }}
           >
-            {orderedRooms.map((room) => {
-              const isDm = room.kind === 'dm';
-              const isPrivate = room.kind !== 'public';
-              const label = isDm
-                ? (dmOther(room.id, ownCall) ?? room.name)
-                : room.name;
-              return (
-                <TabItem
-                  key={room.id}
-                  id={room.id}
-                  label={label}
-                  isPrivate={isPrivate}
-                  isActive={activeRoom === room.id}
-                  unread={unreadByRoom[room.id] ?? 0}
-                  closable={isDm}
-                  onClick={() => setActiveRoom(room.id)}
-                  onClose={isDm ? () => handleTabClose(room.id) : undefined}
-                />
-              );
-            })}
+            <TabScrollButton
+              direction={-1}
+              show={tabScroll.canLeft || tabScroll.canRight}
+              enabled={tabScroll.canLeft}
+              onClick={() => scrollTabs(-1)}
+            />
+            <div
+              ref={tabBarRef}
+              role="tablist"
+              aria-label="Chat rooms"
+              onScroll={syncTabScroll}
+              style={{
+                display: 'flex',
+                alignItems: 'stretch',
+                flex: 1,
+                minWidth: 0,
+                overflowX: 'auto',
+                overflowY: 'hidden',
+                scrollbarWidth: 'none',
+              }}
+            >
+              {orderedRooms.map((room) => {
+                const isDm = room.kind === 'dm';
+                const isPrivate = room.kind !== 'public';
+                const label = isDm
+                  ? (dmOther(room.id, ownCall) ?? room.name)
+                  : room.name;
+                return (
+                  <TabItem
+                    key={room.id}
+                    id={room.id}
+                    label={label}
+                    isPrivate={isPrivate}
+                    isActive={activeRoom === room.id}
+                    unread={unreadByRoom[room.id] ?? 0}
+                    closable={isDm}
+                    onClick={() => setActiveRoom(room.id)}
+                    onClose={isDm ? () => handleTabClose(room.id) : undefined}
+                  />
+                );
+              })}
+            </div>
 
-            {/* Admin: create group room */}
+            {/* Admin: create group room — pinned so it stays reachable
+                regardless of how far the tab strip is scrolled. */}
             {isAdmin && (
               <button
                 type="button"
@@ -2150,14 +2268,14 @@ export function ChatPanel() {
                 title="Create group room"
                 style={{
                   flexShrink: 0,
-                  background: 'none',
+                  background: 'var(--bg-1)',
                   border: 'none',
+                  borderLeft: '1px solid var(--line)',
                   padding: '0 10px',
                   cursor: 'pointer',
                   fontSize: 16,
                   lineHeight: 1,
                   color: 'var(--fg-3)',
-                  alignSelf: 'center',
                   display: 'flex',
                   alignItems: 'center',
                 }}
@@ -2165,6 +2283,12 @@ export function ChatPanel() {
                 +
               </button>
             )}
+            <TabScrollButton
+              direction={1}
+              show={tabScroll.canLeft || tabScroll.canRight}
+              enabled={tabScroll.canRight}
+              onClick={() => scrollTabs(1)}
+            />
           </div>
 
           {/* Admin group management strip */}
