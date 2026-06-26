@@ -128,6 +128,41 @@ public class ChatServiceTests : IDisposable
         Assert.Equal("hello", msg.Text);
         Assert.True(msg.Ts > 0); // synthesised
         Assert.Equal("lobby", msg.Room); // defaulted
+        Assert.Null(msg.Attachment); // plain message has no attachment
+    }
+
+    [Fact]
+    public void ParseMessage_ReadsImageAttachment()
+    {
+        using var doc = JsonDocument.Parse(
+            """{"t":"msg","from":"N9WAR","text":"look","room":"lobby","attachment":{"kind":"image","mime":"image/jpeg","dataUrl":"data:image/jpeg;base64,/9j/AA==","name":"rig.jpg","width":1024,"height":768,"size":4096}}""");
+        var msg = ChatService.ParseMessage(doc.RootElement);
+
+        Assert.NotNull(msg.Attachment);
+        Assert.Equal("image", msg.Attachment!.Kind);
+        Assert.Equal("image/jpeg", msg.Attachment.Mime);
+        Assert.StartsWith("data:image/jpeg;base64,", msg.Attachment.DataUrl);
+        Assert.Equal("rig.jpg", msg.Attachment.Name);
+        Assert.Equal(1024, msg.Attachment.Width);
+        Assert.Equal(768, msg.Attachment.Height);
+        Assert.Equal("look", msg.Text); // text rides alongside the image (caption)
+    }
+
+    [Fact]
+    public void ParseAttachment_DropsNonImageOrOversize()
+    {
+        // Non-image data URL → dropped (message degrades to text-only).
+        using var bad = JsonDocument.Parse(
+            """{"t":"msg","from":"N9WAR","text":"x","attachment":{"kind":"image","mime":"application/pdf","dataUrl":"data:application/pdf;base64,AAAA"}}""");
+        Assert.Null(ChatService.ParseMessage(bad.RootElement).Attachment);
+
+        // Oversized data URL → dropped.
+        var huge = new string('A', ChatAttachment.MaxDataUrlLength + 1);
+        var bigJson =
+            "{\"t\":\"msg\",\"from\":\"N9WAR\",\"attachment\":{\"kind\":\"image\"," +
+            "\"mime\":\"image/png\",\"dataUrl\":\"data:image/png;base64," + huge + "\"}}";
+        using var big = JsonDocument.Parse(bigJson);
+        Assert.Null(ChatService.ParseMessage(big.RootElement).Attachment);
     }
 
     [Fact]
@@ -273,7 +308,7 @@ public class ChatServiceTests : IDisposable
 
         // Send must fail with 409-mapped exception when not connected.
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => chat.SendMessageAsync("hello", null, CancellationToken.None));
+            () => chat.SendMessageAsync("hello", null, null, CancellationToken.None));
     }
 
     [Fact]
@@ -290,7 +325,7 @@ public class ChatServiceTests : IDisposable
         Assert.True(store.GetEnabled());
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => chat.SendMessageAsync("hi", null, CancellationToken.None));
+            () => chat.SendMessageAsync("hi", null, null, CancellationToken.None));
 
         chat.SetEnabled(false);
         Assert.False(store.GetEnabled());
@@ -301,7 +336,7 @@ public class ChatServiceTests : IDisposable
     {
         using var chat = BuildChat();
         await Assert.ThrowsAsync<ArgumentException>(
-            () => chat.SendMessageAsync("   ", null, CancellationToken.None));
+            () => chat.SendMessageAsync("   ", null, null, CancellationToken.None));
     }
 
     [Fact]

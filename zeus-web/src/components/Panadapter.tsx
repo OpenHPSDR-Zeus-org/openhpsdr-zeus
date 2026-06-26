@@ -57,7 +57,7 @@ import { useDisplaySettingsStore, shouldTxAutoRange } from '../state/display-set
 import { useConnectionStore } from '../state/connection-store';
 import { enhanceInto, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { normalizeStitchedBins, stitchFloorShiftDb } from '../dsp/stitch-normalizer';
-import { getReceiverVfoHz, rxIndexOf, type ReceiverKey } from '../state/receiver-state';
+import { getReceiverVfoHz, receiverLabel, rxIndexOf, type ReceiverKey } from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
 import * as viewZoom from '../state/view-zoom';
 import { useTxStore } from '../state/tx-store';
@@ -94,6 +94,11 @@ export function Panadapter({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rxIndex = rxIndexOf(receiver);
   const vfoHz = useConnectionStore((s) => getReceiverVfoHz(s, receiver));
+  // Operator-facing label for the overlay. Hardware DDCs fall back to "RX{n}";
+  // the Kiwi slice receiver carries a name ("Kiwi") on its receivers[] entry.
+  const rxLabel = useConnectionStore((s) =>
+    receiverLabel({ index: rxIndex, name: s.receivers.find((r) => r.index === rxIndex)?.name }),
+  );
   const popEnabled = useSignalEnhanceStore((s) => s.popEnabled);
   const popRenderIntensity = useSignalEnhanceStore((s) => s.popRenderIntensity);
   const moxOn = useTxStore((s) => s.moxOn);
@@ -227,9 +232,14 @@ export function Panadapter({
       // Draw-time zoom (view-zoom.ts): scale the trace about the view centre
       // when the animated display span lags the span this anchor was captured
       // at, so the trace scales in lock-step with the waterfall during a zoom.
+      // The Kiwi slice receiver self-scales to its OWN frame Hz/pixel (it has an
+      // independent span the RX1-driven global tween knows nothing about), which
+      // makes scaleX resolve to 1 (full width); every hardware DDC follows the
+      // shared zoom tween exactly as before. See displayedHzPerPixelFor.
+      const displayedHzPerPixel = viewZoom.displayedHzPerPixelFor(rxIndex, anchorHzPerPixel);
       const scaleX =
-        viewZoom.isInitialized() && anchorHzPerPixel > 0
-          ? anchorHzPerPixel / viewZoom.getDisplayedHzPerPixel()
+        displayedHzPerPixel > 0 && anchorHzPerPixel > 0
+          ? anchorHzPerPixel / displayedHzPerPixel
           : 1;
       renderer.draw(anchorPan, dbMin, dbMax, offsetPx, scaleX);
     };
@@ -490,7 +500,7 @@ export function Panadapter({
           border: '1px solid rgba(255,255,255,0.16)',
         }}
       >
-        {`RX${rxIndex + 1}`} · {(vfoHz / 1e6).toFixed(6)}
+        {rxLabel} · {(vfoHz / 1e6).toFixed(6)}
         {stitched && foreground ? ' · FOCUS' : ''}
       </div>
       {/* Passband + hover crosshair render on BOTH halves (RX2), each tracking

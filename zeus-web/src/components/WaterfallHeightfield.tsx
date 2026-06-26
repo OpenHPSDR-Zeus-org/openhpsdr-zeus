@@ -35,7 +35,7 @@ import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
-import { getReceiverVfoHz, rxIndexOf, type ReceiverKey } from '../state/receiver-state';
+import { getReceiverVfoHz, KIWI_RECEIVER_INDEX, rxIndexOf, type ReceiverKey } from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
 import * as viewZoom from '../state/view-zoom';
 import { usePanTuneGesture, type PanTuneGestureOptions } from '../util/use-pan-tune-gesture';
@@ -219,10 +219,20 @@ export function WaterfallHeightfield({
       // View span: zoom is a single global setting (DspPipelineService applies the
       // same SetZoom to RX1 and RX2, and both frames carry the same hzPerPixel),
       // so BOTH halves follow the one shared zoom glide — RX2 scales as smoothly
-      // as RX1 instead of stepping off its own slice.
-      const viewHzPerPixel = viewZoom.isInitialized()
-        ? viewZoom.getDisplayedHzPerPixel()
-        : null;
+      // as RX1 instead of stepping off its own slice. The Kiwi slice receiver is
+      // the exception: it has an independent native span the shared tween knows
+      // nothing about, so it self-scales to its OWN current frame Hz/pixel
+      // (viewHzPerPixel == the renderer's anchor → scale 1, full width). See
+      // displayedHzPerPixelFor.
+      const ownFrameHzPerPixel = selectDisplaySlice(useDisplayStore.getState(), receiver).hzPerPixel;
+      const viewHzPerPixel =
+        rxIndex === KIWI_RECEIVER_INDEX
+          ? ownFrameHzPerPixel > 0
+            ? viewZoom.displayedHzPerPixelFor(rxIndex, ownFrameHzPerPixel)
+            : null
+          : viewZoom.isInitialized()
+            ? viewZoom.getDisplayedHzPerPixel()
+            : null;
       const t0 = performance.now();
       renderer.draw(dbMin, dbMax, visualCenterHz(), viewHzPerPixel);
       const dt = performance.now() - t0;
