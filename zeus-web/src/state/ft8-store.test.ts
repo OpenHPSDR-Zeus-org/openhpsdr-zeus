@@ -27,15 +27,15 @@ describe('ft8-store ingest (0x38 decode frames)', () => {
     const rows = useFt8Store.getState().rows;
     expect(rows).toHaveLength(2);
     expect(rows.map((r) => r.text)).toContain('CQ KB2UKA FN12');
-    expect(rows[0].slotStartUnixMs).toBe(1000);
-    expect(rows[0].id).toMatch(/^0:1000:/);
+    expect(rows[0]?.slotStartUnixMs).toBe(1000);
+    expect(rows[0]?.id).toMatch(/^0:1000:/);
   });
 
   it('puts the newest slot first', () => {
     useFt8Store.getState().ingest(batch(1000, ['old']));
     useFt8Store.getState().ingest(batch(2000, ['new']));
-    expect(useFt8Store.getState().rows[0].text).toBe('new');
-    expect(useFt8Store.getState().rows[1].text).toBe('old');
+    expect(useFt8Store.getState().rows[0]?.text).toBe('new');
+    expect(useFt8Store.getState().rows[1]?.text).toBe('old');
   });
 
   it('bounds the table to MAX_ROWS', () => {
@@ -46,7 +46,7 @@ describe('ft8-store ingest (0x38 decode frames)', () => {
     // 60 slots * 20 = 1200 ingested, capped at 500.
     expect(useFt8Store.getState().rows.length).toBe(500);
     // Newest slot's rows survived.
-    expect(useFt8Store.getState().rows[0].text).toMatch(/^msg-59-/);
+    expect(useFt8Store.getState().rows[0]?.text).toMatch(/^msg-59-/);
   });
 
   it('clear() empties the table', () => {
