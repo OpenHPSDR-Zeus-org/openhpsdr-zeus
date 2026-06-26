@@ -616,6 +616,22 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         Assert.Equal("aligned", root.GetProperty("runtimeAlignmentStatus").GetString());
     }
 
+    [Fact]
+    public void SmartNrCondition_ReportsAlignedRnnrRuntime()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+        PublishScene(service, smartNrProfile: "NR3");
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(
+            service.SmartNrCondition(Runtime(requested: "Rnnr", effective: "Rnnr")),
+            CamelCaseJson));
+        var root = doc.RootElement;
+
+        Assert.Equal("Rnnr", root.GetProperty("expectedNrMode").GetString());
+        Assert.True(root.GetProperty("runtimeAligned").GetBoolean());
+        Assert.Equal("aligned", root.GetProperty("runtimeAlignmentStatus").GetString());
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("   ")]

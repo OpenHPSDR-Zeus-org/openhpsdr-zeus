@@ -727,62 +727,61 @@
   opacity: 1;
 }
 
-/* Workspace zoom cluster (− | nn% | +) — a floating pill sitting to the LEFT
- * of the round Add Panel button. Same chrome vocabulary so the two read as a
- * matched pair of workspace-level affordances. */
+/* Workspace zoom cluster (ZOOM − | nn% | +) — lives in the bottom transport
+ * bar beside the PA-temperature chip. Styled to the footer .chip vocabulary
+ * (dark inset, hairline border) so it reads as a matched status affordance
+ * rather than a floating pill. */
 .workspace-zoom-controls {
-  position: absolute;
-  right: 54px;
-  bottom: 12px;
-  z-index: 5;
   display: inline-flex;
   align-items: center;
-  height: 34px;
-  padding: 0 2px;
-  border-radius: 999px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.015)),
-    rgba(12, 13, 15, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow:
-    0 8px 20px rgba(0, 0, 0, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.09);
-  opacity: 0.68;
-  transition:
-    opacity var(--dur-fast),
-    border-color var(--dur-fast);
+  gap: 2px;
+  height: 22px;
+  padding: 0 4px;
+  border-radius: var(--r-xs);
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: border-color var(--dur-fast);
 }
 .workspace-zoom-controls:hover,
 .workspace-zoom-controls:focus-within {
-  opacity: 1;
-  border-color: rgba(255, 255, 255, 0.24);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+.workspace-zoom-controls > .k {
+  color: var(--fg-2);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 9px;
+  margin-right: 2px;
 }
 .workspace-zoom-btn,
 .workspace-zoom-readout {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 28px;
+  height: 18px;
   padding: 0;
   border: none;
   background: transparent;
   color: var(--fg-1);
   font-family: var(--font-sans);
   cursor: pointer;
-  border-radius: 999px;
+  border-radius: var(--r-xs);
   transition:
     background var(--dur-fast),
     color var(--dur-fast);
 }
 .workspace-zoom-btn {
-  width: 28px;
+  width: 18px;
 }
 .workspace-zoom-readout {
-  min-width: 44px;
-  padding: 0 6px;
-  font-size: 12px;
+  min-width: 34px;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
+  color: var(--fg-0);
 }
 .workspace-zoom-btn:hover:not(:disabled),
 .workspace-zoom-readout:hover {
