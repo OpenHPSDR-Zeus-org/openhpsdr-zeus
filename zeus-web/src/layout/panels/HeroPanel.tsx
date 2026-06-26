@@ -56,6 +56,7 @@ import { LeafletWorldMap } from '../../components/design/LeafletWorldMap';
 import { LeafletMapErrorBoundary } from '../../components/design/LeafletMapErrorBoundary';
 import { setReceiverMuted } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
+import { receiverLabel } from '../../state/receiver-state';
 import { useTxStore } from '../../state/tx-store';
 import { useRotatorStore } from '../../state/rotator-store';
 import { useLayoutStore } from '../../state/layout-store';
@@ -485,10 +486,10 @@ export function HeroPanel({
                     className={`hero-rx-audio-switch__key ${audible ? 'is-active' : 'is-muted'}`}
                     onClick={() => toggleAudible(r.index, !audible)}
                     aria-pressed={audible}
-                    title={audible ? `Mute RX${r.index + 1} audio` : `Hear RX${r.index + 1} audio`}
+                    title={audible ? `Mute ${receiverLabel(r)} audio` : `Hear ${receiverLabel(r)} audio`}
                   >
                     {audible ? <Volume2 size={11} /> : <VolumeX size={11} />}
-                    <span>{`RX${r.index + 1}`}</span>
+                    <span>{receiverLabel(r)}</span>
                   </button>
                 );
               })}
@@ -517,9 +518,9 @@ export function HeroPanel({
                       : setFocusedRxIndex(r.index)
                   }
                   aria-pressed={selectedRxIndices.includes(r.index)}
-                  title={`RX${r.index + 1}: click to focus, Ctrl/⌘-click to add to the multi-selection (ganged mode/filter/band/AF).`}
+                  title={`${receiverLabel(r)}: click to focus, Ctrl/⌘-click to add to the multi-selection (ganged mode/filter/band/AF).`}
                 >
-                  <span>{`RX${r.index + 1}`}</span>
+                  <span>{receiverLabel(r)}</span>
                 </button>
               ))}
             </div>
@@ -587,7 +588,17 @@ export function HeroPanel({
           {connected && (
             <div style={spectrumGridStyle}>
               {spectrumPanes.map((p) => (
-                <div key={p.index} style={{ minWidth: 0, minHeight: 0 }}>
+                <div
+                  key={p.index}
+                  style={{ minWidth: 0, minHeight: 0 }}
+                  // Any pointer-down anywhere in this RX's pane (panadapter body,
+                  // filter overlay, etc.) focuses the receiver, so the global
+                  // mode/band/AF toolbar then acts on it. Capture phase so it wins
+                  // before child handlers. Fixes "can't change the Kiwi's mode".
+                  onPointerDownCapture={() => {
+                    if (focusedRxIndex !== p.index) setFocusedRxIndex(p.index);
+                  }}
+                >
                   <Panadapter
                     receiver={p.index}
                     stitched={multiRxSpectrum && p.index <= 1}
@@ -618,7 +629,13 @@ export function HeroPanel({
             ) : (
               <div style={spectrumGridStyle}>
                 {spectrumPanes.map((p) => (
-                  <div key={p.index} style={{ minWidth: 0, minHeight: 0 }}>
+                  <div
+                    key={p.index}
+                    style={{ minWidth: 0, minHeight: 0 }}
+                    onPointerDownCapture={() => {
+                      if (focusedRxIndex !== p.index) setFocusedRxIndex(p.index);
+                    }}
+                  >
                     <WaterfallSurface
                       receiver={p.index}
                       transparent={bgActive}

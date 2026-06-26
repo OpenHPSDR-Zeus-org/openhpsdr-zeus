@@ -16,10 +16,13 @@
 // per-receiver rows carry the ADC0/ADC1 selector. Visual idiom reuses the
 // shared `.ps-shell` / `.ps-card` / `.ps-field` surfaces (tokens only).
 
+import { useMemo } from 'react';
 import { setReceiver } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import {
+  KIWI_RECEIVER_INDEX,
   PRACTICAL_MAX_RECEIVERS,
+  receiverLabel,
   setExposedReceiverCount,
 } from '../state/receiver-state';
 
@@ -28,7 +31,15 @@ function formatMhz(hz: number): string {
 }
 
 export function ReceiversPanel() {
-  const receivers = useConnectionStore((s) => s.receivers);
+  const allReceivers = useConnectionStore((s) => s.receivers);
+  // The KiwiSDR slice receiver lives on a reserved high index and is a software
+  // receiver, not a hardware DDC — keep it out of the DDC count + ADC list so it
+  // never affects the multi-RX stepper. Memoised so the filtered array keeps a
+  // stable reference (a fresh array in the selector would loop renders).
+  const receivers = useMemo(
+    () => allReceivers.filter((r) => r.index !== KIWI_RECEIVER_INDEX),
+    [allReceivers],
+  );
   const maxReceivers = useConnectionStore((s) => s.maxReceivers);
   const status = useConnectionStore((s) => s.status);
   const connectedProtocol = useConnectionStore((s) => s.connectedProtocol);
@@ -131,7 +142,7 @@ export function ReceiversPanel() {
             {receivers.map((r) => (
               <div className="ps-field" key={r.index}>
                 <div className="ps-name">
-                  {`RX${r.index + 1}`}
+                  {receiverLabel(r)}
                   <em>
                     {`${r.mode} · ${formatMhz(r.vfoHz)}`}
                     {r.index === 0 ? ' · clock master' : ''}
@@ -140,7 +151,7 @@ export function ReceiversPanel() {
                 <select
                   className="ps-select-mini"
                   value={r.adcSource}
-                  aria-label={`RX${r.index + 1} ADC source`}
+                  aria-label={`${receiverLabel(r)} ADC source`}
                   onChange={(e) => setAdc(r.index, Number(e.target.value))}
                 >
                   <option value={0}>ADC 0</option>

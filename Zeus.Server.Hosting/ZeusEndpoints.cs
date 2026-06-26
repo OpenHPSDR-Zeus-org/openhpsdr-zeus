@@ -3574,9 +3574,10 @@ public static class ZeusEndpoints
         });
 
         // LAN Browser proxy. Fetches a private-LAN device web page on the radio
-        // host's behalf and returns it. Scoped to RFC1918 / IPv6-ULA targets by
-        // LanProxyService; loopback + public + cloud-metadata are refused. Tunnels
-        // transparently for remote operators (it's a same-origin /api GET).
+        // host's behalf and returns it (HTML rewritten so sub-resources route
+        // back through this same endpoint). Scoped to RFC1918 / IPv6-ULA targets
+        // by LanProxyService; loopback + public + cloud-metadata are refused.
+        // Tunnels transparently for remote operators (it's a same-origin /api GET).
         app.MapGet("/api/lan/proxy", async (string? url, string? inline, LanProxyService proxy, HttpContext ctx, CancellationToken ct) =>
         {
             // inline=1 → self-contained HTML for an iframe srcdoc (the remote path,
