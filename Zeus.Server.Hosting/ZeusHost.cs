@@ -214,6 +214,22 @@ public static class ZeusHost
             tciBindAddress = persistedTci.BindAddress;
             tciPort = persistedTci.Port;
         }
+
+        // CAT (Kenwood TS-2000 over TCP) persisted runtime override, mirroring
+        // the TCI bootstrap above. CatServer reads CatOptions directly (it owns
+        // its TcpListener — no Kestrel binding), so we only need the persisted
+        // value here to feed PostConfigure<CatOptions> below; there is no
+        // cat-enabled/bind/port local to thread into Kestrel.
+        CatRuntimeConfig? persistedCat = null;
+        try
+        {
+            using var bootstrapCatStore = new CatConfigStore(NullLogger<CatConfigStore>.Instance);
+            persistedCat = bootstrapCatStore.Get();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"cat.config.bootstrap-load failed: {ex.Message}");
+        }
         // PERF_PASS_3_DEBUG: force-disable TCI bind when running a second
         // instance on the same box (Brian's main session keeps :40001).
         // Uncommitted local edit.
@@ -852,6 +868,28 @@ public static class ZeusHost
         builder.Services.AddHostedService(sp => sp.GetRequiredService<SpotBroadcastService>());
         builder.Services.AddSingleton<TciManagementService>();
 
+        // CAT (Kenwood TS-2000 over TCP) server — control-only sibling of TCI for
+        // loggers / digital-mode apps (WSJT-X, N1MM+, fldigi, Hamlib net rigctl).
+        // Disabled by default; enable via appsettings.json Cat:Enabled=true or the
+        // Network settings tab. CatServer owns its own TcpListener (a raw line
+        // protocol Kestrel can't serve), so — unlike TCI — there is NO Kestrel
+        // port-branch entry below; it binds in its own StartAsync.
+        builder.Services.Configure<Cat.CatOptions>(builder.Configuration.GetSection("Cat"));
+        if (persistedCat is not null)
+        {
+            var pendingCat = persistedCat;
+            builder.Services.PostConfigure<Cat.CatOptions>(o =>
+            {
+                o.Enabled = pendingCat.Enabled;
+                o.BindAddress = pendingCat.BindAddress;
+                o.Port = pendingCat.Port;
+            });
+        }
+        builder.Services.AddSingleton<CatConfigStore>();
+        builder.Services.AddSingleton<Cat.CatServer>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Cat.CatServer>());
+        builder.Services.AddSingleton<CatManagementService>();
+
         // ZeusChat — operator-to-operator chat over the Cloudflare relay.
         // Singleton (API surface) + hosted service (relay connection lifecycle),
         // same shape as SpotBroadcastService above. Opt-in persisted via
@@ -998,7 +1036,11 @@ public static class ZeusHost
         // (operator-facing UI), desktop mode hides the console and skips this.
         if (options.PrintConsoleBanner && Environment.UserInteractive)
         {
-            PrintBanner(options.HttpPort, tciEnabled, tciBindAddress, tciPort);
+            // Reuse the same LAN IP list the structured log emits above so the
+            // banner and the log agree on which addresses the radio is reachable
+            // at. Empty when BindAllInterfaces=false (loopback-only modes).
+            var bannerLanIps = options.BindAllInterfaces ? LanCertificate.GetLanIps() : new List<IPAddress>();
+            PrintBanner(options.HttpPort, httpsPort, bannerLanIps, tciEnabled, tciBindAddress, tciPort);
         }
 
         return app;
@@ -1015,7 +1057,13 @@ public static class ZeusHost
         await qrzService.InitializeAsync(cancellationToken);
     }
 
-    static void PrintBanner(int httpPort, bool tciEnabled, string tciBindAddress, int tciPort)
+    static void PrintBanner(
+        int httpPort,
+        int httpsPort,
+        IReadOnlyList<IPAddress> lanIps,
+        bool tciEnabled,
+        string tciBindAddress,
+        int tciPort)
     {
         var assembly = System.Reflection.Assembly.GetExecutingAssembly();
         var attr = assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
@@ -1030,11 +1078,35 @@ public static class ZeusHost
         Console.WriteLine("  Licensed under GPL-2.0-or-later");
         Console.WriteLine("═══════════════════════════════════════════════════════════════");
         Console.WriteLine();
-        Console.WriteLine($"  Server listening on: http://localhost:{httpPort}");
-        if (tciEnabled)
-            Console.WriteLine($"  TCI listening on:    {tciBindAddress}:{tciPort}");
+        Console.WriteLine("  Open Zeus in your web browser at one of these URLs:");
         Console.WriteLine();
-        Console.WriteLine("  Open your web browser and navigate to the server address above.");
+        Console.WriteLine("    On this machine:");
+        Console.WriteLine($"      http://localhost:{httpPort}");
+        if (httpsPort > 0)
+            Console.WriteLine($"      https://localhost:{httpsPort}");
+        if (lanIps.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("    From another device on your LAN (phone, tablet, other PC):");
+            foreach (var ip in lanIps)
+            {
+                if (httpsPort > 0)
+                    Console.WriteLine($"      https://{ip}:{httpsPort}    ← use this for microphone TX");
+                Console.WriteLine($"      http://{ip}:{httpPort}");
+            }
+            if (httpsPort > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine("    Browsers require HTTPS to allow microphone access on a LAN");
+                Console.WriteLine("    address. The first visit shows a self-signed certificate warning —");
+                Console.WriteLine("    accept it once and microphone TX will work from then on.");
+            }
+        }
+        if (tciEnabled)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"  TCI listening on:    {tciBindAddress}:{tciPort}");
+        }
         Console.WriteLine();
         Console.WriteLine("  To STOP the server:");
         Console.WriteLine("    • Press Ctrl+C in this console window, or");

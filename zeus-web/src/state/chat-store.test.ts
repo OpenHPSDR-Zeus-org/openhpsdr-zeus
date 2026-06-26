@@ -85,6 +85,38 @@ describe('chat-store ingest (0x35 live frames)', () => {
     expect(lobby().map((x) => x.id)).toEqual(['a', 'b']);
   });
 
+  it('preserves a valid image attachment and drops a malformed one', () => {
+    const ing = useChatStore.getState().ingest;
+    const dataUrl = 'data:image/jpeg;base64,/9j/AA==';
+    ing({
+      kind: 'message',
+      message: {
+        id: 'img1',
+        ts: 100,
+        from: 'N9WAR',
+        text: 'look',
+        room: PUBLIC_ROOM,
+        attachment: { kind: 'image', mime: 'image/jpeg', dataUrl, width: 800, height: 600 },
+      },
+    });
+    // A non-image data URL must not survive normalization.
+    ing({
+      kind: 'message',
+      message: {
+        id: 'img2',
+        ts: 200,
+        from: 'N9WAR',
+        text: 'nope',
+        room: PUBLIC_ROOM,
+        attachment: { kind: 'image', mime: 'application/pdf', dataUrl: 'data:application/pdf;base64,AAAA' },
+      },
+    });
+    const msgs = lobby();
+    expect(msgs.find((m) => m.id === 'img1')?.attachment?.dataUrl).toBe(dataUrl);
+    expect(msgs.find((m) => m.id === 'img1')?.attachment?.width).toBe(800);
+    expect(msgs.find((m) => m.id === 'img2')?.attachment).toBeNull();
+  });
+
   it('routes messages to the correct room and counts unread for inactive rooms', () => {
     const ing = useChatStore.getState().ingest;
     ing({ kind: 'message', message: msg('g1', 100, 'hi', 'W1ABC', 'g123') });

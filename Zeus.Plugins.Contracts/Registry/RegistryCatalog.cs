@@ -4,7 +4,7 @@ namespace Zeus.Plugins.Contracts.Registry;
 
 /// <summary>
 /// Top-level <c>registry.json</c> served by the plugin registry repo
-/// (default <c>Kb2uka/openhpsdr-zeus-plugins</c>).
+/// (default <c>OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins</c>).
 /// </summary>
 public sealed record RegistryCatalog
 {

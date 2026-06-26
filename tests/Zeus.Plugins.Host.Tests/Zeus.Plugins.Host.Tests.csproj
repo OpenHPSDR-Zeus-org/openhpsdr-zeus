@@ -48,4 +48,14 @@
     <Copy SourceFiles="@(BridgeWin)"   DestinationFolder="$(OutDir)" Condition="Exists('%(BridgeWin.FullPath)')"   SkipUnchangedFiles="true" />
   </Target>
 
+  <!-- Copy the native AU bridge (macOS only) into the test output dir if a
+       local cmake build exists. AuBridgeNativeRealTests skips gracefully when
+       absent, so the suite stays green on machines / platforms without it. -->
+  <Target Name="CopyAuBridgeDylib" AfterTargets="Build">
+    <ItemGroup>
+      <AuBridgeMac Include="$(MSBuildThisFileDirectory)..\..\native\zeus-au-bridge\build\libzeus-au-bridge.dylib" />
+    </ItemGroup>
+    <Copy SourceFiles="@(AuBridgeMac)" DestinationFolder="$(OutDir)" Condition="Exists('%(AuBridgeMac.FullPath)')" SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>

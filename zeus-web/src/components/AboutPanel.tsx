@@ -69,7 +69,7 @@ export function AboutPanel() {
     setChecking(true);
     try {
       const response = await fetch(
-        'https://api.github.com/repos/Kb2uka/openhpsdr-zeus/releases/latest'
+        'https://api.github.com/repos/OpenHPSDR-Zeus-org/openhpsdr-zeus/releases/latest'
       );
       if (!response.ok) {
         throw new Error(`GitHub API returned ${response.status}`);
@@ -156,7 +156,7 @@ export function AboutPanel() {
           >
             🎉 A new version is available!{' '}
             <a
-              href="https://github.com/Kb2uka/openhpsdr-zeus/releases/latest"
+              href="https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus/releases/latest"
               target="_blank"
               rel="noopener noreferrer"
               style={{ color: 'var(--accent)', textDecoration: 'underline' }}
@@ -226,12 +226,12 @@ export function AboutPanel() {
         <p style={{ margin: 0, lineHeight: 1.6, color: 'var(--fg-2)', fontSize: 11 }}>
           Licensed under GNU GPL v2 or later. See{' '}
           <a
-            href="https://github.com/Kb2uka/openhpsdr-zeus"
+            href="https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus"
             target="_blank"
             rel="noopener noreferrer"
             style={{ color: 'var(--accent)', textDecoration: 'underline' }}
           >
-            github.com/Kb2uka/openhpsdr-zeus
+            github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus
           </a>{' '}
           for source code and documentation.
         </p>

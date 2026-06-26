@@ -534,7 +534,7 @@ FIRST RUN — WDSP WISDOM
   minutes. The window will load, but do NOT click Discover/Connect
   until the wisdom build settles. Subsequent launches are instant.
 
-More info: https://github.com/Kb2uka/openhpsdr-zeus
+More info: https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus
 EOF
 else
     cat > "${DMG_TEMP}/README.txt" << 'EOF'
@@ -598,7 +598,7 @@ FIRST RUN — WDSP WISDOM
   minutes. The window will load, but do NOT click Discover/Connect
   until the wisdom build settles. Subsequent launches are instant.
 
-More info: https://github.com/Kb2uka/openhpsdr-zeus
+More info: https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus
 EOF
 fi
 

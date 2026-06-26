@@ -44,4 +44,11 @@ public enum MoxSource : byte
     /// override. The plugin keys; on-air audio still flows through the normal
     /// TX chain and all interlocks.</summary>
     Plugin = 4,
+    /// <summary>A CAT (Kenwood TS-2000 over TCP) client keying TX via a
+    /// <c>TX;</c> command — a logger / digital-mode app (WSJT-X, N1MM+,
+    /// fldigi, Hamlib net rigctl). Same release rule as <see cref="Tci"/>:
+    /// only the CAT source releases what it itself claimed, and
+    /// <see cref="UI"/> remains the master override. CAT keying never arms
+    /// PureSignal and never auto-keys on connect.</summary>
+    Cat = 5,
 }

@@ -3,7 +3,7 @@
 **Status:** Accepted 2026-05-17 (maintainer: Brian, EI6LF)
 **Supersedes:** `docs/prds/plugins-system-architecture.md`, `docs/proposals/vst-host.md`, `docs/proposals/vst-host-phase2-wire.md`
 **Worktree:** `OPENHPSDR-Zeus.Worktrees/feature_plugin_system` on branch `feature/plugin-system`
-**Registry repo:** `github.com/Kb2uka/openhpsdr-zeus-plugins`
+**Registry repo:** `github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins`
 
 ---
 
@@ -23,7 +23,7 @@ Neither workstream produced a "plugin" the Zeus client could browse and install.
 | Plugin runtime | **In-process** .NET via `AssemblyLoadContext` (collectible) | Native to Zeus stack, low latency, cross-platform. Unload support for hot-reload. |
 | Audio (VST) hosting | **In-process** via small C++ bridge library (P/Invoke from .NET) | Maintainer accepted 64-bit-only constraint and dropping VST2. Removes sidecar IPC complexity. VST3 SDK (MIT) + CLAP SDK (MIT) only. |
 | Plugin packaging | Single zip with `plugin.json` + assembly + optional `ui/*.es.js` + optional `vst3/*.vst3` | One artifact, one drag-and-drop install. |
-| Registry | **Separate repo, HTTPS-fetched**: `Kb2uka/openhpsdr-zeus-plugins` | Lightweight; community contributions via PR to that repo, not Zeus core. |
+| Registry | **Separate repo, HTTPS-fetched**: `OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins` | Lightweight; community contributions via PR to that repo, not Zeus core. |
 | Bring-your-own-plugin | First-class: install by URL or local zip with optional SHA256 pinning | No registry round-trip required. |
 | Versioning | Plugin declares `sdk.abi` (exact match) + `sdk.minVersion` (SemVer) | ABI version for breaking changes; SemVer for additive. |
 | Settings storage | Scoped LiteDB collection per plugin id | One LiteDB seam, isolation between plugins. |
@@ -300,7 +300,7 @@ Tracked in the team's task list. Each iteration ⇒ one or more commits on `feat
 | **5** | Frontend Plugin Browser UI + Playwright integration tests. |
 | **6** | `IAudioPlugin` contract + `zeus-vst-bridge` C skeleton + stub P/Invoke. |
 | **7** | Native bridge implements VST3 load + process; integration test passes. |
-| **8** | Bootstrap `Kb2uka/openhpsdr-zeus-plugins` repo with schema, CI, seed entries. |
+| **8** | Bootstrap `OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins` repo with schema, CI, seed entries. |
 | **9** | Docs (`docs/plugins/`), final polish, all tests green. |
 
 ## 5. Risks + open questions

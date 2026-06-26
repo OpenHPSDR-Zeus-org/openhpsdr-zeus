@@ -14,7 +14,8 @@ namespace Zeus.Plugins.Host.Audio;
 public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
 {
     private readonly IVstBridgeNative _bridge;
-    private readonly string _vst3Path;
+    private readonly string _loadIdentity;
+    private readonly bool _isAudioUnit;
     private readonly string _pluginRootPath;
     private readonly string _slot;
     private readonly ILogger? _log;
@@ -36,8 +37,18 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
             SampleRate: manifestAudio.SampleRate,
             Channels: manifestAudio.Channels,
             BlockSize: manifestAudio.Slot.StartsWith("rx.", StringComparison.OrdinalIgnoreCase) ? 2048 : 1024);
-        _vst3Path = manifestAudio.Vst3Path
-            ?? throw new ArgumentException("audio.vst3Path is required for VstHostAudioPlugin");
+
+        // Format selects the load identity. "au" loads a macOS Audio Unit by
+        // its type:subtype:manufacturer triple (resolved from the OS registry,
+        // not a file); anything else (default "vst3") loads from a VST3 path.
+        // AudioPluginBridge picks the matching IVstBridgeNative backend; this
+        // class stays backend-agnostic.
+        _isAudioUnit = string.Equals(manifestAudio.Format, "au", StringComparison.OrdinalIgnoreCase);
+        _loadIdentity = _isAudioUnit
+            ? (manifestAudio.AuComponentId
+                ?? throw new ArgumentException("audio.auComponentId is required when audio.format is \"au\""))
+            : (manifestAudio.Vst3Path
+                ?? throw new ArgumentException("audio.vst3Path is required for VstHostAudioPlugin"));
     }
 
     public string DisplayName { get; }
@@ -84,22 +95,35 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
             return Task.CompletedTask; // _handle stays 0 → Process passes through
         }
 
-        // Bridge init is idempotent — the native side ref-counts.
+        // Bridge init is idempotent — the native side ref-counts. (The AU
+        // bridge ignores the abi argument and validates against its own
+        // ZAU_ABI; VstBridgeAbi.Current is the VST3 ABI but the AU backend's
+        // Init clamps to AuBridgeAbi.Current internally.)
         var initStatus = _bridge.Init(VstBridgeAbi.Current);
         if (initStatus != VstBridgeStatus.Ok)
             throw new PluginLoadException(
-                $"VST bridge init failed (status={initStatus}); is zeus-vst-bridge installed?");
+                $"audio bridge init failed (status={initStatus}); is the native bridge installed?");
 
-        var absPath = Path.IsPathRooted(_vst3Path)
-            ? _vst3Path
-            : Path.Combine(_pluginRootPath, _vst3Path);
+        // For an Audio Unit the load identity is a registry triple, not a
+        // filesystem path — pass it through unchanged and skip the file check.
+        string loadIdentity;
+        if (_isAudioUnit)
+        {
+            loadIdentity = _loadIdentity;
+        }
+        else
+        {
+            loadIdentity = Path.IsPathRooted(_loadIdentity)
+                ? _loadIdentity
+                : Path.Combine(_pluginRootPath, _loadIdentity);
 
-        if (!File.Exists(absPath) && !Directory.Exists(absPath))
-            throw new PluginLoadException($"VST3 path not found: {absPath}");
+            if (!File.Exists(loadIdentity) && !Directory.Exists(loadIdentity))
+                throw new PluginLoadException($"VST3 path not found: {loadIdentity}");
+        }
 
         var blockSize = Math.Max(1, host.CurrentBlockSize);
         var status = _bridge.LoadVst3(
-            absPath,
+            loadIdentity,
             Requirements.Channels,
             Requirements.SampleRate,
             blockSize,
@@ -107,11 +131,12 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
 
         if (status != VstBridgeStatus.Ok || _handle == 0)
             throw new PluginLoadException(
-                $"VST3 load failed for {absPath} (status={status})");
+                $"{(_isAudioUnit ? "Audio Unit" : "VST3")} load failed for {loadIdentity} (status={status})");
 
         _log?.LogInformation(
-            "VST host loaded {Path} (channels={Channels} sr={SampleRate} block={Block})",
-            absPath, Requirements.Channels, Requirements.SampleRate, blockSize);
+            "{Kind} host loaded {Id} (channels={Channels} sr={SampleRate} block={Block})",
+            _isAudioUnit ? "AU" : "VST", loadIdentity,
+            Requirements.Channels, Requirements.SampleRate, blockSize);
         return Task.CompletedTask;
     }
 

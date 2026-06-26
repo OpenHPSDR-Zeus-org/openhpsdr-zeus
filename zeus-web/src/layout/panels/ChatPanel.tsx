@@ -24,7 +24,13 @@ import {
   PUBLIC_ROOM,
   type ChatMessage,
   type ChatOperator,
+  type ChatAttachment,
 } from '../../state/chat-store';
+import {
+  compressImageToAttachment,
+  ChatImageError,
+  CHAT_IMAGE_ACCEPT,
+} from '../../util/chat-image';
 import { useQrzStore } from '../../state/qrz-store';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { QrzCard } from '../../components/design/QrzCard';
@@ -502,15 +508,42 @@ function RequestRow({
   );
 }
 
+/** Small paperclip glyph for the attach button (inherits text color). */
+function PaperclipIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ display: 'block' }}
+    >
+      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </svg>
+  );
+}
+
 function MessageRow({
   msg,
   own,
   onOpen,
+  onExpandImage,
 }: {
   msg: ChatMessage;
   own: boolean;
   onOpen: (callsign: string) => void;
+  onExpandImage: (att: ChatAttachment) => void;
 }) {
+  const att = msg.attachment;
+  const hasText = msg.text.trim().length > 0;
+  // Constrain the thumbnail to the message's native aspect when known so the
+  // bubble doesn't jump as the image decodes.
+  const ratio = att && att.width && att.height ? att.width / att.height : undefined;
   return (
     <div
       style={{
@@ -533,19 +566,129 @@ function MessageRow({
       </div>
       <div
         style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: own ? 'flex-end' : 'flex-start',
+          gap: 4,
           maxWidth: '85%',
-          padding: '5px 10px',
-          borderRadius: 'var(--r-lg)',
-          background: own ? 'var(--accent-soft)' : 'var(--bg-2)',
-          border: own ? '1px solid var(--accent-line)' : '1px solid var(--line)',
-          color: 'var(--fg-1)',
-          fontSize: 12.5,
-          lineHeight: 1.45,
-          wordBreak: 'break-word',
-          whiteSpace: 'pre-wrap',
         }}
       >
-        {msg.text}
+        {att ? (
+          <button
+            type="button"
+            onClick={() => onExpandImage(att)}
+            title={att.name ?? 'Open image'}
+            style={{
+              display: 'block',
+              padding: 0,
+              margin: 0,
+              border: own ? '1px solid var(--accent-line)' : '1px solid var(--line)',
+              borderRadius: 'var(--r-lg)',
+              background: 'var(--bg-2)',
+              cursor: 'zoom-in',
+              overflow: 'hidden',
+              lineHeight: 0,
+              maxWidth: '100%',
+            }}
+          >
+            <img
+              src={att.dataUrl}
+              alt={att.name ?? 'Shared photo'}
+              loading="lazy"
+              style={{
+                display: 'block',
+                maxWidth: 280,
+                maxHeight: 280,
+                width: 'auto',
+                height: 'auto',
+                aspectRatio: ratio ? String(ratio) : undefined,
+                objectFit: 'cover',
+              }}
+            />
+          </button>
+        ) : null}
+        {hasText ? (
+          <div
+            style={{
+              padding: '5px 10px',
+              borderRadius: 'var(--r-lg)',
+              background: own ? 'var(--accent-soft)' : 'var(--bg-2)',
+              border: own ? '1px solid var(--accent-line)' : '1px solid var(--line)',
+              color: 'var(--fg-1)',
+              fontSize: 12.5,
+              lineHeight: 1.45,
+              wordBreak: 'break-word',
+              whiteSpace: 'pre-wrap',
+            }}
+          >
+            {msg.text}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Full-size image viewer. A dim backdrop with the photo centered; click anywhere
+ * (or Esc) to close. Kept deliberately simple — no zoom/pan, just "see it big".
+ */
+function ImageLightbox({ att, onClose }: { att: ChatAttachment; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 30,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        padding: 16,
+        background: 'rgba(0,0,0,0.82)',
+        cursor: 'zoom-out',
+      }}
+    >
+      <img
+        src={att.dataUrl}
+        alt={att.name ?? 'Shared photo'}
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          maxWidth: '100%',
+          maxHeight: 'calc(100% - 56px)',
+          objectFit: 'contain',
+          borderRadius: 'var(--r-sm)',
+          cursor: 'default',
+        }}
+      />
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        {att.name ? (
+          <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-2)' }}>
+            {att.name}
+          </span>
+        ) : null}
+        <a
+          href={att.dataUrl}
+          download={att.name ?? 'photo.jpg'}
+          onClick={(e) => e.stopPropagation()}
+          className="btn sm"
+        >
+          Download
+        </a>
+        <button type="button" className="btn sm" onClick={onClose}>
+          Close
+        </button>
       </div>
     </div>
   );
@@ -1424,8 +1567,16 @@ export function ChatPanel() {
 
   const [draft, setDraft] = useState('');
   const [profileCall, setProfileCall] = useState<string | null>(null);
+  // Pending inline photo: compressed and ready to send, shown as a preview chip
+  // above the composer until the operator sends or removes it.
+  const [pendingAttachment, setPendingAttachment] = useState<ChatAttachment | null>(null);
+  const [attaching, setAttaching] = useState(false);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  // The image currently open full-size in the lightbox, if any.
+  const [lightbox, setLightbox] = useState<ChatAttachment | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Auto-grow textarea
   useEffect(() => {
@@ -1554,15 +1705,47 @@ export function ChatPanel() {
     return 'Message everyone (Enter to send, Shift+Enter for newline)';
   })();
 
-  const canSend = enabled && connected && draft.trim().length > 0 && draft.length <= MAX_MESSAGE_CHARS;
+  // Sendable when connected and there's either text within the limit or a
+  // pending photo (image-only messages are allowed).
+  const canSend =
+    enabled &&
+    connected &&
+    draft.length <= MAX_MESSAGE_CHARS &&
+    (draft.trim().length > 0 || pendingAttachment !== null);
 
   const doSend = useCallback(async () => {
     const text = draft.trim();
-    if (!text || !connected || text.length > MAX_MESSAGE_CHARS) return;
+    const att = pendingAttachment;
+    if (!connected || text.length > MAX_MESSAGE_CHARS) return;
+    if (!text && !att) return;
+    // Clear optimistically; restore on failure so nothing is silently lost.
     setDraft('');
-    const ok = await send(text);
-    if (!ok) setDraft(text);
-  }, [draft, connected, send]);
+    setPendingAttachment(null);
+    const ok = await send(text, att);
+    if (!ok) {
+      setDraft(text);
+      setPendingAttachment(att);
+    }
+  }, [draft, pendingAttachment, connected, send]);
+
+  // Compress a chosen/pasted/dropped image and stage it for sending.
+  const attachFile = useCallback(async (file: File | null | undefined) => {
+    if (!file) return;
+    setAttachError(null);
+    setAttaching(true);
+    try {
+      const att = await compressImageToAttachment(file);
+      setPendingAttachment(att);
+      // Return focus to the composer so a caption can be typed immediately.
+      inputRef.current?.focus();
+    } catch (err) {
+      setAttachError(
+        err instanceof ChatImageError ? err.message : "Couldn't attach that image.",
+      );
+    } finally {
+      setAttaching(false);
+    }
+  }, []);
 
   // Status pill
   const statusPill = (() => {
@@ -2030,6 +2213,7 @@ export function ChatPanel() {
                     msg={m}
                     own={own}
                     onOpen={openProfile}
+                    onExpandImage={setLightbox}
                   />
                 );
               })
@@ -2047,7 +2231,88 @@ export function ChatPanel() {
               flexShrink: 0,
             }}
           >
+            {/* Hidden file picker driven by the paperclip button. */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={CHAT_IMAGE_ACCEPT}
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                void attachFile(e.target.files?.[0]);
+                e.target.value = ''; // allow re-picking the same file
+              }}
+            />
+
+            {/* Pending photo preview + attach error. */}
+            {pendingAttachment ? (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: 4,
+                  borderRadius: 'var(--r-sm)',
+                  background: 'var(--bg-2)',
+                  border: '1px solid var(--line)',
+                }}
+              >
+                <img
+                  src={pendingAttachment.dataUrl}
+                  alt={pendingAttachment.name ?? 'Attached photo'}
+                  style={{
+                    width: 40,
+                    height: 40,
+                    objectFit: 'cover',
+                    borderRadius: 'var(--r-sm)',
+                    flexShrink: 0,
+                  }}
+                />
+                <span
+                  className="mono"
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    fontSize: 10.5,
+                    color: 'var(--fg-2)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {pendingAttachment.name ?? 'photo.jpg'}
+                  {pendingAttachment.size
+                    ? ` · ${Math.max(1, Math.round(pendingAttachment.size / 1024))} KB`
+                    : ''}
+                </span>
+                <button
+                  type="button"
+                  className="btn sm"
+                  onClick={() => setPendingAttachment(null)}
+                  title="Remove photo"
+                >
+                  ✕
+                </button>
+              </div>
+            ) : null}
+            {attachError ? (
+              <div className="mono" style={{ fontSize: 10, color: 'var(--tx)', paddingLeft: 2 }}>
+                {attachError}
+              </div>
+            ) : null}
+
             <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+              {/* Paperclip — attach a photo. */}
+              <button
+                type="button"
+                className="btn sm"
+                disabled={!connected || attaching}
+                onClick={() => fileInputRef.current?.click()}
+                title={connected ? 'Attach a photo' : 'Not connected'}
+                aria-label="Attach a photo"
+                style={{ flexShrink: 0, padding: '5px 8px' }}
+              >
+                {attaching ? '…' : <PaperclipIcon />}
+              </button>
               <textarea
                 ref={inputRef}
                 className="mono"
@@ -2057,6 +2322,16 @@ export function ChatPanel() {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     void doSend();
+                  }
+                }}
+                onPaste={(e) => {
+                  // Paste an image straight from the clipboard, like texting.
+                  const item = Array.from(e.clipboardData.items).find((it) =>
+                    it.type.startsWith('image/'),
+                  );
+                  if (item) {
+                    e.preventDefault();
+                    void attachFile(item.getAsFile());
                   }
                 }}
                 placeholder={composerPlaceholder}
@@ -2114,6 +2389,9 @@ export function ChatPanel() {
       {profileCall ? (
         <ProfileOverlay callsign={profileCall} onClose={() => setProfileCall(null)} />
       ) : null}
+
+      {/* ── Full-size photo viewer ── */}
+      {lightbox ? <ImageLightbox att={lightbox} onClose={() => setLightbox(null)} /> : null}
 
       {/* ── Moderation / room dialogs (proper in-app, not window.*) ── */}
       {banTarget ? (

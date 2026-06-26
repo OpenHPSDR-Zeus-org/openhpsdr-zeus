@@ -285,7 +285,7 @@ We're also keeping an eye on operator reports for any remaining Windows-only qui
 - **Plugin-settings persistence fix** (#387). LiteDB upsert-by-`_id` bug was silently inserting new rows on every `SetAsync` instead of updating — operator dial-in could revert to defaults across desktop restarts. Now: atomic delete-by-key + insert, with descending-ID read so any pre-fix duplicates resolve to the latest value.
 - **Restart-required modal on every plugin install.** The "Please shut down Zeus and restart" dialog that previously fired only after the Download Audio Suite bundle install now also fires after a single-plugin install from the Plugins panel (Settings → Plugins → Browse / Install). New endpoints + AssemblyLoadContexts only register at backend startup, so the operator always gets the same explicit reminder.
 
-### Added — plugins shipping with this release (Kb2uka/openhpsdr-zeus-plugins)
+### Added — plugins shipping with this release (OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins)
 
 - **EQ v0.2.0** — Input + Output gain stages plus a live FFT spectrum behind the curve.
 - **NoiseGate v0.1.0** — new plugin. Peak-envelope detector with built-in 3 dB hysteresis, hold timer, asymmetric attack/release gain slew, range knob, output trim. Threshold rail UI with **OPEN / HOLD / CLOSED** state pill.

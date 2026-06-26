@@ -83,6 +83,12 @@ public sealed class RadioService : IDisposable
     private readonly PsSettingsStore? _psStore;
     private readonly FilterPresetStore? _filterPresetStore;
     private readonly RadioStateStore? _radioStateStore;
+    // Per-band last-used (hz, mode) register. Read on a band crossing in SetVfo
+    // to recall that band's demod mode server-authoritatively, so mode follows
+    // the band no matter how the operator got there — band buttons, favorites,
+    // the physical front panel, the VFO knob, or a typed frequency (KB2UKA
+    // 2026-06-25). Writes stay frontend/front-panel driven; this is read-only.
+    private readonly BandMemoryStore? _bandMemoryStore;
     // Global (per-radio, NOT per-band) TX-audio source selection. Pushed via
     // PushAudioFrontEnd on store edit + connect (external-audio-jacks re-port).
     private readonly AudioSettingsStore? _audioStore;
@@ -356,7 +362,7 @@ public sealed class RadioService : IDisposable
     // tests / hosts without the Kiwi feature wired.
     private readonly IKiwiReceiverProvider? _kiwiReceiverProvider;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null, Nr3ModelStore? nr3ModelStore = null, Hl2GpioSettingsStore? hl2GpioStore = null, IKiwiReceiverProvider? kiwiReceiverProvider = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null, Nr3ModelStore? nr3ModelStore = null, Hl2GpioSettingsStore? hl2GpioStore = null, BandMemoryStore? bandMemoryStore = null, IKiwiReceiverProvider? kiwiReceiverProvider = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
@@ -368,6 +374,7 @@ public sealed class RadioService : IDisposable
         _psStore = psStore;
         _filterPresetStore = filterPresetStore;
         _radioStateStore = radioStateStore;
+        _bandMemoryStore = bandMemoryStore;
         _audioStore = audioStore;
         _paStore.Changed += RecomputePaAndPush;
         // An antenna edit re-pushes the active band's selection server-
@@ -1372,6 +1379,8 @@ public sealed class RadioService : IDisposable
                 if (BandUtils.FreqToBand(previous) != BandUtils.FreqToBand(clamped))
                 {
                     RecomputePaAndPush();
+                    if (!fromExternal && RestoreBandMode(BandUtils.FreqToBand(clamped)) is { } recalled)
+                        return recalled;
                 }
                 return Snapshot();
             }
@@ -1388,12 +1397,51 @@ public sealed class RadioService : IDisposable
         ActiveClient?.SetVfoAHz(radioLoNew);
         // Band edge crossed? Per-band PA gain / OC bits may have swapped — push
         // the new snapshot before the next TX frame ships. Cheap when no
-        // crossing occurred (same bytes re-pushed).
+        // crossing occurred (same bytes re-pushed). Also recall the new band's
+        // last-used demod mode (operator tunes only — fromExternal CAT/TCI keep
+        // their own mode).
         if (BandUtils.FreqToBand(previous) != BandUtils.FreqToBand(clamped))
         {
             RecomputePaAndPush();
+            if (!fromExternal && RestoreBandMode(BandUtils.FreqToBand(clamped)) is { } recalled)
+                return recalled;
         }
         return Snapshot();
+    }
+
+    /// <summary>
+    /// Server-authoritative per-band mode recall. When the operator's dial
+    /// crosses into a different band — by ANY means: band buttons, favorites,
+    /// the physical front panel, the VFO knob/wheel, a panadapter click, or a
+    /// typed frequency — restore that band's last-used demod mode from
+    /// <see cref="BandMemoryStore"/> so mode follows the band everywhere, not
+    /// just on the band-selector UIs (KB2UKA 2026-06-25). The caller excludes
+    /// external sources (CAT/TCI/calibration, <c>fromExternal=true</c>): they
+    /// manage their own mode and a recall would fight them.
+    ///
+    /// <para>No-op (returns null) when band memory is unavailable, the target
+    /// band has no remembered entry (first visit → the current mode simply
+    /// carries over), or the remembered mode already matches the current one.
+    /// RX1 / VFO A only — the per-band entry is a single register keyed by band
+    /// name and <see cref="SetVfo"/> owns the VFO-A dial. Reuses
+    /// <see cref="SetMode(RxMode, TxVfo)"/> so the per-mode filter memory,
+    /// CW dial bump, and LO push all fire exactly as a manual mode change.</para>
+    ///
+    /// <para>The band string comes from <see cref="BandUtils.FreqToBand"/>,
+    /// which produces the same canonical "40m"-style key the frontend used when
+    /// it persisted the entry (web <c>bandOf</c>) for every in-band frequency,
+    /// so the lookup matches.</para>
+    /// </summary>
+    private StateDto? RestoreBandMode(string? newBand)
+    {
+        if (_bandMemoryStore is null || newBand is null) return null;
+        var mem = _bandMemoryStore.Get(newBand);
+        if (mem is null) return null;
+        RxMode current;
+        lock (_sync) { current = _state.Mode; }
+        if (mem.Mode == current) return null;
+        _log.LogInformation("band.mode.recall band={Band} mode={Mode}", newBand, mem.Mode);
+        return SetMode(mem.Mode, TxVfo.A);
     }
 
     /// <summary>

@@ -79,7 +79,7 @@ public sealed class ActivationSpotsService : BackgroundService
     {
         var c = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
         // POTA/SOTA APIs reject requests without a User-Agent.
-        c.DefaultRequestHeaders.UserAgent.ParseAdd("Zeus-HPSDR/1.0 (+https://github.com/Kb2uka/openhpsdr-zeus)");
+        c.DefaultRequestHeaders.UserAgent.ParseAdd("Zeus-HPSDR/1.0 (+https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus)");
         c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
         return c;
     }

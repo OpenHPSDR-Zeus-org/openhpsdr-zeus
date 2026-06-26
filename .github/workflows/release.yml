@@ -1287,7 +1287,7 @@ jobs:
 
           ## License
 
-          GNU GPL v2 or later. See [LICENSE](https://github.com/Kb2uka/openhpsdr-zeus/blob/main/LICENSE) for details.
+          GNU GPL v2 or later. See [LICENSE](https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus/blob/main/LICENSE) for details.
           EOF
 
       - name: Create or Update Release

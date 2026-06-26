@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/Kb2uka/openhpsdr-zeus/main/docs/plugins/registry.schema.json",
   "title": "Openhpsdr-Zeus plugin registry",
-  "description": "Schema for registry.json hosted by the Kb2uka/openhpsdr-zeus-plugins repo.",
+  "description": "Schema for registry.json hosted by the OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins repo.",
   "type": "object",
   "required": ["schemaVersion", "generated", "plugins"],
   "properties": {
