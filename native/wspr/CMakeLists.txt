@@ -76,9 +76,11 @@ if(ZEUS_WSPR_TESTS)
     # a callable entry, plus the no-op OSD stub (osdwspr.f90 is Fortran/optional).
     # Proves encode -> synth -> decode recovers the message.
     if(NOT WIN32)
+        find_package(Threads REQUIRED)
         add_executable(zeus_wspr_roundtrip
             test/zeus_wspr_roundtrip.c
             zeus_wspr.c
+            zeus_wspr_decode.c
             osdwspr_stub.c
             ${WSPR_ENCODE_SRC}
             ${WSPR_VENDOR}/wsprd.c
@@ -92,7 +94,7 @@ if(ZEUS_WSPR_TESTS)
             PROPERTIES COMPILE_DEFINITIONS "main=wsprd_cli_main")
         # zeus_wspr.c must NOT also define printdata here (wsprd.c owns it).
         target_compile_definitions(zeus_wspr_roundtrip PRIVATE ZEUS_WSPR_LINK_WSPRD)
-        target_link_libraries(zeus_wspr_roundtrip PRIVATE m)
+        target_link_libraries(zeus_wspr_roundtrip PRIVATE m Threads::Threads)
         add_test(NAME wspr_decode_roundtrip COMMAND zeus_wspr_roundtrip)
     endif()
 endif()

@@ -56,6 +56,31 @@ ZEUS_WSPR_API int32_t zeus_wspr_synth(const uint8_t* symbols, int32_t n_sym,
                                       float f0_hz, int32_t sample_rate,
                                       float* audio, int32_t max_samples);
 
+// One decoded WSPR spot.
+typedef struct
+{
+    float snr_db;     // signal-to-noise ratio, dB (2500 Hz reference)
+    float dt_sec;     // time offset, seconds
+    float freq_mhz;   // absolute decoded frequency, MHz
+    int32_t drift_hz; // frequency drift, Hz
+    char message[28]; // "<call> <grid4> <power>" (null-terminated)
+} zeus_wspr_spot_t;
+
+// Decode one WSPR slot of mono audio.
+//   samples       mono float PCM in [-1,1] at sample_rate (≈114 s worth)
+//   n             number of samples
+//   sample_rate   Hz (12000 canonical)
+//   dial_freq_mhz transceiver dial frequency in MHz (labels the decoded freq)
+//   out           caller-allocated array of spots
+//   max_results   capacity of out
+// Returns the number of spots decoded (>=0), or <0 on error.
+//
+// Thread-safety: serialised internally (the vendored decoder has process-global
+// state). WSPR decodes once per 120 s, so serialisation across RX slices is fine.
+ZEUS_WSPR_API int32_t zeus_wspr_decode(const float* samples, int32_t n,
+                                       int32_t sample_rate, double dial_freq_mhz,
+                                       zeus_wspr_spot_t* out, int32_t max_results);
+
 // Library version string (diagnostics / about panel).
 ZEUS_WSPR_API const char* zeus_wspr_version(void);
 
