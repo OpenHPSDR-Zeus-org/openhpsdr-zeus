@@ -750,6 +750,13 @@ public class DspPipelineService : BackgroundService,
     private TxAudioIngest? _txIngest;
     private RadioMicReceiver? _radioMicReceiver;
     private bool _radioMicAttached;
+    // P1 codec mic / line-in re-blocker (issue #992). EP6 frames carry the
+    // codec samples inline; the receiver decimates to 48 kHz and re-blocks
+    // into the same 960-sample mic blocks TxAudioIngest consumes for the
+    // Saturn 1026 path. Wired through the same in-lock _activeSource gate, so
+    // a stale radio source can't leak onto the air after a switch back to Host.
+    private P1RadioMicReceiver? _p1RadioMicReceiver;
+    private bool _p1RadioMicAttached;
 
     private RxMode _appliedMode = RxMode.USB;
     // Sideband actually pushed to WDSP. Equals _appliedMode for every mode except
@@ -1273,6 +1280,9 @@ public class DspPipelineService : BackgroundService,
             _radioMicReceiver = new RadioMicReceiver(
                 block => ingest.OnMicPcmBytesFromRadioMic(block),
                 _loggerFactory.CreateLogger<RadioMicReceiver>());
+            _p1RadioMicReceiver = new P1RadioMicReceiver(
+                block => ingest.OnMicPcmBytesFromRadioMic(block),
+                _loggerFactory.CreateLogger<P1RadioMicReceiver>());
         }
         return _txIngest;
     }
@@ -4485,9 +4495,11 @@ public class DspPipelineService : BackgroundService,
     // TxAudioIngest (which quiesces its WDSP accumulator), resets the 1026
     // re-blocker so no pre-switch audio stitches onto the post-switch source,
     // and attaches / detaches the UDP-1026 decode on the live P2 client so there
-    // is zero added RX cost while Host is selected. P1 radios have no 1026
-    // stream — the handler simply never fires there; the _activeSource gate still
-    // arbitrates host vs (absent) radio harmlessly.
+    // is zero added RX cost while Host is selected. P1 codec radios (ANAN-10E /
+    // Hermes / ANAN-100D/200D) carry the codec samples inline in EP6, so the P1
+    // path also attaches a per-packet mic extractor on the active P1 client
+    // (issue #992); gated on HasOnboardCodec so HL2 (no stream codec) stays a
+    // no-op.
     private void ApplyRadioMicRouting(TxAudioSource source)
     {
         var ingest = ResolveTxIngest();
@@ -4501,11 +4513,13 @@ public class DspPipelineService : BackgroundService,
         // radio mic is dropped (Host armed) — no overlap window.
         ingest.SetActiveSource(source);
 
-        // Always reset the re-blocker on any switch so a <960-sample remainder
+        // Always reset the re-blockers on any switch so a <960-sample remainder
         // of the old source can't stitch onto the new one.
         _radioMicReceiver?.Reset();
+        _p1RadioMicReceiver?.Reset();
 
         var p2 = _p2Client;
+        var p1 = _attachedSinkP1;
         if (radioActive)
         {
             // Subscribe the 1026 decode only while a radio jack is armed. No-op
@@ -4516,11 +4530,28 @@ public class DspPipelineService : BackgroundService,
                 p2.AttachRadioMicHandler(rb.Accept);
                 _radioMicAttached = true;
             }
+            // P1 codec mic extraction — only on codec boards (ANAN-10E et al);
+            // HL2 has no stream codec so its EP6 mic slots carry no audio.
+            if (!_p1RadioMicAttached && p1 is not null && _p1RadioMicReceiver is not null
+                && BoardCapabilitiesTable.For(_radio.EffectiveBoardKind, _radio.EffectiveOrionMkIIVariant).HasOnboardCodec)
+            {
+                var rb = _p1RadioMicReceiver;
+                p1.AttachRadioMicHandler(rb.Accept);
+                _p1RadioMicAttached = true;
+            }
         }
-        else if (_radioMicAttached)
+        else
         {
-            p2?.DetachRadioMicHandler();
-            _radioMicAttached = false;
+            if (_radioMicAttached)
+            {
+                p2?.DetachRadioMicHandler();
+                _radioMicAttached = false;
+            }
+            if (_p1RadioMicAttached)
+            {
+                p1?.DetachRadioMicHandler();
+                _p1RadioMicAttached = false;
+            }
         }
     }
 
@@ -5182,6 +5213,15 @@ public class DspPipelineService : BackgroundService,
         _attachedSinkP1 = null;
         _rxSinkAttached = false;
         client?.DetachRxSink();
+        // The codec radio-mic handler is bound to this client instance; clear our
+        // attach latch and quiesce the re-blocker so a reconnect re-attaches
+        // against the fresh client and no stale remainder survives.
+        if (_p1RadioMicAttached)
+        {
+            client?.DetachRadioMicHandler();
+            _p1RadioMicAttached = false;
+        }
+        _p1RadioMicReceiver?.Reset();
         _log.LogInformation("dsp.pipeline rx-sink detached protocol=p1");
     }
 
