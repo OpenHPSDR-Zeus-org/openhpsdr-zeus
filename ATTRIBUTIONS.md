@@ -243,6 +243,39 @@ Upstream:
 - <https://github.com/kgoba/ft8_lib>
 - FT4/FT8 protocol paper — <https://wsjt.sourceforge.io/FT4_FT8_QEX.pdf>
 
+## wsprd (WSPR encode + decode)
+
+Zeus's native WSPR core vendors the **WSPR encoder and decoder** in-tree under
+[`native/wspr/vendor/`](native/wspr/vendor/), pinned from **pavel-demin/wsprd**
+(the minimal build-able extract of the WSJT-X `wsprd`) at commit
+`8aa903085479910c77de95f7e7c178f66a245ed3`.
+
+Unlike FT8 — where the clean-room MIT `ft8_lib` exists — **no permissively
+licensed WSPR decoder exists anywhere**; the canonical K1JT/K9AN demodulator
+(4-FSK sync search + K=32 r=1/2 convolutional FEC via a Fano/Jelinek sequential
+decoder) is the only working implementation, and its algorithm was never placed
+in the public domain the way the FT4/FT8 protocol was. The decoder
+(`wsprd.c`, `wsprd_utils.c`, `fano.c`, `jelinek.c`, `nhash.c`, `tab.c`,
+`metric_tables.c`) and the encoder (`wsprsim_utils.c`) are **Copyright
+2001-2018 Joe Taylor (K1JT) and Steven Franke (K9AN)**, distributed under the
+**GNU General Public License v3**.
+
+GPL-3 is one-way licence-compatible with Zeus's GPL-2.0-or-later distribution,
+so vendoring it is consistent with both licences — the combined work is governed
+by GPLv3, which Zeus's "or later" permits. This is the single component in Zeus
+of WSJT-X decoder lineage; it is used because a clean-room permissive WSPR
+decoder does not exist and reimplementing the Fano demodulator from scratch
+carries no benefit (the on-air format is standardised regardless).
+
+The decoder bundles **pffft** (Julien Pommier's "pretty fast FFT", FFTPACK-style
+permissive licence) instead of FFTW, so Zeus's WSPR path has no external FFT
+dependency. The vendored source is unmodified; all Zeus-specific glue lives in
+the `zeus_wspr` shim. See [`native/wspr/README.md`](native/wspr/README.md).
+
+Upstream:
+- <https://github.com/pavel-demin/wsprd>
+- WSJT-X (decoder lineage) — <https://wsjt.sourceforge.io/>
+
 ## Relationship to pihpsdr
 
 Zeus is independent of pihpsdr but **routinely consulted pihpsdr source as
