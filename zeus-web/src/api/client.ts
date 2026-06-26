@@ -6756,6 +6756,69 @@ export function setLastLoadedTxAudioProfile(
   );
 }
 
+// Import a TX audio profile from a user-picked .json file (uploaded as
+// multipart — the webview can't hand the server a filesystem path). The profile
+// is ADDED to the collection (never applied); the server uniquifies the name if
+// the slug is already taken. Returns the stored profile.
+export function importTxAudioProfile(
+  file: File,
+  name?: string,
+  signal?: AbortSignal,
+): Promise<TxAudioProfileDto> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  if (name && name.trim().length > 0) form.append('name', name.trim());
+  // No explicit content-type — the browser sets the multipart boundary.
+  return jsonFetch(
+    '/api/tx-audio-profiles/import',
+    { method: 'POST', body: form, signal },
+    (raw) => {
+      const p = normalizeTxAudioProfile(raw);
+      if (!p) throw new ApiError(500, 'Malformed imported TX audio profile response');
+      return p;
+    },
+  );
+}
+
+// Download a saved TX audio profile as a .json file. Fetches the bytes and saves
+// them via a temporary object URL (so server-side errors surface as exceptions
+// the caller can show, rather than opening a JSON error blob in a new tab) —
+// mirrors exportPrefsDatabase.
+export async function exportTxAudioProfile(
+  id: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const url = `/api/tx-audio-profiles/${encodeURIComponent(id)}/export`;
+  const res = await fetch(url, { signal });
+  if (!res.ok) {
+    let message = `${res.status} ${res.statusText}`;
+    try {
+      const body = (await res.json()) as { error?: unknown };
+      if (typeof body?.error === 'string') message = body.error;
+    } catch {
+      /* non-JSON body — keep status text */
+    }
+    throw new ApiError(res.status, message);
+  }
+
+  const blob = await res.blob();
+  const cd = res.headers.get('content-disposition') ?? '';
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+  const fileName = match?.[1] ? decodeURIComponent(match[1]) : `${id}.json`;
+
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 export function fetchTxFidelityPolicy(
   signal?: AbortSignal,
 ): Promise<TxFidelityPolicyDto> {

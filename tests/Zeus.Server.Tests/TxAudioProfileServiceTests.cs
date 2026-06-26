@@ -197,6 +197,66 @@ public sealed class TxAudioProfileServiceTests : IDisposable
         Assert.Null(_service.Get("temp"));
     }
 
+    [Fact]
+    public async Task ExportImport_RoundTrips_FromJsonBytes()
+    {
+        await _mode.StartAsync(CancellationToken.None);
+        _radio.SetTxMicGain(-6);
+        var saved = await _service.SaveCurrentAsync("Roundtrip Voice");
+
+        var export = _service.ExportProfile(saved.Id);
+        Assert.NotNull(export);
+        var json = System.Text.Encoding.UTF8.GetString(export!.Value.Bytes);
+        Assert.Equal("roundtrip-voice.json", export.Value.FileName);
+
+        // Delete then re-import from the exported bytes — must restore the profile.
+        Assert.True(_service.Delete(saved.Id));
+        var imported = _service.ImportProfile(json, "ignored-fallback");
+        Assert.Equal("roundtrip-voice", imported.Id);
+        Assert.Equal("Roundtrip Voice", imported.Name);
+        Assert.Equal(-6, imported.MicGainDb);
+        Assert.NotNull(_service.Get("roundtrip-voice"));
+    }
+
+    [Fact]
+    public async Task Import_IsNonDestructive_UniquifiesNameOnSlugCollision()
+    {
+        await _mode.StartAsync(CancellationToken.None);
+        var saved = await _service.SaveCurrentAsync("Voice");
+        var json = System.Text.Encoding.UTF8.GetString(_service.ExportProfile(saved.Id)!.Value.Bytes);
+
+        // Re-import WITHOUT deleting: the existing profile must survive and the
+        // import lands under a bumped id/name.
+        var imported = _service.ImportProfile(json, null);
+        Assert.Equal("voice-2", imported.Id);
+        Assert.Equal("Voice 2", imported.Name);
+        Assert.NotNull(_service.Get("voice"));     // original intact
+        Assert.NotNull(_service.Get("voice-2"));   // import added
+    }
+
+    [Fact]
+    public void Import_RejectsUnparseableJson()
+    {
+        Assert.Throws<ArgumentException>(() => _service.ImportProfile("not a profile", null));
+    }
+
+    [Fact]
+    public void Import_ToleratesSparseFile_UsesFallbackName()
+    {
+        // A minimal hand-authored file: only a couple of fields, no name, no
+        // collections. Import must default the nullable members and name it from
+        // the fallback rather than throwing.
+        const string json = "{\"micGainDb\": -2, \"targetSpectralDensity\": 40}";
+        var imported = _service.ImportProfile(json, "My Import");
+
+        Assert.Equal("my-import", imported.Id);
+        Assert.Equal("My Import", imported.Name);
+        Assert.Equal(-2, imported.MicGainDb);
+        Assert.NotNull(imported.ChainOrder);
+        Assert.NotNull(imported.CfcConfig);
+        Assert.NotNull(imported.TxLeveling);
+    }
+
     public void Dispose()
     {
         _engine.DisposeAsync().AsTask().GetAwaiter().GetResult();

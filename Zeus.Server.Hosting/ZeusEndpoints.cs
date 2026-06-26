@@ -481,6 +481,51 @@ public static class ZeusEndpoints
             return Results.Ok(new LastLoadedTxAudioProfileDto(svc.LastLoadedId));
         });
 
+        // Import a TX audio profile from an uploaded .json file (multipart). The
+        // webview can't hand the server a filesystem path, so the chosen file's
+        // bytes are uploaded here, parsed, and ADDED to the collection (never
+        // applied). The import is non-destructive — a slug collision bumps the
+        // name rather than overwriting. Every profile is also mirrored to the
+        // on-disk tx-audio-profiles folder. Antiforgery disabled — this is a
+        // loopback / LAN-token API, not a cookie-auth form post.
+        app.MapPost("/api/tx-audio-profiles/import", async (HttpRequest req, TxAudioProfileService svc) =>
+        {
+            try
+            {
+                if (!req.HasFormContentType)
+                    return Results.BadRequest(new { error = "Expected a multipart file upload." });
+                var form = await req.ReadFormAsync();
+                var file = form.Files.GetFile("file") ?? form.Files.FirstOrDefault();
+                if (file is null || file.Length == 0)
+                    return Results.BadRequest(new { error = "No file uploaded." });
+
+                var nameField = form.TryGetValue("name", out var n) ? n.ToString() : null;
+                var fallback = string.IsNullOrWhiteSpace(nameField)
+                    ? Path.GetFileNameWithoutExtension(file.FileName)
+                    : nameField;
+
+                using var reader = new StreamReader(file.OpenReadStream());
+                var json = await reader.ReadToEndAsync();
+                var imported = svc.ImportProfile(json, fallback);
+                return Results.Ok(imported);
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        }).DisableAntiforgery();
+
+        // Download a saved TX audio profile as a .json file so the operator can
+        // back it up or share it (the same bytes are mirrored in the
+        // tx-audio-profiles folder on disk).
+        app.MapGet("/api/tx-audio-profiles/{id}/export", (string id, TxAudioProfileService svc) =>
+        {
+            var export = svc.ExportProfile(id);
+            return export is null
+                ? Results.NotFound(new { error = $"no TX audio profile '{id}'" })
+                : Results.File(export.Value.Bytes, "application/json", export.Value.FileName);
+        });
+
         app.MapGet("/api/rx-audio-suite/profiles", (RxAudioProfileService profiles) =>
         {
             var list = profiles.List().Select(p => new
