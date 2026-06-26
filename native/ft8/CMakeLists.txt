@@ -53,11 +53,13 @@ add_library(zeus_ft8 SHARED
 )
 
 target_include_directories(zeus_ft8 PRIVATE ${FT8_VENDOR})
-# ft8_lib's message.c uses stpcpy where available; it's POSIX/GNU and absent on
-# MSVC, so only advertise it off-Windows (message.c has a portable fallback).
-target_compile_definitions(zeus_ft8 PRIVATE $<$<NOT:$<PLATFORM_ID:Windows>>:HAVE_STPCPY>)
 # MSVC gates M_PI behind _USE_MATH_DEFINES; define it for all sources on Windows.
 target_compile_definitions(zeus_ft8 PRIVATE $<$<PLATFORM_ID:Windows>:_USE_MATH_DEFINES>)
+# ft8_lib's message.c calls stpcpy() directly (POSIX, absent from the MSVC CRT).
+# Force-include a compat shim on Windows so the vendored source stays pristine.
+if(WIN32)
+    target_compile_options(zeus_ft8 PRIVATE /FI${CMAKE_CURRENT_SOURCE_DIR}/win_compat.h)
+endif()
 
 # NOTE (Windows): ft8_lib's vendored decode.c / common/monitor.c use C99
 # variable-length arrays, which MSVC cl.exe rejects. Configure the Windows build
@@ -89,8 +91,10 @@ if(ZEUS_FT8_TESTS)
         ${FT8_VENDOR}/common/wave.c
     )
     target_include_directories(zeus_ft8_selftest PRIVATE ${FT8_VENDOR})
-    target_compile_definitions(zeus_ft8_selftest PRIVATE $<$<NOT:$<PLATFORM_ID:Windows>>:HAVE_STPCPY>)
     target_compile_definitions(zeus_ft8_selftest PRIVATE $<$<PLATFORM_ID:Windows>:_USE_MATH_DEFINES>)
+    if(WIN32)
+        target_compile_options(zeus_ft8_selftest PRIVATE /FI${CMAKE_CURRENT_SOURCE_DIR}/win_compat.h)
+    endif()
     if(NOT WIN32)
         target_link_libraries(zeus_ft8_selftest PRIVATE m)
     endif()
