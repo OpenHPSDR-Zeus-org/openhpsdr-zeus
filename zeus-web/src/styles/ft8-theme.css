@@ -326,4 +326,100 @@
   color: var(--tx);
   font-weight: 700;
 }
+
+/* ---- Receive · waterfall ---- */
+.ft8-receive { overflow: hidden; }
+/* The spectrum stack: short panadapter strip over the growing waterfall, with
+   the click-capture overlay laid on top (position:relative is its containing
+   block). */
+.ft8-receive__stack {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--hud-inset);
+}
+.ft8-receive__pan { flex: 0 0 34%; min-height: 0; position: relative; }
+.ft8-receive__wf { flex: 1; min-height: 0; position: relative; }
+
+/* Transparent capture layer — sits above the canvases so a click resolves to an
+   FT8 audio offset instead of moving the dial. */
+.ft8-wf-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  cursor: crosshair;
+}
+/* Markers span the full height; left is set inline as a percent. */
+.ft8-wf-decode-tick,
+.ft8-wf-rx-cursor,
+.ft8-wf-tx-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+.ft8-wf-decode-tick { width: 2px; opacity: 0.75; }
+.ft8-wf-rx-cursor {
+  width: 2px;
+  background: var(--hud-cyan);
+  box-shadow: 0 0 6px var(--hud-cyan-soft);
+}
+.ft8-wf-tx-marker {
+  width: 2px;
+  background: var(--tx);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--tx) 40%, transparent);
+}
+
+/* WF SPEED / ZOOM / OFFSET control strip. */
+.ft8-wf-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 5px 8px;
+  border-top: 1px solid var(--hud-line);
+  background: var(--hud-panel-2);
+}
+.ft8-wf-offset { display: inline-flex; align-items: center; gap: 4px; }
+.ft8-wf-offset__label {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--hud-text-dim);
+  font-weight: 600;
+}
+.ft8-wf-offset__btn {
+  background: var(--hud-panel);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-text);
+  border-radius: 3px;
+  padding: 2px 6px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.ft8-wf-offset__btn:hover:not(:disabled) { border-color: var(--hud-cyan-line); }
+.ft8-wf-offset__btn:disabled { opacity: 0.5; cursor: default; }
+
+/* ---- TX power (TX CONTROL cluster) ---- */
+.ft8-power { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 8px; }
+.ft8-power__row { display: flex; align-items: center; gap: 8px; }
+.ft8-power__label {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--hud-text-dim);
+  font-weight: 600;
+  width: 64px;
+  flex: 0 0 auto;
+}
+/* The reused DriveSlider/TunePowerSlider fill the remaining row width. The
+   .ft8-power block now lives inside the TX CONTROL cluster (Ft8TxControl); TUNE
+   is the cluster's own .ft8-tx__tune button, so there is no .ft8-power__tune. */
+.ft8-power__row .knob-group { flex: 1; min-width: 0; }
 .ft8-tx__halt:hover { background: var(--tx); color: #1a0604; }

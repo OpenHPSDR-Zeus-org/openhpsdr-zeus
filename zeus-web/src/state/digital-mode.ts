@@ -27,13 +27,19 @@ import {
   nearestDigitalBand,
   type DigitalProtocol,
 } from '../dsp/digital-segments';
+import { applyFt8Framing, restoreFt8Framing } from './ft8-framing';
 
-/** The RX config captured at digital-mode entry so exit can restore it. */
+/** The RX config captured at digital-mode entry so exit can restore it.
+ *  Includes the display framing (CTUN / LO / zoom) the FT8 waterfall applies, so
+ *  exit reverses the framing alongside mode/filter/VFO. */
 export interface RadioModeSnapshot {
   mode: RxMode;
   filterLowHz: number;
   filterHighHz: number;
   vfoHz: number;
+  ctunEnabled: boolean;
+  radioLoHz: number;
+  zoomLevel: number;
 }
 
 /** True while the radio is keyed or tuning — radio reconfig is suppressed. */
@@ -50,6 +56,9 @@ export function snapshotRadio(): RadioModeSnapshot {
     filterLowHz: s.filterLowHz,
     filterHighHz: s.filterHighHz,
     vfoHz: s.vfoHz,
+    ctunEnabled: s.ctunEnabled,
+    radioLoHz: s.radioLoHz,
+    zoomLevel: s.zoomLevel,
   };
 }
 
@@ -75,6 +84,11 @@ export async function configureRadioForDigital(
     await setMode('DIGU');
     await setFilter(DIGITAL_RX_FILTER_LOW_HZ, DIGITAL_RX_FILTER_HIGH_HZ);
     if (dial && Math.abs(dial - vfoHz) > 1) await setVfo(dial);
+    // Frame the waterfall onto the FT8 passband (CTUN / LO / zoom). Uses the
+    // post-QSY dial so the passband centres on the sub-band we just moved to.
+    // FT8-specific: WSPR shares this orchestration but renders no passband
+    // overlay and never requested CTUN/LO/zoom framing, so it is excluded.
+    if (protocol !== 'WSPR') await applyFt8Framing(dial ?? vfoHz);
   } catch {
     // Best-effort: the decoder still runs on whatever audio is present, and the
     // operator can tune manually. Don't let a transient radio error block entry.
@@ -95,6 +109,11 @@ export async function qsyToDigitalBand(
   if (!dial) return null;
   try {
     await setVfo(dial);
+    // Re-frame the passband around the new dial (under CTUN the frozen LO offset
+    // would otherwise stay anchored to the previous band's dial). FT8-specific —
+    // WSPR has no passband overlay and never framed on entry, so it never
+    // reframes on QSY either.
+    if (protocol !== 'WSPR') await applyFt8Framing(dial);
     return dial;
   } catch {
     return null;
@@ -105,6 +124,14 @@ export async function qsyToDigitalBand(
 export async function restoreRadio(snap: RadioModeSnapshot | null): Promise<void> {
   if (!snap || txActive()) return;
   try {
+    // Reverse the FT8 waterfall framing (CTUN / LO / zoom) FIRST, then restore
+    // mode/filter/VFO, so the dial lands on the operator's pre-FT8 frequency
+    // rather than the CTUN-frozen LO offset.
+    await restoreFt8Framing({
+      ctunEnabled: snap.ctunEnabled,
+      radioLoHz: snap.radioLoHz,
+      zoomLevel: snap.zoomLevel,
+    });
     await setMode(snap.mode);
     await setFilter(snap.filterLowHz, snap.filterHighHz);
     await setVfo(snap.vfoHz);

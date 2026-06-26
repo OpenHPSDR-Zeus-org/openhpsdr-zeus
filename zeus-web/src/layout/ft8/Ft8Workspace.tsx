@@ -19,6 +19,7 @@ import { slotOf } from '../../dsp/ft8-sequencer';
 import { useFt8TxRunner } from '../../dsp/ft8-tx-runner';
 import { Ft8DecodeTable } from './Ft8DecodeTable';
 import { Ft8TxControl } from './Ft8TxControl';
+import { Ft8ReceivePanel } from './Ft8ReceivePanel';
 import '../../styles/ft8-theme.css';
 
 export interface Ft8WorkspaceProps {
@@ -53,6 +54,8 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
   const qsyBand = useFt8Store((s) => s.qsyBand);
 
   const vfoHz = useConnectionStore((s) => s.vfoHz);
+  const rxFocusHz = useFt8Store((s) => s.rxFocusHz);
+  const setRxFocusHz = useFt8Store((s) => s.setRxFocusHz);
   const myCall = useOperatorStore((s) => s.call);
   const myGrid = useOperatorStore((s) => s.grid);
   const setCall = useOperatorStore((s) => s.setCall);
@@ -161,14 +164,12 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
               ))}
             </div>
           </section>
-          <section className="ft8-region">
-            <div className="ft8-region__head">Band activity</div>
-            <div className="ft8-placeholder">spectrum — reuses panadapter WebGL (follow-up)</div>
-          </section>
-          <section className="ft8-region ft8-region--grow">
-            <div className="ft8-region__head">Receive · waterfall</div>
-            <div className="ft8-placeholder">waterfall + decode markers (follow-up)</div>
-          </section>
+          <Ft8ReceivePanel
+            runner={tx}
+            rxFocusHz={rxFocusHz}
+            setRxFocusHz={setRxFocusHz}
+            myCall={myCall || undefined}
+          />
         </div>
 
         {/* Center — decode table (live) + activity log */}
