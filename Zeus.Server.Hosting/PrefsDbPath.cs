@@ -222,7 +222,8 @@ public static class PrefsDbPath
 
     // Dual sink: ILogger when one is available (it usually isn't — the guard runs
     // before the DI container exists) AND Console.Error, because the desktop app
-    // calls FreeConsole() and would otherwise swallow the message entirely.
+    // is a GUI-subsystem binary with no console and would otherwise swallow the
+    // message entirely.
     private static void Warn(ILogger? log, string msg, Exception? ex = null)
     {
         if (ex is null) log?.LogWarning("{Msg}", msg);

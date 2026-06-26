@@ -10,6 +10,15 @@
          and the /run skill don't have to special-case per-project layouts. -->
     <AssemblyName>OpenhpsdrZeus</AssemblyName>
     <RootNamespace>Zeus.Server</RootNamespace>
+    <!-- GUI subsystem (WinExe), not console (Exe). The Web SDK defaults to a
+         console-subsystem binary, so on Windows launching the desktop / server
+         shell pops up a console window alongside the Photino frame. WinExe stops
+         Windows from ever allocating that console, so there is nothing to show.
+         Headless service mode still logs: when launched from a
+         terminal we re-attach to the parent console (AttachParentConsoleOnWindows
+         in Program.cs) so the banner / stdout reaches the launching shell. The
+         flag is a Windows-only PE subsystem byte and is a no-op on macOS / Linux. -->
+    <OutputType>WinExe</OutputType>
     <SpaRoot>$(MSBuildThisFileDirectory)..\zeus-web</SpaRoot>
     <SpaBuildOutput>$(MSBuildThisFileDirectory)..\Zeus.Server.Hosting\wwwroot\index.html</SpaBuildOutput>
     <!-- ASP.NET Core defaults to Server GC (one GC thread per logical core),

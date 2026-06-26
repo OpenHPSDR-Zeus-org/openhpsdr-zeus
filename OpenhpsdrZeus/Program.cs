@@ -115,26 +115,31 @@ public partial class Program
         public required PhotinoWindow Window { get; init; }
     }
 
-    // OpenhpsdrZeus.csproj defaults to OutputType=Exe (console subsystem) so that
-    // headless service mode keeps a usable banner / log on stdout. On Windows that
-    // also means a console window pops up alongside the Photino frame in --desktop
-    // and --server modes, which operators (correctly) read as "why is there a
-    // backend log spamming behind my UI?". FreeConsole detaches the inherited
-    // console from this process, hiding the window without affecting Kestrel,
-    // Photino, or any redirected output. It's a no-op on macOS / Linux (the
-    // P/Invoke target does not exist), so the call is guarded by an OS check.
+    // The executable is built as OutputType=WinExe (GUI subsystem) — see
+    // OpenhpsdrZeus.csproj. Windows therefore never auto-allocates a console for
+    // it, so the desktop / server Photino shells start with no console window to
+    // flash. The trade-off is that headless service mode no longer inherits a
+    // console automatically; AttachParentConsoleOnWindows reattaches to the
+    // launching shell's console (ATTACH_PARENT_PROCESS) when there is one, so the
+    // banner / stdout still reaches a terminal launch. When launched by
+    // double-click (installer icon) there is no parent console and the attach
+    // simply fails — which is exactly the "no window" behaviour we want. Both
+    // P/Invokes are no-ops on macOS / Linux, so the calls are guarded by an OS
+    // check.
+    private const int AttachParentProcess = -1;
+
     [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
     [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
-    private static extern bool FreeConsole();
+    private static extern bool AttachConsole(int dwProcessId);
 
     [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
     private static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
 
-    private static void HideConsoleOnWindows()
+    private static void AttachParentConsoleOnWindows()
     {
         if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
         {
-            FreeConsole();
+            AttachConsole(AttachParentProcess);
         }
     }
 
@@ -181,7 +186,6 @@ public partial class Program
 
         if (args.Contains("--desktop"))
         {
-            HideConsoleOnWindows();
             try
             {
                 return RunDesktop(args);
@@ -194,9 +198,9 @@ public partial class Program
             catch (Exception ex)
             {
                 // Any other startup failure would otherwise escape Main and the
-                // process would vanish silently — the console is already detached
-                // (HideConsoleOnWindows), so the operator sees the window flash
-                // and close with no diagnostics. Record it and surface a dialog.
+                // process would vanish silently — the GUI-subsystem binary has no
+                // console, so the operator sees the window flash and close with no
+                // diagnostics. Record it and surface a dialog.
                 ReportStartupFatal(ex);
                 return 1;
             }
@@ -208,8 +212,10 @@ public partial class Program
             // Photino status window so the operator on macOS / Linux has a
             // place to read the LAN URL and a Stop Zeus button. Headless
             // deploys (Docker, Pi) keep using the no-flag path and never
-            // load Photino.
-            HideConsoleOnWindows();
+            // load Photino. Reattach to the launching terminal's console (if
+            // any) so the banner still prints there; the GUI-subsystem binary
+            // means double-clicking the installer icon shows no console.
+            AttachParentConsoleOnWindows();
             try
             {
                 return RunServerWithStatus(args);
@@ -260,6 +266,11 @@ public partial class Program
 
     private static Task<int> RunService(string[] args)
     {
+        // Headless service mode logs to stdout. The binary is GUI-subsystem
+        // (WinExe) so Windows never gives it a console of its own; reattach to
+        // the launching terminal's console so the banner / logs land there.
+        AttachParentConsoleOnWindows();
+
         // 5000 is claimed by macOS ControlCenter (AirPlay receiver) by default,
         // which replies 403 before Kestrel ever sees the request. 6060 is a
         // stable free port across macOS/Linux/Windows for local dev and avoids
@@ -594,8 +605,8 @@ public partial class Program
             }
             catch (Exception ex)
             {
-                // Never block shutdown on a prefs write. Console is detached in
-                // desktop mode (FreeConsole), so this is best-effort.
+                // Never block shutdown on a prefs write. Desktop mode has no
+                // console (GUI-subsystem binary), so this is best-effort.
                 Console.Error.WriteLine($"window.geometry.save failed: {ex.Message}");
             }
             return false; // allow the window to close
@@ -945,9 +956,9 @@ public partial class Program
             _ = MessageBoxW(IntPtr.Zero, message, title, 0x00000040);
     }
 
-    // A startup failure other than port-in-use. The desktop/server paths detach
-    // the console (FreeConsole) before this runs, so an uncaught exception would
-    // make the process vanish with the window never appearing and nothing logged.
+    // A startup failure other than port-in-use. The desktop/server paths run as
+    // a GUI-subsystem binary with no console, so an uncaught exception would make
+    // the process vanish with the window never appearing and nothing logged.
     // Persist the full exception to the shared startup log and show a dialog so
     // the operator gets an actionable message instead of a silent flash-and-close.
     private static void ReportStartupFatal(Exception ex)
