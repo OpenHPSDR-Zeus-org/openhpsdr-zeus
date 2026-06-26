@@ -57,6 +57,22 @@ public sealed class G2PanelProtocolTests
         Assert.Equal(expected, ev.Steps);
     }
 
+    [Theory]
+    [InlineData(7_145_000, 2, 500, 7_146_000)]
+    [InlineData(7_145_800, 1, 1000, 7_147_000)]
+    [InlineData(7_145_800, -1, 1000, 7_145_000)]
+    [InlineData(7_145_800, 17, 1000, 7_163_000)]
+    [InlineData(7_145_000, 1, 0, 7_145_500)]
+    [InlineData(10, -10, 500, 0)]
+    public void Vfo_steps_use_configured_step_and_snap_to_grid(
+        long currentHz,
+        long steps,
+        int stepHz,
+        long expected)
+    {
+        Assert.Equal(expected, G2PanelActionRouter.ApplyVfoSteps(currentHz, steps, stepHz));
+    }
+
     [Fact]
     public void Version_reports_console_type()
     {

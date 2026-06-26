@@ -45,6 +45,7 @@ public sealed class G2PanelActionRouter
     private readonly RadioService _radio;
     private readonly TxService _tx;
     private readonly BandMemoryStore _bandMemory;
+    private readonly ToolbarSettingsStore _toolbarSettings;
     private readonly ILogger _log;
 
     // Per-panel push-button transition tracking. The panel reports a button
@@ -61,9 +62,6 @@ public sealed class G2PanelActionRouter
     // path so a fast spin cannot backlog serial reads behind state broadcasts.
     private long _pendingVfoSteps;
 
-    // Tuning granularity for the main VFO knob, in Hz per (accelerated) step.
-    // The panel's own acceleration curve is already applied upstream.
-    private const long VfoStepHz = 10;
     // Encoder step sizes.
     private const int FilterStepHz = 50;
     private const long RitStepHz = 10;
@@ -96,11 +94,17 @@ public sealed class G2PanelActionRouter
     // Index cycled by the MULTI push-button; the MULTI encoder calls Apply.
     private readonly (string Name, Action<int> Apply)[] _multi;
 
-    public G2PanelActionRouter(RadioService radio, TxService tx, BandMemoryStore bandMemory, ILogger log)
+    public G2PanelActionRouter(
+        RadioService radio,
+        TxService tx,
+        BandMemoryStore bandMemory,
+        ToolbarSettingsStore toolbarSettings,
+        ILogger log)
     {
         _radio = radio;
         _tx = tx;
         _bandMemory = bandMemory;
+        _toolbarSettings = toolbarSettings;
         _log = log;
 
         _multi = new (string, Action<int>)[]
@@ -150,12 +154,30 @@ public sealed class G2PanelActionRouter
         try
         {
             var s = _radio.Snapshot();
-            _radio.SetVfo(s.VfoHz + steps * VfoStepHz);
+            int stepHz = _toolbarSettings.CurrentStepHz;
+            _radio.SetVfo(ApplyVfoSteps(s.VfoHz, steps, stepHz));
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "g2panel.vfo.flush.error steps={Steps}", steps);
         }
+    }
+
+    internal static long ApplyVfoSteps(long currentHz, long steps, int stepHz)
+    {
+        int step = ToolbarSettingsStore.NormalizeStepHz(stepHz);
+        long target = currentHz + steps * step;
+        return RoundToStep(target, step);
+    }
+
+    private static long RoundToStep(long hz, int stepHz)
+    {
+        if (hz <= 0) return 0;
+        if (stepHz <= 1) return hz;
+
+        long quotient = Math.DivRem(hz, stepHz, out long remainder);
+        if (remainder * 2 >= stepHz) quotient++;
+        return quotient > long.MaxValue / stepHz ? long.MaxValue : quotient * stepHz;
     }
 
     // ---- Buttons (G2-Ultra map; Thetis MakeNewG2PanelDataset) ---------------

@@ -73,6 +73,7 @@ public sealed class G2FrontPanelService : BackgroundService
         RadioService radio,
         TxService tx,
         BandMemoryStore bandMemory,
+        ToolbarSettingsStore toolbarSettings,
         ILogger<G2FrontPanelService> log,
         ILoggerFactory loggerFactory)
     {
@@ -82,7 +83,7 @@ public sealed class G2FrontPanelService : BackgroundService
         _radio = radio;
         _tx = tx;
         _log = log;
-        _router = new G2PanelActionRouter(radio, tx, bandMemory,
+        _router = new G2PanelActionRouter(radio, tx, bandMemory, toolbarSettings,
             loggerFactory.CreateLogger<G2PanelActionRouter>());
         // A Settings change re-resolves the device and reconnects without a
         // server restart (enable toggled, COM port / baud edited).

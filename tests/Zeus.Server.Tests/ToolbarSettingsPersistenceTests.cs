@@ -53,6 +53,14 @@ public class ToolbarSettingsPersistenceTests : IDisposable
     }
 
     [Fact]
+    public void FreshDb_CurrentStepHz_ReturnsFrontendDefault()
+    {
+        using var store = BuildStore();
+
+        Assert.Equal(ToolbarSettingsStore.DefaultStepHz, store.CurrentStepHz);
+    }
+
+    [Fact]
     public void Save_AllFields_PersistsAcrossReopen()
     {
         using (var store = BuildStore())
@@ -111,6 +119,19 @@ public class ToolbarSettingsPersistenceTests : IDisposable
 
         var dto = store.Get();
         Assert.Equal(1000, dto.StepHz);
+        Assert.Equal(1000, store.CurrentStepHz);
+    }
+
+    [Theory]
+    [InlineData(null, 500)]
+    [InlineData(0, 500)]
+    [InlineData(-1, 500)]
+    [InlineData(5_001, 500)]
+    [InlineData(1, 1)]
+    [InlineData(5_000, 5_000)]
+    public void NormalizeStepHz_RejectsInvalidValues(int? raw, int expected)
+    {
+        Assert.Equal(expected, ToolbarSettingsStore.NormalizeStepHz(raw));
     }
 
     [Fact]
