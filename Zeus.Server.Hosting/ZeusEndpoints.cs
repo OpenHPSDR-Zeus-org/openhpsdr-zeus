@@ -115,6 +115,36 @@ public static class ZeusEndpoints
             return Results.Ok(new { enabled = false });
         });
 
+        // WSPR native spotting control. nativeAvailable is false where the
+        // zeus_wspr decoder isn't shipped (e.g. Windows encode-only build today).
+        app.MapGet("/api/wspr",
+            (WsprService wspr) => Results.Ok(new
+            {
+                nativeAvailable = wspr.NativeAvailable,
+                enabled = wspr.IsEnabled,
+                receiver = wspr.ActiveReceiver,
+                dialFreqMhz = wspr.DialFreqMhz,
+            }));
+
+        app.MapPost("/api/wspr/enable",
+            (Zeus.Contracts.WsprEnableRequest body, WsprService wspr) =>
+            {
+                double dial = body.DialFreqMhz ?? 14.0956; // 20 m default
+                bool ok = wspr.Enable(body.Receiver ?? 0, dial);
+                log.LogInformation("api.wspr.enable rx={Rx} dial={Dial:F4} ok={Ok}",
+                    body.Receiver ?? 0, dial, ok);
+                return ok
+                    ? Results.Ok(new { enabled = true, nativeAvailable = true })
+                    : Results.Ok(new { enabled = false, nativeAvailable = wspr.NativeAvailable });
+            });
+
+        app.MapPost("/api/wspr/disable", (WsprService wspr) =>
+        {
+            wspr.Disable();
+            log.LogInformation("api.wspr.disable");
+            return Results.Ok(new { enabled = false });
+        });
+
         // Activation spots — merged POTA + SOTA feed, polled server-side by
         // ActivationSpotsService. The Spots panel polls this and offers
         // click-to-tune. Returns whatever's currently cached (empty list until

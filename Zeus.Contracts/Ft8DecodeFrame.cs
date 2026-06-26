@@ -37,6 +37,11 @@ public sealed record Ft8EnableRequest(
     string? Protocol,                // "FT8" | "FT4" (default FT8)
     int? Passes);                    // 1 = NORMAL, &gt;1 = DEEP/MULTI
 
+/// <summary>Request body for POST /api/wspr/enable.</summary>
+public sealed record WsprEnableRequest(
+    int? Receiver,
+    double? DialFreqMhz);            // transceiver dial freq, e.g. 14.0956 (20 m)
+
 /// <summary>Wire codec for the FT8 decode-batch frame (MsgType 0x38).</summary>
 public static class Ft8DecodeFrame
 {

@@ -447,6 +447,11 @@ public static class ZeusHost
         // Ft8BroadcastService — pushes each decoded slot to WS clients as a 0x38
         // Ft8Decode frame for the FT8 workspace decode table.
         builder.Services.AddHostedService<Ft8BroadcastService>();
+        // WsprService — native WSPR spotting: same RX-audio tap, 120 s UTC slots,
+        // decoded via the vendored K1JT/K9AN decoder. No-op (Enable returns false)
+        // when zeus_wspr decode is unavailable (e.g. Windows encode-only build).
+        builder.Services.AddSingleton<WsprService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<WsprService>());
         // FreeDvNativeInstaller — the in-app "Install FreeDV" downloader. codec2
         // can't be built on a stock operator machine, so when the bundled binary
         // is missing (older build / unshipped platform) this fetches the prebuilt
