@@ -42,6 +42,7 @@ public sealed class TxAudioProfileService : IHostedService
     private readonly TxFidelityPolicyStore _fidelity;
     private readonly PluginManager _manager;
     private readonly PluginSettingsStore _pluginSettings;
+    private readonly AudioPluginBridge _audioBridge;
     private readonly ILogger<TxAudioProfileService> _log;
 
     public TxAudioProfileService(
@@ -53,6 +54,7 @@ public sealed class TxAudioProfileService : IHostedService
         TxFidelityPolicyStore fidelity,
         PluginManager manager,
         PluginSettingsStore pluginSettings,
+        AudioPluginBridge audioBridge,
         ILogger<TxAudioProfileService> log)
     {
         _store = store;
@@ -63,6 +65,7 @@ public sealed class TxAudioProfileService : IHostedService
         _fidelity = fidelity;
         _manager = manager;
         _pluginSettings = pluginSettings;
+        _audioBridge = audioBridge;
         _log = log;
     }
 
@@ -227,10 +230,13 @@ public sealed class TxAudioProfileService : IHostedService
         var targetMode = string.Equals(profile.ProcessingMode, "vst", StringComparison.OrdinalIgnoreCase)
             ? AudioProcessingMode.Vst : AudioProcessingMode.Native;
         await _mode.SetModeAsync(targetMode, ct).ConfigureAwait(false);
-        // ApplyMembershipAndOrder fires OrderChanged -> AudioChain rebuild ->
-        // native plugins re-read PluginSettingsStore (restored above), and the
-        // VST engine reloads its chain with the armed states.
+        // ApplyMembershipAndOrder fires OrderChanged -> AudioChain rebuild.
+        // Newly-active native plugins initialize after the restored settings
+        // above. Already-active native plugins need one explicit recycle so
+        // their in-memory controls and DSP state re-read PluginSettingsStore
+        // immediately instead of waiting for a Zeus restart.
         _chainOrder.ApplyMembershipAndOrder(profile.ChainOrder, profile.ChainParked);
+        _audioBridge.ReloadActiveTxPlugins(profile.NativePluginStates.Keys.ToArray());
         _masterBypass.SetMasterBypassed(profile.MasterBypass);
 
         _store.SetLastLoadedId(profile.Id);
