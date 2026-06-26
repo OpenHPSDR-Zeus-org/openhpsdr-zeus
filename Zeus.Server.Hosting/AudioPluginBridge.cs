@@ -1288,6 +1288,92 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     }
 
     /// <summary>
+    /// Recycle already-active TX plugins so they re-read their
+    /// <see cref="Zeus.Plugins.Contracts.IPluginSettings"/> values after a TX
+    /// audio profile restore. Profile apply writes plugin settings directly to
+    /// LiteDB; an initialized plugin would otherwise keep its prior in-memory
+    /// defaults until the next Zeus restart.
+    /// </summary>
+    public void ReloadActiveTxPlugins(IReadOnlyCollection<string> pluginIds)
+    {
+        if (pluginIds.Count == 0) return;
+
+        var requested = new HashSet<string>(pluginIds, StringComparer.Ordinal);
+        var reload = new List<(string Id, IAudioPlugin Plugin, string SlotName)>();
+
+        lock (_lock)
+        {
+            foreach (var id in requested)
+            {
+                if (!_idToPlugin.TryGetValue(id, out var plugin)) continue;
+                if (!_idToSlot.TryGetValue(id, out var slot)) continue;
+                if (!_txInitializedIds.Remove(id)) continue;
+
+                var slotName = _txIdToSlotName.TryGetValue(id, out var s)
+                    ? s
+                    : "tx.post-leveler";
+                reload.Add((id, plugin, slotName));
+                _chain.ClearSlot(slot);
+            }
+        }
+
+        if (reload.Count == 0) return;
+
+        foreach (var item in reload)
+        {
+            try
+            {
+                item.Plugin.ShutdownAudioAsync(CancellationToken.None)
+                    .GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex,
+                    "Audio plugin {Id} ShutdownAudioAsync threw during TX profile reload",
+                    item.Id);
+            }
+        }
+
+        var failed = new List<string>();
+        foreach (var item in reload)
+        {
+            if (!EnsureTxPluginInitialized(item.Id, item.Plugin, item.SlotName))
+                failed.Add(item.Id);
+        }
+
+        if (failed.Count > 0)
+        {
+            lock (_lock)
+            {
+                foreach (var id in failed)
+                {
+                    if (_idToSlot.Remove(id, out var slot))
+                        _chain.ClearSlot(slot);
+                    _idToPlugin.Remove(id);
+                    _txIdToSlotName.Remove(id);
+                    _txInitializedIds.Remove(id);
+                }
+                if (_chainOrder is not null) ReapplySlotsUnderLock();
+            }
+
+            foreach (var id in failed)
+                _chainOrder?.OnPluginDetached(id);
+        }
+        else
+        {
+            lock (_lock)
+            {
+                if (_chainOrder is not null) ReapplySlotsUnderLock();
+            }
+        }
+
+        RefreshPreviewEnabled();
+        _log.LogInformation(
+            "Reloaded {Count} active TX audio plugin(s) after profile restore",
+            reload.Count - failed.Count);
+    }
+
+    /// <summary>
     /// Lazily load the native resources of any TX plugin that is currently
     /// ACTIVE (un-parked) in the operator's order but not yet initialized.
     /// Native instantiation is deferred until a plugin enters the live chain
