@@ -336,7 +336,10 @@ export default function App() {
     // own Zustand subscription on the hot path.
     return useCapabilitiesStore.subscribe((state) => {
       const host = state.capabilities?.host;
-      if (host) setAudioHostMode(host === 'desktop' ? 'native' : 'browser');
+      // A remote (?remote=) session always plays RX audio in the browser even
+      // when the host is a desktop app — the host's native sink only feeds its
+      // own speakers, not the remote operator. See isNativeAudio().
+      if (host) setAudioHostMode(host === 'desktop' && !remoteMode ? 'native' : 'browser');
     });
   }, []);
 

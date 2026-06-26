@@ -35,8 +35,25 @@ export function getAudioHostMode(): AudioHostMode {
   return isNativeAudio() ? 'native' : 'browser';
 }
 
-/** True when the desktop host is rendering RX audio via its native sink. */
+/** True when the SPA is a remote (?remote=<CALLSIGN>) WebRTC session. Checked
+ *  inline (not via remote-client) to avoid an import cycle with ws-client. */
+function isRemoteSession(): boolean {
+  try {
+    return !!new URLSearchParams(window.location.search).get('remote')?.trim();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True when the desktop host is rendering RX audio via its native sink and the
+ * browser should therefore NOT play it. Never true for a remote session: the
+ * host being in desktop mode means *its own* speakers get the native audio, but
+ * a remote operator's browser must play the streamed RX audio — so remote always
+ * runs in browser-audio mode regardless of the host's capabilities.
+ */
 export function isNativeAudio(): boolean {
+  if (isRemoteSession()) return false;
   return useCapabilitiesStore.getState().capabilities?.host === 'desktop';
 }
 
