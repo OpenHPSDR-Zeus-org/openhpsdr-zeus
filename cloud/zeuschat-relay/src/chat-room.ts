@@ -7,7 +7,11 @@ import {
   type RoomInfo,
   type RoomKind,
   type Msg,
-  type Attachment,
+  // Imported under an alias: this module already has a local `Attachment`
+  // interface (the per-connection hibernation state serialized onto each
+  // WebSocket). The photo attachment from the wire protocol is a different
+  // shape, so keep the names distinct to avoid the collision.
+  type Attachment as MsgAttachment,
   type PresenceStatus,
   MAX_MESSAGE_LEN,
   MAX_ATTACHMENT_DATAURL_LEN,
@@ -370,7 +374,7 @@ export class ChatRoom extends DurableObject<Env> {
     room: string,
     from: string,
     text: string,
-    attachment?: Attachment,
+    attachment?: MsgAttachment,
   ): Promise<void> {
     const msg: Msg = { id: crypto.randomUUID(), from, text, ts: Date.now(), room };
     if (attachment) msg.attachment = attachment;
@@ -731,14 +735,14 @@ export class ChatRoom extends DurableObject<Env> {
  * send anything, and the result is persisted + broadcast to the whole room, so
  * enforce the image-only + size invariants here regardless of the C# guard.
  */
-function sanitizeAttachment(a: Attachment | undefined): Attachment | undefined {
+function sanitizeAttachment(a: MsgAttachment | undefined): MsgAttachment | undefined {
   if (!a || typeof a !== 'object') return undefined;
   const mime = typeof a.mime === 'string' ? a.mime : '';
   const dataUrl = typeof a.dataUrl === 'string' ? a.dataUrl : '';
   if (!mime.startsWith('image/')) return undefined;
   if (!dataUrl.startsWith('data:image/')) return undefined;
   if (dataUrl.length > MAX_ATTACHMENT_DATAURL_LEN) return undefined;
-  const clean: Attachment = { kind: 'image', mime, dataUrl };
+  const clean: MsgAttachment = { kind: 'image', mime, dataUrl };
   if (typeof a.name === 'string' && a.name) clean.name = a.name.slice(0, 200);
   if (typeof a.width === 'number' && Number.isFinite(a.width)) clean.width = a.width;
   if (typeof a.height === 'number' && Number.isFinite(a.height)) clean.height = a.height;
