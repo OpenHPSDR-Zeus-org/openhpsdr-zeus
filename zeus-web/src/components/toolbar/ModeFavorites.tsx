@@ -14,6 +14,7 @@ import {
   postReceiverMode,
 } from '../../state/receiver-state';
 import { saveReceiverBandModeMemory } from '../../util/band-memory';
+import { enterDigital, isDigitalEntryKey } from '../../state/enter-digital';
 import { ToolbarFavorites, type ToolbarOption } from './ToolbarFavorites';
 
 const MODE_OPTIONS: readonly ToolbarOption[] = [
@@ -28,6 +29,11 @@ const MODE_OPTIONS: readonly ToolbarOption[] = [
   { key: 'DIGL', label: 'DIGL' },
   { key: 'DIGU', label: 'DIGU' },
   { key: 'FREEDV', label: 'FreeDV' },
+  // Zeus-level digital modes — these open the FT8/FT4/WSPR workspace and
+  // auto-configure the radio (handled in onSelect, not via setReceiverMode).
+  { key: 'FT8', label: 'FT8' },
+  { key: 'FT4', label: 'FT4' },
+  { key: 'WSPR', label: 'WSPR' },
 ];
 
 export function ModeFavorites() {
@@ -38,6 +44,12 @@ export function ModeFavorites() {
 
   const onSelect = useCallback(
     (key: string) => {
+      // FT8/FT4/WSPR are Zeus-level digital modes — open their workspace instead
+      // of setting a WDSP demod mode.
+      if (isDigitalEntryKey(key)) {
+        enterDigital(key);
+        return;
+      }
       const m = key as RxMode;
       if (m === activeMode) return;
       gangedReceiverAction({

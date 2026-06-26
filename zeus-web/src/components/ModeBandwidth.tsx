@@ -45,22 +45,7 @@
 
 import { useCallback } from 'react';
 import { type RxMode } from '../api/client';
-import { useFt8Store } from '../state/ft8-store';
-import { useWsprStore } from '../state/wspr-store';
-
-/** Enter a digital mode, closing whichever other digital workspace is open
- *  (FT8/FT4/WSPR are mutually exclusive — they all retune the radio). */
-function enterDigital(target: 'FT8' | 'FT4' | 'WSPR') {
-  const ft8 = useFt8Store.getState();
-  const wspr = useWsprStore.getState();
-  if (target === 'WSPR') {
-    if (ft8.open) ft8.closeWorkspace();
-    wspr.openWorkspace();
-  } else {
-    if (wspr.open) wspr.closeWorkspace();
-    ft8.openWorkspace({ protocol: target });
-  }
-}
+import { enterDigital } from '../state/enter-digital';
 import { useConnectionStore } from '../state/connection-store';
 import {
   gangedReceiverAction,
