@@ -156,6 +156,7 @@ interface AudioSuiteState {
   // survives a reload — purely a presentation preference, never sent
   // to the server.
   collapsed: Record<string, boolean>;
+  pluginSettingsRevision: number;
 
   // Chips+detail layout: which chain plugin is loaded in the detail
   // pane. Presentation-only, persisted to localStorage. A null or stale
@@ -202,6 +203,7 @@ interface AudioSuiteState {
   // Rack collapse plumbing.
   toggleCollapsed(pluginId: string): void;
   setAllCollapsed(collapsed: boolean, pluginIds: string[]): void;
+  bumpPluginSettingsRevision(): void;
   toggleSidebar(): void;
   toggleSidebarForRoute(route: AudioSuiteRoute): void;
 
@@ -427,6 +429,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       engineSupportLoaded: false,
       isDragging: false,
       collapsed: {},
+      pluginSettingsRevision: 0,
       selectedChainId: null,
       rxSelectedChainId: null,
       sidebarCollapsed: false,
@@ -561,6 +564,9 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           for (const id of pluginIds) next[id] = collapsed;
           return { collapsed: next };
         }),
+
+      bumpPluginSettingsRevision: () =>
+        set((s) => ({ pluginSettingsRevision: s.pluginSettingsRevision + 1 })),
 
       toggleSidebar: () =>
         set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
@@ -786,6 +792,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
               await get().loadMasterBypassFromServer();
             }
           }
+          get().bumpPluginSettingsRevision();
           return { ok: true };
         } catch (err) {
 
