@@ -224,6 +224,93 @@ public sealed class KiwiSdrTests : IDisposable
             $"expected freshest samples, got {dst[0]}");
     }
 
+    // ---- TX mute: the Kiwi drops out of the mix while the radio is keyed -------
+
+    [Fact]
+    public void OnAudio_writes_to_the_bus_when_not_keyed()
+    {
+        using var svc = NewService();
+        svc.OnAudioForTest(new float[] { 0.2f, 0.2f, 0.2f, 0.2f }, 48_000);
+        Assert.True(svc.AudioBusDepthForTest > 0);
+    }
+
+    [Fact]
+    public void OnAudio_is_muted_while_transmitting()
+    {
+        using var svc = NewService();
+        svc.SetTxActiveForTest(true);
+        svc.OnAudioForTest(new float[] { 0.2f, 0.2f, 0.2f, 0.2f }, 48_000);
+        Assert.Equal(0, svc.AudioBusDepthForTest);
+
+        // Un-key: audio flows again.
+        svc.SetTxActiveForTest(false);
+        svc.OnAudioForTest(new float[] { 0.2f, 0.2f, 0.2f, 0.2f }, 48_000);
+        Assert.True(svc.AudioBusDepthForTest > 0);
+    }
+
+    // ---- Squelch: the Kiwi rides the mix bus, so it gets its own S-meter gate --
+
+    private static float[] Tone(int n)
+    {
+        var b = new float[n];
+        Array.Fill(b, 1.0f);
+        return b;
+    }
+
+    [Fact]
+    public void SquelchGate_off_passes_audio_through_untouched()
+    {
+        using var svc = NewService();
+        svc.ApplySquelchConfig(new SquelchConfig(Enabled: false));
+        svc.SetSignalDbmForTest(-130); // dead-quiet would mute if squelch were on
+        var buf = Tone(256);
+        svc.ApplySquelchGate(buf);
+        Assert.All(buf, s => Assert.Equal(1.0f, s));
+    }
+
+    [Fact]
+    public void SquelchGate_fixed_mutes_weak_then_opens_on_strong()
+    {
+        using var svc = NewService();
+        // Fixed, Level 100 → threshold = -120 + 100% * 100 = -20 dBm.
+        svc.ApplySquelchConfig(new SquelchConfig(Enabled: true, Level: 100, Adaptive: false));
+
+        // Weak signal well below the threshold: the gate closes, ramping audio to
+        // silence (release ~50 ms @ 12 kHz, so a ~1 k buffer fully settles).
+        svc.SetSignalDbmForTest(-100);
+        var weak = Tone(1500);
+        svc.ApplySquelchGate(weak);
+        Assert.True(weak[^1] < 0.01f, $"expected muted tail, got {weak[^1]}");
+
+        // Strong signal above the threshold: the gate re-opens (attack ~5 ms), so
+        // a couple hundred samples restore full gain.
+        svc.SetSignalDbmForTest(-10);
+        var strong = Tone(600);
+        svc.ApplySquelchGate(strong);
+        Assert.True(strong[^1] > 0.99f, $"expected open tail, got {strong[^1]}");
+    }
+
+    [Fact]
+    public void SquelchGate_adaptive_tracks_floor_and_opens_above_margin()
+    {
+        using var svc = NewService();
+        svc.ApplySquelchConfig(new SquelchConfig(Enabled: true, Level: 0, Adaptive: true));
+
+        // Sit at the noise floor for a while: the gate stays closed (signal is
+        // below floor + open-margin), muting the audio.
+        svc.SetSignalDbmForTest(-120);
+        for (int i = 0; i < 4; i++) svc.ApplySquelchGate(Tone(1500));
+        var quiet = Tone(1500);
+        svc.ApplySquelchGate(quiet);
+        Assert.True(quiet[^1] < 0.01f, $"expected muted floor, got {quiet[^1]}");
+
+        // A signal well above the tracked floor opens the gate.
+        svc.SetSignalDbmForTest(-80);
+        var sig = Tone(600);
+        svc.ApplySquelchGate(sig);
+        Assert.True(sig[^1] > 0.99f, $"expected open on strong signal, got {sig[^1]}");
+    }
+
     // ---- KiwiDirectoryService: parse the public receiver list ---------------
 
     [Theory]

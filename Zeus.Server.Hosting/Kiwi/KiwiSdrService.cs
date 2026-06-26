@@ -126,6 +126,51 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
     private bool _muted;
     private int _zoomLevel = 1; // 1..32, shared zoom level (see /api/rx/zoom)
 
+    // True while the radio is transmitting (MOX or TUN). The Kiwi is a remote RX
+    // monitoring the same band the operator transmits on, so during TX it would
+    // play back the operator's own signal (delayed, off-frequency, often loud) —
+    // exactly the monitor-feedback we don't want. Mirror the local RX: drop the
+    // Kiwi out of the mix while keyed. _txActive = _moxActive || _tunActive, fed
+    // by RadioService.MoxChanged / TunActiveChanged; all guarded by _sync.
+    private bool _moxActive;
+    private bool _tunActive;
+    private bool _txActive;
+
+    // RX squelch. The Kiwi demodulates server-side and rides the mix bus (no
+    // WDSP), so Zeus's WDSP / adaptive squelch in DspPipelineService never
+    // reaches it — the global SQL control was a no-op on the Kiwi. We gate the
+    // Kiwi audio HERE instead, using the Kiwi's own per-SND-frame S-meter (dBm),
+    // so the same global squelch config drives the Kiwi too. Config is mirrored
+    // from RadioService.StateChanged (guarded by _sync). The gate runtime state
+    // (_sqlSignalDbm/_sqlNoiseFloorDbm/_sqlGain/_sqlOpen) is touched only on the
+    // SND receive-loop thread (OnSignalLevel + OnAudio run there), so it needs
+    // no lock.
+    private bool _sqlEnabled;            // guarded by _sync
+    private bool _sqlAdaptive = true;    // guarded by _sync
+    private int _sqlLevel;               // 0..100, higher = tighter; guarded by _sync
+    private double _sqlSignalDbm = double.NaN;     // latest Kiwi S-meter (SND thread)
+    private double _sqlNoiseFloorDbm = double.NaN; // adaptive floor estimate (SND thread)
+    private double _sqlGain = 1.0;       // smoothed gate gain 0..1 (SND thread)
+    private bool _sqlOpen = true;        // current gate state w/ hysteresis (SND thread)
+
+    // Fixed-mode threshold maps Level 0..100 linearly onto the Kiwi S-meter dBm
+    // range (~-120 dBm noise floor .. ~-20 dBm strong signal): higher Level =
+    // higher (tighter) threshold. Adaptive mode tracks a slow noise floor and
+    // opens a fixed margin above it. Hysteresis avoids chatter on signals
+    // hovering at the threshold.
+    private const double SqlFixedFloorDbm = -120.0;
+    private const double SqlFixedSpanDb = 100.0; // dBm at Level 100 = floor + span
+    private const double SqlOpenMarginDb = 6.0;
+    private const double SqlHysteresisDb = 3.0;
+    // Per-SND-frame slew (frames arrive ~20-40/s): the floor follows the signal
+    // down quickly but creeps up slowly so a brief carrier doesn't raise it.
+    private const double SqlFloorFallDbPerFrame = 3.0;
+    private const double SqlFloorRiseDbPerFrame = 0.2;
+    // Per-sample gain ramp (native ~12 kHz): fast attack (~5 ms) so signal
+    // onset isn't clipped, slower release (~50 ms) so tails fade without a click.
+    private const double SqlAttackPerSample = 1.0 / 60.0;
+    private const double SqlReleasePerSample = 1.0 / 600.0;
+
     // Waterfall span for the current zoom level. Caller need not hold _sync.
     private double CurrentSpanHz()
     {
@@ -212,7 +257,7 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
     // -------------------------------------------------------------------------
     public bool AudioActive
     {
-        get { lock (_sync) return _enabled && !_muted && _client is not null; }
+        get { lock (_sync) return _enabled && !_muted && !_txActive && _client is not null; }
     }
 
     public int ReadAudio(Span<float> dst)
@@ -240,6 +285,11 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
     internal int EnqueueAudioForTest(ReadOnlySpan<float> samples) => _audioBus.Write(samples);
     internal int AudioBusDepthForTest => _audioBus.Count;
 
+    // Test seams for the TX-mute path: drive the keyed flag and the audio-ingest
+    // entry point so "Kiwi mutes on TX" is unit-testable without a live client.
+    internal void SetTxActiveForTest(bool active) { lock (_sync) _txActive = active; }
+    internal void OnAudioForTest(float[] samples, int inRateHz) => OnAudio(samples, inRateHz);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Hydrate the persisted enable flag. Unlike PureSignal there is no
@@ -257,13 +307,23 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
         Action<Zeus.Protocol1.IProtocol1Client> onP1Connect = _ => OnRadioConnected();
         Action<Zeus.Protocol2.Protocol2Client> onP2Connect = _ => OnRadioConnected();
         Action onDisconnect = OnRadioDisconnected;
+        // Mirror the global RX squelch config so the Kiwi audio gate (ApplySquelchGate)
+        // honours the same SQL control as the hardware RXs.
+        Action<StateDto> onState = s => ApplySquelchConfig(s.Squelch);
+        // Track TX (MOX/TUN) so the Kiwi mutes while the operator is keyed.
+        Action<bool> onMox = on => { lock (_sync) { _moxActive = on; _txActive = _moxActive || _tunActive; } };
+        Action<bool> onTun = on => { lock (_sync) { _tunActive = on; _txActive = _moxActive || _tunActive; } };
         if (radio is not null)
         {
             radio.Connected += onP1Connect;
             radio.P2Connected += onP2Connect;
             radio.Disconnected += onDisconnect;
             radio.P2Disconnected += onDisconnect;
+            radio.StateChanged += onState;
+            radio.MoxChanged += onMox;
+            radio.TunActiveChanged += onTun;
             lock (_sync) { _radioConnected = radio.IsConnected; }
+            ApplySquelchConfig(radio.Snapshot().Squelch);
         }
         else
         {
@@ -286,6 +346,9 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
             radio.P2Connected -= onP2Connect;
             radio.Disconnected -= onDisconnect;
             radio.P2Disconnected -= onDisconnect;
+            radio.StateChanged -= onState;
+            radio.MoxChanged -= onMox;
+            radio.TunActiveChanged -= onTun;
         }
         await StopClientAsync().ConfigureAwait(false);
     }
@@ -551,9 +614,12 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
         client.AudioReceived = OnAudio;
         client.WaterfallReceived = OnWaterfall;
         client.StatusChanged = OnClientStatus;
-        // SignalLevel is intentionally not wired: RxMeterFrame carries no RxId,
-        // so a Kiwi S-meter broadcast would overwrite RX1's meter. The
-        // panadapter/waterfall convey the Kiwi signal level visually.
+        // The Kiwi S-meter is NOT broadcast (RxMeterFrame carries no RxId, so it
+        // would overwrite RX1's meter — the panadapter/waterfall convey the Kiwi
+        // level visually). It IS consumed internally to drive the audio squelch
+        // gate (ApplySquelchGate), since the Kiwi rides the mix bus and never
+        // sees Zeus's WDSP/adaptive squelch.
+        client.SignalLevel = dbm => _sqlSignalDbm = dbm;
 
         lock (_sync)
         {
@@ -599,6 +665,7 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
         // the new width so the frequency mapping is unchanged.
         Interlocked.Increment(ref _wfFramesWindow);
         double span = binsDb.Length * hzPerBin;
+        LogWfDbRangeIfDue(binsDb);
         var db = ResampleBins(binsDb, DisplayWidth);
         var frame = new DisplayFrame(
             Seq: unchecked(++_displaySeq),
@@ -613,6 +680,33 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
             PanDb: db,
             WfDb: db);
         _hub.Broadcast(frame);
+    }
+
+    // 1 Hz diagnostic of the incoming Kiwi waterfall dB span. The Kiwi sends raw
+    // dBm (byte-255) on a different absolute scale than the hardware RX's dBFS,
+    // and an operator reported the Kiwi pane washing out bright (noise floor not
+    // dark like RX1). The frontend cross-band floor-normalisation
+    // (floor-normalization.ts) is supposed to align it, but to calibrate that we
+    // need to SEE the real distribution rather than guess — log min / robust
+    // floor (10th pct) / median / max once per second. Cheap: one pass + a tiny
+    // partial sort over ~1k bins.
+    private long _wfDbLogMs;
+    private void LogWfDbRangeIfDue(float[] binsDb)
+    {
+        if (!_log.IsEnabled(LogLevel.Debug)) return;
+        long now = Environment.TickCount64;
+        long last = Interlocked.Read(ref _wfDbLogMs);
+        if (now - last < 1000) return;
+        if (Interlocked.CompareExchange(ref _wfDbLogMs, now, last) != last) return;
+
+        float mn = float.MaxValue, mx = float.MinValue;
+        foreach (var v in binsDb) { if (v < mn) mn = v; if (v > mx) mx = v; }
+        var sorted = (float[])binsDb.Clone();
+        Array.Sort(sorted);
+        float floor = sorted[(int)(sorted.Length * 0.10)];
+        float median = sorted[sorted.Length / 2];
+        _log.LogDebug("kiwi.wf.db min={Min:F1} floor10={Floor:F1} median={Median:F1} max={Max:F1} bins={N}",
+            mn, floor, median, mx, binsDb.Length);
     }
 
     // Linear-interpolate a per-bin dB array to a fixed destination length.
@@ -641,8 +735,12 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
         // the Kiwi is muted we simply stop publishing its frames so it drops out
         // of the client-side mix.
         bool muted;
-        lock (_sync) muted = _muted;
+        lock (_sync) muted = _muted || _txActive;
         if (muted) return;
+        // Squelch the native-rate audio (ties to the per-frame S-meter) before
+        // resampling, so the gate's attack/release constants match the ~12 kHz
+        // native cadence.
+        ApplySquelchGate(samples);
         var output = Resample(samples, inRateHz);
         if (output.Length == 0) return;
 
@@ -711,6 +809,86 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
         _resamplePrev = prev;
         return outList.ToArray();
     }
+
+    // -------------------------------------------------------------------------
+    // Squelch — the Kiwi rides the mix bus, so Zeus's WDSP/adaptive squelch can't
+    // reach it. Gate the audio here off the Kiwi's own S-meter (dBm) so the
+    // global SQL control works on the Kiwi too. Mirrors the spirit of
+    // DspPipelineService's adaptive squelch (noise-floor tracking + margin +
+    // hysteresis) but operates on the Kiwi's server-side-demodulated stream.
+    // -------------------------------------------------------------------------
+    internal void ApplySquelchConfig(SquelchConfig? cfg)
+    {
+        cfg ??= new SquelchConfig();
+        lock (_sync)
+        {
+            _sqlEnabled = cfg.Enabled;
+            _sqlAdaptive = cfg.Adaptive;
+            _sqlLevel = Math.Clamp(cfg.Level, 0, 100);
+        }
+    }
+
+    // SND-thread only. Updates the gate state from the latest S-meter and applies
+    // a smoothed gain ramp to the native-rate samples in place.
+    internal void ApplySquelchGate(float[] samples)
+    {
+        bool enabled, adaptive; int level;
+        lock (_sync) { enabled = _sqlEnabled; adaptive = _sqlAdaptive; level = _sqlLevel; }
+        if (!enabled)
+        {
+            // Off: pass through and reset the gate so a later enable doesn't open
+            // muted or replay a stale floor estimate.
+            _sqlGain = 1.0; _sqlOpen = true; _sqlNoiseFloorDbm = double.NaN;
+            return;
+        }
+
+        double sig = _sqlSignalDbm;
+        bool open;
+        if (!double.IsFinite(sig))
+        {
+            // No S-meter yet (just connected): never mute on missing data.
+            open = true;
+        }
+        else if (adaptive)
+        {
+            if (!double.IsFinite(_sqlNoiseFloorDbm)) _sqlNoiseFloorDbm = sig;
+            else if (sig < _sqlNoiseFloorDbm)
+                _sqlNoiseFloorDbm = Math.Max(sig, _sqlNoiseFloorDbm - SqlFloorFallDbPerFrame);
+            else
+                _sqlNoiseFloorDbm = Math.Min(sig, _sqlNoiseFloorDbm + SqlFloorRiseDbPerFrame);
+
+            double openThresh = _sqlNoiseFloorDbm + SqlOpenMarginDb;
+            double closeThresh = openThresh - SqlHysteresisDb;
+            open = _sqlOpen ? sig >= closeThresh : sig >= openThresh;
+        }
+        else
+        {
+            double thresh = SqlFixedFloorDbm + (level / 100.0) * SqlFixedSpanDb;
+            double closeThresh = thresh - SqlHysteresisDb;
+            open = _sqlOpen ? sig >= closeThresh : sig >= thresh;
+        }
+        _sqlOpen = open;
+
+        double target = open ? 1.0 : 0.0;
+        double g = _sqlGain;
+        if (g == target)
+        {
+            if (g != 1.0)
+                for (int i = 0; i < samples.Length; i++) samples[i] *= (float)g;
+            return;
+        }
+        for (int i = 0; i < samples.Length; i++)
+        {
+            if (g < target) g = Math.Min(target, g + SqlAttackPerSample);
+            else if (g > target) g = Math.Max(target, g - SqlReleasePerSample);
+            samples[i] *= (float)g;
+        }
+        _sqlGain = g;
+    }
+
+    // Test seam: feed an S-meter reading so the gate is unit-testable without a
+    // live KiwiSdrClient.
+    internal void SetSignalDbmForTest(double dbm) => _sqlSignalDbm = dbm;
 
     // -------------------------------------------------------------------------
     // Helpers.
