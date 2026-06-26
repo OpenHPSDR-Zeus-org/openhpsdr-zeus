@@ -58,6 +58,7 @@ import {
   uploadPrefsDatabase,
   exportPrefsDatabase,
   restartApp,
+  quitApp,
   ApiError,
   type PrefsDatabaseInfo,
   type RadioInfoDto,
@@ -548,6 +549,9 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
   const [pendingManualTakeover, setPendingManualTakeover] =
     useState<Required<Pick<SavedEndpoint, 'ip' | 'port' | 'protocol' | 'sampleRate' | 'board'>> & { label?: string } | null>(null);
 
+  // Pending "Exit Zeus?" confirmation for the login-dialog Exit button.
+  const [pendingQuit, setPendingQuit] = useState(false);
+
   const [manualIp, setManualIp] = useState(manualFormDefaults.ip);
   const [manualPort, setManualPort] = useState(manualFormDefaults.port);
   const [manualProtocol, setManualProtocol] = useState<ProtocolChoice>(manualFormDefaults.protocol);
@@ -869,6 +873,13 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
 
   const onSavePromptCancel = useCallback(() => setSavePrompt(null), []);
 
+  const handleQuit = useCallback(() => {
+    setPendingQuit(false);
+    // The process exits ~300 ms after acking, so the response may never land —
+    // fire and forget, swallowing the inevitable network error on teardown.
+    void quitApp().catch(() => {});
+  }, []);
+
   const handleRetry = useCallback(() => {
     setError(null);
     setFailureCount(0);
@@ -1013,6 +1024,15 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
             OpenHPSDR · Protocol 1 / 2
           </span>
         </div>
+        <button
+          type="button"
+          onClick={() => setPendingQuit(true)}
+          className="btn sm"
+          style={{ marginLeft: 'auto' }}
+          title="Close Zeus"
+        >
+          Exit
+        </button>
       </div>
       <div style={{ height: 180 }} />
 
@@ -1262,6 +1282,21 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
             is in use by another controller. Taking it over sends a stop command
             that disconnects whoever is currently using it — including an active
             transmission — and then connects Zeus.
+          </p>
+        </ConfirmDialog>
+      )}
+      {pendingQuit && (
+        <ConfirmDialog
+          title="Exit Zeus?"
+          confirmLabel="Exit"
+          cancelLabel="Cancel"
+          intent="danger"
+          onConfirm={handleQuit}
+          onCancel={() => setPendingQuit(false)}
+        >
+          <p style={{ margin: 0 }}>
+            This closes Zeus and stops the backend. Any active radio connection
+            will be dropped.
           </p>
         </ConfirmDialog>
       )}

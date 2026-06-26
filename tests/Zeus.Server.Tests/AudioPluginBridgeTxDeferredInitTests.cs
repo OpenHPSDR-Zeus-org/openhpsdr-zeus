@@ -61,6 +61,31 @@ public sealed class AudioPluginBridgeTxDeferredInitTests
         Assert.Equal(1, spy.InitCount);
     }
 
+    [Fact]
+    public void ReloadActiveTxPlugins_RecyclesInitializedLiveTxPlugin()
+    {
+        using var fx = new TxOrderFixture();
+        var bridge = NewBridgeWithChainOrder(fx.Service);
+        var spy = new SpyTxPlugin();
+        const string pluginId = "com.openhpsdr.zeus.samples.eq";
+
+        fx.Service.OnPluginAttached(pluginId, []);
+        TxPluginMap(bridge)[pluginId] = spy;
+        TxSlotNameMap(bridge)[pluginId] = "tx.post-leveler";
+        ApplyChainOrder(bridge);
+
+        Assert.Equal(1, spy.InitCount);
+        Assert.Equal(0, spy.ShutdownCount);
+        Assert.Same(spy, TxChain(bridge).GetSlot(0));
+
+        bridge.ReloadActiveTxPlugins([pluginId]);
+
+        Assert.Equal(2, spy.InitCount);
+        Assert.Equal(1, spy.ShutdownCount);
+        Assert.Contains(pluginId, TxInitializedSet(bridge));
+        Assert.Same(spy, TxChain(bridge).GetSlot(0));
+    }
+
     // -- harness ---------------------------------------------------------
 
     private static AudioPluginBridge NewBridgeWithChainOrder(ChainOrderService chainOrder)
@@ -147,6 +172,7 @@ public sealed class AudioPluginBridgeTxDeferredInitTests
     private sealed class SpyTxPlugin : IAudioPlugin
     {
         public int InitCount { get; private set; }
+        public int ShutdownCount { get; private set; }
         public string DisplayName => "Spy TX";
         public AudioPluginRequirements Requirements => new(48_000, 1, 1_024);
 
@@ -159,6 +185,10 @@ public sealed class AudioPluginBridgeTxDeferredInitTests
         public void Process(ReadOnlySpan<float> input, Span<float> output, AudioBlockContext ctx) =>
             input.CopyTo(output);
 
-        public Task ShutdownAudioAsync(CancellationToken ct) => Task.CompletedTask;
+        public Task ShutdownAudioAsync(CancellationToken ct)
+        {
+            ShutdownCount++;
+            return Task.CompletedTask;
+        }
     }
 }

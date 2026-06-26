@@ -25,6 +25,7 @@ public sealed class TxAudioProfileServiceTests : IDisposable
     private readonly VstEngineController _engine;
     private readonly RadioService _radio;
     private readonly ChainOrderService _chainOrder;
+    private readonly AudioPluginBridge _bridge;
     private readonly AudioChainMasterBypassService _masterBypass;
     private readonly AudioProcessingModeService _mode;
     private readonly TxAudioProfileService _service;
@@ -55,11 +56,12 @@ public sealed class TxAudioProfileServiceTests : IDisposable
 
         var hub = new StreamingHub(NullLogger<StreamingHub>.Instance);
         _chainOrder = new ChainOrderService(_orderStore, hub, NullLogger<ChainOrderService>.Instance);
+        _bridge = new AudioPluginBridge(
+            isMoxOn: () => false, isMonitorOn: () => false,
+            log: NullLogger<AudioPluginBridge>.Instance);
         _masterBypass = new AudioChainMasterBypassService(
             _chainSettings,
-            new AudioPluginBridge(
-                isMoxOn: () => false, isMonitorOn: () => false,
-                log: NullLogger<AudioPluginBridge>.Instance),
+            _bridge,
             hub,
             NullLogger<AudioChainMasterBypassService>.Instance);
         _mode = new AudioProcessingModeService(
@@ -68,7 +70,7 @@ public sealed class TxAudioProfileServiceTests : IDisposable
 
         _service = new TxAudioProfileService(
             _profileStore, _radio, _chainOrder, _masterBypass, _mode, _fidelity,
-            _pluginManager, _pluginSettings,
+            _pluginManager, _pluginSettings, _bridge,
             NullLogger<TxAudioProfileService>.Instance);
     }
 
