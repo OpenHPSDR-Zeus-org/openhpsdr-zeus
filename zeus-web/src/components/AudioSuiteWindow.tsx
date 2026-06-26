@@ -495,6 +495,10 @@ interface PluginSidebarProps {
   onScanDirectory(): void;
   onScanDefault(): void;
   onScanBothDefault(): void;
+  /** Scan the OS AudioComponent registry for AUv2 effects (macOS only). */
+  onScanAu(): void;
+  /** Audio Units are hostable (macOS) — gates the "Scan AU" control. */
+  auSupported: boolean;
   scanning: boolean;
   favoriteVstIds: ReadonlySet<string>;
   onToggleFavorite(pluginId: string): void;
@@ -528,6 +532,8 @@ function PluginSidebar({
   onScanDirectory,
   onScanDefault,
   onScanBothDefault,
+  onScanAu,
+  auSupported,
   scanning,
   favoriteVstIds,
   onToggleFavorite,
@@ -889,6 +895,17 @@ function PluginSidebar({
           >
             + Add VST folder
           </button>
+          {auSupported && (
+            <button
+              type="button"
+              onClick={onScanAu}
+              disabled={scanning}
+              title="Scan installed Audio Units (macOS) and add them to the rack — hosted in-process"
+              style={scanBtnStyle(scanning, false)}
+            >
+              {scanning ? 'Scanning...' : 'Scan AU'}
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -995,6 +1012,11 @@ export function AudioSuiteWindow({
   const applyProfile = useAudioSuiteStore((s) => s.applyProfile);
   const deleteProfile = useAudioSuiteStore((s) => s.deleteProfile);
   const scanVstDirectory = useAudioSuiteStore((s) => s.scanVstDirectory);
+  const scanAuComponents = useAudioSuiteStore((s) => s.scanAuComponents);
+  const auSupported = useAudioSuiteStore((s) => s.auSupported);
+  const loadEngineSupportFromServer = useAudioSuiteStore(
+    (s) => s.loadEngineSupportFromServer,
+  );
   const uninstallPlugin = useAudioSuiteStore((s) => s.uninstallPlugin);
   const favoriteVstIds = useAudioSuiteStore((s) => s.favoriteVstIds);
   const toggleFavoriteVst = useAudioSuiteStore((s) => s.toggleFavoriteVst);
@@ -1101,6 +1123,8 @@ export function AudioSuiteWindow({
   // in ws-client.ts.
   useEffect(() => {
     if (!embedded && !isOpen) return;
+    // Platform affordance flags (auSupported gates the "Scan AU" control).
+    loadEngineSupportFromServer();
     if (isRxSuite) {
       loadRxChainOrderFromServer();
       loadRxProcessingModeFromServer();
@@ -1119,6 +1143,7 @@ export function AudioSuiteWindow({
     embedded,
     isOpen,
     isRxSuite,
+    loadEngineSupportFromServer,
     loadChainOrderFromServer,
     loadRxChainOrderFromServer,
     loadProcessingModeFromServer,
@@ -1439,6 +1464,39 @@ export function AudioSuiteWindow({
   // Prompt for a specific folder, then scan just that one.
   const onScanVstDirectory = async () => {
     setScanFolderOpen(true);
+  };
+
+  // Scan installed Audio Units (macOS) into this suite's insert chain. The
+  // AU registry is resolved server-side, so there is no folder prompt — one
+  // click sweeps the system components. Routes by suite: RX suite scans the
+  // RX insert chain, TX suite the TX chain.
+  const onScanAuComponents = async () => {
+    setScanning(true);
+    try {
+      const result = await scanAuComponents(route);
+      if (!result.ok) {
+        setVstNotice({ tone: 'error', text: `AU scan failed:\n${result.error ?? 'unknown error'}` });
+        return;
+      }
+      if (!result.supported) {
+        setVstNotice({ tone: 'warn', text: 'Audio Units are available on macOS only.' });
+        return;
+      }
+      const lines = [
+        `Registered: ${result.registered.length}`,
+        `Already present: ${result.skipped.length}`,
+        `Failed: ${result.errors.length}`,
+      ];
+      if (result.errors.length > 0) {
+        lines.push('', ...result.errors.slice(0, 6).map((e) => `• ${e.message}`));
+      }
+      setVstNotice({
+        tone: result.errors.length > 0 ? 'warn' : 'ok',
+        text: lines.join('\n'),
+      });
+    } finally {
+      setScanning(false);
+    }
   };
 
   // Permanently remove a VST from Zeus (not just park it). The UI arms the
@@ -1902,6 +1960,8 @@ export function AudioSuiteWindow({
           onScanDirectory={() => void onScanVstDirectory()}
           onScanDefault={onScanDefaultVstDirectory}
           onScanBothDefault={onScanBothDefaultVstDirectory}
+          onScanAu={() => void onScanAuComponents()}
+          auSupported={auSupported}
           scanning={scanning}
           favoriteVstIds={favoriteVstIdSet}
           onToggleFavorite={toggleFavoriteVst}

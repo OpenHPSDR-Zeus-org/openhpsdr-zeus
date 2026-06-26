@@ -3,23 +3,30 @@ using System.Runtime.InteropServices;
 
 namespace Zeus.Plugins.Host.Audio;
 
-internal static class VstBridgeNativeLoader
+/// <summary>
+/// RID-probing DllImport resolver for the macOS Audio Unit bridge
+/// (<c>libzeus-au-bridge.dylib</c>). Mirrors <see cref="VstBridgeNativeLoader"/>:
+/// it probes <c>runtimes/&lt;rid&gt;/native</c> next to the assembly and the
+/// app base directory before the OS fallback. The AU dylib ships ONLY under
+/// <c>runtimes/osx-{x64,arm64}/native</c>; on Windows/Linux no candidate
+/// exists, the resolver returns <see cref="IntPtr.Zero"/>, and
+/// <see cref="AuBridgeNative"/> degrades to clean passthrough — exactly like
+/// the VST3 bridge when its native lib is absent.
+/// </summary>
+internal static class AuBridgeNativeLoader
 {
     internal static void EnsureResolverRegistered()
     {
-        // Route through the shared registrar: the runtime allows only ONE
-        // DllImport resolver per assembly, and the macOS AU bridge ships a
-        // second native library in this same assembly. The registrar installs
-        // a single dispatching resolver so VST3 and AU never collide. VST3
-        // resolution is unchanged — Resolve below is the same delegate as
-        // before, just installed via the shared dispatcher instead of a
-        // direct SetDllImportResolver call.
+        // Route through the shared registrar so the AU resolver coexists with
+        // the VST3 resolver — both bridges live in this one assembly, which the
+        // runtime permits only a single SetDllImportResolver for. See
+        // NativeBridgeResolver.
         NativeBridgeResolver.Register(Resolve);
     }
 
     private static IntPtr Resolve(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
     {
-        if (libraryName != VstBridgeNative.LibraryName) return IntPtr.Zero;
+        if (libraryName != AuBridgeNative.LibraryName) return IntPtr.Zero;
         return TryResolve(assembly, out var handle) ? handle : IntPtr.Zero;
     }
 
@@ -30,7 +37,7 @@ internal static class VstBridgeNativeLoader
             if (File.Exists(candidate) && NativeLibrary.TryLoad(candidate, out handle))
                 return true;
         }
-        return NativeLibrary.TryLoad(VstBridgeNative.LibraryName, assembly, null, out handle);
+        return NativeLibrary.TryLoad(AuBridgeNative.LibraryName, assembly, null, out handle);
     }
 
     internal static IEnumerable<string> CandidatePaths(Assembly assembly)
@@ -66,9 +73,12 @@ internal static class VstBridgeNativeLoader
 
     private static string NativeFileName()
     {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return "libzeus-vst-bridge.dylib";
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return "libzeus-vst-bridge.so";
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return "zeus-vst-bridge.dll";
-        return "libzeus-vst-bridge";
+        // The AU bridge is macOS-only. On other platforms we still return a
+        // platform-shaped name so the probe is well-defined, but no file ever
+        // exists there and the load falls through to passthrough.
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return "libzeus-au-bridge.dylib";
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return "libzeus-au-bridge.so";
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return "zeus-au-bridge.dll";
+        return "libzeus-au-bridge";
     }
 }
