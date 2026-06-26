@@ -53,6 +53,12 @@ function extremelyWeakSignal(): Float32Array {
   return spec;
 }
 
+function speechLikeSsbCopy(): Float32Array {
+  const spec = new Float32Array(WIDTH).fill(NOISE_DB);
+  for (let i = 64; i < 164; i += 4) spec[i] = NOISE_DB + 32;
+  return spec;
+}
+
 function quietNoise(): Float32Array {
   return new Float32Array(WIDTH).fill(NOISE_DB);
 }
@@ -339,6 +345,22 @@ describe('SmartNrController', () => {
     expect(setNrMock).toHaveBeenCalledTimes(1);
     expect(setNrMock.mock.calls[0]?.[0].nrMode).toBe('Sbnr');
     expect(useSmartNrStore.getState().status?.reason).toContain('Weak-signal assist');
+  });
+
+  it('applies NR3 for speech-like SSB when an RNNoise model is installed', () => {
+    useConnectionStore.setState({
+      mode: 'USB',
+      wdspNr3RnnrAvailable: true,
+      nr3ModelName: 'hf-voice.rnn',
+    });
+
+    for (let i = 0; i < 6; i++) feed(speechLikeSsbCopy());
+
+    expect(setNrMock).toHaveBeenCalledTimes(1);
+    expect(setNrMock.mock.calls[0]?.[0].nrMode).toBe('Rnnr');
+    expect(setNrMock.mock.calls[0]?.[0].snbEnabled).toBe(false);
+    expect(useSmartNrStore.getState().status?.profile).toBe('NR3');
+    expect(useSmartNrStore.getState().status?.reason).toContain('neural speech');
   });
 
   it('times out a stuck hardware diagnostics request and retries on a later sample', async () => {
