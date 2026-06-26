@@ -50,6 +50,21 @@ public class RadeModemTests
         modem.FlushTx();
     }
 
+    [Fact]
+    public void FinishTx_AndDrainTo_DoNotThrow_WhenIdleOrNativeMissing()
+    {
+        using var modem = new RadeModem();
+        Assert.Equal(0, modem.FinishTx());
+        modem.Activate();
+        modem.SetTxText("N9WAR");
+        // FinishTx completes the over and appends the EOO callsign when native is
+        // present; reports 0 and stays safe when absent.
+        modem.FinishTx();
+        var block = new float[480];
+        modem.DrainTo(block);
+        Assert.True(modem.TxPendingOutSamples() >= 0);
+    }
+
     [SkippableFact]
     public void WhenNativeMissing_ActiveTx_Silences_AndRxPassesThrough()
     {

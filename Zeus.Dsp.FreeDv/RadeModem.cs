@@ -371,6 +371,76 @@ public sealed class RadeModem : IDisposable
         }
     }
 
+    /// <summary>
+    /// End-of-over flush: encode the residual sub-frame of mic speech so a
+    /// COMPLETE final RADE frame exists, then append the End-of-Over frame (which
+    /// carries the configured callsign via the FreeDV reliable-text LDPC), and
+    /// report the 48 kHz output samples now pending. The TX tail drain clocks
+    /// those out before PTT drops, so the over ends on a whole frame AND the EOO
+    /// callsign actually reaches the air (previously best-effort and never fired,
+    /// because there was no post-unkey drain — see ProcessTx note in
+    /// FreeDvService). Control-thread only; gates the TX hot path out. Returns 0
+    /// when native is missing or TX isn't open.
+    /// </summary>
+    public int FinishTx()
+    {
+        if (!_nativeAvailable) return 0;
+        lock (_reconfigGate)
+        {
+            IntPtr h = Volatile.Read(ref _txRade);
+            if (h == IntPtr.Zero) return 0;
+            int nspeech = _txNSpeech, ntx = _txNTxOut;
+            if (nspeech <= 0 || ntx <= 0) return 0;
+
+            Volatile.Write(ref _txRade, IntPtr.Zero);
+            Thread.MemoryBarrier();
+            SpinUntilIdle(ref _txBusy);
+
+            // Complete any residual speech into whole frame(s).
+            while (_tx16In.Count > 0)
+            {
+                int have = Math.Min(_tx16In.Count, nspeech);
+                _tx16In.Read(_tx16Float.AsSpan(0, have));
+                if (have < nspeech) Array.Clear(_tx16Float, have, nspeech - have);
+                FloatToShort(_tx16Float, _tx16Short, nspeech);
+                int n = RadeNativeMethods.zeus_rade_tx(h, _tx16Short, _txIqOut);
+                if (n > ntx) n = ntx;
+                for (int i = 0; i < n; i++) _txModemReal[i] = _txIqOut[2 * i];
+                int up = _txUp.Process(_txModemReal.AsSpan(0, n), _txInterp);
+                WriteBounded(_txOut48, _txInterp.AsSpan(0, up));
+            }
+
+            // Append the EOO (closing callsign) frame as the final modem audio.
+            if (_txNEooOut > 0)
+            {
+                int n = RadeNativeMethods.zeus_rade_tx_eoo(h, _txIqOut);
+                if (n > _txNEooOut) n = _txNEooOut;
+                for (int i = 0; i < n; i++) _txModemReal[i] = _txIqOut[2 * i];
+                int up = _txUp.Process(_txModemReal.AsSpan(0, n), _txInterp);
+                WriteBounded(_txOut48, _txInterp.AsSpan(0, up));
+            }
+
+            Volatile.Write(ref _txRade, h);
+            return _txOut48.Count;
+        }
+    }
+
+    /// <summary>48 kHz output samples awaiting transmit (the TX tail backlog).</summary>
+    public int TxPendingOutSamples() => _txOut48.Count;
+
+    /// <summary>
+    /// Drain queued modem output into <paramref name="block48k"/> WITHOUT encoding
+    /// new speech; silence-pads the remainder and returns the real (non-pad)
+    /// count. Used by the end-of-over tail drain while the TX hot path is quiesced
+    /// (the drain owns TX exclusively). Returns 0 when nothing is pending.
+    /// </summary>
+    public int DrainTo(Span<float> block48k)
+    {
+        int filled = _txOut48.Read(block48k);
+        if (filled < block48k.Length) block48k.Slice(filled).Clear();
+        return filled;
+    }
+
     private static void WriteBounded(FreeDvSampleRing ring, ReadOnlySpan<float> src)
     {
         if (ring.Count > MaxOutFifo) ring.Drop(ring.Count - MaxOutFifo);

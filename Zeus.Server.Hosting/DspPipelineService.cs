@@ -1297,6 +1297,15 @@ public class DspPipelineService : BackgroundService,
         return _txIngest;
     }
 
+    /// <summary>
+    /// FreeDV end-of-over TX tail: complete the final modem frame and clock it
+    /// out to the radio before PTT drops, so the receiver gets whole OFDM frames
+    /// (no end-of-over garble). Called by <see cref="TxService"/> on un-key,
+    /// before the wire MOX bit drops. No-op unless FreeDV is engaged. Blocks the
+    /// caller for the bounded tail duration.
+    /// </summary>
+    public void DrainFreeDvTxTail() => ResolveTxIngest()?.DrainFreeDvTxTail();
+
     // Persisted TX display analyzer config (live TX waterfall feature). Optional
     // so test constructions of DspPipelineService keep working; when null the
     // engine just runs at its built-in defaults. Display-only — never affects

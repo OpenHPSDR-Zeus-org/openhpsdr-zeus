@@ -222,6 +222,20 @@ public sealed class TxService
             ? (long)(preKeyMs / 1000.0 * System.Diagnostics.Stopwatch.Frequency)
             : 0;
 
+        // FreeDV end-of-over TX tail. On a genuine, accepted mic un-key, clock the
+        // final modem frame out to the radio while the wire MOX bit is STILL
+        // asserted and _moxOn is still true — done here, before the state lock, so
+        // the audio thread never runs its falling-edge ring-clear mid-tail and the
+        // receiver gets whole OFDM frames instead of a mid-symbol cut. No-op unless
+        // FreeDV is engaged; blocks briefly (bounded) for the tail to transmit.
+        // The acceptance test mirrors the lock below (only the owner / UI may
+        // drop), so we never transmit a tail for a drop that will be rejected.
+        if (!on && IsMoxOn
+            && (source == MoxSource.UI || MoxOwner is null || MoxOwner == source))
+        {
+            _pipeline.DrainFreeDvTxTail();
+        }
+
         bool wasTunOn;
         bool? txActiveCaptured;
         lock (_sync)
