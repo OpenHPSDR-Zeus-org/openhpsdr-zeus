@@ -60,6 +60,16 @@ public sealed class RemoteWebRtcSession
     private int _lastAudioSeq = -1;
     private bool _audioWired;
 
+    // SOTA RX audio (opt-in, bench-gated): when ZEUS_REMOTE_OPUS_RX is set, RX
+    // audio is Opus-encoded onto the outbound WebRTC audio track instead of raw
+    // PCM over the unreliable "frames" data channel — native browser jitter
+    // buffer + PLC + ~50× less bandwidth. Default OFF so the proven PCM path is
+    // unchanged until this is bench-verified against a real radio + internet hop.
+    internal static readonly bool OpusRxEnabled =
+        (Environment.GetEnvironmentVariable("ZEUS_REMOTE_OPUS_RX") ?? "")
+            .Trim() is "1" or "true" or "TRUE" or "True";
+    private RemoteRxAudioPipeline? _rxAudio;
+
     // Post-unlock binary stream-request control frames (RX monitoring, Phase A):
     //   first byte 0x22 = display request, 0x21 = audio request; byte[1] 1/0 = enable/disable.
     // We track the session's current wanted-state so a duplicate enable can't
@@ -78,6 +88,12 @@ public sealed class RemoteWebRtcSession
     // bulk-import path we don't want to relay either direction.
     private const int MaxResponseBytes = 1 * 1024 * 1024;
     private const int MaxRequestBytes = 1 * 1024 * 1024;
+
+    // The LAN Browser proxy returns whole device pages with inlined CSS/images
+    // (data URIs), which legitimately exceed the 1 MiB chrome cap. It's the one
+    // endpoint whose large reply is expected, so it gets its own ceiling.
+    private const int LanProxyMaxResponseBytes = 10 * 1024 * 1024;
+    private const string LanProxyPath = "/api/lan/proxy";
 
     /// <summary>
     /// Always-denied endpoints (BOTH read and write). A request to one of these
@@ -191,7 +207,22 @@ public sealed class RemoteWebRtcSession
     /// </summary>
     public bool TrySendFrame(byte[] frame)
     {
-        if (!_session.TryEgress() || _frames is null)
+        if (!_session.TryEgress())
+            return false;
+
+        // Opus-RX mode: divert RX audio frames (0x02) onto the WebRTC audio track
+        // and DON'T also ship the raw PCM over the data channel. Every other frame
+        // type (spectrum/meters/MOX/…) still rides the data channel as before.
+        if (_rxAudio is not null
+            && frame.Length >= Zeus.Contracts.WireFormat.HeaderSize
+            && frame[0] == (byte)Zeus.Contracts.MsgType.AudioPcm)
+        {
+            try { _rxAudio.Encode(Zeus.Contracts.AudioFrame.Deserialize(frame)); }
+            catch { /* malformed frame — drop, never fatal */ }
+            return true;
+        }
+
+        if (_frames is null)
             return false;
         _frames.send(frame);
         return true;
@@ -329,14 +360,21 @@ public sealed class RemoteWebRtcSession
             return;
 
         _micPipeline = new RemoteMicAudioPipeline(OnRemoteMicBlock);
+        // With Opus-RX on, the same audio m-line is bidirectional: we RECEIVE the
+        // operator's mic AND SEND the radio's RX audio over it. Off (default) it
+        // stays recvonly (mic only) exactly as before.
+        var direction = OpusRxEnabled ? MediaStreamStatusEnum.SendRecv : MediaStreamStatusEnum.RecvOnly;
         var audioTrack = new MediaStreamTrack(
             SDPMediaTypesEnum.audio, false,
             new List<SDPAudioVideoMediaFormat> { new(SDPMediaTypesEnum.audio, 111, "OPUS", 48000, 2) },
-            MediaStreamStatusEnum.RecvOnly);
+            direction);
         _pc.addTrack(audioTrack);
         _pc.OnRtpPacketReceived += OnAudioRtpReceived;
+        if (OpusRxEnabled) _rxAudio = new RemoteRxAudioPipeline(OnEncodedRxOpus);
         _audioWired = true;
-        _log.LogInformation("rtc.remote voice-mic track negotiated (Opus 48k recvonly)");
+        _log.LogInformation(
+            "rtc.remote voice-mic track negotiated (Opus 48k {Dir})",
+            OpusRxEnabled ? "sendrecv +RX-audio" : "recvonly");
     }
 
     private void OnAudioRtpReceived(
@@ -366,6 +404,14 @@ public sealed class RemoteWebRtcSession
 
     /// <summary>Inject a decoded 960-sample f32le voice block into the TX-mic ingest.</summary>
     private void OnRemoteMicBlock(ReadOnlyMemory<byte> f32leBlock) => _hub?.InjectMicPcm(f32leBlock);
+
+    /// <summary>Send one 20 ms Opus RX packet on the outbound audio track. Called
+    /// synchronously from the frame-drain task (Opus-RX mode only). Never throws.</summary>
+    private void OnEncodedRxOpus(ReadOnlyMemory<byte> opus)
+    {
+        try { _pc.SendAudio(RemoteRxAudioPipeline.BlockRtpUnits, opus.ToArray()); }
+        catch { /* peer gone / track not ready — drop, never fatal */ }
+    }
 
     // -- Read-write REST tunnel ---------------------------------------------
     //
@@ -488,13 +534,19 @@ public sealed class RemoteWebRtcSession
                 TrackTxKeying(target.AbsolutePath, body);
 
             // Cap the body so the tunnel can't be used as a bulk-export channel.
-            if (resp.Content.Headers.ContentLength is long len && len > MaxResponseBytes)
+            // The LAN Browser proxy is the one endpoint with an expected-large
+            // reply (a whole device page with inlined assets), so it gets a
+            // higher ceiling than the small chrome/control endpoints.
+            int maxResp = path.StartsWith(LanProxyPath, StringComparison.OrdinalIgnoreCase)
+                ? LanProxyMaxResponseBytes
+                : MaxResponseBytes;
+            if (resp.Content.Headers.ContentLength is long len && len > maxResp)
             {
                 SendApiReply(id, 502);
                 return;
             }
             var bytes = await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-            if (bytes.Length > MaxResponseBytes)
+            if (bytes.Length > maxResp)
             {
                 SendApiReply(id, 502);
                 return;

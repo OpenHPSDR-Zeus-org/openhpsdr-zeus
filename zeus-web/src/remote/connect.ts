@@ -121,12 +121,14 @@ async function establish(
   const api = pc.createDataChannel('api'); // reliable, ordered — read-write REST tunnel
   if (opts.onFrame) frames.onmessage = (e: MessageEvent) => opts.onFrame!(e.data as ArrayBuffer);
 
-  // Sendonly Opus audio m-line for remote voice TX. Added up front so the offer
-  // carries m=audio (the radio answers recvonly), but getUserMedia is deferred
-  // until the operator actually keys: replaceTrack swaps the live mic into this
-  // sender with NO renegotiation, so an RX-only session never prompts for the
-  // mic. The browser encodes Opus natively — low latency, in-band FEC + PLC.
-  const audioSender = pc.addTransceiver('audio', { direction: 'sendonly' }).sender;
+  // Bidirectional Opus audio m-line. We always SEND the operator's mic for voice
+  // TX (getUserMedia is deferred until the first key — replaceTrack swaps it in
+  // with no renegotiation, so an RX-only session never prompts for the mic). We
+  // offer RECV too so the radio can stream RX audio back on this track when the
+  // host has the Opus-RX path enabled (native browser jitter buffer + PLC); if it
+  // doesn't, it simply answers recvonly and RX audio keeps flowing as PCM over
+  // the data channel — this offer is harmless either way.
+  const audioSender = pc.addTransceiver('audio', { direction: 'sendrecv' }).sender;
   let micStream: MediaStream | null = null;
   let micTrack: MediaStreamTrack | null = null;
 

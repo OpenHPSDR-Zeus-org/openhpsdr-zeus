@@ -69,6 +69,7 @@ import {
 } from '../components/meter-group/meterGroupConfig';
 import { HeroPanel } from './panels/HeroPanel';
 import { UrlEmbedPanel } from './panels/UrlEmbedPanel';
+import { LanBrowserPanel } from './panels/LanBrowserPanel';
 import {
   parseUrlEmbedConfig,
   type UrlEmbedConfig,
@@ -930,6 +931,18 @@ function PanelBody({
       />
     );
   }
+  if (tile.panelId === 'lanbrowser') {
+    return (
+      <LanBrowserTileBody
+        tile={tile}
+        layoutId={layoutId}
+        onRemove={onRemove}
+        tileLocked={tileLocked}
+        workspaceLocked={workspaceLocked}
+        onToggleLock={onToggleLock}
+      />
+    );
+  }
   const def = getPanelDef(tile.panelId);
   if (!def) return null;
   const Component = def.component;
@@ -1109,6 +1122,49 @@ function UrlEmbedTileBody({
 
   return (
     <UrlEmbedPanel
+      config={config}
+      setConfig={setConfig}
+      onRemove={onRemove}
+      tileLocked={tileLocked}
+      workspaceLocked={workspaceLocked}
+      onToggleLock={onToggleLock}
+    />
+  );
+}
+
+// LAN Browser shares the URL-embed per-tile config shape (url + title); only the
+// rendered component differs (it frames the server-side LAN proxy).
+function LanBrowserTileBody({
+  tile,
+  layoutId,
+  onRemove,
+  tileLocked,
+  workspaceLocked,
+  onToggleLock,
+}: {
+  tile: WorkspaceTile;
+  layoutId: string;
+  onRemove?: () => void;
+  tileLocked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
+}) {
+  const updateTileInstanceConfig = useLayoutStore(
+    (s) => s.updateTileInstanceConfigInLayout,
+  );
+  const config: UrlEmbedConfig = useMemo(
+    () => parseUrlEmbedConfig(tile.instanceConfig),
+    [tile.instanceConfig],
+  );
+  const setConfig = useCallback(
+    (next: UrlEmbedConfig) => {
+      updateTileInstanceConfig(layoutId, tile.uid, next);
+    },
+    [layoutId, tile.uid, updateTileInstanceConfig],
+  );
+
+  return (
+    <LanBrowserPanel
       config={config}
       setConfig={setConfig}
       onRemove={onRemove}
