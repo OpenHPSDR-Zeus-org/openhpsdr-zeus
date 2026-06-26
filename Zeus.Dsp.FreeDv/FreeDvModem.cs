@@ -86,6 +86,16 @@ public sealed class FreeDvModem : IDisposable
     private int _speechRate = FreeDvResampler.FsLow;
     private int _modemRate = FreeDvResampler.FsLow;
 
+    // RX decoder-input instrumentation (hot-path accumulators, 1 Hz log). The
+    // level into freedv_rx is set by WDSP's FIXED RX AGC under FreeDV; if that
+    // level drives the float->int16 conversion into clipping the OFDM demod sees
+    // a distorted constellation and the decoded speech turns harsh/"nasal" on
+    // strong signals. Logging peak + clamp rate makes that level-dependent
+    // failure observable instead of a guess. See docs/lessons/.
+    private float _rxInPeakAccum;
+    private long _rxClampAccum;
+    private long _rxInstrLastMs;
+
     // Config (control thread writes; hot path applies squelch lazily)
     private bool _squelchEnabled = true;
     private float _snrSquelchThresh = DefaultSquelchThresh(FreeDvSubmode.Mode700D);
@@ -321,6 +331,71 @@ public sealed class FreeDvModem : IDisposable
         }
     }
 
+    /// <summary>
+    /// End-of-over flush: encode the residual sub-frame of mic speech so a
+    /// COMPLETE final OFDM frame exists in the output FIFO, then report how many
+    /// 48 kHz output samples are now pending. The TX tail drain (TxAudioIngest)
+    /// drives <see cref="DrainTo"/> to push those samples to the radio before PTT
+    /// drops, so the receiver gets whole frames instead of a mid-symbol cut — the
+    /// root cause of end-of-over garble. Control-thread only; gates the TX hot
+    /// path out for the encode, then republishes the handle. No-op (returns 0)
+    /// when native is missing or TX isn't open.
+    /// </summary>
+    public int FinishTx()
+    {
+        if (!_nativeAvailable) return 0;
+        lock (_reconfigGate)
+        {
+            IntPtr fd = Volatile.Read(ref _txFreedv);
+            if (fd == IntPtr.Zero) return 0;
+            int nspeech = _txNSpeech, nmodem = _txNNomModem;
+            if (nspeech <= 0 || nmodem <= 0) return 0;
+
+            // Gate the TX hot path out so we own _tx8In / _txOut48 / resamplers.
+            Volatile.Write(ref _txFreedv, IntPtr.Zero);
+            Thread.MemoryBarrier();
+            SpinUntilIdle(ref _txBusy);
+
+            // Pad the partial residual up to one whole speech frame with silence
+            // and encode it, so the final transmitted frame is well-formed. Any
+            // accidental whole-frame backlog is drained the same way.
+            while (_tx8In.Count > 0)
+            {
+                int have = Math.Min(_tx8In.Count, nspeech);
+                _tx8In.Read(_txSpeechFloat.AsSpan(0, have));
+                if (have < nspeech)
+                    Array.Clear(_txSpeechFloat, have, nspeech - have);
+                FloatToShort(_txSpeechFloat, _txSpeechShort, nspeech);
+                FreeDvNativeMethods.freedv_tx(fd, _txModemShort, _txSpeechShort);
+                ShortToFloat(_txModemShort, _txModemFloat, nmodem);
+                int up = _txUp.Process(_txModemFloat.AsSpan(0, nmodem), _txInterp);
+                WriteBounded(_txOut48, _txInterp.AsSpan(0, up));
+            }
+
+            Volatile.Write(ref _txFreedv, fd);
+            return _txOut48.Count;
+        }
+    }
+
+    /// <summary>48 kHz output samples awaiting transmit (the TX tail backlog).</summary>
+    public int TxPendingOutSamples() => _txOut48.Count;
+
+    /// <summary>
+    /// Drain queued modem output into <paramref name="block48k"/> WITHOUT encoding
+    /// any new speech — fills with pending TX output, silence-pads the remainder,
+    /// and returns the count of REAL (non-pad) samples. Used by the end-of-over
+    /// tail drain to clock the completed final frame out to the radio. Must only
+    /// be called while the TX hot path is quiesced (the tail drain owns TX
+    /// exclusively, mirroring the tune-driver handoff), so it touches _txOut48
+    /// directly without the seqlock. Returns 0 when nothing is pending.
+    /// </summary>
+    public int DrainTo(Span<float> block48k)
+    {
+        int filled = _txOut48.Read(block48k);
+        if (filled < block48k.Length) block48k.Slice(filled).Clear();
+        return filled;
+    }
+
     // -------- RX hot path (DSP tick thread; no lock, no alloc) --------
 
     public void ProcessRxInPlace(Span<float> block48k)
@@ -346,7 +421,7 @@ public sealed class FreeDvModem : IDisposable
             while (nin > 0 && _rx8In.Count >= nin)
             {
                 _rx8In.Read(_rxModemFloat.AsSpan(0, nin));
-                FloatToShort(_rxModemFloat, _rxModemShort, nin);
+                FloatToShortRxInstrumented(_rxModemFloat, _rxModemShort, nin);
 
                 int nout = FreeDvNativeMethods.freedv_rx(fd, _rxSpeechShort, _rxModemShort);
                 FreeDvNativeMethods.freedv_get_modem_stats(fd, out int sync, out float snr);
@@ -360,6 +435,22 @@ public sealed class FreeDvModem : IDisposable
                     WriteBounded(_rxOut48, _rxInterp.AsSpan(0, up));
                 }
                 nin = FreeDvNativeMethods.freedv_nin(fd);
+            }
+
+            // 1 Hz decoder-input health log: flags level-dependent clipping into
+            // freedv_rx (the "sometimes nasally on strong signals" symptom). Only
+            // emitted when synced and the input is actually clamping, so a quiet
+            // band stays silent in the log.
+            long nowMs = Environment.TickCount64;
+            if (nowMs - _rxInstrLastMs >= 1000)
+            {
+                _rxInstrLastMs = nowMs;
+                if (_synced && _rxClampAccum > 0)
+                    _log?.LogWarning(
+                        "freedv.rx.in clipping: peak={Peak:F3} clamps/s={Clamps} snr={Snr:F1}dB — FIXED RX AGC may be over-driving the decoder",
+                        _rxInPeakAccum, _rxClampAccum, Volatile.Read(ref _snrDb));
+                _rxInPeakAccum = 0f;
+                _rxClampAccum = 0;
             }
 
             int filled = _rxOut48.Read(block48k);
@@ -423,6 +514,27 @@ public sealed class FreeDvModem : IDisposable
     private static void ShortToFloat(short[] src, float[] dst, int n)
     {
         for (int i = 0; i < n; i++) dst[i] = src[i] * (1f / 32768f);
+    }
+
+    // RX modem-input conversion that also accumulates peak + clamp count for the
+    // 1 Hz decoder-input health log. Same math as FloatToShort; the only added
+    // cost is two comparisons per sample, off any allocation path.
+    private void FloatToShortRxInstrumented(float[] src, short[] dst, int n)
+    {
+        float peak = _rxInPeakAccum;
+        long clamps = 0;
+        for (int i = 0; i < n; i++)
+        {
+            float v = src[i];
+            float a = v < 0 ? -v : v;
+            if (a > peak) peak = a;
+            int s = (int)MathF.Round(v * 32767f);
+            if (s > short.MaxValue) { s = short.MaxValue; clamps++; }
+            else if (s < short.MinValue) { s = short.MinValue; clamps++; }
+            dst[i] = (short)s;
+        }
+        _rxInPeakAccum = peak;
+        _rxClampAccum += clamps;
     }
 
     // -------- reconfig helpers (control thread, under _reconfigGate) --------

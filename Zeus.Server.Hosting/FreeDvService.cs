@@ -231,6 +231,29 @@ public sealed class FreeDvService : IDisposable
         else _modem.FlushTx();
     }
 
+    /// <summary>
+    /// End-of-over flush on the active modem: complete the final frame (and, for
+    /// RADE, append the EOO callsign) so a whole frame can be clocked out on the
+    /// TX tail. Returns the 48 kHz output samples now pending so the tail drain
+    /// knows how long to hold PTT. No-op (0) unless FreeDV is engaged.
+    /// </summary>
+    public int FinishTx()
+    {
+        if (!Active) return 0;
+        return _radeActive ? _rade.FinishTx() : _modem.FinishTx();
+    }
+
+    /// <summary>
+    /// Drain queued modem output (no new encoding) into the block for the TX tail
+    /// drain; returns the real (non-pad) sample count, 0 when empty. Must only be
+    /// called while the TX path is owned by the tail drain.
+    /// </summary>
+    public int DrainTx(Span<float> block48k)
+    {
+        if (!Active) { block48k.Clear(); return 0; }
+        return _radeActive ? _rade.DrainTo(block48k) : _modem.DrainTo(block48k);
+    }
+
     public FreeDvStatusDto Status()
     {
         bool rade = RadeSelected;

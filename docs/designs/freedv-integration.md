@@ -81,6 +81,14 @@ one consumer of that library.
   RX sync) — the modem path compiles and is unit-testable but has not been keyed
   on real hardware.
 
+## Fidelity follow-up (end-of-over tail + speech-band resampling)
+
+End-of-over garble and dull/"nasal" audio were addressed by adding a FreeDV TX
+tail (complete + clock out the final OFDM frame before PTT drops; RADE's EOO
+callsign now rides it), widening the 48k⇄8k resampler passband, and instrumenting
+the RX decoder input for level-dependent clipping. Bench-tuning knobs and the G2
+validation checklist live in [`docs/lessons/freedv-fidelity.md`](../lessons/freedv-fidelity.md).
+
 ## Gotcha worth remembering
 
 `Zeus.Server.Hosting` types live in namespace **`Zeus.Server`**, not
