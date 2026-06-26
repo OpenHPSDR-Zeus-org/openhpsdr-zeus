@@ -165,3 +165,85 @@
 }
 .ft8-ws-status .ok { color: var(--hud-cq); }
 .ft8-ws-status .warn { color: var(--hud-me); }
+
+/* Header: protocol tabs + operator identity. */
+.ft8-ws-tabs { display: flex; gap: 2px; }
+.ft8-ws-tab {
+  background: transparent;
+  border: 1px solid var(--hud-cyan-line);
+  color: var(--hud-text-dim);
+  border-radius: 3px;
+  padding: 2px 12px;
+  cursor: pointer;
+  font: inherit;
+  letter-spacing: 0.06em;
+}
+.ft8-ws-tab.is-active { background: var(--hud-cyan); color: #06121a; font-weight: 700; }
+.ft8-ws-id { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--hud-text-dim); }
+.ft8-ws-id input {
+  background: var(--hud-panel);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-cyan);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font: inherit;
+  text-transform: uppercase;
+}
+/* Visible, filled Exit button (was a near-invisible outline). */
+.ft8-ws-close {
+  background: var(--hud-me);
+  border: 1px solid var(--hud-me);
+  color: #1a0604;
+  border-radius: 3px;
+  padding: 3px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+.ft8-ws-close:hover { filter: brightness(1.12); }
+
+/* Band selector. */
+.ft8-band-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 6px 8px 8px; }
+.ft8-band-btn {
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-text);
+  border-radius: 3px;
+  padding: 4px 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.ft8-band-btn:hover { border-color: var(--hud-cyan-line); }
+.ft8-band-btn.is-active { background: var(--hud-cyan); color: #06121a; font-weight: 700; }
+
+/* QSO / TX-control panel. */
+.ft8-qso { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.ft8-qso--empty { color: var(--hud-text-dim); font-style: italic; }
+.ft8-qso__dx { color: var(--hud-text); }
+.ft8-qso__dx strong { color: var(--hud-cyan); }
+.ft8-qso__ladder { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.ft8-qso__ladder li { display: flex; gap: 8px; align-items: baseline; }
+.ft8-qso__slot { color: var(--hud-text-dim); font-size: 10px; width: 26px; flex: none; }
+.ft8-qso__msg { font-variant-numeric: tabular-nums; color: var(--hud-text); }
+.ft8-qso__bench {
+  color: var(--hud-power, #ffc93a);
+  background: rgba(255, 201, 58, 0.08);
+  border: 1px solid rgba(255, 201, 58, 0.3);
+  border-radius: 3px;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.ft8-qso__actions { display: flex; gap: 6px; }
+.ft8-qso__btn {
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-text);
+  border-radius: 3px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+.ft8-qso__btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.ft8-qso__btn:not(:disabled):hover { border-color: var(--hud-cyan-line); }

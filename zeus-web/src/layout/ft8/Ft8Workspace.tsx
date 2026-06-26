@@ -1,27 +1,37 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// Ft8Workspace — the fixed full-screen FT8 command-center (KB2UKA design,
-// Option A dark-HUD). NOT the moveable panel grid: a purpose-built locked
-// layout that comes up when FT8 mode is engaged. Three columns under a header,
-// status bar across the bottom, matching docs/designs/ft8-ui.md.
+// Ft8Workspace — the full-screen FT8/FT4 command center (KB2UKA design,
+// Option A dark-HUD). A purpose-built locked layout that comes up when a digital
+// mode is engaged. Three columns under a header, status bar across the bottom.
 //
-// This is the SHELL: the decode table is live (real ft8-store data); the
-// waterfall, band map, activity log, and TX controls are labelled placeholders
-// to be filled in (each reuses an existing Zeus seam — panadapter WebGL,
-// LogService, VFO/CAT). Header tabs and the own-VFO readout are scaffolded.
+// Live: decode table, VFO readout, band selector, protocol tabs, operator
+// identity, and click-to-call QSO staging. The QSO panel previews the full
+// auto-sequence; actual on-air keying is BENCH-GATED and not wired here (see the
+// banner in the TX region). The waterfall/band-map reuse existing Zeus seams and
+// are tracked as follow-ups.
 
-import { useEffect, useState } from 'react';
-import { useFt8Store } from '../../state/ft8-store';
+import { useEffect, useMemo, useState } from 'react';
+import { useFt8Store, type Ft8Row } from '../../state/ft8-store';
+import { useConnectionStore } from '../../state/connection-store';
+import { useOperatorStore } from '../../state/operator-store';
+import { DIGITAL_BANDS } from '../../dsp/digital-segments';
+import { parseFt8Message, type Ft8Message } from '../../dsp/ft8-message';
+import {
+  answerCq,
+  currentOutgoing,
+  genTx2,
+  genTx3,
+  genTx4,
+  genTx5,
+  slotOf,
+  type QsoState,
+} from '../../dsp/ft8-sequencer';
 import { Ft8DecodeTable } from './Ft8DecodeTable';
 import '../../styles/ft8-theme.css';
 
 export interface Ft8WorkspaceProps {
   /** Called when the operator leaves FT8 (e.g. closes the workspace). */
   onClose?: () => void;
-  /** Operator callsign for the directed-at-me decode highlight. */
-  myCall?: string;
-  /** Dial frequency to show in the workspace VFO (Hz). */
-  dialHz?: number;
 }
 
 function useUtcClock(): string {
@@ -39,90 +49,238 @@ function fmtMHz(hz?: number): string {
   return (hz / 1e6).toFixed(6);
 }
 
-export function Ft8Workspace({ onClose, myCall, dialHz }: Ft8WorkspaceProps) {
+export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
   const clock = useUtcClock();
-  const nativeAvailable = useFt8Store((s) => s.nativeAvailable);
   const protocol = useFt8Store((s) => s.protocol);
+  const band = useFt8Store((s) => s.band);
+  const nativeAvailable = useFt8Store((s) => s.nativeAvailable);
+  const enabled = useFt8Store((s) => s.enabled);
   const decodeCount = useFt8Store((s) => s.rows.length);
+  const error = useFt8Store((s) => s.error);
+  const switchProtocol = useFt8Store((s) => s.switchProtocol);
+  const qsyBand = useFt8Store((s) => s.qsyBand);
+
+  const vfoHz = useConnectionStore((s) => s.vfoHz);
+  const myCall = useOperatorStore((s) => s.call);
+  const myGrid = useOperatorStore((s) => s.grid);
+  const setCall = useOperatorStore((s) => s.setCall);
+  const setGrid = useOperatorStore((s) => s.setGrid);
+
+  const [staged, setStaged] = useState<QsoState | null>(null);
+
+  // Esc closes the workspace.
+  useEffect(() => {
+    if (!onClose) return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
+
+  // Click a decode → stage a QSO answering that station.
+  const onRowClick = (row: Ft8Row) => {
+    if (!myCall) return; // need an operator call to generate Tx messages
+    const parsed = parseFt8Message(row.text, myCall);
+    if (!parsed.deCall) return;
+    // The slot the heard station transmitted in (FT8 15 s / FT4 7.5 s) — we
+    // answer in the opposite slot.
+    const secs = new Date(row.slotStartUnixMs).getUTCSeconds();
+    const senderSlot = slotOf(secs, protocol);
+    // Treat any clicked station as a CQ to answer (start with our grid reply).
+    const asCq: Ft8Message = { ...parsed, kind: 'cq' };
+    const next = answerCq({ myCall, myGrid4: myGrid || null, mode: protocol }, asCq, senderSlot);
+    if (next) setStaged(next);
+  };
+
+  const bandsForProtocol = useMemo(
+    () => DIGITAL_BANDS.filter((b) => (protocol === 'FT4' ? b.ft4Hz != null : b.ft8Hz != null)),
+    [protocol],
+  );
 
   return (
     <div className="ft8-workspace" role="region" aria-label="FT8 workspace">
       <header className="ft8-ws-header">
         <span className="ft8-ws-title">{protocol} DIGITAL MODE</span>
+        <div className="ft8-ws-tabs" role="tablist" aria-label="Digital protocol">
+          {(['FT8', 'FT4'] as const).map((p) => (
+            <button
+              key={p}
+              type="button"
+              role="tab"
+              aria-selected={protocol === p}
+              className={`ft8-ws-tab${protocol === p ? ' is-active' : ''}`}
+              onClick={() => switchProtocol(p)}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+        <label className="ft8-ws-id">
+          <span>Call</span>
+          <input
+            value={myCall}
+            onChange={(e) => setCall(e.target.value)}
+            placeholder="MYCALL"
+            spellCheck={false}
+            size={8}
+          />
+        </label>
+        <label className="ft8-ws-id">
+          <span>Grid</span>
+          <input
+            value={myGrid}
+            onChange={(e) => setGrid(e.target.value)}
+            placeholder="FN42"
+            spellCheck={false}
+            size={6}
+          />
+        </label>
         <span className="ft8-ws-clock">{clock}</span>
         {onClose && (
           <button type="button" className="ft8-ws-close" onClick={onClose}>
-            Exit
+            Exit · Esc
           </button>
         )}
       </header>
 
       <div className="ft8-ws-body">
-        {/* Left — radio / VFO / band activity / waterfall */}
+        {/* Left — radio / VFO / band */}
         <div className="ft8-ws-col">
           <section className="ft8-region">
             <div className="ft8-region__head">Radio</div>
             <div className="ft8-vfo">
-              {fmtMHz(dialHz)} <small>MHz · USB</small>
+              {fmtMHz(vfoHz)} <small>MHz · USB/DIGU</small>
+            </div>
+            <div className="ft8-band-grid">
+              {bandsForProtocol.map((b) => (
+                <button
+                  key={b.name}
+                  type="button"
+                  className={`ft8-band-btn${band === b.name ? ' is-active' : ''}`}
+                  onClick={() => qsyBand(b.name)}
+                  title={`QSY to ${b.name} ${protocol} dial`}
+                >
+                  {b.name}
+                </button>
+              ))}
             </div>
           </section>
           <section className="ft8-region">
             <div className="ft8-region__head">Band activity</div>
-            <div className="ft8-placeholder">spectrum — reuses panadapter WebGL</div>
+            <div className="ft8-placeholder">spectrum — reuses panadapter WebGL (follow-up)</div>
           </section>
           <section className="ft8-region ft8-region--grow">
             <div className="ft8-region__head">Receive · waterfall</div>
-            <div className="ft8-placeholder">waterfall + decode markers</div>
+            <div className="ft8-placeholder">waterfall + decode markers (follow-up)</div>
           </section>
         </div>
 
         {/* Center — decode table (live) + activity log */}
         <div className="ft8-ws-col ft8-ws-col--center">
           <section className="ft8-region ft8-region--decodes ft8-region--grow">
-            <div className="ft8-region__head">Decoded messages</div>
+            <div className="ft8-region__head">
+              Decoded messages
+              {myCall ? (
+                <small> · click a station to call</small>
+              ) : (
+                <small> · set your Call to enable calling</small>
+              )}
+            </div>
             <div className="ft8-region__body">
-              <Ft8DecodeTable myCall={myCall} />
+              <Ft8DecodeTable myCall={myCall || undefined} onRowClick={onRowClick} />
             </div>
           </section>
           <section className="ft8-region">
             <div className="ft8-region__head">Activity log</div>
-            <div className="ft8-placeholder">QSO log — feeds existing LogService (ADIF)</div>
+            <div className="ft8-placeholder">QSO log — feeds existing LogService (ADIF, follow-up)</div>
           </section>
         </div>
 
-        {/* Right — band map / TX control / stats */}
+        {/* Right — QSO / TX control */}
         <div className="ft8-ws-col">
           <section className="ft8-region ft8-region--grow">
+            <div className="ft8-region__head">TX control · QSO</div>
+            <div className="ft8-region__body">
+              <QsoPanel staged={staged} onClear={() => setStaged(null)} />
+            </div>
+          </section>
+          <section className="ft8-region">
             <div className="ft8-region__head">Band map</div>
-            <div className="ft8-placeholder">great-circle map from decoded grids</div>
-          </section>
-          <section className="ft8-region">
-            <div className="ft8-region__head">TX control</div>
-            <div className="ft8-placeholder">arm · CQ · even/odd · power (bench-gated)</div>
-          </section>
-          <section className="ft8-region">
-            <div className="ft8-region__head">Stats</div>
-            <div className="ft8-placeholder">QSOs · DXCC · grids · best DX</div>
+            <div className="ft8-placeholder">great-circle map from decoded grids (follow-up)</div>
           </section>
         </div>
       </div>
 
       <footer className="ft8-ws-status">
         <span className={nativeAvailable ? 'ok' : 'warn'}>
-          {nativeAvailable ? 'DECODER READY' : 'DECODER UNAVAILABLE'}
+          {nativeAvailable ? (enabled ? 'DECODING' : 'DECODER READY') : 'DECODER UNAVAILABLE'}
         </span>
         <span>{decodeCount} decodes</span>
-        <span style={{ marginLeft: 'auto' }}>FT8 / FT4 native — no audio routing</span>
+        {error && <span className="warn">{error}</span>}
+        <span style={{ marginLeft: 'auto' }}>
+          {protocol} native · {band}
+        </span>
       </footer>
+    </div>
+  );
+}
+
+/** Staged-QSO preview: the message ladder we WOULD transmit. Keying is
+ *  bench-gated — Enable Tx is intentionally inert until verified on the G2. */
+function QsoPanel({ staged, onClear }: { staged: QsoState | null; onClear: () => void }) {
+  if (!staged || !staged.dxCall) {
+    return (
+      <div className="ft8-qso ft8-qso--empty">
+        Click a decoded station to stage a QSO. The auto-sequence preview appears here.
+      </div>
+    );
+  }
+  const his = staged.dxCall;
+  const mine = staged.myCall;
+  const ladder: { label: string; msg: string }[] = [
+    { label: 'Tx1', msg: currentOutgoing(staged) ?? '' },
+    { label: 'Tx2', msg: genTx2(his, mine, -10) },
+    { label: 'Tx3', msg: genTx3(his, mine, -10) },
+    { label: 'Tx4', msg: genTx4(his, mine, staged.txAck) },
+    { label: 'Tx5', msg: genTx5(his, mine) },
+  ];
+  return (
+    <div className="ft8-qso">
+      <div className="ft8-qso__dx">
+        Calling <strong>{his}</strong>
+        {staged.dxGrid4 ? ` · ${staged.dxGrid4}` : ''} · slot {staged.txSlot}
+      </div>
+      <ol className="ft8-qso__ladder">
+        {ladder.map((l) => (
+          <li key={l.label}>
+            <span className="ft8-qso__slot">{l.label}</span>
+            <span className="ft8-qso__msg">{l.msg}</span>
+          </li>
+        ))}
+      </ol>
+      <div className="ft8-qso__bench" role="note">
+        ⚠ TX keying is bench-gated — Enable Tx is disabled until verified on the G2. This panel
+        previews the sequence only.
+      </div>
+      <div className="ft8-qso__actions">
+        <button type="button" className="ft8-qso__btn" disabled title="Bench-gated">
+          Enable Tx
+        </button>
+        <button type="button" className="ft8-qso__btn" onClick={onClear}>
+          Clear
+        </button>
+      </div>
     </div>
   );
 }
 
 /**
  * Self-contained mount point: subscribes to ft8-store `open` and renders the
- * workspace overlay or nothing. Drop a single &lt;Ft8WorkspaceMount/&gt; into
- * the app shell — it owns its own visibility, so the host needs no extra hooks
- * or conditional render logic. The overlay is position:fixed and covers the app
+ * workspace overlay or nothing. The overlay is position:fixed and covers the app
  * when open.
  */
 export function Ft8WorkspaceMount() {

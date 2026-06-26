@@ -45,6 +45,7 @@
 
 import { useCallback } from 'react';
 import { type RxMode } from '../api/client';
+import { useFt8Store } from '../state/ft8-store';
 import { useConnectionStore } from '../state/connection-store';
 import {
   gangedReceiverAction,
@@ -116,6 +117,22 @@ export function ModeBandwidth() {
               title={`${m.label} — drag onto a toolbar favorite slot to pin`}
             >
               {m.label}
+            </button>
+          ))}
+        </div>
+        {/* Digital modes open the dedicated FT8/FT4 workspace (which auto-sets
+            DIGU + the FT8 bandwidth + the band dial). Separate from the WDSP
+            demod modes above because they are Zeus-level modes, like FreeDV. */}
+        <div className="btn-row wrap" style={{ width: '100%', marginTop: 4 }}>
+          {(['FT8', 'FT4'] as const).map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => useFt8Store.getState().openWorkspace({ protocol: p })}
+              className="btn sm"
+              title={`Enter ${p} — opens the digital workspace and configures the radio`}
+            >
+              {p}
             </button>
           ))}
         </div>
