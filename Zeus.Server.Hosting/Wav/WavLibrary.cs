@@ -33,18 +33,34 @@ public sealed class WavLibrary
     // can be inferred from the name and the legacy migration knows what is ours.
     public const string FilePrefix = "zeus-";
 
-    private readonly string _root;
+    private string _root;
     private readonly ILogger _log;
 
-    public WavLibrary(string root, ILogger? log = null)
+    /// <param name="migrate">When true (the default), run the one-time
+    /// loose-Downloads migration. This MUST be false for an operator-chosen
+    /// custom root: that root's parent is an arbitrary user directory and we
+    /// must never scan it for, or move, files.</param>
+    public WavLibrary(string root, ILogger? log = null, bool migrate = true)
     {
         _root = root;
         _log = log ?? NullLogger.Instance;
         Directory.CreateDirectory(_root);
-        MigrateLooseDownloads();
+        if (migrate) MigrateLooseDownloads();
     }
 
     public string Root => _root;
+
+    /// <summary>Point the library at a different root, creating it if needed.
+    /// NEVER migrates — relocating to a user-chosen directory must not touch its
+    /// parent. All path helpers use the new root immediately afterward.</summary>
+    public void SetRoot(string newRoot)
+    {
+        if (string.IsNullOrWhiteSpace(newRoot))
+            throw new ArgumentException("root is required", nameof(newRoot));
+        Directory.CreateDirectory(newRoot);
+        _root = newRoot;
+        _log.LogInformation("wav.root set {Root}", newRoot);
+    }
 
     // Recordings save under the OS Downloads folder by default so they land
     // where the operator expects. UserProfile/Downloads is the default on
@@ -223,8 +239,10 @@ public sealed class WavLibrary
     }
 
     /// <summary>Delete a folder under the root. Recursively deletes only if the
-    /// folder (and its subfolders) contain solely <c>.wav</c> files; refuses
-    /// otherwise. Returns the deleted root-relative path.</summary>
+    /// folder (and its subfolders) contain solely <c>.wav</c> files and
+    /// ignorable OS sidecars (<c>.DS_Store</c>, <c>Thumbs.db</c>, dot-files);
+    /// refuses on any genuine user content. Returns the deleted root-relative
+    /// path.</summary>
     public string DeleteFolder(string relPath)
     {
         string dir = ResolveRel(relPath);
@@ -234,10 +252,12 @@ public sealed class WavLibrary
 
         foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
         {
-            if (!file.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("folder contains non-recording files; refusing to delete");
+            if (file.EndsWith(".wav", StringComparison.OrdinalIgnoreCase)) continue;
+            if (IsIgnorableSidecar(Path.GetFileName(file))) continue; // .DS_Store / Thumbs.db etc.
+            throw new InvalidOperationException("folder contains non-recording files; refusing to delete");
         }
 
+        // recursive: true sweeps the recordings AND any ignorable sidecars.
         Directory.Delete(dir, recursive: true);
         _log.LogInformation("wav.folder.delete {Dir}", dir);
         return RelOf(dir)!.Replace('\\', '/');
@@ -284,8 +304,86 @@ public sealed class WavLibrary
         return rel.Replace('\\', '/');
     }
 
+    // ---- Server-side directory browser -------------------------------------
+
+    /// <summary>List the immediate subdirectories of <paramref name="path"/> so a
+    /// remote web client can pick a folder on the machine the backend runs on.
+    /// This is a read-only filesystem browse, deliberately NOT confined to the
+    /// recordings root — the whole point is choosing a new root anywhere the
+    /// operator can write.
+    ///
+    /// <para>An empty/whitespace <paramref name="path"/> starts at the user's
+    /// home directory (falling back to the working directory). The path is
+    /// normalised with <see cref="Path.GetFullPath(string)"/>; a path that does
+    /// not exist or is not a directory throws
+    /// <see cref="DirectoryNotFoundException"/>. Entries that can't be read are
+    /// skipped (each is wrapped) rather than failing the whole listing. The
+    /// result is sorted by name, ordinal-ignore-case. <c>Parent</c> is null when
+    /// the resolved path is a filesystem/drive root.</para></summary>
+    public static WavDirListing BrowseDirectories(string? path)
+    {
+        string start;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            start = string.IsNullOrEmpty(home) ? Environment.CurrentDirectory : home;
+        }
+        else
+        {
+            start = path;
+        }
+
+        string full = Path.GetFullPath(start);
+        if (!Directory.Exists(full))
+            throw new DirectoryNotFoundException($"not a directory: {full}");
+
+        var dirs = new List<WavDirEntry>();
+        foreach (var dir in Directory.EnumerateDirectories(full))
+        {
+            try
+            {
+                dirs.Add(new WavDirEntry(Path.GetFileName(dir), dir));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Skip entries we can't read rather than dropping the listing.
+            }
+        }
+        dirs.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+
+        string? parent = Directory.GetParent(full)?.FullName;
+
+        return new WavDirListing(
+            Path: full,
+            Parent: parent,
+            Separator: Path.DirectorySeparatorChar.ToString(),
+            Dirs: dirs);
+    }
+
+    // A FIXED, portable invalid-filename set applied on every platform. Cannot
+    // use Path.GetInvalidFileNameChars(): on Unix that is only {'/','\0'}, so a
+    // backslash or a Windows-reserved char ( : * ? " < > | ) would survive into
+    // an on-disk name. The wire path is always forward-slash and root-relative,
+    // so any such char desyncs the on-disk name from RelOf's path and the
+    // recording becomes visible-but-unmanageable (Play/Delete/Move throw
+    // FileNotFoundException). Strip the same set everywhere, plus control chars.
+    private static readonly char[] PortableInvalidFileNameChars =
+        { '\\', '/', ':', '*', '?', '"', '<', '>', '|' };
+
+    // Windows reserved DEVICE names. A file whose stem (case-insensitive,
+    // extension ignored) is one of these is unopenable on Windows even though it
+    // is perfectly legal on macOS/Linux. Suffix an underscore on EVERY platform
+    // so a clip named on a Mac/Linux box stays portable to a Windows operator.
+    private static readonly HashSet<string> WindowsReservedNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON", "PRN", "AUX", "NUL",
+        "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    };
+
     // Strip path separators and illegal filename characters, drop any trailing
-    // .wav the caller included, and reject an empty result.
+    // .wav the caller included, and reject an empty result. Portable across all
+    // platforms Zeus runs on (see PortableInvalidFileNameChars).
     public static string SanitizeFileStem(string name)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -293,12 +391,44 @@ public sealed class WavLibrary
         string stem = name.Trim();
         if (stem.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
             stem = stem[..^4];
-        stem = Path.GetFileName(stem); // strips any directory separators
-        foreach (char c in Path.GetInvalidFileNameChars())
-            stem = stem.Replace(c.ToString(), "");
-        stem = stem.Trim().Trim('.');
+        stem = Path.GetFileName(stem); // strips OS-native directory separators
+
+        var sb = new System.Text.StringBuilder(stem.Length);
+        foreach (char c in stem)
+        {
+            if (c < 0x20) continue;                                   // control chars 0x00-0x1F
+            if (Array.IndexOf(PortableInvalidFileNameChars, c) >= 0) continue;
+            sb.Append(c);
+        }
+        stem = sb.ToString().Trim().Trim('.');
         if (stem.Length == 0)
             throw new ArgumentException("name has no usable characters", nameof(name));
+
+        // A Windows reserved device name (CON, NUL, COM1, …) is unopenable on
+        // Windows; disambiguate with a trailing underscore on all platforms.
+        if (WindowsReservedNames.Contains(stem))
+            stem += "_";
         return stem;
     }
+
+    // OS-generated sidecar / metadata files that must never block a folder
+    // delete: macOS Finder (.DS_Store), Windows Explorer (Thumbs.db /
+    // desktop.ini), and any dot-file. These get deleted alongside the .wavs.
+    private static bool IsIgnorableSidecar(string fileName)
+    {
+        if (string.IsNullOrEmpty(fileName)) return false;
+        if (fileName.StartsWith('.')) return true; // .DS_Store and any dot-file
+        return fileName.Equals("Thumbs.db", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase);
+    }
 }
+
+/// <summary>One subdirectory in a <see cref="WavLibrary.BrowseDirectories"/>
+/// listing: its display name and its absolute path.</summary>
+public sealed record WavDirEntry(string Name, string Path);
+
+/// <summary>Result of <see cref="WavLibrary.BrowseDirectories"/>: the resolved
+/// absolute <c>Path</c>, its <c>Parent</c> (null at a filesystem root), the OS
+/// directory <c>Separator</c> for display, and the immediate subdirectories.</summary>
+public sealed record WavDirListing(
+    string Path, string? Parent, string Separator, IReadOnlyList<WavDirEntry> Dirs);

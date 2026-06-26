@@ -57,10 +57,14 @@
   min-width: 190px;
   flex: 1 1 220px;
   min-height: 120px;
-  background: var(--bg-inset);
+  background: linear-gradient(180deg, var(--bg-1) 0%, var(--bg-inset) 14%);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   overflow: hidden;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.3),
+    0 2px 8px rgba(0, 0, 0, 0.4);
 }
 
 .zdr__libhead {
@@ -70,7 +74,10 @@
   gap: 6px;
   padding: 5px 6px;
   border-bottom: 1px solid var(--line);
-  background: var(--bg-1);
+  background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 1px 0 rgba(0, 0, 0, 0.4);
 }
 
 .zdr__crumbs {
@@ -104,8 +111,56 @@
 
 .zdr__libactions {
   display: flex;
+  align-items: center;
   gap: 3px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* Save-location button — folder glyph + abbreviated path. */
+.zdr__dirbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 132px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  background: linear-gradient(180deg, var(--bg-3) 0%, var(--bg-2) 100%);
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.4);
+}
+.zdr__dirbtn:hover {
+  color: var(--fg-0);
+  border-color: var(--accent-line);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 8px var(--accent-soft);
+}
+.zdr__dirbtn:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 1px;
+}
+.zdr__dirbtn-glyph {
   flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--amber);
+  filter: drop-shadow(0 0 3px var(--amber-soft));
+}
+.zdr__dirbtn-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .zdr__filelist {
@@ -276,10 +331,13 @@
 /* ---- Level meter ---- */
 
 .zdr__meter {
-  background: var(--bg-inset);
+  background: linear-gradient(180deg, var(--bg-1) 0%, var(--bg-inset) 100%);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   padding: 7px 9px 8px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 2px 8px rgba(0, 0, 0, 0.4);
 }
 .zdr__meterhead {
   display: flex;
@@ -317,16 +375,23 @@
   width: 100%;
   height: 40px;
   border-radius: var(--r-sm);
+  background: var(--bg-meter);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.6),
+    inset 0 2px 6px rgba(0, 0, 0, 0.7);
 }
 
 .zdr__lcd {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
-  background: var(--bg-meter);
+  background: linear-gradient(180deg, #000 0%, var(--bg-meter) 60%);
   border: 1px solid var(--line-strong);
   border-radius: var(--r-sm);
-  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.8);
+  box-shadow:
+    inset 0 1px 4px rgba(0, 0, 0, 0.9),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.5),
+    0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .zdr__lcd small {
   font-size: 0.62em;
@@ -339,14 +404,19 @@
   font-size: 14px;
   padding: 2px 7px;
   color: var(--amber);
+  text-shadow: 0 0 6px var(--amber-soft);
 }
 .zdr__lcd--hold {
   color: var(--fg-2);
+  text-shadow: none;
 }
 .zdr__lcd--big {
   font-size: 22px;
   padding: 3px 10px;
   color: var(--amber);
+  text-shadow:
+    0 0 8px var(--amber-soft),
+    0 0 2px var(--amber-soft);
 }
 
 /* ---- Transport ---- */
@@ -357,9 +427,12 @@
   gap: 10px;
   flex-wrap: wrap;
   padding: 8px 10px;
-  background: var(--bg-1);
+  background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 2px 8px rgba(0, 0, 0, 0.4);
 }
 
 .zdr__xport {
@@ -377,19 +450,32 @@
   width: 46px;
   height: 46px;
   border-radius: 50%;
-  background: radial-gradient(circle at 38% 32%, var(--bg-3), var(--bg-0) 78%);
+  background:
+    radial-gradient(circle at 38% 30%, rgba(255, 255, 255, 0.08), transparent 46%),
+    radial-gradient(circle at 50% 120%, var(--bg-3), var(--bg-0) 72%);
   border: 1px solid var(--line-strong);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 2px 5px rgba(0, 0, 0, 0.5);
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -2px 5px rgba(0, 0, 0, 0.6),
+    0 3px 7px rgba(0, 0, 0, 0.55);
   color: var(--fg-2);
-  transition: transform var(--dur-fast) var(--ease-out);
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 .zdr__xport:hover:not(:disabled) .zdr__xport-glyph {
   transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -2px 5px rgba(0, 0, 0, 0.6),
+    0 5px 10px rgba(0, 0, 0, 0.55);
 }
 .zdr__xport:active:not(:disabled) .zdr__xport-glyph {
   transform: translateY(1px);
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.7),
+    0 1px 3px rgba(0, 0, 0, 0.5);
 }
 .zdr__xport:disabled {
   opacity: 0.4;
@@ -415,19 +501,30 @@
   width: 18px;
   height: 18px;
   border-radius: 50%;
-}
-.zdr__xport--rec .zdr__glyph-rec {
-  background: var(--tx);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4) inset;
+  background: radial-gradient(circle at 38% 32%, #ff8a93, var(--tx) 70%);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.4) inset,
+    0 0 6px var(--tx-soft);
 }
 .zdr__xport--rec.is-on .zdr__xport-glyph {
   border-color: var(--tx);
+  background:
+    radial-gradient(circle at 38% 30%, rgba(255, 255, 255, 0.1), transparent 46%),
+    radial-gradient(circle at 50% 120%, var(--bg-2), var(--bg-0) 72%);
   box-shadow:
-    0 0 14px var(--tx-soft),
-    inset 0 0 8px var(--tx-soft);
+    0 0 16px var(--tx-soft),
+    0 0 4px var(--tx-soft),
+    inset 0 0 10px var(--tx-soft);
+}
+.zdr__xport--rec.is-on .zdr__glyph-rec {
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.4) inset,
+    0 0 12px var(--tx),
+    0 0 5px var(--tx);
 }
 .zdr__xport--rec.is-on .zdr__xport-text {
   color: var(--tx);
+  text-shadow: 0 0 6px var(--tx-soft);
 }
 
 /* PLAY — blue triangle */
@@ -438,31 +535,67 @@
   border-width: 9px 0 9px 15px;
   border-color: transparent transparent transparent var(--accent-bright);
   margin-left: 3px;
+  filter: drop-shadow(0 0 3px var(--accent-soft));
 }
 .zdr__xport--play.is-on .zdr__xport-glyph {
-  border-color: var(--accent-bright);
+  border-color: var(--accent-line);
+  background:
+    radial-gradient(circle at 38% 30%, rgba(255, 255, 255, 0.1), transparent 46%),
+    radial-gradient(circle at 50% 120%, var(--bg-2), var(--bg-0) 72%);
   box-shadow:
-    0 0 14px var(--accent-soft),
-    inset 0 0 8px var(--accent-soft);
+    0 0 16px var(--accent-soft),
+    0 0 4px var(--accent-soft),
+    inset 0 0 10px var(--accent-soft);
+}
+.zdr__xport--play.is-on .zdr__glyph-play {
+  filter: drop-shadow(0 0 6px var(--accent-bright));
 }
 .zdr__xport--play.is-on .zdr__xport-text {
   color: var(--accent-bright);
+  text-shadow: 0 0 6px var(--accent-soft);
 }
 
 /* TRANSMIT — green antenna */
 .zdr__xport--air .zdr__xport-glyph {
   color: var(--green-soft);
 }
+.zdr__xport--air .zdr__glyph-air {
+  filter: drop-shadow(0 0 3px var(--ok-soft));
+}
 .zdr__xport--air.is-on .zdr__xport-glyph {
   color: #fff;
-  background: radial-gradient(circle at 38% 32%, var(--green-soft), var(--bg-0) 92%);
+  background:
+    radial-gradient(circle at 38% 30%, rgba(255, 255, 255, 0.18), transparent 50%),
+    radial-gradient(circle at 50% 120%, var(--green-soft), var(--bg-0) 86%);
   border-color: var(--green-soft);
   box-shadow:
-    0 0 16px var(--ok-soft),
-    inset 0 0 10px var(--ok-soft);
+    0 0 18px var(--ok-soft),
+    0 0 6px var(--ok-soft),
+    inset 0 0 12px var(--ok-soft);
+  animation: zdr-air-pulse 1.5s var(--ease-out) infinite;
+}
+.zdr__xport--air.is-on .zdr__glyph-air {
+  filter: drop-shadow(0 0 5px rgba(255, 255, 255, 0.6));
 }
 .zdr__xport--air.is-on .zdr__xport-text {
   color: var(--ok);
+  text-shadow: 0 0 6px var(--ok-soft);
+}
+
+@keyframes zdr-air-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 14px var(--ok-soft),
+      0 0 5px var(--ok-soft),
+      inset 0 0 10px var(--ok-soft);
+  }
+  50% {
+    box-shadow:
+      0 0 26px var(--ok),
+      0 0 10px var(--ok-soft),
+      inset 0 0 14px var(--ok-soft);
+  }
 }
 
 /* STOP — square */
@@ -470,7 +603,13 @@
   width: 15px;
   height: 15px;
   border-radius: 2px;
-  background: var(--fg-1);
+  background: linear-gradient(180deg, var(--fg-0), var(--fg-1));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 0 4px rgba(0, 0, 0, 0.5);
+}
+.zdr__xport--stop:hover:not(:disabled) .zdr__glyph-stop {
+  background: linear-gradient(180deg, #fff, var(--fg-0));
 }
 
 .zdr__xport-side {
@@ -487,6 +626,9 @@
   padding: 3px 10px;
   color: var(--amber);
   letter-spacing: 0.04em;
+  text-shadow:
+    0 0 7px var(--amber-soft),
+    0 0 2px var(--amber-soft);
 }
 
 .zdr__srctoggle {
@@ -506,9 +648,12 @@
   border-radius: var(--r-sm);
 }
 .zdr__srcbtn.is-on {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: linear-gradient(180deg, var(--accent-bright), var(--accent));
+  border-color: var(--accent-line);
   color: #fff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 0 8px var(--accent-soft);
 }
 .zdr__srcbtn:disabled {
   opacity: 0.5;
@@ -525,6 +670,10 @@
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   overflow: hidden;
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.6),
+    inset 0 2px 8px rgba(0, 0, 0, 0.7),
+    0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .zdr__wavecanvas {
   display: block;
@@ -545,11 +694,14 @@
 /* ---- File info ---- */
 
 .zdr__info {
-  background: var(--bg-1);
+  background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   padding: 7px 9px;
   flex: 0 0 auto;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 2px 8px rgba(0, 0, 0, 0.4);
 }
 .zdr__info-title {
   font-weight: 700;
@@ -612,10 +764,13 @@
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 150px;
-  background: var(--bg-inset);
+  background: linear-gradient(180deg, var(--bg-1) 0%, var(--bg-inset) 100%);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   padding: 7px 9px 8px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 2px 8px rgba(0, 0, 0, 0.4);
 }
 .zdr__vmeterbody {
   display: flex;
@@ -629,6 +784,11 @@
   width: 100%;
   flex: 1 1 auto;
   min-height: 80px;
+  background: var(--bg-meter);
+  border-radius: var(--r-sm);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.6),
+    inset 0 2px 6px rgba(0, 0, 0, 0.7);
 }
 .zdr__vmeterscale {
   display: flex;
@@ -728,11 +888,255 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.zdr__notemsg {
+  margin-left: auto;
+  color: var(--ok);
+  font-size: 11px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 0 6px var(--ok-soft);
+}
+
+/* ============================ Directory picker ========================= */
+
+.zdr-dirpick-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(1.5px);
+}
+
+.zdr-dirpick {
+  display: flex;
+  flex-direction: column;
+  width: min(420px, 100%);
+  max-height: min(520px, 100%);
+  color: var(--fg-1);
+  background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 12px 40px rgba(0, 0, 0, 0.6);
+  outline: none;
+}
+
+.zdr-dirpick__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, var(--bg-3) 0%, var(--bg-2) 100%);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+}
+.zdr-dirpick__title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--fg-2);
+}
+.zdr-dirpick__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-size: 12px;
+  line-height: 1;
+}
+.zdr-dirpick__close:hover {
+  color: var(--fg-0);
+  background: var(--bg-3);
+}
+
+.zdr-dirpick__pathrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+}
+.zdr-dirpick__up {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  background: linear-gradient(180deg, var(--bg-3), var(--bg-2));
+  color: var(--fg-1);
+  font-size: 13px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.zdr-dirpick__up:hover:not(:disabled) {
+  color: var(--fg-0);
+  border-color: var(--accent-line);
+}
+.zdr-dirpick__up:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.zdr-dirpick__path {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--amber);
+  background: linear-gradient(180deg, #000 0%, var(--bg-meter) 60%);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.9);
+  text-shadow: 0 0 6px var(--amber-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zdr-dirpick__list {
+  flex: 1 1 auto;
+  min-height: 120px;
+  overflow-y: auto;
+  margin: 0 10px;
+  padding: 4px;
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.zdr-dirpick__hint {
+  padding: 14px 8px;
+  text-align: center;
+  color: var(--fg-3);
+  font-size: 11px;
+}
+.zdr-dirpick__dir {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 7px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-1);
+  text-align: left;
+  font-size: 12px;
+}
+.zdr-dirpick__dir:hover:not(:disabled) {
+  background: var(--bg-3);
+  border-color: var(--line-strong);
+  color: var(--fg-0);
+}
+.zdr-dirpick__dir:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: -2px;
+}
+.zdr-dirpick__dir:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.zdr-dirpick__diricon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--amber);
+}
+.zdr-dirpick__dirname {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zdr-dirpick__chev {
+  flex: 0 0 auto;
+  color: var(--fg-3);
+  font-size: 14px;
+}
+
+.zdr-dirpick__error {
+  margin: 8px 10px 0;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--tx);
+  background: var(--tx-soft);
+  color: var(--tx);
+  font-size: 11px;
+}
+
+.zdr-dirpick__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+}
+.zdr-dirpick__spacer {
+  flex: 1 1 auto;
+}
+.zdr-dirpick__btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  background: linear-gradient(180deg, var(--bg-3), var(--bg-2));
+  color: var(--fg-1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.zdr-dirpick__btn:hover:not(:disabled) {
+  color: var(--fg-0);
+  border-color: var(--accent-line);
+}
+.zdr-dirpick__btn:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 1px;
+}
+.zdr-dirpick__btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.zdr-dirpick__btn--reset {
+  color: var(--fg-2);
+}
+.zdr-dirpick__btn--use {
+  background: linear-gradient(180deg, var(--accent-bright), var(--accent));
+  border-color: var(--accent-line);
+  color: #fff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 0 10px var(--accent-soft);
+}
+.zdr-dirpick__btn--use:hover:not(:disabled) {
+  color: #fff;
+}
 
 /* ============================ Reduced motion ============================ */
 
 @media (prefers-reduced-motion: reduce) {
   .zdr__xport-glyph {
     transition: none;
+  }
+  .zdr__xport--air.is-on .zdr__xport-glyph {
+    animation: none;
+  }
+  .zdr-dirpick-backdrop {
+    backdrop-filter: none;
   }
 }

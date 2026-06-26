@@ -27,7 +27,16 @@ public sealed class WavMeter
     private long _clipUntilTick;
     private long _lastTick;
 
-    public WavMeter() => Reset();
+    // Monotonic millisecond clock. Defaults to Environment.TickCount64; an
+    // injected provider lets tests drive decay / clip-latch expiry deterministically
+    // without flaky sleeps. WavRecorderService uses the default.
+    private readonly Func<long> _now;
+
+    public WavMeter(Func<long>? nowMsProvider = null)
+    {
+        _now = nowMsProvider ?? (() => Environment.TickCount64);
+        Reset();
+    }
 
     /// <summary>Linear peak, 0..1, with peak-hold + decay.</summary>
     public double Peak => _peak;
@@ -39,7 +48,7 @@ public sealed class WavMeter
     public double PeakDb => ToDb(_peak);
 
     /// <summary>True while the clip latch is lit.</summary>
-    public bool Clip => Environment.TickCount64 < Volatile.Read(ref _clipUntilTick);
+    public bool Clip => _now() < Volatile.Read(ref _clipUntilTick);
 
     /// <summary>Reset to silence — called on record/play start and stop/finish.</summary>
     public void Reset()
@@ -47,7 +56,7 @@ public sealed class WavMeter
         _peak = 0;
         _rms = 0;
         Volatile.Write(ref _clipUntilTick, 0);
-        Volatile.Write(ref _lastTick, Environment.TickCount64);
+        Volatile.Write(ref _lastTick, _now());
     }
 
     /// <summary>Fold one block of mono samples into the meter.</summary>
@@ -66,7 +75,7 @@ public sealed class WavMeter
         }
         double blockRms = Math.Sqrt(sumSq / block.Length);
 
-        long now = Environment.TickCount64;
+        long now = _now();
         long last = Volatile.Read(ref _lastTick);
         Volatile.Write(ref _lastTick, now);
         double dt = Math.Min(1.0, Math.Max(0, (now - last) / 1000.0));

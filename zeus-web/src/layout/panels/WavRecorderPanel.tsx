@@ -11,13 +11,14 @@
 // option) any later version. See the LICENSE file at the root of this
 // repository for the full text, or https://www.gnu.org/licenses/.
 //
-// ZEUS Digital Recorder — rack-mount WAV recorder panel. Segmented LED level
+// ZEUS WAV Recorder — rack-mount WAV recorder panel. Segmented LED level
 // meter, round transport buttons, a waveform strip, a folder/file browser with
 // rename/move/delete, and a metadata column. Theming is token-only
 // (zeus-web/src/styles/tokens.css). Backed by the /api/wav/* endpoints.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './WavRecorderPanel.css';
+import { DirectoryPickerModal } from './DirectoryPickerModal';
 import {
   fmtBytes,
   fmtClock,
@@ -30,6 +31,7 @@ import {
   breadcrumb,
   segmentZone,
   litSegments,
+  abbreviatePath,
 } from './wavRecorder.format';
 
 // ---------------------------------------------------------------------------
@@ -73,6 +75,8 @@ type ListResp = {
 
 type WaveformResp = { file: string; buckets: number[] };
 
+type RootResp = { root: string; isDefault: boolean };
+
 const IDLE_STATUS: Status = {
   state: 'idle',
   source: 'rx',
@@ -92,6 +96,11 @@ const WAVE_BUCKETS = 400;
 const STATUS_POLL_ACTIVE_MS = 90;
 const STATUS_POLL_IDLE_MS = 500;
 const LIST_POLL_MS = 1000;
+// Waveform cache bound — keep the most-recently-used N entries so a long
+// session can't grow the map without limit.
+const WAVE_CACHE_MAX = 50;
+// Below this displayed/target level the meter is treated as fully settled.
+const METER_EPS = 0.001;
 
 // ---------------------------------------------------------------------------
 // Fetch helpers
@@ -175,6 +184,33 @@ function zoneColor(c: MeterColors, index: number): string {
   }
 }
 
+/**
+ * Convert a `#rgb` / `#rrggbb` token colour to an `rgba()` string at `alpha`.
+ * Inputs that are already `rgb()`/`rgba()` are returned unchanged. Lets the
+ * canvas build glows + gradient fades from palette tokens without new hex.
+ */
+function withAlpha(color: string, alpha: number): string {
+  const c = color.trim();
+  if (c.charCodeAt(0) === 35 /* '#' */) {
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    if (c.length === 4) {
+      r = parseInt(c[1]! + c[1]!, 16);
+      g = parseInt(c[2]! + c[2]!, 16);
+      b = parseInt(c[3]! + c[3]!, 16);
+    } else if (c.length >= 7) {
+      r = parseInt(c.slice(1, 3), 16);
+      g = parseInt(c.slice(3, 5), 16);
+      b = parseInt(c.slice(5, 7), 16);
+    }
+    if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
+      return `rgba(${r},${g},${b},${alpha})`;
+    }
+  }
+  return c;
+}
+
 /** Resize a canvas's backing store to its CSS box (DPR-aware). */
 function fitCanvas(canvas: HTMLCanvasElement): { ctx: CanvasRenderingContext2D; w: number; h: number } | null {
   const ctx = canvas.getContext('2d');
@@ -192,6 +228,37 @@ function fitCanvas(canvas: HTMLCanvasElement): { ctx: CanvasRenderingContext2D; 
   return { ctx, w, h };
 }
 
+// --- Waveform cache (relPath:mtime keyed, bounded LRU) ----------------------
+
+/** Insert/refresh a cache entry, evicting the oldest beyond WAVE_CACHE_MAX. */
+function waveCachePut(map: Map<string, number[]>, key: string, buckets: number[]): void {
+  map.delete(key); // re-insert moves it to the most-recent (Map iteration order)
+  map.set(key, buckets);
+  while (map.size > WAVE_CACHE_MAX) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+}
+
+/** Read a cache entry and mark it most-recently-used. */
+function waveCacheGet(map: Map<string, number[]>, key: string): number[] | undefined {
+  const hit = map.get(key);
+  if (hit) {
+    map.delete(key);
+    map.set(key, hit);
+  }
+  return hit;
+}
+
+/** Drop every cache entry for a relPath, across all of its mtime variants. */
+function waveCacheDropPath(map: Map<string, number[]>, relPath: string): void {
+  const prefix = `${relPath}:`;
+  for (const k of [...map.keys()]) {
+    if (k === relPath || k.startsWith(prefix)) map.delete(k);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -204,11 +271,22 @@ export function WavRecorderPanel() {
   const [currentFolder, setCurrentFolder] = useState<string>('');
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [narrow, setNarrow] = useState(false);
+
+  // Save-location (recordings root) + folder picker.
+  const [root, setRoot] = useState<string>('');
+  const [rootIsDefault, setRootIsDefault] = useState(true);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   // CRUD interaction state
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
+  // Rename guards: `cancelRenameRef` lets Escape's unmount-blur bail without
+  // POSTing; `committingRenameRef` makes a commit single-shot so Enter (which
+  // also triggers blur on unmount) can't double-submit with a stale `from`.
+  const cancelRenameRef = useRef(false);
+  const committingRenameRef = useRef(false);
   const [moveMenu, setMoveMenu] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [confirmFolderDelete, setConfirmFolderDelete] = useState<string | null>(null);
@@ -224,10 +302,21 @@ export function WavRecorderPanel() {
   const targetRef = useRef({ peak: 0, rms: 0, clip: false });
   const dispRef = useRef({ peak: 0, rms: 0, hold: 0 });
   const rafRef = useRef<number | null>(null);
+  // Idle-gating for the meter RAF: it stops when fully settled and is woken
+  // from the status-poll path when a non-zero level / clip / active state
+  // arrives. `wakeMeterRef` is installed by the RAF effect.
+  const meterRunningRef = useRef(false);
+  const wakeMeterRef = useRef<(() => void) | null>(null);
 
-  // Waveform cache: relPath → buckets.
+  // Waveform cache: `relPath:mtime` → buckets (bounded LRU).
   const waveCacheRef = useRef<Map<string, number[]>>(new Map());
+  // Live mirrors of the waveform inputs so the ResizeObserver can subscribe
+  // once and still read current buckets/progress on resize.
+  const waveBucketsRef = useRef<number[] | null>(null);
+  const progressRef = useRef(-1);
   const [waveBuckets, setWaveBuckets] = useState<number[] | null>(null);
+  // Bumped on theme/font change so the waveform repaints with fresh colours.
+  const [themeTick, setThemeTick] = useState(0);
 
   const errorTimer = useRef<number | null>(null);
   const flashError = useCallback((msg: string) => {
@@ -236,13 +325,51 @@ export function WavRecorderPanel() {
     errorTimer.current = window.setTimeout(() => setError(null), 4000);
   }, []);
 
+  const noticeTimer = useRef<number | null>(null);
+  const flashNotice = useCallback((msg: string) => {
+    setNotice(msg);
+    if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+    noticeTimer.current = window.setTimeout(() => setNotice(null), 3500);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (errorTimer.current !== null) window.clearTimeout(errorTimer.current);
+      if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+    },
+    [],
+  );
+
+  // --- Save-location (recordings root) --------------------------------------
+
+  const fetchRoot = useCallback(async () => {
+    try {
+      const r = (await fetch('/api/wav/root').then((res) => res.json())) as RootResp;
+      setRoot(typeof r.root === 'string' ? r.root : '');
+      setRootIsDefault(!!r.isDefault);
+    } catch {
+      /* transient */
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchRoot();
+  }, [fetchRoot]);
+
   // --- Status + list polling -------------------------------------------------
 
   const fetchStatus = useCallback(async () => {
     try {
       const s = (await fetch('/api/wav/status').then((r) => r.json())) as Status;
       setStatus(s);
-      targetRef.current = { peak: s.peak ?? 0, rms: s.rms ?? 0, clip: !!s.clip };
+      const peak = s.peak ?? 0;
+      const rms = s.rms ?? 0;
+      targetRef.current = { peak, rms, clip: !!s.clip };
+      // Wake the (possibly idle-stopped) meter when there's something to show
+      // or the deck is actively recording/playing.
+      if (peak > METER_EPS || rms > METER_EPS || s.clip || s.state !== 'idle') {
+        wakeMeterRef.current?.();
+      }
     } catch {
       /* transient */
     }
@@ -262,6 +389,18 @@ export function WavRecorderPanel() {
     void fetchStatus();
     void fetchList();
   }, [fetchStatus, fetchList]);
+
+  const onRootChanged = useCallback(
+    (newRoot: string, isDefault: boolean) => {
+      setRoot(newRoot);
+      setRootIsDefault(isDefault);
+      waveCacheRef.current.clear();
+      setSelected(null);
+      void fetchList();
+      flashNotice(isDefault ? 'Save folder reset to default' : 'Save folder updated');
+    },
+    [fetchList, flashNotice],
+  );
 
   // Status poll cadence depends on activity.
   const active = status.state !== 'idle';
@@ -284,6 +423,8 @@ export function WavRecorderPanel() {
   useEffect(() => {
     const refreshColors = () => {
       colorsRef.current = readColors(rootRef.current);
+      // Meter picks colours up live via its RAF; nudge the waveform to repaint.
+      setThemeTick((t) => t + 1);
     };
     refreshColors();
     const mo = new MutationObserver(refreshColors);
@@ -309,6 +450,9 @@ export function WavRecorderPanel() {
     const ro = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect.width ?? el.clientWidth;
       setNarrow(w < 640);
+      // The meter canvas re-fits its backing store only inside the RAF; wake
+      // it for a settle cycle so a resize during silence isn't left stale.
+      wakeMeterRef.current?.();
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -336,16 +480,69 @@ export function WavRecorderPanel() {
       if (target.peak >= disp.hold) disp.hold = target.peak;
       else disp.hold = Math.max(target.peak, disp.hold - (reduced ? 0.02 : 0.006));
 
-      if (canvas) drawMeter(canvas, colorsRef.current, disp.peak, disp.rms, disp.hold, target.clip);
+      if (canvas) drawMeter(canvas, colorsRef.current, disp.peak, disp.rms, disp.hold, target.clip, reduced);
       const vcanvas = vmeterCanvasRef.current;
-      if (vcanvas) drawVMeter(vcanvas, colorsRef.current, disp.peak, disp.rms, disp.hold);
+      if (vcanvas) drawVMeter(vcanvas, colorsRef.current, disp.peak, disp.rms, disp.hold, reduced);
+
+      // Idle-gate: once the displayed bar AND the incoming target are all at
+      // rest (and not clipping), draw this final settled frame and STOP. The
+      // status poll calls wake() to restart when a level/clip returns. This
+      // is the perf win — no 60fps canvas churn during silence. The active
+      // visual is untouched: while any signal is present we keep scheduling.
+      const settled =
+        !target.clip &&
+        target.peak < METER_EPS &&
+        target.rms < METER_EPS &&
+        disp.peak < METER_EPS &&
+        disp.rms < METER_EPS &&
+        disp.hold < METER_EPS;
+      if (settled) {
+        meterRunningRef.current = false;
+        rafRef.current = null;
+        return;
+      }
       rafRef.current = window.requestAnimationFrame(draw);
     };
-    rafRef.current = window.requestAnimationFrame(draw);
+
+    const wake = () => {
+      if (meterRunningRef.current) return;
+      meterRunningRef.current = true;
+      rafRef.current = window.requestAnimationFrame(draw);
+    };
+    wakeMeterRef.current = wake;
+
+    // Kick once so the wells render even if no signal ever arrives.
+    wake();
     return () => {
       if (rafRef.current !== null) window.cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+      meterRunningRef.current = false;
+      wakeMeterRef.current = null;
     };
   }, []);
+
+  // --- Selected recording + stale-selection reconciliation -------------------
+
+  const selectedRec = useMemo(
+    () => recordings.find((r) => r.relPath === selected) ?? null,
+    [recordings, selected],
+  );
+  // mtime of the selected file (0 if not in the list yet). Drives the cache
+  // key so a replaced file under the same name re-fetches instead of serving
+  // stale buckets. Only changes when the selection or its mtime changes — not
+  // on every list poll.
+  const selectedMtime = selectedRec?.modifiedUnixMs ?? 0;
+
+  // If the selected file vanishes from the list (deleted in another session,
+  // or its folder removed), clear the selection so PLAY/TX can't POST a
+  // missing file. Guard the optimistic-rename/move window: those paths
+  // await fetchList() before re-selecting, so the new relPath is already
+  // present here.
+  useEffect(() => {
+    if (selected && !recordings.some((r) => r.relPath === selected)) {
+      setSelected(null);
+    }
+  }, [recordings, selected]);
 
   // --- Waveform fetch on selection change ------------------------------------
 
@@ -354,7 +551,8 @@ export function WavRecorderPanel() {
       setWaveBuckets(null);
       return;
     }
-    const cached = waveCacheRef.current.get(selected);
+    const key = selectedMtime > 0 ? `${selected}:${selectedMtime}` : selected;
+    const cached = waveCacheGet(waveCacheRef.current, key);
     if (cached) {
       setWaveBuckets(cached);
       return;
@@ -365,14 +563,14 @@ export function WavRecorderPanel() {
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${r.status}`))))
       .then((w: WaveformResp) => {
         const buckets = Array.isArray(w.buckets) ? w.buckets : [];
-        waveCacheRef.current.set(selected, buckets);
+        waveCachePut(waveCacheRef.current, key, buckets);
         setWaveBuckets(buckets);
       })
       .catch(() => {
         /* leave empty well; selection still valid for playback */
       });
     return () => ctrl.abort();
-  }, [selected]);
+  }, [selected, selectedMtime]);
 
   // --- Waveform redraw (buckets / progress / size) ---------------------------
 
@@ -380,18 +578,27 @@ export function WavRecorderPanel() {
   const progress = playingThis && status.durationSec > 0 ? status.seconds / status.durationSec : -1;
 
   useEffect(() => {
+    waveBucketsRef.current = waveBuckets;
+    progressRef.current = progress;
     const canvas = waveCanvasRef.current;
     if (!canvas) return;
-    drawWaveform(canvas, colorsRef.current, waveBuckets, progress);
-  }, [waveBuckets, progress, narrow]);
+    // `themeTick` is a dep so a live theme/font switch repaints with fresh
+    // colours instead of waiting for the next bucket/resize.
+    drawWaveform(canvas, colorsRef.current, waveBuckets, progress, reducedMotionRef.current);
+  }, [waveBuckets, progress, narrow, themeTick]);
 
   useEffect(() => {
     const canvas = waveCanvasRef.current;
     if (!canvas || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => drawWaveform(canvas, colorsRef.current, waveBuckets, progress));
+    // Subscribe ONCE — read live buckets/progress from refs so the fast-
+    // changing `progress` (~11×/s during playback) doesn't tear down and
+    // recreate the observer every tick.
+    const ro = new ResizeObserver(() =>
+      drawWaveform(canvas, colorsRef.current, waveBucketsRef.current, progressRef.current, reducedMotionRef.current),
+    );
     ro.observe(canvas);
     return () => ro.disconnect();
-  }, [waveBuckets, progress]);
+  }, []);
 
   // --- Derived data ----------------------------------------------------------
 
@@ -406,10 +613,6 @@ export function WavRecorderPanel() {
   );
   const crumbs = useMemo(() => breadcrumb(currentFolder), [currentFolder]);
   const allFolders = useMemo(() => folders.slice().sort((a, b) => a.localeCompare(b)), [folders]);
-  const selectedRec = useMemo(
-    () => recordings.find((r) => r.relPath === selected) ?? null,
-    [recordings, selected],
-  );
 
   const recState = status.state;
   const isRecording = recState === 'recording';
@@ -492,18 +695,34 @@ export function WavRecorderPanel() {
 
   const commitRename = useCallback(
     async (from: string) => {
+      // Escape requested a cancel: bail without POSTing (the unmount-blur
+      // would otherwise commit the draft). Consume the flag.
+      if (cancelRenameRef.current) {
+        cancelRenameRef.current = false;
+        return;
+      }
+      // Single-shot: Enter + the unmount-blur both call this; only the first
+      // wins, so no stale-`from` second POST (which would 404).
+      if (committingRenameRef.current) return;
+      committingRenameRef.current = true;
+
       const name = renameDraft.trim();
       setRenaming(null);
-      if (!name) return;
+      if (!name) {
+        committingRenameRef.current = false;
+        return;
+      }
       try {
         const res = await postJson<{ relPath: string }>('/api/wav/rename', { from, name });
         if (res?.relPath) {
-          waveCacheRef.current.delete(from);
+          waveCacheDropPath(waveCacheRef.current, from);
+          await fetchList(); // ensure the new relPath is in the list before reselect
           setSelected(res.relPath);
         }
       } catch (e) {
         flashError(e instanceof Error ? e.message : 'Rename failed');
       } finally {
+        committingRenameRef.current = false;
         fetchList();
       }
     },
@@ -516,7 +735,8 @@ export function WavRecorderPanel() {
       try {
         const res = await postJson<{ relPath: string }>('/api/wav/move', { from, folder });
         if (res?.relPath) {
-          waveCacheRef.current.delete(from);
+          waveCacheDropPath(waveCacheRef.current, from);
+          await fetchList(); // ensure the moved relPath is in the list before reselect
           setSelected(res.relPath);
         }
       } catch (e) {
@@ -533,7 +753,7 @@ export function WavRecorderPanel() {
       setConfirmDelete(null);
       try {
         await postJson('/api/wav/delete', { file: relPath });
-        waveCacheRef.current.delete(relPath);
+        waveCacheDropPath(waveCacheRef.current, relPath);
         if (selected === relPath) setSelected(null);
       } catch (e) {
         flashError(e instanceof Error ? e.message : 'Delete failed');
@@ -594,6 +814,26 @@ export function WavRecorderPanel() {
               ))}
             </nav>
             <div className="zdr__libactions">
+              <button
+                type="button"
+                className="zdr__dirbtn"
+                onClick={() => setPickerOpen(true)}
+                aria-label={`Change save folder (currently ${root || 'default'})`}
+                title={`Save location: ${root || 'default'}${rootIsDefault ? ' (default)' : ''}\nClick to change`}
+              >
+                <span className="zdr__dirbtn-glyph" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
+                    <path
+                      d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4l2 2.2H19.5A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5Z"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.4"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
+                <span className="zdr__dirbtn-path">{root ? abbreviatePath(root, 2) : 'Default'}</span>
+              </button>
               {currentFolder && (
                 <button
                   type="button"
@@ -681,7 +921,12 @@ export function WavRecorderPanel() {
                       onChange={(e) => setRenameDraft(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') void commitRename(r.relPath);
-                        if (e.key === 'Escape') setRenaming(null);
+                        if (e.key === 'Escape') {
+                          // Flag cancel BEFORE unmounting so the autoFocus
+                          // input's blur handler bails without committing.
+                          cancelRenameRef.current = true;
+                          setRenaming(null);
+                        }
                       }}
                       onBlur={() => void commitRename(r.relPath)}
                     />
@@ -745,6 +990,8 @@ export function WavRecorderPanel() {
                           aria-label={`Rename ${r.name}`}
                           title="Rename"
                           onClick={() => {
+                            cancelRenameRef.current = false;
+                            committingRenameRef.current = false;
                             setRenameDraft(r.name);
                             setRenaming(r.relPath);
                           }}
@@ -960,12 +1207,25 @@ export function WavRecorderPanel() {
           <span className="zdr__onair-dot" aria-hidden="true" />
           {status.onAir ? 'ON AIR' : status.mox ? 'MOX' : 'RX'}
         </span>
-        {error && (
+        {error ? (
           <span className="zdr__errmsg" role="alert">
             {error}
           </span>
-        )}
+        ) : notice ? (
+          <span className="zdr__notemsg" role="status">
+            {notice}
+          </span>
+        ) : null}
       </footer>
+
+      {pickerOpen && (
+        <DirectoryPickerModal
+          initialPath={root}
+          rootIsDefault={rootIsDefault}
+          onClose={() => setPickerOpen(false)}
+          onChanged={onRootChanged}
+        />
+      )}
     </div>
   );
 }
@@ -981,6 +1241,7 @@ function drawMeter(
   rms: number,
   hold: number,
   clip: boolean,
+  reduced: boolean,
 ): void {
   const fit = fitCanvas(canvas);
   if (!fit) return;
@@ -993,57 +1254,90 @@ function drawMeter(
   const rmsLit = litSegments(rms, SEGMENTS);
   const holdIdx = Math.min(SEGMENTS - 1, litSegments(hold, SEGMENTS) - 1);
 
+  // Two gradients built once per frame (reused across all 40 segments — no
+  // per-segment garbage). `glass` gives lit segments a backlit-tube sheen;
+  // `wellGrad` carves a faint inset into the dark unlit wells.
+  const glass = ctx.createLinearGradient(0, 0, 0, h);
+  glass.addColorStop(0, 'rgba(255,255,255,0.34)');
+  glass.addColorStop(0.18, 'rgba(255,255,255,0.10)');
+  glass.addColorStop(0.5, 'rgba(255,255,255,0)');
+  glass.addColorStop(0.85, 'rgba(0,0,0,0.18)');
+  glass.addColorStop(1, 'rgba(0,0,0,0.32)');
+  const wellGrad = ctx.createLinearGradient(0, 0, 0, h);
+  wellGrad.addColorStop(0, 'rgba(0,0,0,0.45)');
+  wellGrad.addColorStop(0.5, 'rgba(255,255,255,0.03)');
+  wellGrad.addColorStop(1, 'rgba(0,0,0,0.5)');
+
   for (let i = 0; i < SEGMENTS; i++) {
     const x = i * (segW + gap);
     const col = zoneColor(c, i);
-    // Well (off) segment.
+    // Well (off) segment — dark base + inset depth + hairline frame.
     ctx.fillStyle = c.well;
+    ctx.fillRect(x, 0, segW, h);
+    ctx.fillStyle = wellGrad;
     ctx.fillRect(x, 0, segW, h);
     ctx.strokeStyle = c.line;
     ctx.lineWidth = 1;
     ctx.strokeRect(x + 0.5, 0.5, segW - 1, h - 1);
 
     if (i < rmsLit) {
-      // Solid lit core (rms) — bright + glow.
+      // Illuminated core (rms) — saturated fill + zone-colour outer glow…
       ctx.save();
-      ctx.shadowColor = col;
-      ctx.shadowBlur = Math.max(2, segW * 0.5);
+      if (!reduced) {
+        ctx.shadowColor = col;
+        ctx.shadowBlur = Math.max(2, segW * 0.55);
+      }
       ctx.fillStyle = col;
       ctx.fillRect(x, 0, segW, h);
       ctx.restore();
+      // …then a glass sheen on top so it reads as a lit tube, not a flat bar.
+      ctx.fillStyle = glass;
+      ctx.fillRect(x, 0, segW, h);
     } else if (i < peakLit) {
-      // Peak overhang — dimmer, no heavy glow.
-      ctx.globalAlpha = 0.42;
+      // Peak overhang — dimmer, lighter sheen, no heavy glow.
+      ctx.globalAlpha = 0.4;
       ctx.fillStyle = col;
+      ctx.fillRect(x, 0, segW, h);
+      ctx.globalAlpha = 0.5;
+      ctx.fillStyle = glass;
       ctx.fillRect(x, 0, segW, h);
       ctx.globalAlpha = 1;
     }
   }
 
-  // Peak-hold tick.
+  // Peak-hold tick — brighter than the bar, its own glow, lit end-caps.
   if (holdIdx >= 0) {
     const x = holdIdx * (segW + gap);
     const col = zoneColor(c, holdIdx);
     ctx.save();
-    ctx.shadowColor = col;
-    ctx.shadowBlur = Math.max(3, segW * 0.7);
+    if (!reduced) {
+      ctx.shadowColor = col;
+      ctx.shadowBlur = Math.max(4, segW * 0.9);
+    }
     ctx.fillStyle = col;
     ctx.fillRect(x, 0, segW, h);
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.fillRect(x, 0, segW, Math.max(2, h * 0.18));
-    ctx.fillRect(x, h - Math.max(2, h * 0.18), segW, Math.max(2, h * 0.18));
     ctx.restore();
+    ctx.fillStyle = glass;
+    ctx.fillRect(x, 0, segW, h);
+    const cap = Math.max(2, h * 0.16);
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillRect(x, 0, segW, cap);
+    ctx.fillRect(x, h - cap, segW, cap);
   }
 
   // Clip flare on the last segment.
   if (clip) {
     const x = (SEGMENTS - 1) * (segW + gap);
     ctx.save();
-    ctx.shadowColor = c.red;
-    ctx.shadowBlur = segW * 1.2;
+    if (!reduced) {
+      ctx.shadowColor = c.red;
+      ctx.shadowBlur = segW * 1.3;
+    }
     ctx.fillStyle = c.red;
     ctx.fillRect(x, 0, segW, h);
     ctx.restore();
+    ctx.fillStyle = glass;
+    ctx.fillRect(x, 0, segW, h);
   }
 }
 
@@ -1052,20 +1346,30 @@ function drawWaveform(
   c: MeterColors,
   buckets: number[] | null,
   progress: number,
+  reduced: boolean,
 ): void {
   const fit = fitCanvas(canvas);
   if (!fit) return;
   const { ctx, w, h } = fit;
   ctx.clearRect(0, 0, w, h);
 
-  // Well background + centre line.
+  // Well background + a faint vertical inset so the strip reads as recessed.
   ctx.fillStyle = c.well;
   ctx.fillRect(0, 0, w, h);
-  ctx.strokeStyle = c.line;
+  const bg = ctx.createLinearGradient(0, 0, 0, h);
+  bg.addColorStop(0, 'rgba(0,0,0,0.38)');
+  bg.addColorStop(0.5, 'rgba(255,255,255,0.02)');
+  bg.addColorStop(1, 'rgba(0,0,0,0.42)');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+
+  // Centre axis line (faint).
+  const midY = Math.round(h / 2) + 0.5;
+  ctx.strokeStyle = withAlpha(c.line, 0.9);
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(0, h / 2 + 0.5);
-  ctx.lineTo(w, h / 2 + 0.5);
+  ctx.moveTo(0, midY);
+  ctx.lineTo(w, midY);
   ctx.stroke();
 
   if (!buckets || buckets.length === 0) return;
@@ -1073,7 +1377,21 @@ function drawWaveform(
   const n = buckets.length;
   const mid = h / 2;
   const colW = w / n;
-  ctx.fillStyle = c.amber;
+
+  // Amber gradient: brightest at the centre axis, fading toward the edges.
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, withAlpha(c.amber, 0.3));
+  grad.addColorStop(0.42, withAlpha(c.amber, 0.95));
+  grad.addColorStop(0.5, c.amber);
+  grad.addColorStop(0.58, withAlpha(c.amber, 0.95));
+  grad.addColorStop(1, withAlpha(c.amber, 0.3));
+
+  ctx.save();
+  if (!reduced) {
+    ctx.shadowColor = withAlpha(c.amber, 0.5);
+    ctx.shadowBlur = 4;
+  }
+  ctx.fillStyle = grad;
   for (let i = 0; i < n; i++) {
     const v = Math.max(0, Math.min(1, buckets[i] ?? 0));
     const half = Math.max(0.5, v * (h / 2 - 1));
@@ -1081,14 +1399,19 @@ function drawWaveform(
     const bw = Math.max(0.6, colW - 0.4);
     ctx.fillRect(x, mid - half, bw, half * 2);
   }
+  ctx.restore();
 
-  // Playback progress line.
+  // Playback progress: dim the un-played tail, then a crisp glowing playhead.
   if (progress >= 0) {
     const px = Math.max(0, Math.min(1, progress)) * w;
+    ctx.fillStyle = 'rgba(0,0,0,0.42)';
+    ctx.fillRect(px, 0, w - px, h);
     ctx.save();
     ctx.strokeStyle = c.accent;
-    ctx.shadowColor = c.accent;
-    ctx.shadowBlur = 6;
+    if (!reduced) {
+      ctx.shadowColor = c.accent;
+      ctx.shadowBlur = 8;
+    }
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(px, 0);
@@ -1102,7 +1425,14 @@ const VSEGMENTS = 28;
 
 /** Two vertical segmented LED columns (L/R). Audio is mono, so both columns
  *  read the same level — a faithful "stereo meter" face on a mono source. */
-function drawVMeter(canvas: HTMLCanvasElement, c: MeterColors, peak: number, rms: number, hold: number): void {
+function drawVMeter(
+  canvas: HTMLCanvasElement,
+  c: MeterColors,
+  peak: number,
+  rms: number,
+  hold: number,
+  reduced: boolean,
+): void {
   const fit = fitCanvas(canvas);
   if (!fit) return;
   const { ctx, w, h } = fit;
@@ -1127,34 +1457,58 @@ function drawVMeter(canvas: HTMLCanvasElement, c: MeterColors, peak: number, rms
 
   for (let col = 0; col < cols; col++) {
     const x = colGap + col * (colW + colGap);
+    // Horizontal cylinder sheen for this column (one gradient per column —
+    // gives each lit LED a rounded, backlit look).
+    const cyl = ctx.createLinearGradient(x, 0, x + colW, 0);
+    cyl.addColorStop(0, 'rgba(0,0,0,0.3)');
+    cyl.addColorStop(0.5, 'rgba(255,255,255,0.22)');
+    cyl.addColorStop(1, 'rgba(0,0,0,0.3)');
     for (let i = 0; i < VSEGMENTS; i++) {
       // i counts from bottom; y inverts.
       const y = h - (i + 1) * segH - i * vgap;
       const color = vzone(i);
+      // Dark well + faint inset.
       ctx.fillStyle = c.well;
+      ctx.fillRect(x, y, colW, segH);
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
       ctx.fillRect(x, y, colW, segH);
       if (i < rmsLit) {
         ctx.save();
-        ctx.shadowColor = color;
-        ctx.shadowBlur = Math.max(2, colW * 0.4);
+        if (!reduced) {
+          ctx.shadowColor = color;
+          ctx.shadowBlur = Math.max(2, colW * 0.45);
+        }
         ctx.fillStyle = color;
         ctx.fillRect(x, y, colW, segH);
         ctx.restore();
+        ctx.fillStyle = cyl;
+        ctx.fillRect(x, y, colW, segH);
       } else if (i < peakLit) {
-        ctx.globalAlpha = 0.42;
+        ctx.globalAlpha = 0.4;
         ctx.fillStyle = color;
+        ctx.fillRect(x, y, colW, segH);
+        ctx.globalAlpha = 0.5;
+        ctx.fillStyle = cyl;
         ctx.fillRect(x, y, colW, segH);
         ctx.globalAlpha = 1;
       }
     }
     if (holdIdx >= 0) {
       const y = h - (holdIdx + 1) * segH - holdIdx * vgap;
+      const hc = vzone(holdIdx);
       ctx.save();
-      ctx.shadowColor = vzone(holdIdx);
-      ctx.shadowBlur = Math.max(3, colW * 0.5);
-      ctx.fillStyle = vzone(holdIdx);
+      if (!reduced) {
+        ctx.shadowColor = hc;
+        ctx.shadowBlur = Math.max(3, colW * 0.6);
+      }
+      ctx.fillStyle = hc;
       ctx.fillRect(x, y, colW, segH);
       ctx.restore();
+      ctx.fillStyle = cyl;
+      ctx.fillRect(x, y, colW, segH);
+      // Bright lit cap on the held segment.
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.fillRect(x, y, colW, Math.max(1, segH * 0.34));
     }
   }
 }

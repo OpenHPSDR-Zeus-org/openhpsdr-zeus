@@ -476,9 +476,9 @@ export const PANELS: Record<string, PanelDef> = {
   },
   wavrecorder: {
     id: 'wavrecorder',
-    name: 'Digital Recorder',
+    name: 'Wav Recorder',
     category: 'tools',
-    tags: ['recorder', 'wav', 'tape', 'record', 'playback', 'audio', 'reel', 'meter', 'folder'],
+    tags: ['recorder', 'wav', 'record', 'playback', 'audio', 'meter', 'folder'],
     component: WavRecorderPanel,
     minW: 4,
     minH: 8,

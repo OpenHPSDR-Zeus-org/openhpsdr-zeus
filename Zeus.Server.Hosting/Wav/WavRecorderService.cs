@@ -57,8 +57,10 @@ public enum WavRecorderState
 /// folders, traversal-guarded paths, and a prefix-free recursive listing.</para>
 ///
 /// <para><b>Playback</b> takes an explicit destination.
-/// <see cref="WavPlayDest.Local"/> streams a WAV to the operator's monitor via
-/// <see cref="IPreviewAudioSink"/> without keying. <see cref="WavPlayDest.Air"/>
+/// <see cref="WavPlayDest.Local"/> mixes the WAV into the RX audio block via
+/// <see cref="DspPipelineService.EnqueueMonitorAudio"/> (the universal monitor
+/// path that reaches every sink — browser WebSocket and desktop native — alike)
+/// without keying. <see cref="WavPlayDest.Air"/>
 /// transmits the recording through <see cref="TxAudioIngest"/> so it is
 /// processed by the normal TX chain like live speech; the recorder keys MOX
 /// itself only when the rig is unkeyed and releases only what it keyed (see
@@ -75,12 +77,12 @@ public sealed class WavRecorderService : IDisposable
     private const int PlaybackBlockMs = 20;
 
     private readonly DspPipelineService _pipeline;
-    private readonly IPreviewAudioSink _preview;
     private readonly TxAudioIngest _txIngest;
     private readonly TxService _tx;
     private readonly RadioService _radio;
     private readonly ILogger<WavRecorderService> _log;
     private readonly WavLibrary _library;
+    private readonly WavRecorderSettingsStore _settings;
     private readonly WavMeter _meter = new();
 
     private readonly object _sync = new();
@@ -97,34 +99,152 @@ public sealed class WavRecorderService : IDisposable
     private Thread? _playThread;
     private CancellationTokenSource? _playCts;
     private string? _playingFile;       // absolute path of the clip being played
-    private bool _restorePreviewOff;
     private bool _playingOnAir;
     private bool _weKeyedMox;            // true ⇒ we raised MOX and must drop it
     private double _playingDurationSec;
 
     public WavRecorderService(
         DspPipelineService pipeline,
-        IPreviewAudioSink preview,
         TxAudioIngest txIngest,
         TxService tx,
         RadioService radio,
         ILogger<WavRecorderService> log,
+        WavRecorderSettingsStore settings,
         string? recordingsRootOverride = null)
     {
         _pipeline = pipeline;
-        _preview = preview;
         _txIngest = txIngest;
         _tx = tx;
         _radio = radio;
         _log = log;
+        _settings = settings;
 
-        _library = new WavLibrary(recordingsRootOverride ?? WavLibrary.DefaultRoot(), log);
+        // Resolve the effective root: an explicit test override wins; otherwise
+        // the persisted custom root if it's set and usable; otherwise the
+        // platform default. Migrate loose legacy files ONLY when we land on the
+        // default root — never scan an operator-chosen parent directory.
+        string defaultRoot = WavLibrary.DefaultRoot();
+        string effectiveRoot;
+        bool migrate;
+        if (!string.IsNullOrWhiteSpace(recordingsRootOverride))
+        {
+            effectiveRoot = recordingsRootOverride;
+            migrate = PathsEqual(recordingsRootOverride, defaultRoot);
+        }
+        else
+        {
+            string? persisted = _settings.GetRoot();
+            if (!string.IsNullOrWhiteSpace(persisted) && IsUsableRoot(persisted))
+            {
+                effectiveRoot = persisted;
+                migrate = false;
+            }
+            else
+            {
+                effectiveRoot = defaultRoot;
+                migrate = true;
+            }
+        }
+
+        _library = new WavLibrary(effectiveRoot, log, migrate);
 
         _pipeline.RxAudioAvailable += OnRxAudio;
         _txIngest.MicPcmTapped += OnMicPcm;
     }
 
     public string RecordingsDir => _library.Root;
+
+    /// <summary>The current recordings root and whether it is the platform
+    /// default.</summary>
+    public (string Root, bool IsDefault) GetRecordingsRoot()
+    {
+        lock (_sync)
+        {
+            return (_library.Root, PathsEqual(_library.Root, WavLibrary.DefaultRoot()));
+        }
+    }
+
+    /// <summary>Change the recordings root, persisting the choice.
+    /// <para>Null/empty resets to the platform default (and clears the persisted
+    /// value). A non-empty value must be an ABSOLUTE, creatable, writable path.
+    /// Only allowed while idle.</para>
+    /// Throws <see cref="InvalidOperationException"/> if the recorder is busy and
+    /// <see cref="ArgumentException"/> on a path that is relative or cannot be
+    /// created/written.</summary>
+    public (string Root, bool IsDefault) SetRecordingsRoot(string? absPath)
+    {
+        lock (_sync)
+        {
+            if (_state != WavRecorderState.Idle)
+                throw new InvalidOperationException($"recorder busy ({_state})");
+
+            string defaultRoot = WavLibrary.DefaultRoot();
+            string resolved;
+
+            if (string.IsNullOrWhiteSpace(absPath))
+            {
+                resolved = defaultRoot;
+                _settings.SetRoot(null);
+            }
+            else
+            {
+                if (!Path.IsPathRooted(absPath))
+                    throw new ArgumentException("recordings path must be absolute", nameof(absPath));
+                resolved = Path.GetFullPath(absPath);
+                if (!TryProbeWritable(resolved, out string? err))
+                    throw new ArgumentException(err ?? "recordings path is not writable", nameof(absPath));
+                _settings.SetRoot(resolved);
+            }
+
+            _library.SetRoot(resolved);
+            return (_library.Root, PathsEqual(_library.Root, defaultRoot));
+        }
+    }
+
+    // A persisted root is usable if it already exists or can be created.
+    private static bool IsUsableRoot(string root)
+    {
+        try
+        {
+            Directory.CreateDirectory(root);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    // Create the directory and prove we can write a file into it, then clean up
+    // the probe. Any failure means the path is unusable as a root.
+    private static bool TryProbeWritable(string root, out string? error)
+    {
+        error = null;
+        try
+        {
+            Directory.CreateDirectory(root);
+            string probe = Path.Combine(root, ".zeus-write-probe");
+            File.WriteAllText(probe, "");
+            File.Delete(probe);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            error = $"recordings path is not writable: {ex.Message}";
+            return false;
+        }
+    }
+
+    // Case- and separator-tolerant absolute-path comparison.
+    private static bool PathsEqual(string a, string b)
+    {
+        string fa = Path.TrimEndingDirectorySeparator(Path.GetFullPath(a));
+        string fb = Path.TrimEndingDirectorySeparator(Path.GetFullPath(b));
+        var cmp = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        return string.Equals(fa, fb, cmp);
+    }
 
     public WavRecorderStatus GetStatus()
     {
@@ -269,33 +389,52 @@ public sealed class WavRecorderService : IDisposable
             // else over-air on an already-keyed rig: ride the operator's key and
             // do not unkey at the end.
 
-            _playingFile = path;
-            _playingOnAir = onAir;
-            _weKeyedMox = weKeyed;
-            _playingDurationSec = samples.Length / (double)Math.Max(1, rate);
-            _state = WavRecorderState.Playing;
-            _playCts = new CancellationTokenSource();
-            _meter.Reset();
-
-            // Local playback mixes into the speaker via the preview path; force
-            // it on for the clip and restore after. Over-air playback does NOT
-            // touch the preview sink (the operator hears their TX monitor /
-            // sidetone as usual, not a local copy).
-            _restorePreviewOff = false;
-            if (!onAir)
+            // From here on a key may be raised. If ANYTHING below throws (e.g.
+            // thread/OOM exhaustion on a Pi when starting the pump), the pump's
+            // finally→FinishPlayback never runs, so we must unwind to Idle and —
+            // critically — drop any MOX we raised. Otherwise the rig is stranded
+            // keyed with no release path. RF-safety: only ever drop a key we
+            // raised ourselves; never touch an operator-held key.
+            try
             {
-                _restorePreviewOff = !_preview.IsEnabled;
-                if (_restorePreviewOff) _preview.SetEnabled(true);
+                _playingFile = path;
+                _playingOnAir = onAir;
+                _weKeyedMox = weKeyed;
+                _playingDurationSec = samples.Length / (double)Math.Max(1, rate);
+                _state = WavRecorderState.Playing;
+                _playCts = new CancellationTokenSource();
+                _meter.Reset();
+
+                // Local playback is mixed into the RX audio block on the pump thread
+                // (see EmitBlock → EnqueueMonitorAudio), so it reaches the operator's
+                // speakers in both web and desktop modes. Over-air playback feeds the
+                // TX chain instead. Nothing to arm here.
+                var ct = _playCts.Token;
+                bool keyedForSettle = weKeyed;
+                _playThread = new Thread(() => PlaybackPump(samples, rate, onAir, keyedForSettle, ct))
+                {
+                    IsBackground = true,
+                    Name = "wav-playback",
+                };
+                _playThread.Start();
+            }
+            catch
+            {
+                // Unwind: reset state, tear down the CTS/thread refs, and release
+                // any key we raised so we never leave the transmitter stranded.
+                _state = WavRecorderState.Idle;
+                _playingFile = null;
+                _playingOnAir = false;
+                _weKeyedMox = false;
+                _playingDurationSec = 0;
+                _playCts?.Dispose();
+                _playCts = null;
+                _playThread = null;
+                if (weKeyed)
+                    _tx.TrySetMox(false, MoxSource.Wav, out _);
+                throw;
             }
 
-            var ct = _playCts.Token;
-            bool keyedForSettle = weKeyed;
-            _playThread = new Thread(() => PlaybackPump(samples, rate, onAir, keyedForSettle, ct))
-            {
-                IsBackground = true,
-                Name = "wav-playback",
-            };
-            _playThread.Start();
             _log.LogInformation(
                 "wav.play start file={File} samples={Samples} rate={Rate} onAir={OnAir} weKeyed={WeKeyed}",
                 path, samples.Length, rate, onAir, weKeyed);
@@ -312,7 +451,14 @@ public sealed class WavRecorderService : IDisposable
             _playCts?.Cancel();
             thread = _playThread;
         }
-        thread?.Join(500);
+        // Only join a thread that actually started and is still running. A thread
+        // that was created but never Start()ed (Play threw mid-setup) throws
+        // ThreadStateException on Join — which would skip FinishPlayback and leave
+        // a keyed rig. IsAlive is false for both an unstarted and an
+        // already-finished thread, so guarding on it keeps FinishPlayback always
+        // reachable. FinishPlayback is idempotent (no-ops if already Idle).
+        if (thread is { IsAlive: true })
+            thread.Join(500);
         FinishPlayback();
     }
 
@@ -379,7 +525,13 @@ public sealed class WavRecorderService : IDisposable
                 }
                 else
                 {
-                    _preview.PublishPreview(block, TxMicBlockResampler.OutputSampleRate);
+                    // Local monitor: mix into the RX audio block so it reaches
+                    // every sink — browser (WebSocket) AND desktop (native) —
+                    // alike. The old preview-sink side-channel was desktop-only
+                    // and silent in web mode; EnqueueMonitorAudio is the
+                    // universal path PluginPlaybackSink already uses. A full ring
+                    // (returns false) just drops the block, same as that path.
+                    _pipeline.EnqueueMonitorAudio(block);
                 }
 
                 Pace();
@@ -417,7 +569,6 @@ public sealed class WavRecorderService : IDisposable
         lock (_sync)
         {
             if (_state != WavRecorderState.Playing) return;
-            if (_restorePreviewOff) { _preview.SetEnabled(false); _restorePreviewOff = false; }
             dropMox = _weKeyedMox;
             _weKeyedMox = false;
             _playCts?.Dispose();
@@ -458,13 +609,53 @@ public sealed class WavRecorderService : IDisposable
         return WavFile.Envelope(samples, Math.Clamp(buckets, 16, 2000));
     }
 
-    public bool DeleteRecording(string relPath) => _library.DeleteRecording(relPath);
+    public bool DeleteRecording(string relPath)
+    {
+        EnsureNotActiveTarget(_library.ResolveRel(relPath));
+        return _library.DeleteRecording(relPath);
+    }
     public string RenameRecording(string relFrom, string newDisplayName)
         => _library.RenameRecording(relFrom, newDisplayName);
     public string MoveRecording(string relFrom, string destFolder)
         => _library.MoveRecording(relFrom, destFolder);
     public string CreateFolder(string relPath) => _library.CreateFolder(relPath);
-    public string DeleteFolder(string relPath) => _library.DeleteFolder(relPath);
+    public string DeleteFolder(string relPath)
+    {
+        EnsureNotActiveTarget(_library.ResolveRel(relPath));
+        return _library.DeleteFolder(relPath);
+    }
+
+    // Refuse to delete the file currently being recorded or played, or a folder
+    // that contains it. On Unix the unlink succeeds and silently truncates the
+    // live capture (data loss); on Windows it throws a sharing violation (500).
+    // Stop both up front with a clear error the endpoint maps to 409 Conflict.
+    private void EnsureNotActiveTarget(string absPathOrDir)
+    {
+        lock (_sync)
+        {
+            if (_state == WavRecorderState.Idle) return;
+            string? active = _state == WavRecorderState.Recording ? _writer?.Path
+                           : _state == WavRecorderState.Playing ? _playingFile
+                           : null;
+            if (string.IsNullOrEmpty(active)) return;
+            if (IsSameOrUnder(absPathOrDir, active))
+                throw new InvalidOperationException(
+                    $"cannot delete a recording that is currently {_state.ToString().ToLowerInvariant()}");
+        }
+    }
+
+    // True when <paramref name="candidate"/> is the same file as
+    // <paramref name="target"/> or lives under it (when target is a directory).
+    private static bool IsSameOrUnder(string target, string candidate)
+    {
+        string t = Path.TrimEndingDirectorySeparator(Path.GetFullPath(target));
+        string c = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidate));
+        var cmp = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        return string.Equals(t, c, cmp)
+            || c.StartsWith(t + Path.DirectorySeparatorChar, cmp);
+    }
 
     public void Dispose()
     {

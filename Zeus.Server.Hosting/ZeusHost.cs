@@ -521,6 +521,10 @@ public static class ZeusHost
         // pipeline event subscriptions and runs the one-time loose-file
         // migration. The optional recordingsRootOverride ctor param defaults to
         // null here (Downloads-based) — tests inject a temp root.
+        // Persists the operator-chosen recordings root (null = platform default).
+        // Tiny single-row LiteDB store, mirrors PreferredRadioStore to stay clear
+        // of the Linux shared-mode crash (#682).
+        builder.Services.AddSingleton<Zeus.Server.Wav.WavRecorderSettingsStore>();
         builder.Services.AddSingleton<Zeus.Server.Wav.WavRecorderService>();
         // PS auto-attenuate timer2code-equivalent: ramps the radio's TX step
         // attenuator (Protocol2 only today) when calcc feedback level lands outside

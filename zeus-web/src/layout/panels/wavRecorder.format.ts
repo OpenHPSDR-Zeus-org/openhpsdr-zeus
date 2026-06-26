@@ -11,7 +11,7 @@
 // option) any later version. See the LICENSE file at the root of this
 // repository for the full text, or https://www.gnu.org/licenses/.
 //
-// Pure formatting + folder-tree helpers for the Digital Recorder panel.
+// Pure formatting + folder-tree helpers for the WAV Recorder panel.
 // Kept side-effect-free so they can be unit-tested without a DOM.
 
 /** Human-readable byte count: B / KB / MB / GB. */
@@ -109,4 +109,19 @@ export function segmentZone(index: number, total: number): Zone {
 export function litSegments(level: number, total: number): number {
   const clamped = Number.isFinite(level) ? Math.max(0, Math.min(1, level)) : 0;
   return Math.round(clamped * total);
+}
+
+/**
+ * Abbreviate an absolute filesystem path for a compact button label, keeping
+ * the last `tailSegments` path segments and prefixing an ellipsis when the
+ * path was shortened. Handles both POSIX (`/`) and Windows (`\`) separators so
+ * the label is correct regardless of the server platform. The full path still
+ * belongs in a `title` tooltip. Empty input → ''.
+ */
+export function abbreviatePath(path: string, tailSegments = 2): string {
+  if (!path) return '';
+  const sep = path.includes('\\') ? '\\' : '/';
+  const parts = path.split(/[\\/]+/).filter(Boolean);
+  if (parts.length <= tailSegments) return path;
+  return `…${sep}${parts.slice(-tailSegments).join(sep)}`;
 }

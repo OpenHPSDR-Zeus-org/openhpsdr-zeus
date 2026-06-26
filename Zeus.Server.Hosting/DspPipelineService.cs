@@ -624,6 +624,15 @@ public class DspPipelineService : BackgroundService,
     private long _monInjW;
     private long _monInjR;
 
+    // Output samples per Tick at the 30 Hz cadence (~1600 @ 48 kHz). When RX
+    // produces no audio this tick (RX1 muted / no band audio) but a local clip
+    // is mid-playback through the monitor-inject ring, we synthesize a silent RX
+    // block this size, mix the queued playback into it, and publish — otherwise
+    // local WAV playback is inaudible while RX is silent (FIX 4). Sized to drain
+    // the ring at ~real time so playback stays glitch-free.
+    private static readonly int MonitorInjectSilentBlockSamples =
+        Math.Min(AudioDrainCapacity, (int)Math.Round(AudioOutputRateHz * TickPeriod.TotalSeconds));
+
     /// <summary>
     /// Enqueue mono float32 samples to be mixed into the local RX audio output
     /// (the operator's monitor) on the next ticks. Realtime-safe, lock-free.
@@ -5867,6 +5876,34 @@ public class DspPipelineService : BackgroundService,
                 PublishAudio(in audioFrame);
                 RxAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
             }
+        }
+        else if (!txMonitorOn && MonitorBacklog > 0)
+        {
+            // FIX 4: RX produced no audio this tick (RX1 muted, or no band audio)
+            // yet a local clip is playing back through the monitor-inject ring.
+            // The audioSampleCount>0 path above — which mixes and publishes the
+            // monitor inject — was skipped, so the clip would be silent even
+            // though status says "playing". Synthesize a full-size silent RX
+            // block, mix the queued playback into it, and publish so the operator
+            // hears it on EVERY sink. STRICT no-op when the ring is empty (the
+            // MonitorBacklog>0 guard is a single volatile read), so normal /
+            // muted-RX behaviour is byte-identical when nothing is playing.
+            // Deliberately does NOT fire RxAudioAvailable: that tap feeds RX
+            // capture, which must stay byte-identical (no synthetic silence).
+            int monBlock = Math.Min(audioBuf.Length, MonitorInjectSilentBlockSamples);
+            Array.Clear(audioBuf, 0, monBlock);
+            MixMonitorInject(audioBuf.AsSpan(0, monBlock));
+            LimitRxAudioBuffer(audioBuf.AsSpan(0, monBlock));
+
+            var injectFrame = new AudioFrame(
+                Seq: ++_audioSeq,
+                TsUnixMs: nowMs,
+                RxId: 0,
+                Channels: 1,
+                SampleRateHz: (uint)AudioOutputRateHz,
+                SampleCount: (ushort)monBlock,
+                Samples: new ReadOnlyMemory<float>(audioBuf, 0, monBlock));
+            PublishAudio(in injectFrame);
         }
         if (txMonitorOn)
         {

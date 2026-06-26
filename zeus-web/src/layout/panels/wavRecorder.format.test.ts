@@ -23,6 +23,7 @@ import {
   breadcrumb,
   segmentZone,
   litSegments,
+  abbreviatePath,
 } from './wavRecorder.format';
 
 describe('fmtBytes', () => {
@@ -49,6 +50,10 @@ describe('fmtClock', () => {
   it('clamps negatives and non-finite to 00:00', () => {
     expect(fmtClock(-3)).toBe('00:00');
     expect(fmtClock(NaN)).toBe('00:00');
+  });
+  it('rolls hours into minutes (mm:ss, no hour field)', () => {
+    expect(fmtClock(3661)).toBe('61:01');
+    expect(fmtClock(7200)).toBe('120:00');
   });
 });
 
@@ -89,6 +94,12 @@ describe('childFolders', () => {
   it('returns empty for a leaf', () => {
     expect(childFolders(folders, 'Nets/Weekly')).toEqual([]);
   });
+  it('does not treat a prefix-sibling as a child', () => {
+    // "DXpedition" shares the "DX" prefix but is NOT a child of "DX".
+    const f = ['DX', 'DXpedition', 'DX/2024'];
+    expect(childFolders(f, 'DX')).toEqual(['DX/2024']);
+    expect(childFolders(f, '')).toEqual(['DX', 'DXpedition']);
+  });
 });
 
 describe('breadcrumb', () => {
@@ -118,5 +129,25 @@ describe('meter ladder', () => {
     expect(litSegments(2, 40)).toBe(40);
     expect(litSegments(-1, 40)).toBe(0);
     expect(litSegments(NaN, 40)).toBe(0);
+  });
+});
+
+describe('abbreviatePath', () => {
+  it('returns empty for empty input', () => {
+    expect(abbreviatePath('')).toBe('');
+  });
+  it('leaves short paths intact', () => {
+    expect(abbreviatePath('/home')).toBe('/home');
+    expect(abbreviatePath('/home/doug')).toBe('/home/doug');
+  });
+  it('keeps the last two POSIX segments with an ellipsis prefix', () => {
+    expect(abbreviatePath('/Users/doug/Music/Recordings')).toBe('…/Music/Recordings');
+  });
+  it('keeps the last two Windows segments with a backslash separator', () => {
+    expect(abbreviatePath('C:\\Users\\Doug\\Recordings')).toBe('…\\Doug\\Recordings');
+  });
+  it('honors a custom tail length', () => {
+    expect(abbreviatePath('/a/b/c/d', 1)).toBe('…/d');
+    expect(abbreviatePath('/a/b/c/d', 3)).toBe('…/b/c/d');
   });
 });
