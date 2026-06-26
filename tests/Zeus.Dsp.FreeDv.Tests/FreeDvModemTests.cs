@@ -75,6 +75,55 @@ public class FreeDvModemTests
     }
 
     [Fact]
+    public void RxText_NullBeforeAnyDecode()
+    {
+        using var modem = new FreeDvModem();
+        Assert.Null(modem.RxText);
+    }
+
+    [Fact]
+    public void RxText_SurfacesCrTerminatedLine()
+    {
+        using var modem = new FreeDvModem();
+        modem.IngestRxTextForTest("N9WAR\r");
+        Assert.Equal("N9WAR", modem.RxText);
+    }
+
+    [Fact]
+    public void RxText_SurfacesPartial_WhenSenderSendsNoTerminator()
+    {
+        // Many real FreeDV stations send a bare repeating callsign with no CR/LF.
+        // The terminator-only readout used to show nothing for them; the partial
+        // fallback must surface the in-progress text so the operator sees it.
+        using var modem = new FreeDvModem();
+        modem.IngestRxTextForTest("VK5DGR");
+        Assert.Equal("VK5DGR", modem.RxText);
+    }
+
+    [Fact]
+    public void RxText_PrefersCompletedLine_OverLaterPartial()
+    {
+        // Once a clean line completes, a subsequent partial (the next callsign
+        // building up) must not clobber the stable readout with half-text.
+        using var modem = new FreeDvModem();
+        modem.IngestRxTextForTest("N9WAR\rVK");
+        Assert.Equal("N9WAR", modem.RxText);
+    }
+
+    [Fact]
+    public void RxText_SlidingWindow_KeepsRecentText_PastTheCap()
+    {
+        // A terminator-less sender must not blank out at the buffer cap; the
+        // sliding window keeps recent characters so the readout stays populated.
+        using var modem = new FreeDvModem();
+        modem.IngestRxTextForTest(new string('X', 80));
+        var text = modem.RxText;
+        Assert.False(string.IsNullOrEmpty(text));
+        Assert.True(text!.Length is > 0 and <= 64);
+        Assert.All(text, ch => Assert.Equal('X', ch));
+    }
+
+    [Fact]
     public void RadeV1_ReportsUnavailable_AndPassesThrough()
     {
         // RADE V1 has no native decoder yet. Selecting it must NOT mis-open a
