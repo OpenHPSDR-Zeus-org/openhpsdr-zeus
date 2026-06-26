@@ -3078,11 +3078,12 @@ public static class ZeusEndpoints
 
         app.MapPost("/api/chat/send", async (ChatSendRequest req, ChatService chat, HttpContext ctx) =>
         {
-            if (string.IsNullOrWhiteSpace(req.Text))
+            // Text is optional when an image is attached (image-only message).
+            if (string.IsNullOrWhiteSpace(req.Text) && req.Attachment is null)
                 return Results.BadRequest(new { error = "message text required" });
             try
             {
-                await chat.SendMessageAsync(req.Text, req.Room, ctx.RequestAborted);
+                await chat.SendMessageAsync(req.Text, req.Room, req.Attachment, ctx.RequestAborted);
                 return Results.Ok(new { ok = true });
             }
             catch (ArgumentException ex)
@@ -3149,7 +3150,7 @@ public static class ZeusEndpoints
         app.MapGet("/api/chat/rooms", (ChatService chat) => Results.Ok(new { rooms = chat.GetRooms() }));
 
         app.MapPost("/api/chat/dm", (ChatDmRequest req, ChatService chat, HttpContext ctx) =>
-            Run(() => chat.SendDmAsync(req.To, req.Text, ctx.RequestAborted)));
+            Run(() => chat.SendDmAsync(req.To, req.Text, req.Attachment, ctx.RequestAborted)));
 
         app.MapPost("/api/chat/history", (ChatRoomRequest req, ChatService chat, HttpContext ctx) =>
             Run(() => chat.RequestHistoryAsync(req.Room, ctx.RequestAborted)));
