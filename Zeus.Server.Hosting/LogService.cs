@@ -88,7 +88,10 @@ public sealed class LogService : IDisposable
                 QsoDateTimeUtc = request.QsoDateTimeUtc ?? DateTime.UtcNow,
                 Callsign = request.Callsign.ToUpperInvariant(),
                 Name = request.Name,
-                FrequencyMhz = request.FrequencyMhz,
+                // 0/negative MHz means "dial unknown" (e.g. a manual log while
+                // disconnected) — store null so ADIF omits FREQ and falls back to
+                // BAND, rather than exporting a junk FREQ:0.000000.
+                FrequencyMhz = request.FrequencyMhz > 0 ? request.FrequencyMhz : null,
                 Band = request.Band,
                 Mode = request.Mode,
                 RstSent = request.RstSent,
@@ -528,7 +531,22 @@ public sealed class LogService : IDisposable
         if (doc.FrequencyMhz.HasValue)
             AppendAdifField(sb, "FREQ", doc.FrequencyMhz.Value.ToString("F6", CultureInfo.InvariantCulture));
         AppendAdifField(sb, "BAND", doc.Band);
-        AppendAdifField(sb, "MODE", doc.Mode);
+        // FT4 is an MFSK SUBMODE in ADIF (3.1.x), not a top-level MODE enum value;
+        // strict parsers (LoTW / Club Log / QRZ) reject MODE=FT4. Emit it the
+        // canonical way. FT8 is a valid MODE and passes through unchanged.
+        if (string.Equals(doc.Mode, "FT4", StringComparison.OrdinalIgnoreCase))
+        {
+            AppendAdifField(sb, "MODE", "MFSK");
+            // Don't duplicate a SUBMODE already carried in the imported fields
+            // (those are re-emitted verbatim by AppendAdditionalAdifFields).
+            var hasSubmode = doc.AdifFields is not null && doc.AdifFields.ContainsKey("SUBMODE");
+            if (!hasSubmode)
+                AppendAdifField(sb, "SUBMODE", "FT4");
+        }
+        else
+        {
+            AppendAdifField(sb, "MODE", doc.Mode);
+        }
         AppendAdifField(sb, "RST_SENT", doc.RstSent);
         AppendAdifField(sb, "RST_RCVD", doc.RstRcvd);
 

@@ -114,6 +114,32 @@ describe('Ft8TxController', () => {
     expect(ctrl.getState().dxCall).toBeNull();
   });
 
+  it('markLogged() latches so a manual log blocks the sequencer auto-log (exactly once)', () => {
+    const { fn } = makeFetch();
+    const logged: string[] = [];
+    const ctrl = new Ft8TxController({
+      myCall: 'KB2UKA',
+      myGrid4: 'FN12',
+      fetchFn: fn,
+      onLogQso: (s) => logged.push(s.dxCall ?? ''),
+    });
+
+    // CQ caller picks up an answerer, advances to the report stage.
+    ctrl.enableTx();
+    ctrl.onWindow(['KB2UKA K1ABC FN31']);
+    expect(ctrl.getState().dxCall).toBe('K1ABC');
+
+    // Operator hits LOG QSO mid-QSO — latch it as logged.
+    ctrl.markLogged();
+    expect(ctrl.getState().logged).toBe(true);
+
+    // The QSO then completes on the wire (R-report → 73). The auto-log guard is
+    // `!state.logged`, so onLogQso must NOT fire a second time.
+    ctrl.onWindow(['KB2UKA K1ABC R-12']);
+    ctrl.onWindow(['KB2UKA K1ABC 73']);
+    expect(logged).toEqual([]); // manual log already recorded it; no duplicate
+  });
+
   it('posts /halt on operator Halt', () => {
     const { fn, calls } = makeFetch();
     const ctrl = new Ft8TxController({ myCall: 'KB2UKA', fetchFn: fn });

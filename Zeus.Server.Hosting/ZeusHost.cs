@@ -895,6 +895,15 @@ public static class ZeusHost
         builder.Services.AddHostedService(sp => sp.GetRequiredService<Cat.CatServer>());
         builder.Services.AddSingleton<CatManagementService>();
 
+        // WSJT-X logged-QSO UDP broadcaster — outbound QSO-record push to
+        // third-party loggers (JTAlert / Log4OM / GridTracker / N1MM). DISABLED
+        // by default; this is NEW network egress, opt-in via the Network settings
+        // tab. No listener / hosted service — it only sends a datagram from the
+        // /api/log/entry path, so config applies live (no restart).
+        builder.Services.AddSingleton<WsjtxConfigStore>();
+        builder.Services.AddSingleton<WsjtxManagementService>();
+        builder.Services.AddSingleton<Wsjtx.WsjtxUdpBroadcaster>();
+
         // ZeusChat — operator-to-operator chat over the Cloudflare relay.
         // Singleton (API surface) + hosted service (relay connection lifecycle),
         // same shape as SpotBroadcastService above. Opt-in persisted via

@@ -17,9 +17,13 @@ import { useOperatorStore } from '../../state/operator-store';
 import { DIGITAL_BANDS } from '../../dsp/digital-segments';
 import { slotOf } from '../../dsp/ft8-sequencer';
 import { useFt8TxRunner } from '../../dsp/ft8-tx-runner';
+import { qsoStateToLogEntry } from '../../dsp/ft8-qso-log';
+import { useLoggerStore } from '../../state/logger-store';
 import { Ft8DecodeTable } from './Ft8DecodeTable';
 import { Ft8TxControl } from './Ft8TxControl';
 import { Ft8ReceivePanel } from './Ft8ReceivePanel';
+import { Ft8ActivityLog } from './Ft8ActivityLog';
+import { Ft8Stats } from './Ft8Stats';
 import '../../styles/ft8-theme.css';
 
 export interface Ft8WorkspaceProps {
@@ -61,14 +65,64 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
   const setCall = useOperatorStore((s) => s.setCall);
   const setGrid = useOperatorStore((s) => s.setGrid);
 
+  const addLogEntry = useLoggerStore((s) => s.addLogEntry);
+  const entries = useLoggerStore((s) => s.entries);
+
+  // Worked-before / new-grid sets for decode-table highlighting, memoized from
+  // the logbook. NOTE: useLoggerStore.loadEntries caps at 100 entries, so these
+  // miss older QSOs — a bulk "worked callsigns/grids" endpoint (or a larger take
+  // for the workspace) is a follow-up (#1015).
+  const workedCalls = useMemo(
+    () => new Set(entries.map((e) => e.callsign.toUpperCase())),
+    [entries],
+  );
+  const workedGrids = useMemo(
+    () =>
+      new Set(
+        entries
+          .filter((e) => e.grid)
+          .map((e) => e.grid!.slice(0, 4).toUpperCase()),
+      ),
+    [entries],
+  );
+
   // Live TX runner: owns the QSO sequencer + backend keyer, driven once per slot.
+  // onLogQso fires exactly once per completed QSO (the sequencer's `logged`
+  // latch). It reads band/dial live from the stores so the captured closure can
+  // never log a stale band/frequency.
   const tx = useFt8TxRunner({
     myCall,
     myGrid: myGrid || null,
     mode: protocol,
     active: true,
     band,
+    onLogQso: (state) => {
+      const dialHz = useConnectionStore.getState().vfoHz ?? 0;
+      const req = qsoStateToLogEntry(state, {
+        band: useFt8Store.getState().band,
+        freqMhz: dialHz / 1e6,
+        mode: state.mode,
+      });
+      if (req) void useLoggerStore.getState().addLogEntry(req);
+    },
   });
+
+  // Manual LOG QSO — record the in-progress QSO on demand (same pure mapper).
+  // Latches the controller's `logged` flag so the auto-log path can't write a
+  // second identical row when the sequencer later completes the QSO. Bails if the
+  // QSO has already been logged (manual or auto).
+  const logCurrentQso = () => {
+    if (tx.qso.logged) return;
+    const req = qsoStateToLogEntry(tx.qso, {
+      band,
+      freqMhz: (vfoHz ?? 0) / 1e6,
+      mode: protocol,
+    });
+    if (req) {
+      void addLogEntry(req);
+      tx.markLogged();
+    }
+  };
 
   // Esc closes the workspace.
   useEffect(() => {
@@ -184,12 +238,22 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
               )}
             </div>
             <div className="ft8-region__body">
-              <Ft8DecodeTable myCall={myCall || undefined} onRowClick={onRowClick} />
+              <Ft8DecodeTable
+                myCall={myCall || undefined}
+                workedCalls={workedCalls}
+                workedGrids={workedGrids}
+                onRowClick={onRowClick}
+              />
             </div>
           </section>
-          <section className="ft8-region">
+          <section className="ft8-region ft8-region--log">
             <div className="ft8-region__head">Activity log</div>
-            <div className="ft8-placeholder">QSO log — feeds existing LogService (ADIF, follow-up)</div>
+            <div className="ft8-region__body">
+              <Ft8ActivityLog
+                onLogQso={logCurrentQso}
+                canLog={!!tx.qso.dxCall && !tx.qso.logged}
+              />
+            </div>
           </section>
         </div>
 
@@ -202,8 +266,10 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
             </div>
           </section>
           <section className="ft8-region">
-            <div className="ft8-region__head">Band map</div>
-            <div className="ft8-placeholder">great-circle map from decoded grids (follow-up)</div>
+            <div className="ft8-region__head">Stats</div>
+            <div className="ft8-region__body">
+              <Ft8Stats />
+            </div>
           </section>
         </div>
       </div>

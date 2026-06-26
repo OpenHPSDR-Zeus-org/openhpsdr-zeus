@@ -42,4 +42,27 @@ describe('classifyDecode', () => {
   it('defaults to normal', () => {
     expect(classifyDecode(row('GJ0KYZ RK9AX MO05'))).toBe('normal');
   });
+
+  it('lights a new (unworked) grid on a directed decode', () => {
+    const grids = new Set(['FN42']);
+    // MO05 not yet worked → new; FN42 already worked → normal.
+    expect(classifyDecode(row('GJ0KYZ RK9AX MO05'), undefined, undefined, grids)).toBe('new');
+    expect(classifyDecode(row('GJ0KYZ RK9AX FN42'), undefined, undefined, grids)).toBe('normal');
+  });
+
+  it('keeps CQ green even when its grid is new', () => {
+    const grids = new Set<string>();
+    expect(classifyDecode(row('CQ RK9AX MO05'), undefined, undefined, grids)).toBe('cq');
+  });
+
+  it('prefers worked-before over new-grid', () => {
+    const worked = new Set(['RK9AX']);
+    const grids = new Set<string>();
+    expect(classifyDecode(row('GJ0KYZ RK9AX MO05'), undefined, worked, grids)).toBe('worked');
+  });
+
+  it('returns normal for a directed decode with no grid', () => {
+    const grids = new Set<string>();
+    expect(classifyDecode(row('GJ0KYZ RK9AX -12'), undefined, undefined, grids)).toBe('normal');
+  });
 });

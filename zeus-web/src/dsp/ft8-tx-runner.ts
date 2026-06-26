@@ -23,6 +23,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFt8Store, type Ft8Row } from '../state/ft8-store';
 import { Ft8TxController } from './ft8-tx-controller';
+import { parseFt8Message } from './ft8-message';
 import type { DigitalQsoMode, QsoState, Slot } from './ft8-sequencer';
 
 /** Slot length (ms) for a digital mode. FT8 = 15 s, FT4 = 7.5 s. */
@@ -59,7 +60,38 @@ export function slotParity(slotIndex: number): Slot {
  * membership is `floor(slotStartUnixMs / slotMs) === slotIndex`.
  */
 export function decodesForSlot(rows: readonly Ft8Row[], slotIndex: number, slotMs: number): string[] {
-  return rows.filter((r) => slotIndexOf(r.slotStartUnixMs, slotMs) === slotIndex).map((r) => r.text);
+  return rowsForSlot(rows, slotIndex, slotMs).map((r) => r.text);
+}
+
+/**
+ * The decode ROWS (text + snrDb + offset) that belong to a given UTC slot index.
+ * Sibling of {@link decodesForSlot}; the runner needs the full rows (not just the
+ * text) so it can read the measured SNR of the DX station for the outgoing
+ * report. Pure.
+ */
+export function rowsForSlot(rows: readonly Ft8Row[], slotIndex: number, slotMs: number): Ft8Row[] {
+  return rows.filter((r) => slotIndexOf(r.slotStartUnixMs, slotMs) === slotIndex);
+}
+
+/**
+ * The SNR (dB) we measured of the DX station in this window's decodes — the value
+ * to report to him (Tx2 / Tx3). When a QSO is already latched we match the
+ * station we're working (`state.dxCall`); while still calling CQ we use the SNR
+ * of the first station calling us (the prospective answerer the sequencer will
+ * pick). Returns undefined when no matching row exists, so the sequencer keeps
+ * its own fallback rather than logging a constant.
+ */
+export function measuredDxSnr(rows: readonly Ft8Row[], state: QsoState): number | undefined {
+  const dx = state.dxCall;
+  for (const r of rows) {
+    const m = parseFt8Message(r.text, state.myCall);
+    if (dx) {
+      if (m.deCall === dx) return r.snrDb;
+    } else if (m.isCallingMe && m.deCall) {
+      return r.snrDb;
+    }
+  }
+  return undefined;
 }
 
 export interface Ft8TxRunnerView {
@@ -84,6 +116,8 @@ export interface Ft8TxRunnerView {
   answerCq: (decodeText: string, senderSlot: Slot) => boolean;
   callStation: (decodeText: string, senderSlot: Slot) => boolean;
   stageMacro: (message: string) => void;
+  /** Latch the live QSO as logged (manual LOG QSO) so the auto-log can't double-fire. */
+  markLogged: () => void;
 }
 
 export interface UseFt8TxRunnerOpts {
@@ -109,7 +143,7 @@ export function startFt8SlotDriver(opts: {
   slotMs: number;
   settleMs: number;
   getRows: () => readonly Ft8Row[];
-  onWindow: (texts: string[], senderSlot: Slot) => void;
+  onWindow: (rows: Ft8Row[], senderSlot: Slot) => void;
 }): () => void {
   const { slotMs, settleMs, getRows, onWindow } = opts;
   let lastSlot = slotIndexOf(Date.now(), slotMs);
@@ -121,7 +155,7 @@ export function startFt8SlotDriver(opts: {
     const endedSlot = lastSlot; // the slot that just closed
     lastSlot = cur;
     const id = setTimeout(() => {
-      onWindow(decodesForSlot(getRows(), endedSlot, slotMs), slotParity(endedSlot));
+      onWindow(rowsForSlot(getRows(), endedSlot, slotMs), slotParity(endedSlot));
     }, settleMs);
     pending.push(id);
   };
@@ -178,8 +212,11 @@ export function useFt8TxRunner(opts: UseFt8TxRunnerOpts): Ft8TxRunnerView {
       slotMs: slotMsFor(mode),
       settleMs: settleMsFor(mode),
       getRows: () => useFt8Store.getState().rows,
-      onWindow: (texts, senderSlot) => {
-        ctrl.onWindow(texts, undefined, senderSlot);
+      onWindow: (rows, senderSlot) => {
+        // Thread the measured SNR of the DX station so the report we send (and
+        // log) is the real exchange, not a constant fallback.
+        const measured = measuredDxSnr(rows, ctrl.getState());
+        ctrl.onWindow(rows.map((r) => r.text), measured, senderSlot);
         sync();
       },
     });
@@ -258,6 +295,10 @@ export function useFt8TxRunner(opts: UseFt8TxRunnerOpts): Ft8TxRunnerView {
     },
     stageMacro: (message) => {
       ctrl.stageMacro(message);
+      sync();
+    },
+    markLogged: () => {
+      ctrl.markLogged();
       sync();
     },
   };

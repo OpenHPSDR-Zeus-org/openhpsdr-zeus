@@ -150,6 +150,13 @@ export class Ft8TxController {
     this.callFirst = on;
   }
 
+  /** Latch the live QSO as logged (the manual LOG QSO path). Once set, the
+   *  sequencer's auto-log guard (`!state.logged`) can never fire onLogQso for the
+   *  same QSO, so a manual log followed by sequence completion logs exactly once. */
+  markLogged(): void {
+    if (!this.state.logged) this.state = { ...this.state, logged: true };
+  }
+
   /** Operator disable (disable-after-73 also routes here). */
   disableTx(): void {
     this.state = { ...this.state, enableTx: false };

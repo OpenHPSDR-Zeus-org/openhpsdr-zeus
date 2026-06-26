@@ -6,17 +6,23 @@
 // move the audio cursor.
 
 import { useFt8Store, type Ft8Row } from '../../state/ft8-store';
+import { parseFt8Message } from '../../dsp/ft8-message';
 
 export type Ft8RowClass = 'cq' | 'me' | 'worked' | 'new' | 'normal';
 
 /**
  * Classify a decode for color-coding. `myCall` enables the directed-at-me
- * highlight; `workedCalls` (optional) dims stations already worked.
+ * highlight; `workedCalls` (optional) dims stations already worked; `workedGrids`
+ * (optional, 4-char upper-case) lights an otherwise-plain decode whose grid we
+ * have NOT worked yet ('new'). CQ keeps its own green class even when its grid is
+ * new — CQ is the louder signal in the table and the existing precedence is
+ * relied on elsewhere.
  */
 export function classifyDecode(
   row: Ft8Row,
   myCall?: string,
   workedCalls?: ReadonlySet<string>,
+  workedGrids?: ReadonlySet<string>,
 ): Ft8RowClass {
   const tokens = row.text.trim().split(/\s+/);
   const first = tokens[0]?.toUpperCase() ?? '';
@@ -27,6 +33,10 @@ export function classifyDecode(
   if (first === 'CQ') return 'cq';                  // a CQ row (even my own)
   if (me && first === me) return 'me';              // someone is calling ME
   if (workedCalls && second && workedCalls.has(second)) return 'worked';
+  if (workedGrids) {
+    const grid = parseFt8Message(row.text).grid;
+    if (grid && !workedGrids.has(grid.toUpperCase())) return 'new';
+  }
   return 'normal';
 }
 
@@ -47,10 +57,11 @@ const CLASS_CSS: Record<Ft8RowClass, string> = {
 export interface Ft8DecodeTableProps {
   myCall?: string;
   workedCalls?: ReadonlySet<string>;
+  workedGrids?: ReadonlySet<string>;
   onRowClick?: (row: Ft8Row) => void;
 }
 
-export function Ft8DecodeTable({ myCall, workedCalls, onRowClick }: Ft8DecodeTableProps) {
+export function Ft8DecodeTable({ myCall, workedCalls, workedGrids, onRowClick }: Ft8DecodeTableProps) {
   const rows = useFt8Store((s) => s.rows);
 
   if (rows.length === 0) {
@@ -70,7 +81,7 @@ export function Ft8DecodeTable({ myCall, workedCalls, onRowClick }: Ft8DecodeTab
       </thead>
       <tbody>
         {rows.map((r) => {
-          const cls = classifyDecode(r, myCall, workedCalls);
+          const cls = classifyDecode(r, myCall, workedCalls, workedGrids);
           return (
             <tr
               key={r.id}
