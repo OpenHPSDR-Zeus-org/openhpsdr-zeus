@@ -58,6 +58,7 @@ import {
   getReceiverFilterLowHz,
   getReceiverMode,
   getReceiverVfoHz,
+  KIWI_RECEIVER_INDEX,
 } from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
 import { panReceiverCenterTo } from './ctun-zoom-center';
@@ -71,12 +72,6 @@ const AUTOPAN_MARGIN_FRAC = 0.06;
 // the view-centre tween glides smoothly to the latest target in between, so a
 // throttled follow still looks continuous during a sustained tune.
 const PAN_THROTTLE_MS = 80;
-// Highest receiver index the view-centre-motion subscription covers: RX1 (0),
-// the hardware secondaries, and the reserved Kiwi slice slot (7), so the Kiwi
-// waterfall is kept in view exactly like the hardware panes once that feature
-// is present. Subscribing to inactive indices is free — their view-centre
-// controller stays idle and never glides, so the listener never fires.
-const MAX_AUTOPAN_RX_INDEX = 7;
 
 /**
  * Pure geometry: given the current view centre, span, dial, and filter, return
@@ -207,15 +202,14 @@ export function useFilterAutopan(): void {
         schedule();
       }
     });
-    // View-centre motion for every receiver index, including the reserved Kiwi
-    // slice slot (MAX_AUTOPAN_RX_INDEX) whose waterfall pans its own centre via
-    // SetCenter: catches a glide easing toward the dial and, crucially, a
-    // ruler-pan that scrolled the dial off-screen — so the crosshair is
-    // recovered once the drag releases on ANY pane, not only on the next tune.
-    // Subscribing to inactive indices is free: their view-centre never glides,
-    // so the listener never fires.
+    // View-centre motion for every receiver index, including the Kiwi slice
+    // (KIWI_RECEIVER_INDEX) whose waterfall pans its own centre via SetCenter:
+    // catches a glide easing toward the dial and, crucially, a ruler-pan that
+    // scrolled the dial off-screen — so the crosshair is recovered once the drag
+    // releases on ANY pane, not only on the next tune. Subscribing to inactive
+    // indices is free: their view-centre never glides, so the listener never fires.
     const unsubVcs: Array<() => void> = [];
-    for (let i = 0; i <= MAX_AUTOPAN_RX_INDEX; i++) {
+    for (let i = 0; i <= KIWI_RECEIVER_INDEX; i++) {
       unsubVcs.push(viewCenter.viewCenterFor(i).subscribe(schedule));
     }
 
