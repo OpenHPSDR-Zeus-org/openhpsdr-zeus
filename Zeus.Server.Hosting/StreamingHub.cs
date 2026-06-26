@@ -877,6 +877,21 @@ public sealed class StreamingHub
     }
 
     /// <summary>
+    /// Broadcasts a pre-encoded WsprSpot (0x39) frame ([type][UTF-8 JSON of
+    /// <see cref="Zeus.Contracts.WsprSpotBatchDto"/>]) to every connected client.
+    /// One frame per completed 120 s WSPR slot — same fan-out shape as
+    /// <see cref="BroadcastFt8Decode"/>; called by WsprBroadcastService.
+    /// </summary>
+    public void BroadcastWsprSpot(byte[] payload)
+    {
+        if (_clients.IsEmpty) return;
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
+    }
+
+    /// <summary>
     /// Broadcasts a pre-encoded DiagnosticsHealth (0x36) frame
     /// ([type][UTF-8 JSON of <see cref="Zeus.Contracts.DiagnosticsHealthDto"/>]) to every
     /// connected client and caches it for push-on-attach. Same fan-out shape as

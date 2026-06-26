@@ -46,6 +46,21 @@
 import { useCallback } from 'react';
 import { type RxMode } from '../api/client';
 import { useFt8Store } from '../state/ft8-store';
+import { useWsprStore } from '../state/wspr-store';
+
+/** Enter a digital mode, closing whichever other digital workspace is open
+ *  (FT8/FT4/WSPR are mutually exclusive — they all retune the radio). */
+function enterDigital(target: 'FT8' | 'FT4' | 'WSPR') {
+  const ft8 = useFt8Store.getState();
+  const wspr = useWsprStore.getState();
+  if (target === 'WSPR') {
+    if (ft8.open) ft8.closeWorkspace();
+    wspr.openWorkspace();
+  } else {
+    if (wspr.open) wspr.closeWorkspace();
+    ft8.openWorkspace({ protocol: target });
+  }
+}
 import { useConnectionStore } from '../state/connection-store';
 import {
   gangedReceiverAction,
@@ -124,11 +139,11 @@ export function ModeBandwidth() {
             DIGU + the FT8 bandwidth + the band dial). Separate from the WDSP
             demod modes above because they are Zeus-level modes, like FreeDV. */}
         <div className="btn-row wrap" style={{ width: '100%', marginTop: 4 }}>
-          {(['FT8', 'FT4'] as const).map((p) => (
+          {(['FT8', 'FT4', 'WSPR'] as const).map((p) => (
             <button
               key={p}
               type="button"
-              onClick={() => useFt8Store.getState().openWorkspace({ protocol: p })}
+              onClick={() => enterDigital(p)}
               className="btn sm"
               title={`Enter ${p} — opens the digital workspace and configures the radio`}
             >

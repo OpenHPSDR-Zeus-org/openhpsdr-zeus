@@ -255,4 +255,11 @@ public enum MsgType : byte
     // types so older builds tolerate it cleanly. Payload:
     // [type:1][UTF-8 JSON Ft8DecodeBatchDto]. See Ft8DecodeFrame.cs.
     Ft8Decode = 0x38,
+
+    // Server → client (WSPR spot batch). Broadcast by WsprBroadcastService once
+    // per completed 120 s UTC slot, carrying all decoded spots for one RX. Same
+    // low-rate JSON-envelope shape as Ft8Decode; the WSPR workspace renders them
+    // into its spot table. UI ignores unknown types so older builds tolerate it.
+    // Payload: [type:1][UTF-8 JSON WsprSpotBatchDto]. See WsprSpotFrame.cs.
+    WsprSpot = 0x39,
 }

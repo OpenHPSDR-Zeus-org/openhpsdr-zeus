@@ -452,6 +452,9 @@ public static class ZeusHost
         // when zeus_wspr decode is unavailable (e.g. Windows encode-only build).
         builder.Services.AddSingleton<WsprService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<WsprService>());
+        // WsprBroadcastService — pushes each completed 120 s slot's spots to WS
+        // clients as a 0x39 WsprSpot frame for the WSPR workspace spot table.
+        builder.Services.AddHostedService<WsprBroadcastService>();
         // FreeDvNativeInstaller — the in-app "Install FreeDV" downloader. codec2
         // can't be built on a stock operator machine, so when the bundled binary
         // is missing (older build / unshipped platform) this fetches the prebuilt

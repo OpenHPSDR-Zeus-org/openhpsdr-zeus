@@ -48,6 +48,7 @@ import { ChevronLeft, ChevronRight, Download, Upload } from 'lucide-react';
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
 import { Ft8WorkspaceMount } from './layout/ft8/Ft8Workspace';
+import { WsprWorkspaceMount } from './layout/ft8/WsprWorkspace';
 import { useFt8Store } from './state/ft8-store';
 import { WorkspaceErrorBoundary } from './layout/WorkspaceErrorBoundary';
 import { AppErrorBoundary } from './layout/AppErrorBoundary';
@@ -986,6 +987,7 @@ export default function App() {
           operator engages FT8 mode (open it via #ft8). Self-contained: renders
           null when closed, so this is purely additive to the main console. */}
       <Ft8WorkspaceMount />
+      <WsprWorkspaceMount />
 
       {/* Left layout bar — issue #241. Spans the full app height; lists named
           layouts for the active radio with switch/add/delete/reset actions. */}

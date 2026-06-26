@@ -64,6 +64,7 @@ import { CW_STATE_FROM_BYTE, useCwStore } from '../state/cw-store';
 import { useSpotStore } from '../state/spot-store';
 import { useChatStore, type ChatEnvelope } from '../state/chat-store';
 import { useFt8Store, type Ft8DecodeBatch } from '../state/ft8-store';
+import { useWsprStore, type WsprSpotBatch } from '../state/wspr-store';
 import { usePttStore } from '../state/ptt-store';
 import { warnOnce } from '../util/logger';
 import { clampFinite } from '../util/number';
@@ -213,6 +214,10 @@ const PTT_STATUS_BYTES = 2;
 // after the type byte; dispatched into ft8-store's ingest(). Contract:
 // Zeus.Contracts/Ft8DecodeFrame.cs.
 export const MSG_TYPE_FT8_DECODE = 0x38;
+// 0x39 WsprSpot: variable-length UTF-8 JSON WsprSpotBatchDto after the type
+// byte, one per completed 120 s WSPR slot; dispatched into wspr-store's
+// ingest(). Contract: Zeus.Contracts/WsprSpotFrame.cs.
+export const MSG_TYPE_WSPR_SPOT = 0x39;
 
 // CW engine status — broadcast on every state edge of the host-side CW
 // keyer so the macro pad can render in-flight text + queue depth without
@@ -520,6 +525,18 @@ export function dispatchServerFrame(data: ArrayBuffer): void {
         useFt8Store.getState().ingest(batch);
       } catch (err) {
         warnOnce('ws-ft8-decode-parse', 'ft8 decode frame parse failed', err);
+      }
+      return;
+    }
+    if (peekType === MSG_TYPE_WSPR_SPOT) {
+      // Variable-length UTF-8 JSON WsprSpotBatchDto after the type byte.
+      const bytes = new Uint8Array(ev.data, 1);
+      const json = new TextDecoder('utf-8').decode(bytes);
+      try {
+        const batch = JSON.parse(json) as WsprSpotBatch;
+        useWsprStore.getState().ingest(batch);
+      } catch (err) {
+        warnOnce('ws-wspr-spot-parse', 'wspr spot frame parse failed', err);
       }
       return;
     }
