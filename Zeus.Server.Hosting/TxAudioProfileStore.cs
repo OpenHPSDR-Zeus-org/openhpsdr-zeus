@@ -31,11 +31,26 @@ public sealed class TxAudioProfileStore : IDisposable
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
+    // Folder-mirror output: human-readable, so a profile dropped in the folder
+    // (or shared between operators) is easy to eyeball and hand-edit.
+    private static readonly JsonSerializerOptions FileJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true,
+    };
+
+    // Each profile is ALSO mirrored to <prefs-dir>/tx-audio-profiles/<id>.json so
+    // the whole catalog lives as plain files on disk (portable, shareable,
+    // importable). LiteDB stays the source of truth; the folder is a write-through
+    // mirror — best-effort, never allowed to break a DB write.
+    private const string ProfileDirName = "tx-audio-profiles";
+
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<TxAudioProfileEntry> _profiles;
     private readonly ILiteCollection<TxAudioProfileLastLoadedEntry> _lastLoaded;
     private readonly ILogger<TxAudioProfileStore> _log;
     private readonly object _sync = new();
+    private readonly string _profileDir;
 
     public TxAudioProfileStore(ILogger<TxAudioProfileStore> log, string? dbPathOverride = null)
     {
@@ -44,6 +59,11 @@ public sealed class TxAudioProfileStore : IDisposable
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
+
+        // Mirror folder sits next to the active prefs DB, so a ZEUS_PREFS_PATH
+        // override (dev `/run fresh`, CI, tests) isolates the folder too.
+        var prefsDir = Path.GetDirectoryName(Path.GetFullPath(dbPath));
+        _profileDir = Path.Combine(string.IsNullOrEmpty(prefsDir) ? "." : prefsDir, ProfileDirName);
 
         _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
         _profiles = _db.GetCollection<TxAudioProfileEntry>("tx_audio_profiles");
@@ -54,8 +74,15 @@ public sealed class TxAudioProfileStore : IDisposable
         catch (LiteException ex) when (ex.Message.Contains("INDEX_DUPLICATE_KEY", StringComparison.OrdinalIgnoreCase)) { }
         _lastLoaded = _db.GetCollection<TxAudioProfileLastLoadedEntry>("tx_audio_profile_last_loaded");
 
-        _log.LogInformation("TxAudioProfileStore initialized at {Path}", dbPath);
+        // Make sure every profile already in the DB is present in the folder.
+        try { SyncFolder(); }
+        catch (Exception ex) { _log.LogWarning(ex, "TX audio profile folder sync at startup failed"); }
+
+        _log.LogInformation("TxAudioProfileStore initialized at {Path} (folder {Folder})", dbPath, _profileDir);
     }
+
+    /// <summary>The on-disk folder every profile is mirrored into as JSON.</summary>
+    public string ProfileFolder => _profileDir;
 
     public static string NormalizeId(string id) => (id ?? "").Trim().ToLowerInvariant();
 
@@ -123,6 +150,7 @@ public sealed class TxAudioProfileStore : IDisposable
                 existing.UpdatedUtc = nowUtc;
                 _profiles.Update(existing);
             }
+            MirrorToFolder(normalized);
             return normalized;
         }
     }
@@ -144,6 +172,7 @@ public sealed class TxAudioProfileStore : IDisposable
                     ptr.ProfileId = null;
                     _lastLoaded.Update(ptr);
                 }
+                RemoveFromFolder(id);
             }
             return removed;
         }
@@ -171,6 +200,52 @@ public sealed class TxAudioProfileStore : IDisposable
             if (ptr.Id == 0) _lastLoaded.Insert(ptr);
             else _lastLoaded.Update(ptr);
         }
+    }
+
+    /// <summary>Parse a profile from a JSON document (e.g. an imported file).
+    /// Returns null on blank/invalid input rather than throwing.</summary>
+    public static TxAudioProfileDto? ParseJson(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try { return JsonSerializer.Deserialize<TxAudioProfileDto>(json, JsonOptions); }
+        catch { return null; }
+    }
+
+    // Write-through mirror of one profile to <folder>/<id>.json. Best-effort:
+    // the DB row is authoritative, so a folder IO failure is logged, not thrown.
+    private void MirrorToFolder(TxAudioProfileDto profile)
+    {
+        try
+        {
+            Directory.CreateDirectory(_profileDir);
+            var path = Path.Combine(_profileDir, profile.Id + ".json");
+            File.WriteAllText(path, JsonSerializer.Serialize(profile, FileJsonOptions));
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Mirroring TX audio profile '{Id}' to folder failed", profile.Id);
+        }
+    }
+
+    private void RemoveFromFolder(string profileId)
+    {
+        try
+        {
+            var path = Path.Combine(_profileDir, profileId + ".json");
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Removing TX audio profile file '{Id}' failed", profileId);
+        }
+    }
+
+    // Ensure every profile in the DB has a file in the folder (idempotent).
+    private void SyncFolder()
+    {
+        Directory.CreateDirectory(_profileDir);
+        foreach (var profile in GetAll())
+            MirrorToFolder(profile);
     }
 
     private TxAudioProfileDto? TryDeserialize(TxAudioProfileEntry entry)

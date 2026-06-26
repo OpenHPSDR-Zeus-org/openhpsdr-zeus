@@ -682,8 +682,10 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
 
     /// <summary>
     /// Build a ProcessStartInfo that resolves PATH-installed tools on every
-    /// OS. npm is a .cmd shim on Windows (not a PATH-resolvable .exe), so it
-    /// must be invoked through cmd.exe; node.exe resolves directly.
+    /// OS. npm/npx are run by invoking their JS entrypoint with node directly
+    /// (node "…/npm-cli.js" …) rather than through the npm/npm.cmd shim, so the
+    /// working directory can never hijack which npm runs; node.exe resolves
+    /// directly. See <see cref="CreateToolProcessStartInfo"/>.
     /// </summary>
     private ProcessStartInfo MakePsi(string tool, string args, string cwd)
     {
@@ -700,6 +702,34 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+
+        // For npm/npx, run their JS entrypoint with node directly
+        // (node "<…>/npm-cli.js" <args>) instead of going through the
+        // npm / npm.cmd shim. cmd.exe resolves a bare `npm` against the working
+        // directory *before* PATH, so a stray or half-written node_modules\npm
+        // in the install dir (e.g. left by an interrupted `npm ci`) can shadow
+        // the real npm and fail with "Cannot find module npm-cli.js". Calling
+        // node with an absolute entrypoint removes every shim / PATH / CWD
+        // ambiguity, and is identical on Windows, macOS and Linux.
+        if (tool is "npm" or "npx")
+        {
+            var nodeExe = ResolveNodeExe(nodeDir);
+            var cliJs = nodeExe is null ? null : ResolveNpmCliJs(nodeExe, tool);
+            if (nodeExe is not null && cliJs is not null)
+            {
+                psi.FileName = nodeExe;
+                var quotedCli = $"\"{cliJs}\"";
+                psi.Arguments = args.Length == 0 ? quotedCli : $"{quotedCli} {args}";
+                if (nodeDir is not null)
+                    PrependPath(psi, nodeDir);
+                return psi;
+            }
+        }
+
+        // Fallback (and the normal path for node/tar/etc.): the npm/npx CLI
+        // entrypoint couldn't be located, so fall back to the shim. npm is a
+        // .cmd shim on Windows (not a PATH-resolvable .exe), so it must be
+        // invoked through cmd.exe; node.exe and tar resolve directly.
         var bundledTool = nodeDir is null ? null : ResolveBundledToolPath(tool, nodeDir);
         if (OperatingSystem.IsWindows() && (tool is "npm" or "npx"))
         {
@@ -720,6 +750,56 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
         if (nodeDir is not null)
             PrependPath(psi, nodeDir);
         return psi;
+    }
+
+    /// <summary>
+    /// Resolve the absolute path to the node executable to run: the bundled copy
+    /// when <paramref name="nodeDir"/> is set, otherwise the first <c>node</c>
+    /// found on PATH. Returns null if none is found.
+    /// </summary>
+    private static string? ResolveNodeExe(string? nodeDir)
+    {
+        var exeName = OperatingSystem.IsWindows() ? "node.exe" : "node";
+        if (nodeDir is not null)
+        {
+            var bundled = Path.Combine(nodeDir, exeName);
+            return File.Exists(bundled) ? bundled : null;
+        }
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrEmpty(path)) return null;
+        foreach (var dir in path.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(dir)) continue;
+            string candidate;
+            try { candidate = Path.Combine(dir.Trim(), exeName); }
+            catch { continue; } // malformed PATH entry — skip
+            if (File.Exists(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Resolve the absolute path to npm-cli.js / npx-cli.js for the given node
+    /// executable. Checks the Windows / portable-archive layout (npm beside
+    /// node) and the Unix system layout (node in <c>&lt;prefix&gt;/bin</c>, npm
+    /// under <c>&lt;prefix&gt;/lib</c>). Returns null if not found.
+    /// </summary>
+    private static string? ResolveNpmCliJs(string nodeExe, string tool)
+    {
+        var cliName = tool == "npx" ? "npx-cli.js" : "npm-cli.js";
+        var dir = Path.GetDirectoryName(nodeExe);
+        if (string.IsNullOrEmpty(dir)) return null;
+        string[] candidates =
+        [
+            Path.Combine(dir, "node_modules", "npm", "bin", cliName),              // Windows install / portable archive
+            Path.Combine(dir, "..", "lib", "node_modules", "npm", "bin", cliName), // Unix system (node in <prefix>/bin)
+        ];
+        foreach (var c in candidates)
+        {
+            try { if (File.Exists(c)) return Path.GetFullPath(c); }
+            catch { /* malformed candidate — try the next */ }
+        }
+        return null;
     }
 
     private static string? ResolveBundledToolPath(string tool, string nodeDir)
