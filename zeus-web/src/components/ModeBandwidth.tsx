@@ -134,17 +134,17 @@ export function ModeBandwidth() {
               {m.label}
             </button>
           ))}
-        </div>
-        {/* Digital modes open the dedicated FT8/FT4 workspace (which auto-sets
-            DIGU + the FT8 bandwidth + the band dial). Separate from the WDSP
-            demod modes above because they are Zeus-level modes, like FreeDV. */}
-        <div className="btn-row wrap" style={{ width: '100%', marginTop: 4 }}>
+          {/* Digital modes are Zeus-level modes (like FreeDV), not WDSP demods —
+              they open the dedicated FT8/FT4/WSPR workspace and auto-configure
+              the radio (DIGU + FT8 bandwidth + band dial). Rendered inline with
+              the mode buttons so they're always visible next to DIGU/DIGL. */}
           {(['FT8', 'FT4', 'WSPR'] as const).map((p) => (
             <button
               key={p}
               type="button"
               onClick={() => enterDigital(p)}
               className="btn sm"
+              style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
               title={`Enter ${p} — opens the digital workspace and configures the radio`}
             >
               {p}
