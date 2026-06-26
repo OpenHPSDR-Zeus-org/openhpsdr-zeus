@@ -50,6 +50,10 @@
     <PackageReference Include="Photino.NET" Version="4.0.16" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Zeus.Server.Tests" />
+  </ItemGroup>
+
   <!-- Ship zeus.png + zeus.ico next to the binary so Photino's SetIconFile
        can find them at runtime — zeus.png for Linux GTK / macOS dev runs,
        zeus.ico for Windows. CopyToOutputDirectory keeps `dotnet run` and
