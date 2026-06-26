@@ -1,0 +1,46 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF),
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
+//
+// zeus_wspr — stable C ABI over the vendored K1JT/K9AN wsprd (GPL-3, see
+// vendor/). Exposes WSPR encode now; decode follows once wsprd.c's CLI main is
+// refactored into a callable slot-decode entry. The ABI passes only flat C
+// types so the managed P/Invoke stays stable across re-vendoring.
+
+#ifndef ZEUS_WSPR_H
+#define ZEUS_WSPR_H
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#if defined(_WIN32)
+#define ZEUS_WSPR_API __declspec(dllexport)
+#else
+#define ZEUS_WSPR_API __attribute__((visibility("default")))
+#endif
+
+// Number of channel symbols in a WSPR transmission.
+#define ZEUS_WSPR_NSYM 162
+
+// Encode a WSPR message into 162 4-FSK channel symbols (each 0..3).
+//   message     "<call> <grid4> <power_dBm>", e.g. "KB2UKA FN12 30"
+//   symbols     caller-allocated output, length >= max_symbols
+//   max_symbols capacity (must be >= 162)
+// Returns 162 on success, or <0 on error (bad args / unencodable message).
+ZEUS_WSPR_API int32_t zeus_wspr_encode(const char* message,
+                                       uint8_t* symbols, int32_t max_symbols);
+
+// Library version string (diagnostics / about panel).
+ZEUS_WSPR_API const char* zeus_wspr_version(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // ZEUS_WSPR_H
