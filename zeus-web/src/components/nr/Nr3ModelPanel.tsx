@@ -21,6 +21,7 @@
 // cycle. See NrControls / DspPanel nrCycleFor().
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { ExternalLink } from 'lucide-react';
 import {
   downloadNr3Model,
   removeNr3Model,
@@ -28,6 +29,41 @@ import {
   type RadioStateDto,
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
+
+const RNNOISE_MODEL_DATA_URL = 'https://media.xiph.org/rnnoise/models/';
+const RNNOISE_REPO_URL = 'https://gitlab.xiph.org/xiph/rnnoise';
+
+function ModelSourceLinks() {
+  return (
+    <div className="nr-settings__row nr-settings__source-row">
+      <span className="nr-settings__label">Sources</span>
+      <div className="nr-settings__source-links">
+        <a
+          className="nr-settings__button"
+          href={RNNOISE_MODEL_DATA_URL}
+          target="_blank"
+          rel="noreferrer"
+          title="Open the Xiph RNNoise model data directory"
+          aria-label="Open the Xiph RNNoise model data directory"
+        >
+          <ExternalLink size={12} aria-hidden />
+          Xiph models
+        </a>
+        <a
+          className="nr-settings__button"
+          href={RNNOISE_REPO_URL}
+          target="_blank"
+          rel="noreferrer"
+          title="Open the official RNNoise source repository"
+          aria-label="Open the official RNNoise source repository"
+        >
+          <ExternalLink size={12} aria-hidden />
+          RNNoise repo
+        </a>
+      </div>
+    </div>
+  );
+}
 
 export function Nr3ModelPanel() {
   const available = useConnectionStore((s) => s.wdspNr3RnnrAvailable);
@@ -91,6 +127,7 @@ export function Nr3ModelPanel() {
           NR3 (RNNoise) is not available in this build — the loaded WDSP library
           was compiled without RNNoise support.
         </p>
+        <ModelSourceLinks />
       </div>
     );
   }
@@ -104,6 +141,8 @@ export function Nr3ModelPanel() {
           ? `Installed model: ${modelName}. NR3 is now in the NR cycle.`
           : 'No model installed — NR3 is hidden until you install an RNNoise weights file. Zeus ships no model; bring your own.'}
       </p>
+
+      <ModelSourceLinks />
 
       <div className="nr-settings__row">
         <span className="nr-settings__label">File</span>
