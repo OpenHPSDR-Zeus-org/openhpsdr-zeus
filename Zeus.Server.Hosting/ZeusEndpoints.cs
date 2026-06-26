@@ -3293,6 +3293,12 @@ public static class ZeusEndpoints
             return Results.Ok(new { restarting = true });
         });
 
+        app.MapPost("/api/app/quit", (AppRestartService restart) =>
+        {
+            restart.RequestQuit();
+            return Results.Ok(new { quitting = true });
+        });
+
         app.MapGet("/api/qrz/status", (QrzService qrz) => qrz.GetStatus());
 
         app.MapPost("/api/qrz/login", async (QrzLoginRequest req, QrzService qrz, HttpContext ctx) =>
