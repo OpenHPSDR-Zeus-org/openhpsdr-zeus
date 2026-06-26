@@ -438,6 +438,12 @@ public static class ZeusHost
         // and TxAudioIngest taps TX (pre-WDSP), both gated on FreeDV being the
         // active RX0 mode. No-op when the codec2 native library is absent.
         builder.Services.AddSingleton<FreeDvService>();
+        // Ft8Service — the built-in FT8/FT4 RX decode pipeline. Taps the same
+        // post-demod RX audio event AudioTapBridge uses (no hot-path changes),
+        // decimates 48k->12k, buffers UTC slots, and decodes on a worker. No-op
+        // (Enable() returns false) when the zeus_ft8 native library is absent.
+        builder.Services.AddSingleton<Ft8Service>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Ft8Service>());
         // FreeDvNativeInstaller — the in-app "Install FreeDV" downloader. codec2
         // can't be built on a stock operator machine, so when the bundled binary
         // is missing (older build / unshipped platform) this fetches the prebuilt
