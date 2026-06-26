@@ -14,6 +14,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+using System.Net.Http;
 using Microsoft.Extensions.Hosting;
 using Zeus.Contracts;
 
@@ -87,6 +88,10 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
 
     private readonly KiwiSettingsStore _store;
     private readonly StreamingHub _hub;
+    // Used to resolve the kiwisdr.com proxy redirect chain to the receiver's real
+    // host:port before opening the WebSocket (see ResolveEndpointAsync). Optional
+    // so tests can construct the service without an HTTP stack.
+    private readonly IHttpClientFactory? _httpFactory;
     // Demodulated 48 kHz mono audio bus, drained by DspPipelineService each tick
     // and averaged into the RX1-clocked mix (IKiwiAudioBus). Single producer
     // (the SND receive loop, via OnAudio), single consumer (the DSP tick).
@@ -135,12 +140,53 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
     public KiwiSdrService(
         KiwiSettingsStore store,
         StreamingHub hub,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        IHttpClientFactory? httpFactory = null)
     {
         _store = store;
         _hub = hub;
         _loggerFactory = loggerFactory;
+        _httpFactory = httpFactory;
         _log = loggerFactory.CreateLogger<KiwiSdrService>();
+    }
+
+    // Public KiwiSDR directory entries are "http://&lt;id&gt;.proxy.kiwisdr.com"
+    // URLs that 307-redirect (often several hops) to the operator's REAL endpoint
+    // — e.g. 21084.proxy.kiwisdr.com → … → http://web888.servehttp.com:8074. A
+    // browser follows the chain; a raw ClientWebSocket does not, so it would hang
+    // on "connecting". Resolve the chain with HttpClient (which follows redirects)
+    // and connect the WebSocket to the FINAL host:port:scheme. Falls back to the
+    // original endpoint on any failure, so a directory that needs no redirect (a
+    // direct host:port) is unaffected.
+    private async Task<(string Host, int Port, bool Secure)> ResolveEndpointAsync(
+        string host, int port, bool secure, CancellationToken ct)
+    {
+        if (_httpFactory is null) return (host, port, secure);
+        try
+        {
+            var scheme = secure ? "https" : "http";
+            var http = _httpFactory.CreateClient();
+            http.Timeout = TimeSpan.FromSeconds(8);
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"{scheme}://{host}:{port}/");
+            req.Headers.TryAddWithoutValidation("User-Agent", "OpenHPSDR-Zeus");
+            using var resp = await http
+                .SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct)
+                .ConfigureAwait(false);
+            var final = resp.RequestMessage?.RequestUri;
+            if (final is not null && !string.IsNullOrEmpty(final.Host))
+            {
+                bool sec = final.Scheme == Uri.UriSchemeHttps;
+                int p = final.Port > 0 ? final.Port : (sec ? 443 : 80);
+                if (!string.Equals(final.Host, host, StringComparison.OrdinalIgnoreCase) || p != port || sec != secure)
+                    _log.LogInformation("kiwi.resolve {From} -> {Host}:{Port}", $"{host}:{port}", final.Host, p);
+                return (final.Host, p, sec);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug("kiwi.resolve failed for {Host}:{Port}, using as-is err={Err}", host, port, ex.Message);
+        }
+        return (host, port, secure);
     }
 
     // -------------------------------------------------------------------------
@@ -361,6 +407,10 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
             lock (_sync) { _status = "error"; _statusDetail = "invalid URL"; }
             return;
         }
+
+        // Follow the kiwisdr.com proxy redirect chain to the real host:port so a
+        // "<id>.proxy.kiwisdr.com" entry connects instead of hanging.
+        (host, port, secure) = await ResolveEndpointAsync(host, port, secure, ct).ConfigureAwait(false);
 
         var client = new KiwiSdrClient(host, port, secure, password, "ZeusSDR", _loggerFactory.CreateLogger<KiwiSdrClient>());
         client.AudioReceived = OnAudio;
