@@ -53,8 +53,9 @@ add_library(zeus_ft8 SHARED
 )
 
 target_include_directories(zeus_ft8 PRIVATE ${FT8_VENDOR})
-# ft8_lib's message.c uses stpcpy where available.
-target_compile_definitions(zeus_ft8 PRIVATE HAVE_STPCPY)
+# ft8_lib's message.c uses stpcpy where available; it's POSIX/GNU and absent on
+# MSVC, so only advertise it off-Windows (message.c has a portable fallback).
+target_compile_definitions(zeus_ft8 PRIVATE $<$<NOT:$<PLATFORM_ID:Windows>>:HAVE_STPCPY>)
 # MSVC gates M_PI behind _USE_MATH_DEFINES; define it for all sources on Windows.
 target_compile_definitions(zeus_ft8 PRIVATE $<$<PLATFORM_ID:Windows>:_USE_MATH_DEFINES>)
 
@@ -88,7 +89,8 @@ if(ZEUS_FT8_TESTS)
         ${FT8_VENDOR}/common/wave.c
     )
     target_include_directories(zeus_ft8_selftest PRIVATE ${FT8_VENDOR})
-    target_compile_definitions(zeus_ft8_selftest PRIVATE HAVE_STPCPY)
+    target_compile_definitions(zeus_ft8_selftest PRIVATE $<$<NOT:$<PLATFORM_ID:Windows>>:HAVE_STPCPY>)
+    target_compile_definitions(zeus_ft8_selftest PRIVATE $<$<PLATFORM_ID:Windows>:_USE_MATH_DEFINES>)
     if(NOT WIN32)
         target_link_libraries(zeus_ft8_selftest PRIVATE m)
     endif()
