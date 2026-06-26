@@ -14,6 +14,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+using System.Net.Http;
 using Microsoft.Extensions.Hosting;
 using Zeus.Contracts;
 
@@ -87,6 +88,10 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
 
     private readonly KiwiSettingsStore _store;
     private readonly StreamingHub _hub;
+    // Used to resolve the kiwisdr.com proxy redirect chain to the receiver's real
+    // host:port before opening the WebSocket (see ResolveEndpointAsync). Optional
+    // so tests can construct the service without an HTTP stack.
+    private readonly IHttpClientFactory? _httpFactory;
     // Demodulated 48 kHz mono audio bus, drained by DspPipelineService each tick
     // and averaged into the RX1-clocked mix (IKiwiAudioBus). Single producer
     // (the SND receive loop, via OnAudio), single consumer (the DSP tick).
@@ -100,6 +105,16 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
     private KiwiSdrClient? _client;
     private string _status = "disabled";
     private string? _statusDetail;
+    // Serialises every remote-connection lifecycle transition (startup,
+    // /api/kiwi config change, and the radio connect/disconnect callbacks) so
+    // they can't race the _client field. Not reentrant — never await another
+    // gated method while holding it.
+    private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    // The Kiwi is a receiver like any other: it must not stream until a radio is
+    // connected to clock the shared RX audio-mix bus (DspPipelineService.Tick
+    // drains the Kiwi bus alongside RX1..n). Tracks the radio link so the slice
+    // waits for the radio instead of auto-connecting on a headless/idle server.
+    private bool _radioConnected;            // guarded by _sync
 
     // Projected Kiwi receiver tuning/state.
     private bool _enabled;
@@ -132,15 +147,64 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
 
     public event Action? KiwiReceiverChanged;
 
+    // Resolved lazily in ExecuteAsync to subscribe to the radio connect/disconnect
+    // lifecycle. Injected via IServiceProvider (not a direct RadioService ctor
+    // param) to avoid a DI cycle — RadioService depends on IKiwiReceiverProvider,
+    // i.e. this service. Optional so unit tests can construct without a container.
+    private readonly IServiceProvider? _services;
+
     public KiwiSdrService(
         KiwiSettingsStore store,
         StreamingHub hub,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        IHttpClientFactory? httpFactory = null,
+        IServiceProvider? services = null)
     {
         _store = store;
         _hub = hub;
         _loggerFactory = loggerFactory;
+        _httpFactory = httpFactory;
+        _services = services;
         _log = loggerFactory.CreateLogger<KiwiSdrService>();
+    }
+
+    // Public KiwiSDR directory entries are "http://&lt;id&gt;.proxy.kiwisdr.com"
+    // URLs that 307-redirect (often several hops) to the operator's REAL endpoint
+    // — e.g. 21084.proxy.kiwisdr.com → … → http://web888.servehttp.com:8074. A
+    // browser follows the chain; a raw ClientWebSocket does not, so it would hang
+    // on "connecting". Resolve the chain with HttpClient (which follows redirects)
+    // and connect the WebSocket to the FINAL host:port:scheme. Falls back to the
+    // original endpoint on any failure, so a directory that needs no redirect (a
+    // direct host:port) is unaffected.
+    private async Task<(string Host, int Port, bool Secure)> ResolveEndpointAsync(
+        string host, int port, bool secure, CancellationToken ct)
+    {
+        if (_httpFactory is null) return (host, port, secure);
+        try
+        {
+            var scheme = secure ? "https" : "http";
+            var http = _httpFactory.CreateClient();
+            http.Timeout = TimeSpan.FromSeconds(8);
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"{scheme}://{host}:{port}/");
+            req.Headers.TryAddWithoutValidation("User-Agent", "OpenHPSDR-Zeus");
+            using var resp = await http
+                .SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct)
+                .ConfigureAwait(false);
+            var final = resp.RequestMessage?.RequestUri;
+            if (final is not null && !string.IsNullOrEmpty(final.Host))
+            {
+                bool sec = final.Scheme == Uri.UriSchemeHttps;
+                int p = final.Port > 0 ? final.Port : (sec ? 443 : 80);
+                if (!string.Equals(final.Host, host, StringComparison.OrdinalIgnoreCase) || p != port || sec != secure)
+                    _log.LogInformation("kiwi.resolve {From} -> {Host}:{Port}", $"{host}:{port}", final.Host, p);
+                return (final.Host, p, sec);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug("kiwi.resolve failed for {Host}:{Port}, using as-is err={Err}", host, port, ex.Message);
+        }
+        return (host, port, secure);
     }
 
     // -------------------------------------------------------------------------
@@ -178,20 +242,124 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // Hydrate from persisted settings: reconnect a previously-enabled slice
-        // on startup (no hardware-safety constraint — unlike PureSignal — so a
-        // remote receiver may auto-resume).
+        // Hydrate the persisted enable flag. Unlike PureSignal there is no
+        // hardware-safety constraint, so a previously-enabled slice may resume —
+        // but ONLY once a radio is connected (the Kiwi rides the radio-clocked
+        // mix bus). It does not auto-connect on a headless/idle server.
         var s = _store.Get();
         lock (_sync) { _enabled = s.Enabled; }
-        if (s.Enabled && !string.IsNullOrWhiteSpace(s.Url))
+
+        // Subscribe to the radio connect/disconnect lifecycle. Resolved here (not
+        // in the ctor) so RadioService — which depends on this service via
+        // IKiwiReceiverProvider — is already built, avoiding a DI cycle. P1 and P2
+        // connects both mean "a radio is up"; either disconnect means it's down.
+        var radio = _services?.GetService(typeof(RadioService)) as RadioService;
+        Action<Zeus.Protocol1.IProtocol1Client> onP1Connect = _ => OnRadioConnected();
+        Action<Zeus.Protocol2.Protocol2Client> onP2Connect = _ => OnRadioConnected();
+        Action onDisconnect = OnRadioDisconnected;
+        if (radio is not null)
         {
-            try { await StartClientAsync(s.Url!, s.Password, stoppingToken).ConfigureAwait(false); }
-            catch (Exception ex) { _log.LogWarning("kiwi.startup.connect failed err={Err}", ex.Message); }
+            radio.Connected += onP1Connect;
+            radio.P2Connected += onP2Connect;
+            radio.Disconnected += onDisconnect;
+            radio.P2Disconnected += onDisconnect;
+            lock (_sync) { _radioConnected = radio.IsConnected; }
         }
+        else
+        {
+            // No radio service in this host (some unit/integration setups): keep
+            // legacy standalone behaviour so the Kiwi can still be exercised.
+            lock (_sync) { _radioConnected = true; }
+        }
+
+        // Connect now only if a radio is already up; otherwise sit in "waiting for
+        // radio" until OnRadioConnected fires.
+        await MaybeStartAsync(stoppingToken).ConfigureAwait(false);
+
         // Idle until shutdown; all work is event-driven off the client callbacks.
         try { await Task.Delay(Timeout.Infinite, stoppingToken).ConfigureAwait(false); }
         catch (OperationCanceledException) { }
+
+        if (radio is not null)
+        {
+            radio.Connected -= onP1Connect;
+            radio.P2Connected -= onP2Connect;
+            radio.Disconnected -= onDisconnect;
+            radio.P2Disconnected -= onDisconnect;
+        }
         await StopClientAsync().ConfigureAwait(false);
+    }
+
+    // Start (or restart) the remote KiwiSDR connection iff the slice is enabled,
+    // has a URL, a radio is connected, and we're not already connected. When
+    // enabled but the radio is still down, parks the status at "waiting for
+    // radio". Serialised by _lifecycleGate. Safe to call from startup, the radio
+    // connect callback, or anywhere NOT already holding the gate.
+    private async Task MaybeStartAsync(CancellationToken ct)
+    {
+        var s = _store.Get();
+        string? url = s.Url, password = s.Password;
+        bool go, waiting;
+        lock (_sync)
+        {
+            go = _enabled && !string.IsNullOrWhiteSpace(url) && _radioConnected && _client is null;
+            waiting = _enabled && !_radioConnected && _client is null;
+            if (waiting) { _status = "waiting"; _statusDetail = "waiting for radio"; }
+        }
+        if (!go) { if (waiting) RaiseChanged(); return; }
+
+        await _lifecycleGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            // Re-check under the gate — state may have changed while awaiting.
+            lock (_sync) { go = _enabled && _radioConnected && _client is null; }
+            if (!go) return;
+            try { await StartClientAsync(url!, password, ct).ConfigureAwait(false); }
+            catch (Exception ex)
+            {
+                _log.LogWarning("kiwi.connect failed url={Url} err={Err}", url, ex.Message);
+                lock (_sync) { _status = "error"; _statusDetail = ex.Message; }
+            }
+        }
+        finally { _lifecycleGate.Release(); }
+        RaiseChanged();
+    }
+
+    // Radio came up: connect the slice if the operator has it enabled.
+    private void OnRadioConnected()
+    {
+        lock (_sync) { if (_radioConnected) return; _radioConnected = true; }
+        _log.LogInformation("kiwi.radio connected -> starting slice if enabled");
+        // Fire-and-forget so the radio connect path is never blocked; errors are
+        // logged inside MaybeStartAsync.
+        _ = MaybeStartAsync(CancellationToken.None);
+    }
+
+    // Radio went down: tear the slice's remote connection down so it stops
+    // feeding a now-unclocked mix bus, and park it back at "waiting for radio".
+    private void OnRadioDisconnected()
+    {
+        bool wasConnected;
+        lock (_sync) { wasConnected = _radioConnected; _radioConnected = false; }
+        if (!wasConnected) return;
+        _log.LogInformation("kiwi.radio disconnected -> stopping slice");
+        _ = StopOnRadioDownAsync();
+    }
+
+    private async Task StopOnRadioDownAsync()
+    {
+        await _lifecycleGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await StopClientAsync().ConfigureAwait(false);
+            lock (_sync)
+            {
+                if (_enabled) { _status = "waiting"; _statusDetail = "waiting for radio"; }
+                else { _status = "disabled"; _statusDetail = null; }
+            }
+        }
+        finally { _lifecycleGate.Release(); }
+        RaiseChanged();
     }
 
     // -------------------------------------------------------------------------
@@ -207,24 +375,37 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
     public async Task<KiwiConfigDto> SetConfigAsync(bool? enabled, string? url, string? password, CancellationToken ct)
     {
         var s = _store.Set(enabled, url, password);
+        lock (_sync) { _enabled = s.Enabled; }
         bool wantOn = s.Enabled && !string.IsNullOrWhiteSpace(s.Url);
 
-        await StopClientAsync().ConfigureAwait(false);
-        lock (_sync) { _enabled = s.Enabled; }
-
-        if (wantOn)
+        // Tear down any existing connection, then reconnect ONLY if a radio is up.
+        // If the operator enables the Kiwi with no radio connected, park it at
+        // "waiting for radio" — OnRadioConnected will start it when the radio comes
+        // up. All of this is serialised against the radio callbacks by the gate.
+        await _lifecycleGate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            try { await StartClientAsync(s.Url!, s.Password, ct).ConfigureAwait(false); }
-            catch (Exception ex)
+            await StopClientAsync().ConfigureAwait(false);
+            bool radioUp; lock (_sync) radioUp = _radioConnected;
+            if (wantOn && radioUp)
             {
-                _log.LogWarning("kiwi.connect failed url={Url} err={Err}", s.Url, ex.Message);
-                lock (_sync) { _status = "error"; _statusDetail = ex.Message; }
+                try { await StartClientAsync(s.Url!, s.Password, ct).ConfigureAwait(false); }
+                catch (Exception ex)
+                {
+                    _log.LogWarning("kiwi.connect failed url={Url} err={Err}", s.Url, ex.Message);
+                    lock (_sync) { _status = "error"; _statusDetail = ex.Message; }
+                }
+            }
+            else if (wantOn)
+            {
+                lock (_sync) { _status = "waiting"; _statusDetail = "waiting for radio"; }
+            }
+            else
+            {
+                lock (_sync) { _status = "disabled"; _statusDetail = null; }
             }
         }
-        else
-        {
-            lock (_sync) { _status = "disabled"; _statusDetail = null; }
-        }
+        finally { _lifecycleGate.Release(); }
 
         RaiseChanged();
         return GetConfig();
@@ -361,6 +542,10 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
             lock (_sync) { _status = "error"; _statusDetail = "invalid URL"; }
             return;
         }
+
+        // Follow the kiwisdr.com proxy redirect chain to the real host:port so a
+        // "<id>.proxy.kiwisdr.com" entry connects instead of hanging.
+        (host, port, secure) = await ResolveEndpointAsync(host, port, secure, ct).ConfigureAwait(false);
 
         var client = new KiwiSdrClient(host, port, secure, password, "ZeusSDR", _loggerFactory.CreateLogger<KiwiSdrClient>());
         client.AudioReceived = OnAudio;
