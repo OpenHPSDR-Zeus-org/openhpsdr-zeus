@@ -37,6 +37,7 @@ export type SmartNrCondition = {
   denseNoise: boolean;
   impulsiveNoise: boolean;
   tonalInterference: boolean;
+  speechLikeVoice: boolean;
 };
 
 export type SmartNrRecommendation = {
@@ -48,7 +49,10 @@ export type SmartNrRecommendation = {
 export type SmartNrDspCapabilities = Pick<
   HardwareDspDiagnosticsDto,
   'wdspActive' | 'wdspEmnrPost2Available' | 'wdspNr4SbnrAvailable'
->;
+> & {
+  wdspNr3RnnrAvailable?: boolean;
+  nr3ModelName?: string | null;
+};
 
 export type SmartNrCapabilityAdaptation = {
   nr: NrConfigDto;
@@ -68,6 +72,7 @@ export type SmartNrInput = {
   floor: Float32Array | null;
   confidence?: Float32Array | null;
   rx?: SmartNrRxContext | null;
+  dsp?: SmartNrDspCapabilities | null;
   current: NrConfigDto;
   mode: RxMode;
 };
@@ -80,6 +85,7 @@ export type SmartNrRxContext = {
 
 export function labelSmartNrProfile(nr: NrConfigDto): string {
   if (nr.nbMode !== 'Off' && nr.snbEnabled) return `${nr.nbMode}+SNB`;
+  if (nr.nrMode === 'Rnnr') return 'NR3';
   if (nr.nrMode === 'Sbnr') return 'NR4';
   if (nr.nrMode === 'Emnr') return 'NR2';
   if (nr.nrMode === 'Anr') return 'NR1';
@@ -172,6 +178,22 @@ export function adaptSmartNrToDspCapabilities(
     notes.push('NR4/SBNR unavailable in the active WDSP build; using NR2/EMNR fallback.');
   }
 
+  if (next.nrMode === 'Rnnr' && !nr3Ready(capabilities)) {
+    next = {
+      ...next,
+      nrMode: 'Emnr',
+      emnrGainMethod: 2,
+      emnrNpeMethod: 0,
+      emnrAeRun: true,
+      emnrPost2Run: capabilities.wdspEmnrPost2Available !== false,
+      emnrPost2Factor: 11,
+      emnrPost2Nlevel: 11,
+      emnrPost2Rate: 5,
+      emnrPost2Taper: 12,
+    };
+    notes.push('NR3/RNNoise is not ready; using NR2/EMNR speech fallback.');
+  }
+
   if (next.nrMode === 'Emnr' && capabilities.wdspEmnrPost2Available === false && next.emnrPost2Run !== false) {
     next = {
       ...next,
@@ -224,6 +246,10 @@ function finiteConfidence(confidence: Float32Array | null, index: number, useCon
   if (!useConfidence) return 1;
   const c = confidence![index]!;
   return Number.isFinite(c) ? Math.max(0, Math.min(1, c)) : 0;
+}
+
+function nr3Ready(capabilities: SmartNrDspCapabilities | null | undefined): boolean {
+  return capabilities?.wdspNr3RnnrAvailable === true && !!capabilities.nr3ModelName;
 }
 
 export function analyzeSmartNrCondition(
@@ -347,9 +373,20 @@ export function analyzeSmartNrCondition(
     occupancy12 < 0.12 &&
     copyAssistSpread &&
     coherentOccupancy6 < 0.14;
+  const speechLikeVoice =
+    !impulsiveNoise &&
+    hasSignal &&
+    maxSnrDb >= 8 &&
+    maxSnrDb < 45 &&
+    tonalPeakCount >= 8 &&
+    tonalPeakCount <= 128 &&
+    occupancy12 < 0.22 &&
+    coherentOccupancy6 >= 0.025 &&
+    coherentOccupancy6 < 0.22;
   const tonalInterference =
     !impulsiveNoise &&
     !coherentCopySignal &&
+    !speechLikeVoice &&
     tonalPeakCount > 0 &&
     tonalPeakCount <= 24 &&
     maxSnrDb >= 18 &&
@@ -378,6 +415,7 @@ export function analyzeSmartNrCondition(
     denseNoise,
     impulsiveNoise,
     tonalInterference,
+    speechLikeVoice,
   };
 }
 
@@ -481,6 +519,18 @@ function withNr2(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
   };
 }
 
+function withNr3(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
+  return {
+    ...current,
+    nrMode: 'Rnnr',
+    anfEnabled: false,
+    snbEnabled: false,
+    nbpNotchesEnabled: false,
+    nbMode: c.impulsiveNoise ? 'Nb2' : 'Off',
+    nbThreshold: c.impulsiveNoise ? impulsiveBlankerThreshold(current) : current.nbThreshold,
+  };
+}
+
 function quietProfile(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
   return {
     ...current,
@@ -497,6 +547,7 @@ export function recommendSmartNr(input: SmartNrInput): SmartNrRecommendation | n
   const baseCondition = analyzeSmartNrCondition(input.spectrum, input.floor, input.confidence ?? null);
   if (!baseCondition) return null;
   const condition = applyRxWeakSignalEvidence(baseCondition, input.rx);
+  const neuralVoiceReady = nr3Ready(input.dsp);
 
   let nr: NrConfigDto;
   let reason: string;
@@ -514,10 +565,20 @@ export function recommendSmartNr(input: SmartNrInput): SmartNrRecommendation | n
         ? 'Impulsive-noise profile: engage NB2/SNB while keeping NR2/NR4 conservative.'
       : 'CW/digital profile: NR2/NR4 with conservative blanking.';
   } else if (isVoiceSsb(input.mode)) {
-    nr = condition.weakSparse || condition.denseNoise || condition.coherentCopySignal
+    const useNeuralVoice =
+      neuralVoiceReady &&
+      condition.speechLikeVoice &&
+      !condition.weakSparse &&
+      !condition.rxAssistedWeakSignal &&
+      !condition.coherentSubthresholdSignal;
+    nr = useNeuralVoice
+      ? withNr3(input.current, condition)
+      : condition.weakSparse || condition.denseNoise || condition.coherentCopySignal
       ? withNr2(input.current, condition)
       : quietProfile(input.current, condition);
-    reason = condition.rxAssistedWeakSignal
+    reason = useNeuralVoice
+      ? 'SSB neural speech profile: installed NR3/RNNoise model is ready; use neural post-demod cleanup for speech-like copy.'
+      : condition.rxAssistedWeakSignal
       ? 'Weak-signal assist: AGC/RX telemetry confirms marginal SSB copy; use NR2/EMNR and RX Suite VST cleanup.'
       : condition.coherentSubthresholdSignal
       ? 'SSB coherent weak-signal profile: temporal confidence confirms a subthreshold ridge; use NR2/EMNR plus RX Suite VST cleanup.'

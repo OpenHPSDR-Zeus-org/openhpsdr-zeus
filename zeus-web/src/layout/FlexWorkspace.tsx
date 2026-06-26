@@ -33,17 +33,10 @@ import {
   type LayoutItem,
 } from 'react-grid-layout';
 import { absoluteStrategy } from 'react-grid-layout/core';
-import { Minus, Plus, Puzzle, Settings } from 'lucide-react';
+import { Plus, Puzzle, Settings } from 'lucide-react';
 import { useWorkspace } from './WorkspaceContext';
 import { parseLayoutOrDefault, useLayoutStore } from '../state/layout-store';
 import { useConnectionStore } from '../state/connection-store';
-import {
-  setWorkspaceZoom,
-  WORKSPACE_ZOOM_DEFAULT,
-  WORKSPACE_ZOOM_MAX,
-  WORKSPACE_ZOOM_MIN,
-  WORKSPACE_ZOOM_STEP,
-} from '../api/client';
 import { getPanelDef } from './panels';
 import {
   WORKSPACE_RESIZE_COMPACTOR,
@@ -194,19 +187,16 @@ export function FlexWorkspace({
       />
       <TerminatorLines active={terminatorActive} />
       {showAddPanelModal && !addPanelOpen && (
-        <>
-          <WorkspaceZoomControls />
-          <button
-            type="button"
-            className="workspace-add-panel-btn"
-            onClick={() => setAddPanelOpen(true)}
-            disabled={!isLoaded}
-            title="Add a panel to this workspace"
-            aria-label="Add panel"
-          >
-            <Plus size={18} strokeWidth={2.2} aria-hidden />
-          </button>
-        </>
+        <button
+          type="button"
+          className="workspace-add-panel-btn"
+          onClick={() => setAddPanelOpen(true)}
+          disabled={!isLoaded}
+          title="Add a panel to this workspace"
+          aria-label="Add panel"
+        >
+          <Plus size={18} strokeWidth={2.2} aria-hidden />
+        </button>
       )}
       {showAddPanelModal && addPanelOpen && (
         <AddPanelModal
@@ -233,78 +223,6 @@ export function FlexWorkspace({
           </p>
         </ConfirmDialog>
       )}
-    </div>
-  );
-}
-
-// Floating workspace-zoom cluster (− | nn% | +) that sits beside the Add Panel
-// button. Steps the server-persisted WorkspaceZoomPct; the percent readout
-// doubles as a reset-to-100% button. Optimistic store write + POST + applyState
-// reconcile, mirroring how the spectral-zoom controls talk to the server.
-function WorkspaceZoomControls() {
-  const pct = useConnectionStore((s) => s.workspaceZoomPct);
-  const setWorkspaceZoomPct = useConnectionStore((s) => s.setWorkspaceZoomPct);
-  const abortRef = useRef<AbortController | null>(null);
-  useEffect(() => () => abortRef.current?.abort(), []);
-
-  const apply = useCallback(
-    (next: number) => {
-      const clamped = Math.min(
-        WORKSPACE_ZOOM_MAX,
-        Math.max(WORKSPACE_ZOOM_MIN, Math.round(next)),
-      );
-      if (clamped === useConnectionStore.getState().workspaceZoomPct) return;
-      setWorkspaceZoomPct(clamped); // optimistic — grid rescales immediately
-      abortRef.current?.abort();
-      const ctrl = new AbortController();
-      abortRef.current = ctrl;
-      setWorkspaceZoom(clamped, ctrl.signal)
-        .then((s) => {
-          if (!ctrl.signal.aborted) useConnectionStore.getState().applyState(s);
-        })
-        .catch(() => {
-          // Network/abort error: keep the optimistic value; the 1 Hz state
-          // poll reconciles to server truth on the next tick.
-        });
-    },
-    [setWorkspaceZoomPct],
-  );
-
-  return (
-    <div
-      className="workspace-zoom-controls"
-      role="group"
-      aria-label="Workspace zoom"
-    >
-      <button
-        type="button"
-        className="workspace-zoom-btn"
-        onClick={() => apply(pct - WORKSPACE_ZOOM_STEP)}
-        disabled={pct <= WORKSPACE_ZOOM_MIN}
-        title="Zoom workspace out"
-        aria-label="Zoom workspace out"
-      >
-        <Minus size={14} strokeWidth={2.4} aria-hidden />
-      </button>
-      <button
-        type="button"
-        className="workspace-zoom-readout"
-        onClick={() => apply(WORKSPACE_ZOOM_DEFAULT)}
-        title="Reset workspace zoom to 100%"
-        aria-label={`Workspace zoom ${pct}% — click to reset to 100%`}
-      >
-        {pct}%
-      </button>
-      <button
-        type="button"
-        className="workspace-zoom-btn"
-        onClick={() => apply(pct + WORKSPACE_ZOOM_STEP)}
-        disabled={pct >= WORKSPACE_ZOOM_MAX}
-        title="Zoom workspace in"
-        aria-label="Zoom workspace in"
-      >
-        <Plus size={14} strokeWidth={2.4} aria-hidden />
-      </button>
     </div>
   );
 }

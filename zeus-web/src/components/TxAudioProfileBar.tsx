@@ -155,8 +155,8 @@ export function TxAudioProfileBar({ compact = false }: TxAudioProfileBarProps) {
     }
   };
 
-  // Import: open the OS file picker; the chosen .json is uploaded and ADDED to
-  // the catalog (never auto-applied).
+  // Import: open the OS file picker; the chosen .json is uploaded, saved, then
+  // immediately applied so recovered/shared profiles become live in one action.
   const onImportPick = () => {
     setNotice(null);
     fileInputRef.current?.click();
@@ -173,7 +173,7 @@ export function TxAudioProfileBar({ compact = false }: TxAudioProfileBarProps) {
       setNotice({ tone: 'error', text: result.error ?? 'Profile import failed.' });
       return;
     }
-    setNotice({ tone: 'ok', text: `Imported "${file.name}".` });
+    setNotice({ tone: 'ok', text: `Imported and loaded "${file.name}".` });
   };
 
   // Export: download the selected profile as a .json file.

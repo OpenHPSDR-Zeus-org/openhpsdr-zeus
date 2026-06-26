@@ -42,6 +42,67 @@ namespace Zeus.Server.FrontPanel;
 /// </summary>
 public sealed class G2PanelActionRouter
 {
+    private enum ButtonAction
+    {
+        ToggleMuteRx2,
+        ToggleMuteRx1,
+        CycleMulti,
+        AtuTune,
+        ToggleTwoTone,
+        ToggleTune,
+        ToggleMox,
+        ToggleCtun,
+        ToggleLock,
+        SwapVfos,
+        CycleRitXit,
+        ClearRitXit,
+        FilterCutDefault,
+        ModePlus,
+        FilterPlus,
+        BandPlus,
+        ModeMinus,
+        FilterMinus,
+        BandMinus,
+        CopyAtoB,
+        CopyBtoA,
+        ToggleSplit,
+        ToggleSnb,
+        ToggleNb,
+        CycleNr,
+        Band160,
+        Band80,
+        Band60,
+        Band40,
+        Band30,
+        Band20,
+        Band17,
+        Band15,
+        Band12,
+        Band10,
+        Band6,
+        BandLfMf,
+        ToggleDiversity,
+    }
+
+    private enum EncoderAction
+    {
+        AfRx2,
+        AgcRx2,
+        AfRx1,
+        AgcRx1,
+        Multi,
+        Drive,
+        RitXit,
+        Atten,
+        FilterHigh,
+        FilterLow,
+        DivGain,
+        DivPhase,
+        Rit,
+        Xit,
+        Count,
+    }
+
     private readonly RadioService _radio;
     private readonly TxService _tx;
     private readonly BandMemoryStore _bandMemory;
@@ -63,6 +124,12 @@ public sealed class G2PanelActionRouter
     // off that path so a fast spin cannot backlog serial reads behind state
     // broadcasts.
     private long _pendingVfoTicks;
+
+    // Non-VFO encoder movement, accumulated by logical action. DeskHPSDR queues
+    // ANDROMEDA actions onto the GTK idle loop; this gives Zeus the same shape:
+    // serial reads only enqueue ticks, while radio-state mutations happen on a
+    // steady panel timer.
+    private readonly long[] _pendingEncoderTicks = new long[(int)EncoderAction.Count];
 
     // DeskHPSDR's action layer keeps a VFO accumulator and divides by
     // vfo_encoder_divisor before calling vfo_step(). Zeus computes the divisor
@@ -103,7 +170,7 @@ public sealed class G2PanelActionRouter
 
     // Assignable MULTI-encoder functions (Thetis MultiTable ∩ Zeus backend).
     // Index cycled by the MULTI push-button; the MULTI encoder calls Apply.
-    private readonly (string Name, Action<int> Apply)[] _multi;
+    private readonly (string Name, EncoderAction Target)[] _multi;
 
     public G2PanelActionRouter(
         RadioService radio,
@@ -118,19 +185,19 @@ public sealed class G2PanelActionRouter
         _toolbarSettings = toolbarSettings;
         _log = log;
 
-        _multi = new (string, Action<int>)[]
+        _multi = new (string, EncoderAction)[]
         {
-            ("RX1 AF Gain",     AdjustAfRx1),
-            ("RX2 AF Gain",     AdjustAfRx2),
-            ("RX1 AGC",         AdjustAgcRx1),
-            ("RX1 Step Atten",  AdjustAtten),
-            ("Filter High Cut", AdjustFilterHigh),
-            ("Filter Low Cut",  AdjustFilterLow),
-            ("RIT",             AdjustRit),
-            ("XIT",             AdjustXit),
-            ("TX Drive",        AdjustDrive),
-            ("Diversity Gain",  AdjustDivGain),
-            ("Diversity Phase", AdjustDivPhase),
+            ("RX1 AF Gain",     EncoderAction.AfRx1),
+            ("RX2 AF Gain",     EncoderAction.AfRx2),
+            ("RX1 AGC",         EncoderAction.AgcRx1),
+            ("RX1 Step Atten",  EncoderAction.Atten),
+            ("Filter High Cut", EncoderAction.FilterHigh),
+            ("Filter Low Cut",  EncoderAction.FilterLow),
+            ("RIT",             EncoderAction.Rit),
+            ("XIT",             EncoderAction.Xit),
+            ("TX Drive",        EncoderAction.Drive),
+            ("Diversity Gain",  EncoderAction.DivGain),
+            ("Diversity Phase", EncoderAction.DivPhase),
         };
     }
 
@@ -157,26 +224,62 @@ public sealed class G2PanelActionRouter
         Interlocked.Add(ref _pendingVfoTicks, steps);
     }
 
-    public void FlushPendingVfo()
+    public bool FlushPendingVfo()
     {
         long ticks = Interlocked.Exchange(ref _pendingVfoTicks, 0);
-        if (ticks == 0) return;
+        if (ticks == 0) return false;
 
         try
         {
             int stepHz = _toolbarSettings.CurrentStepHz;
             var divided = DivideVfoEncoderTicks(_vfoTickAccumulator, ticks, stepHz);
             _vfoTickAccumulator = divided.RemainderTicks;
-            if (divided.LogicalSteps == 0) return;
+            if (divided.LogicalSteps == 0) return false;
 
             var s = _radio.Snapshot();
             _radio.SetVfo(ApplyVfoSteps(s.VfoHz, divided.LogicalSteps, stepHz));
+            return true;
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "g2panel.vfo.flush.error ticks={Ticks}", ticks);
+            return false;
         }
     }
+
+    public bool FlushPendingEncoders()
+    {
+        bool applied = false;
+        for (int i = 0; i < (int)EncoderAction.Count; i++)
+        {
+            long ticks = Interlocked.Exchange(ref _pendingEncoderTicks[i], 0);
+            if (ticks == 0) continue;
+
+            var action = (EncoderAction)i;
+            try
+            {
+                ApplyEncoderAction(action, ClampToInt(ticks));
+                applied = true;
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "g2panel.encoder.flush.error action={Action} ticks={Ticks}", action, ticks);
+            }
+        }
+        return applied;
+    }
+
+    public bool FlushPendingPanelWork()
+    {
+        bool vfoApplied = FlushPendingVfo();
+        bool encodersApplied = FlushPendingEncoders();
+        return vfoApplied || encodersApplied;
+    }
+
+    private static int ClampToInt(long ticks) =>
+        ticks > int.MaxValue ? int.MaxValue :
+        ticks < int.MinValue ? int.MinValue :
+        (int)ticks;
 
     internal static int VfoEncoderDivisorForStep(int stepHz)
     {
@@ -219,67 +322,125 @@ public sealed class G2PanelActionRouter
     {
         // Derive transitions from the shared previous value, exactly as the
         // panel firmware expects (short press = tr01; long press = tr12).
-        bool tr01 = _lastV == 0 && v == 1;
-        bool tr12 = _lastV == 1 && v == 2;
-        bool tr10 = _lastV == 1 && v == 0;
+        var action = ButtonActionForTransition(p, _lastV, v);
         _lastV = v;
 
-        switch (p)
+        if (action is not null)
+        {
+            FlushPendingPanelWork();
+            ApplyButtonAction(action.Value);
+        }
+    }
+
+    private static ButtonAction? ButtonActionForTransition(int p, int previousV, int v)
+    {
+        bool tr01 = previousV == 0 && v == 1;
+        bool tr10 = previousV == 1 && v == 0;
+
+        return p switch
         {
             // Encoder push-buttons -------------------------------------------
-            case 1: if (tr01) ToggleMute(1); break;   // MUTE_RX2
-            case 2: if (tr01) ToggleMute(0); break;   // MUTE_RX1
-            case 3: if (tr01) CycleMulti(); break;    // MULTI encoder button
+            1 when tr01 => ButtonAction.ToggleMuteRx2,
+            2 when tr01 => ButtonAction.ToggleMuteRx1,
+            3 when tr01 => ButtonAction.CycleMulti,
 
             // Four buttons left of the screen --------------------------------
-            case 4: if (tr01) _radio.RequestAtuTune(AtuTunePulseMs); break;  // ATU
-            case 5: if (tr01) ToggleTwoTone(); break;
-            case 6: if (tr01) ToggleTune(); break;
-            case 7: if (tr01) ToggleMox(); break;
+            4 when tr01 => ButtonAction.AtuTune,
+            5 when tr01 => ButtonAction.ToggleTwoTone,
+            6 when tr01 => ButtonAction.ToggleTune,
+            7 when tr01 => ButtonAction.ToggleMox,
 
             // Buttons below the VFO knob -------------------------------------
-            case 8: if (tr01) ToggleCtun(); break;
-            case 9: if (tr01) ToggleLock(); break;    // LOCK
+            8 when tr01 => ButtonAction.ToggleCtun,
+            9 when tr01 => ButtonAction.ToggleLock,
 
             // Right-hand buttons ---------------------------------------------
-            case 10: if (tr01) _radio.SwapVfos(); break;                  // A/B
-            case 11: if (tr01) CycleRitXit(); break;                      // RITSELECT
-            case 12: if (tr01) ClearRitXit(); break;                      // RIT/XIT clear
-            case 13: if (tr01) FilterCutDefault(); break;                 // filter reset
+            10 when tr01 => ButtonAction.SwapVfos,
+            11 when tr01 => ButtonAction.CycleRitXit,
+            12 when tr01 => ButtonAction.ClearRitXit,
+            13 when tr01 => ButtonAction.FilterCutDefault,
 
             // 4x3 pad — "no Band" layer (Mode/Filter/Band stepping) ----------
             // Long-press (tr12) would open an on-panel menu in Thetis; Zeus
             // uses its web UI for menus, so the long action is a no-op.
-            case 14: if (tr10) StepMode(+1); break;
-            case 15: if (tr10) StepFilter(+1); break;
-            case 16: if (tr01) StepBand(+1); break;
-            case 17: if (tr01) StepMode(-1); break;
-            case 18: if (tr01) StepFilter(-1); break;
-            case 19: if (tr01) StepBand(-1); break;
-            case 20: if (tr01) CopyAtoB(); break;                          // A>B
-            case 21: if (tr01) CopyBtoA(); break;                          // B>A
-            case 22: if (tr01) ToggleSplit(); break;                       // SPLIT
-            case 23: if (tr10) ToggleSnb(); break;                         // F1
-            case 24: if (tr10) ToggleNb(); break;                          // F2
-            case 25: if (tr10) CycleNr(); break;                           // F3
+            14 when tr10 => ButtonAction.ModePlus,
+            15 when tr10 => ButtonAction.FilterPlus,
+            16 when tr01 => ButtonAction.BandPlus,
+            17 when tr01 => ButtonAction.ModeMinus,
+            18 when tr01 => ButtonAction.FilterMinus,
+            19 when tr01 => ButtonAction.BandMinus,
+            20 when tr01 => ButtonAction.CopyAtoB,
+            21 when tr01 => ButtonAction.CopyBtoA,
+            22 when tr01 => ButtonAction.ToggleSplit,
+            23 when tr10 => ButtonAction.ToggleSnb,
+            24 when tr10 => ButtonAction.ToggleNb,
+            25 when tr10 => ButtonAction.CycleNr,
 
             // 4x3 pad — "Band" layer (direct band select) -------------------
-            case 27: if (tr01) SelectBand("160m"); break;
-            case 28: if (tr01) SelectBand("80m"); break;
-            case 29: if (tr01) SelectBand("60m"); break;
-            case 30: if (tr01) SelectBand("40m"); break;
-            case 31: if (tr01) SelectBand("30m"); break;
-            case 32: if (tr01) SelectBand("20m"); break;
-            case 33: if (tr01) SelectBand("17m"); break;
-            case 34: if (tr01) SelectBand("15m"); break;
-            case 35: if (tr01) SelectBand("12m"); break;
-            case 36: if (tr01) SelectBand("10m"); break;
-            case 37: if (tr01) SelectBand("6m"); break;
-            case 38: if (tr01) SelectLfMf(); break;                        // LF/MF
+            27 when tr01 => ButtonAction.Band160,
+            28 when tr01 => ButtonAction.Band80,
+            29 when tr01 => ButtonAction.Band60,
+            30 when tr01 => ButtonAction.Band40,
+            31 when tr01 => ButtonAction.Band30,
+            32 when tr01 => ButtonAction.Band20,
+            33 when tr01 => ButtonAction.Band17,
+            34 when tr01 => ButtonAction.Band15,
+            35 when tr01 => ButtonAction.Band12,
+            36 when tr01 => ButtonAction.Band10,
+            37 when tr01 => ButtonAction.Band6,
+            38 when tr01 => ButtonAction.BandLfMf,
 
-            case 41: if (tr01) ToggleDiversity(); break;                   // DIV
+            41 when tr01 => ButtonAction.ToggleDiversity,
 
-            default: break; // 26, 39, 40, 42-50 reserved/unused on the G2-Ultra
+            _ => null, // 26, 39, 40, 42-50 reserved/unused on the G2-Ultra
+        };
+    }
+
+    internal static string? G2UltraButtonActionNameForTransition(int p, int previousV, int v) =>
+        ButtonActionForTransition(p, previousV, v)?.ToString();
+
+    private void ApplyButtonAction(ButtonAction action)
+    {
+        switch (action)
+        {
+            case ButtonAction.ToggleMuteRx2: ToggleMute(1); break;
+            case ButtonAction.ToggleMuteRx1: ToggleMute(0); break;
+            case ButtonAction.CycleMulti: CycleMulti(); break;
+            case ButtonAction.AtuTune: _radio.RequestAtuTune(AtuTunePulseMs); break;
+            case ButtonAction.ToggleTwoTone: ToggleTwoTone(); break;
+            case ButtonAction.ToggleTune: ToggleTune(); break;
+            case ButtonAction.ToggleMox: ToggleMox(); break;
+            case ButtonAction.ToggleCtun: ToggleCtun(); break;
+            case ButtonAction.ToggleLock: ToggleLock(); break;
+            case ButtonAction.SwapVfos: _radio.SwapVfos(); break;
+            case ButtonAction.CycleRitXit: CycleRitXit(); break;
+            case ButtonAction.ClearRitXit: ClearRitXit(); break;
+            case ButtonAction.FilterCutDefault: FilterCutDefault(); break;
+            case ButtonAction.ModePlus: StepMode(+1); break;
+            case ButtonAction.FilterPlus: StepFilter(+1); break;
+            case ButtonAction.BandPlus: StepBand(+1); break;
+            case ButtonAction.ModeMinus: StepMode(-1); break;
+            case ButtonAction.FilterMinus: StepFilter(-1); break;
+            case ButtonAction.BandMinus: StepBand(-1); break;
+            case ButtonAction.CopyAtoB: CopyAtoB(); break;
+            case ButtonAction.CopyBtoA: CopyBtoA(); break;
+            case ButtonAction.ToggleSplit: ToggleSplit(); break;
+            case ButtonAction.ToggleSnb: ToggleSnb(); break;
+            case ButtonAction.ToggleNb: ToggleNb(); break;
+            case ButtonAction.CycleNr: CycleNr(); break;
+            case ButtonAction.Band160: SelectBand("160m"); break;
+            case ButtonAction.Band80: SelectBand("80m"); break;
+            case ButtonAction.Band60: SelectBand("60m"); break;
+            case ButtonAction.Band40: SelectBand("40m"); break;
+            case ButtonAction.Band30: SelectBand("30m"); break;
+            case ButtonAction.Band20: SelectBand("20m"); break;
+            case ButtonAction.Band17: SelectBand("17m"); break;
+            case ButtonAction.Band15: SelectBand("15m"); break;
+            case ButtonAction.Band12: SelectBand("12m"); break;
+            case ButtonAction.Band10: SelectBand("10m"); break;
+            case ButtonAction.Band6: SelectBand("6m"); break;
+            case ButtonAction.BandLfMf: SelectLfMf(); break;
+            case ButtonAction.ToggleDiversity: ToggleDiversity(); break;
         }
     }
 
@@ -287,21 +448,65 @@ public sealed class G2PanelActionRouter
 
     private void HandleEncoder(int p, int ticks)
     {
-        switch (p)
+        var action = EncoderActionFor(p);
+        if (action is null) return;
+
+        if (action == EncoderAction.Multi)
         {
-            case 1: AdjustAfRx2(ticks); break;        // RX2 AF gain
-            case 2: Unmapped("AGC_GAIN_RX2 (no per-RX AGC top)"); break;
-            case 3: AdjustAfRx1(ticks); break;        // RX1 AF gain
-            case 4: AdjustAgcRx1(ticks); break;       // RX1 AGC top
-            case 5: ApplyMulti(ticks); break;         // MULTI encoder
-            case 6: AdjustDrive(ticks); break;        // TX drive
-            case 7: AdjustRitXit(ticks); break;       // RIT/XIT offset (silk RIT/ATTN inner)
-            case 8: AdjustAtten(ticks); break;        // RX attenuator (silk RIT/ATTN outer)
-            case 9: AdjustFilterHigh(ticks); break;   // filter cut high
-            case 10: AdjustFilterLow(ticks); break;   // filter cut low
-            case 11: AdjustDivGain(ticks); break;     // diversity gain
-            case 12: AdjustDivPhase(ticks); break;    // diversity phase
-            default: break;
+            ApplyMulti(ticks);
+        }
+        else
+        {
+            QueueEncoder(action.Value, ticks);
+        }
+    }
+
+    private static EncoderAction? EncoderActionFor(int p) => p switch
+    {
+        1 => EncoderAction.AfRx2,
+        2 => EncoderAction.AgcRx2,
+        3 => EncoderAction.AfRx1,
+        4 => EncoderAction.AgcRx1,
+        5 => EncoderAction.Multi,
+        6 => EncoderAction.Drive,
+        7 => EncoderAction.RitXit,
+        8 => EncoderAction.Atten,
+        9 => EncoderAction.FilterHigh,
+        10 => EncoderAction.FilterLow,
+        11 => EncoderAction.DivGain,
+        12 => EncoderAction.DivPhase,
+        _ => null,
+    };
+
+    internal static string? G2UltraEncoderActionName(int p) =>
+        EncoderActionFor(p)?.ToString();
+
+    private void QueueEncoder(EncoderAction action, int ticks)
+    {
+        if (ticks == 0) return;
+        Interlocked.Add(ref _pendingEncoderTicks[(int)action], ticks);
+    }
+
+    private void ApplyEncoderAction(EncoderAction action, int ticks)
+    {
+        switch (action)
+        {
+            case EncoderAction.AfRx2: AdjustAfRx2(ticks); break;
+            case EncoderAction.AgcRx2: AdjustAgcRx2(ticks); break;
+            case EncoderAction.AfRx1: AdjustAfRx1(ticks); break;
+            case EncoderAction.AgcRx1: AdjustAgcRx1(ticks); break;
+            case EncoderAction.Drive: AdjustDrive(ticks); break;
+            case EncoderAction.RitXit: AdjustRitXit(ticks); break;
+            case EncoderAction.Atten: AdjustAtten(ticks); break;
+            case EncoderAction.FilterHigh: AdjustFilterHigh(ticks); break;
+            case EncoderAction.FilterLow: AdjustFilterLow(ticks); break;
+            case EncoderAction.DivGain: AdjustDivGain(ticks); break;
+            case EncoderAction.DivPhase: AdjustDivPhase(ticks); break;
+            case EncoderAction.Rit: AdjustRit(ticks); break;
+            case EncoderAction.Xit: AdjustXit(ticks); break;
+            case EncoderAction.Multi:
+            case EncoderAction.Count:
+                break;
         }
     }
 
@@ -321,6 +526,18 @@ public sealed class G2PanelActionRouter
     }
 
     private void AdjustAgcRx1(int ticks)
+    {
+        AdjustAgcTop(ticks);
+    }
+
+    private void AdjustAgcRx2(int ticks)
+    {
+        // Zeus currently exposes AGC-T as one shared receiver-DSP ceiling.
+        // Keep the DeskHPSDR RX2 AGC encoder live by driving that shared slider.
+        AdjustAgcTop(ticks);
+    }
+
+    private void AdjustAgcTop(int ticks)
     {
         var s = _radio.Snapshot();
         _radio.SetAgcTop(s.AgcTopDb + ticks * AgcStepDb);
@@ -397,7 +614,7 @@ public sealed class G2PanelActionRouter
         _log.LogInformation("g2panel.multi.select {Name}", _multi[_multiIndex].Name);
     }
 
-    private void ApplyMulti(int ticks) => _multi[_multiIndex].Apply(ticks);
+    private void ApplyMulti(int ticks) => QueueEncoder(_multi[_multiIndex].Target, ticks);
 
     // ---- Button action helpers ---------------------------------------------
 
