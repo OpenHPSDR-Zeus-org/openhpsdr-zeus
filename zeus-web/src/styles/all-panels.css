@@ -474,6 +474,7 @@
 .workspace-tile[data-panel-id='freedvstations'] > .workspace-tile-body,
 .workspace-tile[data-panel-id='vfo'] > .workspace-tile-body,
 .workspace-tile[data-panel-id='chat'] > .workspace-tile-body,
+.workspace-tile[data-panel-id='wavrecorder'] > .workspace-tile-body,
 .workspace-tile[data-panel-id='filterpresets'] > .workspace-tile-body {
   display: flex;
   flex-direction: column;
@@ -491,6 +492,7 @@
 .workspace-tile[data-panel-id='freedvstations'] > .workspace-tile-body > *,
 .workspace-tile[data-panel-id='vfo'] > .workspace-tile-body > *,
 .workspace-tile[data-panel-id='chat'] > .workspace-tile-body > *,
+.workspace-tile[data-panel-id='wavrecorder'] > .workspace-tile-body > *,
 .workspace-tile[data-panel-id='filterpresets'] > .workspace-tile-body > * {
   flex: 1 1 auto;
   min-height: 0;

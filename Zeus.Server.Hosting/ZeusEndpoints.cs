@@ -965,36 +965,58 @@ public static class ZeusEndpoints
                 return MapEditorResult(result, open: false);
             });
 
-        // WAV recorder / player. Records RX or processed-TX audio to float32
-        // WAVs in the Downloads folder, and plays recordings back to the local
-        // monitor (no keying). Over-the-air playback is a later layer.
+        // WAV recorder / tape deck. Records RX or processed-TX audio to float32
+        // WAVs under the managed root (<Downloads>/Zeus Recordings), organises
+        // them into folders, and plays recordings back to the local monitor or
+        // over the air. All paths on the wire are root-relative with forward
+        // slashes; the service traversal-guards every one.
         app.MapGet("/api/wav/status", (Zeus.Server.Wav.WavRecorderService wav) =>
             Results.Ok(wav.GetStatus()));
         app.MapGet("/api/wav/list", (Zeus.Server.Wav.WavRecorderService wav) =>
-            Results.Ok(new { dir = wav.RecordingsDir, recordings = wav.ListRecordings() }));
+            Results.Ok(new
+            {
+                root = wav.RecordingsDir,
+                folders = wav.ListFolders(),
+                recordings = wav.ListRecordings(),
+            }));
+        app.MapGet("/api/wav/waveform",
+            (string? file, int? buckets, Zeus.Server.Wav.WavRecorderService wav) =>
+        {
+            if (string.IsNullOrWhiteSpace(file))
+                return Results.BadRequest(new { error = "file is required" });
+            try { return Results.Ok(new { file, buckets = wav.ComputeWaveform(file, buckets ?? 400) }); }
+            catch (FileNotFoundException) { return Results.NotFound(new { error = "recording not found" }); }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (InvalidDataException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        });
         app.MapPost("/api/wav/record/start",
             (WavRecordStartRequest body, Zeus.Server.Wav.WavRecorderService wav) =>
         {
             var source = string.Equals(body?.Source, "tx", StringComparison.OrdinalIgnoreCase)
                 ? Zeus.Server.Wav.WavRecordSource.Tx
                 : Zeus.Server.Wav.WavRecordSource.Rx;
-            try { return Results.Ok(new { file = wav.StartRecording(source) }); }
+            try { return Results.Ok(new { relPath = wav.StartRecording(source, body?.Folder) }); }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
             catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
         });
         app.MapPost("/api/wav/record/stop", (Zeus.Server.Wav.WavRecorderService wav) =>
         {
             var r = wav.StopRecording();
             return r is { } x
-                ? Results.Ok(new { file = Path.GetFileName(x.Path), samples = x.Samples })
-                : Results.Ok(new { file = (string?)null, samples = 0L });
+                ? Results.Ok(new { relPath = x.RelPath, samples = x.Samples })
+                : Results.Ok(new { relPath = (string?)null, samples = 0L });
         });
         app.MapPost("/api/wav/play",
             (WavPlayRequest body, Zeus.Server.Wav.WavRecorderService wav) =>
         {
             if (string.IsNullOrWhiteSpace(body?.File))
                 return Results.BadRequest(new { error = "file is required" });
-            try { wav.Play(body.File); return Results.Ok(wav.GetStatus()); }
+            var dest = string.Equals(body?.Dest, "air", StringComparison.OrdinalIgnoreCase)
+                ? Zeus.Server.Wav.WavPlayDest.Air
+                : Zeus.Server.Wav.WavPlayDest.Local;
+            try { wav.Play(body!.File!, dest); return Results.Ok(wav.GetStatus()); }
             catch (FileNotFoundException) { return Results.NotFound(new { error = "recording not found" }); }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
             catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
         });
         app.MapPost("/api/wav/stop", (Zeus.Server.Wav.WavRecorderService wav) =>
@@ -1002,10 +1024,101 @@ public static class ZeusEndpoints
             wav.StopPlayback();
             return Results.Ok(wav.GetStatus());
         });
-        app.MapDelete("/api/wav/{file}", (string file, Zeus.Server.Wav.WavRecorderService wav) =>
+        app.MapPost("/api/wav/rename",
+            (WavRenameRequest body, Zeus.Server.Wav.WavRecorderService wav) =>
         {
-            try { wav.DeleteRecording(file); return Results.Ok(new { deleted = file }); }
+            if (string.IsNullOrWhiteSpace(body?.From) || string.IsNullOrWhiteSpace(body?.Name))
+                return Results.BadRequest(new { error = "from and name are required" });
+            try { return Results.Ok(new { relPath = wav.RenameRecording(body.From, body.Name) }); }
             catch (FileNotFoundException) { return Results.NotFound(new { error = "recording not found" }); }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+        });
+        app.MapPost("/api/wav/move",
+            (WavMoveRequest body, Zeus.Server.Wav.WavRecorderService wav) =>
+        {
+            if (string.IsNullOrWhiteSpace(body?.From))
+                return Results.BadRequest(new { error = "from is required" });
+            try { return Results.Ok(new { relPath = wav.MoveRecording(body.From, body.Folder ?? "") }); }
+            catch (FileNotFoundException) { return Results.NotFound(new { error = "recording not found" }); }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+        });
+        app.MapPost("/api/wav/folder/create",
+            (WavFolderRequest body, Zeus.Server.Wav.WavRecorderService wav) =>
+        {
+            if (string.IsNullOrWhiteSpace(body?.Path))
+                return Results.BadRequest(new { error = "path is required" });
+            try { return Results.Ok(new { folder = wav.CreateFolder(body.Path) }); }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+        });
+        app.MapPost("/api/wav/folder/delete",
+            (WavFolderRequest body, Zeus.Server.Wav.WavRecorderService wav) =>
+        {
+            if (string.IsNullOrWhiteSpace(body?.Path))
+                return Results.BadRequest(new { error = "path is required" });
+            try { return Results.Ok(new { deleted = wav.DeleteFolder(body.Path) }); }
+            catch (FileNotFoundException) { return Results.NotFound(new { error = "folder not found" }); }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+            // Sharing violation (a file in the folder is open/in use) on Windows.
+            catch (IOException ex) { return Results.Conflict(new { error = ex.Message }); }
+        });
+        app.MapPost("/api/wav/delete",
+            (WavDeleteRequest body, Zeus.Server.Wav.WavRecorderService wav) =>
+        {
+            if (string.IsNullOrWhiteSpace(body?.File))
+                return Results.BadRequest(new { error = "file is required" });
+            try { wav.DeleteRecording(body.File); return Results.Ok(new { deleted = body.File }); }
+            catch (FileNotFoundException) { return Results.NotFound(new { error = "recording not found" }); }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            // Active recording/playback target — refused up front.
+            catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+            // Sharing violation (file open/in use) on Windows.
+            catch (IOException ex) { return Results.Conflict(new { error = ex.Message }); }
+        });
+
+        // The recordings root: where new captures land and the listing reads
+        // from. Operator-selectable and persisted across restarts.
+        app.MapGet("/api/wav/root", (Zeus.Server.Wav.WavRecorderService wav) =>
+        {
+            var (root, isDefault) = wav.GetRecordingsRoot();
+            return Results.Ok(new { root, isDefault });
+        });
+        app.MapPost("/api/wav/root",
+            (WavRootRequest body, Zeus.Server.Wav.WavRecorderService wav) =>
+        {
+            try
+            {
+                // Null/empty/missing path resets to the platform default.
+                var (root, isDefault) = wav.SetRecordingsRoot(body?.Path);
+                return Results.Ok(new { root, isDefault });
+            }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+        });
+
+        // Read-only server-side directory browser so the web UI can pick a
+        // recordings root on the machine the backend runs on. Deliberately not
+        // confined to the recordings root.
+        app.MapGet("/api/wav/dirs", (string? path) =>
+        {
+            try
+            {
+                var listing = Zeus.Server.Wav.WavLibrary.BrowseDirectories(path);
+                return Results.Ok(new
+                {
+                    path = listing.Path,
+                    parent = listing.Parent,
+                    separator = listing.Separator,
+                    dirs = listing.Dirs.Select(d => new { name = d.Name, path = d.Path }),
+                });
+            }
+            catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException or IOException)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
         });
 
         app.MapGet("/api/state", (RadioService r) => r.Snapshot());
@@ -4978,5 +5091,11 @@ internal sealed record TxDutyGuidanceDto(
 // "P1" or "P2" so the server sends the correct stop frame.
 internal sealed record ReclaimRadioRequest(string? Endpoint, string? Protocol);
 internal sealed record HardwareDiagnosticsMarkerRequest(string? Label, string? Notes);
-internal sealed record WavRecordStartRequest(string? Source);
-internal sealed record WavPlayRequest(string? File);
+internal sealed record WavRecordStartRequest(string? Source, string? Folder);
+internal sealed record WavPlayRequest(string? File, string? Dest);
+internal sealed record WavRenameRequest(string? From, string? Name);
+internal sealed record WavMoveRequest(string? From, string? Folder);
+internal sealed record WavFolderRequest(string? Path);
+internal sealed record WavDeleteRequest(string? File);
+// Body for POST /api/wav/root. Null/empty Path resets to the platform default.
+internal sealed record WavRootRequest(string? Path);

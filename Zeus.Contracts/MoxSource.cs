@@ -51,4 +51,13 @@ public enum MoxSource : byte
     /// <see cref="UI"/> remains the master override. CAT keying never arms
     /// PureSignal and never auto-keys on connect.</summary>
     Cat = 5,
+    /// <summary>The WAV recorder / tape deck keying TX for over-the-air
+    /// playback of a recording. Same release rule as the others: only
+    /// <see cref="Wav"/> releases what <see cref="Wav"/> claimed, and
+    /// <see cref="UI"/> remains the master override. If the operator was
+    /// already transmitting when playback started, the recorder rides that key
+    /// and never drops it. WAV playback never arms PureSignal and never
+    /// auto-keys on connect — the operator (or an explicit Air playback)
+    /// initiates every transmission.</summary>
+    Wav = 6,
 }

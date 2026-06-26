@@ -476,10 +476,12 @@ export const PANELS: Record<string, PanelDef> = {
   },
   wavrecorder: {
     id: 'wavrecorder',
-    name: 'Tape Deck · WAV Recorder',
+    name: 'Wav Recorder',
     category: 'tools',
-    tags: ['recorder', 'wav', 'tape', 'record', 'playback', 'audio', 'reel'],
+    tags: ['recorder', 'wav', 'record', 'playback', 'audio', 'meter', 'folder'],
     component: WavRecorderPanel,
+    minW: 4,
+    minH: 8,
   },
   analogmeter: {
     id: 'analogmeter',
