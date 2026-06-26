@@ -63,28 +63,33 @@ public class AuHostAudioPluginTests : IDisposable
     }
 
     [Fact]
-    public async Task Initialize_AuTxNativeLoad_StaysOptInByDefault()
+    public async Task Initialize_AuTxNativeLoad_IsEnabledByDefault()
     {
         VstHostAudioPlugin.NativeLoadEnabledOverride = null;
         var prevEnable = Environment.GetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD");
         var prevDisable = Environment.GetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD");
+        var prevTxDisable = Environment.GetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD");
         try
         {
             Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", null);
             Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", null);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD", null);
 
             var bridge = new FakeBridge();
             var plugin = new VstHostAudioPlugin(bridge, AuManifest(), Path.GetTempPath(), "AULowpass");
             await plugin.InitializeAudioAsync(new StubHost(), default);
 
-            // AU inherits the SAME gate as VST3 — TX native load off by default.
-            Assert.False(bridge.InitCalled);
-            Assert.False(plugin.IsNativelyLoaded);
+            // AU inherits the SAME gate as VST3 — TX native load now on by default
+            // (KB2UKA-approved 2026-06-26). The AU load identity is a registry
+            // triple, so no filesystem path is required.
+            Assert.True(bridge.InitCalled);
+            Assert.True(plugin.IsNativelyLoaded);
         }
         finally
         {
             Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", prevEnable);
             Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", prevDisable);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD", prevTxDisable);
             VstHostAudioPlugin.NativeLoadEnabledOverride = true;
         }
     }

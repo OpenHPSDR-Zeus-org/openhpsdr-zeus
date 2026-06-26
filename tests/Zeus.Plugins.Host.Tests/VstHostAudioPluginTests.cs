@@ -182,15 +182,57 @@ public class VstHostAudioPluginTests : IDisposable
     }
 
     [Fact]
-    public async Task Initialize_TxNativeLoad_StaysOptInByDefault()
+    public async Task Initialize_TxNativeLoad_IsEnabledByDefault()
     {
+        // TX native load now defaults on (KB2UKA-approved 2026-06-26). With no
+        // env overrides a tx.* slot loads natively, same as rx.*.
         VstHostAudioPlugin.NativeLoadEnabledOverride = null;
         var previousEnable = Environment.GetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD");
         var previousDisable = Environment.GetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD");
+        var previousTxDisable = Environment.GetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD");
+        var bridge = new FakeBridge();
+        var pluginDir = Path.GetTempPath();
+        var vst3Abs = Path.Combine(pluginDir, "vst3", "FakeTx.vst3");
+        Directory.CreateDirectory(Path.GetDirectoryName(vst3Abs)!);
+        File.WriteAllText(vst3Abs, "stub");
         try
         {
             Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", null);
             Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", null);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD", null);
+
+            var plugin = new VstHostAudioPlugin(
+                bridge, AudioManifest("vst3/FakeTx.vst3", "tx.post-leveler"), pluginDir, "FakeTx");
+
+            await plugin.InitializeAudioAsync(new StubHost(currentBlockSize: 2048), default);
+
+            Assert.True(bridge.InitCalled);
+            Assert.True(plugin.IsNativelyLoaded);
+        }
+        finally
+        {
+            File.Delete(vst3Abs);
+            Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", previousEnable);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", previousDisable);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD", previousTxDisable);
+            VstHostAudioPlugin.NativeLoadEnabledOverride = true;
+        }
+    }
+
+    [Fact]
+    public async Task Initialize_TxNativeLoad_DisabledBy_TxKillSwitch()
+    {
+        // ZEUS_DISABLE_TX_VST_LOAD=1 falls a tx.* slot back to passthrough
+        // (crash-isolated out-of-process engine) without touching rx.*.
+        VstHostAudioPlugin.NativeLoadEnabledOverride = null;
+        var previousEnable = Environment.GetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD");
+        var previousDisable = Environment.GetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD");
+        var previousTxDisable = Environment.GetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD");
+        try
+        {
+            Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", null);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", null);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD", "1");
 
             var bridge = new FakeBridge();
             var plugin = new VstHostAudioPlugin(bridge, AudioManifest(), Path.GetTempPath(), "FakeFx");
@@ -204,6 +246,7 @@ public class VstHostAudioPluginTests : IDisposable
         {
             Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", previousEnable);
             Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", previousDisable);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD", previousTxDisable);
             VstHostAudioPlugin.NativeLoadEnabledOverride = true;
         }
     }
