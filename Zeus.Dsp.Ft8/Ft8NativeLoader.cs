@@ -44,7 +44,8 @@ public static class Ft8NativeLoader
         lock (Gate)
         {
             if (_probed) return _loadable;
-            if (TryResolve(typeof(Ft8NativeMethods).Assembly, out var handle))
+            if (TryResolveNamed(typeof(Ft8NativeMethods).Assembly, NativeFileName(),
+                                Ft8NativeMethods.LibraryName, out var handle))
             {
                 NativeLibrary.Free(handle);
                 _loadable = true;
@@ -64,21 +65,58 @@ public static class Ft8NativeLoader
         lock (Gate) { _probed = false; _loadable = false; }
     }
 
+    private static bool _wsprProbed;
+    private static bool _wsprLoadable;
+
+    /// <summary>True if the zeus_wspr shared library can be located and loaded.</summary>
+    public static bool TryProbeWspr()
+    {
+        EnsureResolverRegistered();
+        if (_wsprProbed) return _wsprLoadable;
+        lock (Gate)
+        {
+            if (_wsprProbed) return _wsprLoadable;
+            if (TryResolveNamed(typeof(Ft8NativeMethods).Assembly, WsprNativeFileName(),
+                                WsprNativeMethods.LibraryName, out var handle))
+            {
+                NativeLibrary.Free(handle);
+                _wsprLoadable = true;
+            }
+            else
+            {
+                _wsprLoadable = false;
+            }
+            _wsprProbed = true;
+            return _wsprLoadable;
+        }
+    }
+
     private static IntPtr Resolve(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
     {
         if (libraryName == Ft8NativeMethods.LibraryName)
-            return TryResolve(assembly, out var handle) ? handle : IntPtr.Zero;
+            return TryResolveNamed(assembly, NativeFileName(), Ft8NativeMethods.LibraryName, out var h) ? h : IntPtr.Zero;
+        if (libraryName == WsprNativeMethods.LibraryName)
+            return TryResolveNamed(assembly, WsprNativeFileName(), WsprNativeMethods.LibraryName, out var hw) ? hw : IntPtr.Zero;
         return IntPtr.Zero;
     }
 
-    private static bool TryResolve(Assembly assembly, out IntPtr handle)
+    private static bool TryResolveNamed(Assembly assembly, string fileName, string libName, out IntPtr handle)
     {
-        foreach (var candidate in CandidatePaths(assembly, NativeFileName()))
+        foreach (var candidate in CandidatePaths(assembly, fileName))
         {
             if (File.Exists(candidate) && NativeLibrary.TryLoad(candidate, out handle))
                 return true;
         }
-        return NativeLibrary.TryLoad(Ft8NativeMethods.LibraryName, assembly, null, out handle);
+        return NativeLibrary.TryLoad(libName, assembly, null, out handle);
+    }
+
+    /// <summary>Platform shared-library filename for zeus_wspr.</summary>
+    public static string WsprNativeFileName()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return "libzeus_wspr.dylib";
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return "libzeus_wspr.so";
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return "zeus_wspr.dll";
+        return "libzeus_wspr";
     }
 
     private static IEnumerable<string> CandidatePaths(Assembly assembly, string fileName)
