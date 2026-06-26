@@ -307,6 +307,55 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private byte _micControl;
     private byte _lineInGain;
 
+    // Internal (FPGA) CW keyer config — issue #1032. Wire-encoded into the
+    // TxSpecific (CmdTx, port 1026) packet bytes 5-13/17. These are the
+    // operator-driven values (CW-mode active, keyer mode, speed, sidetone);
+    // the remaining gateware parameters are pinned to the Cw* constants
+    // below, mirroring how the Protocol-1 path pins weight/spacing/reverse in
+    // ControlFrame. Latched by SetCwKeyerConfig and re-pushed on the next
+    // CmdTx, exactly like the audio front-end bytes. All-default (Inactive)
+    // leaves byte 5 = 0, so a non-CW transmit is byte-identical to today.
+    private bool _cwActive;
+    private CwKeyerMode _cwMode;
+    private int _cwSpeedWpm;
+    private int _cwSidetoneHz;
+    private byte _cwSidetoneLevel;
+
+    // TxSpecific byte-5 CW mode_control bit layout — pihpsdr new_protocol.c
+    // new_protocol_tx_specific (transmit_specific_buffer[5]) and OpenHPSDR
+    // Ethernet Protocol v4.4 "Transmitter Specific" packet (pp.29-30). Public
+    // so the wire-format golden tests can assert the canonical bit positions.
+    public const byte CwModeCwSelected   = 0x02; // bit1 — internal keyer / CW selected
+    public const byte CwModeReverse      = 0x04; // bit2 — swap dit/dah paddles
+    public const byte CwModeIambic       = 0x08; // bit3 — iambic (Mode A)
+    public const byte CwModeModeB        = 0x20; // bit5 — Mode B (set with Iambic)
+    public const byte CwModeSidetone     = 0x10; // bit4 — radio sidetone enable
+    public const byte CwModeStrictSpacing = 0x40; // bit6 — strict char spacing
+    public const byte CwModeBreakIn      = 0x80; // bit7 — break-in (radio handles TX/RX)
+
+    // Gateware keyer parameters that have no operator UI yet (mirrors the
+    // Protocol-1 neutral defaults in ControlFrame). Held as constants and
+    // sent on every CW transmit.
+    //   Weight  : TxSpecific byte 10, 50% => 1:1 dit:dah (pihpsdr default).
+    //   Spacing : strict letter spacing off (bug/keyer pass-through).
+    //   Reverse : paddles un-swapped.
+    //   BreakIn : ON. *Load-bearing for issue #1032* — without break-in the
+    //             radio will not switch to TX on key-down, so the jack stays
+    //             silent (the original bug). Semi/full/off is a CW-operator
+    //             preference and a candidate follow-up control; ON is the only
+    //             value that makes "plug a key in and it works" true.
+    //   HangMs  : semi-break-in tail before the radio drops back to RX.
+    //   RfDelayMs: PTT-to-RF (key-down) delay; gateware-clamped to 900/WPM
+    //             (pihpsdr "FPGA iambic keyer bug" workaround, byte 13).
+    //   RampMs  : CW envelope rise/fall; Thetis forces 9 (setup.cs:29327).
+    private const byte CwKeyerWeight    = 50;
+    private const bool CwKeyerSpacing   = false;
+    private const bool CwKeyerReverse   = false;
+    private const bool CwKeyerBreakIn   = true;
+    private const int  CwKeyerHangMs    = 300;
+    private const int  CwKeyerRfDelayMs = 8;
+    private const byte CwKeyerRampMs    = 9;
+
     // TxSpecific byte-50 mic_control bit layout (Thetis network.c:1226-1233).
     // Public so the wire-format golden tests can assert against the canonical
     // bit positions. The byte itself is resolved upstream from the selected
@@ -1877,8 +1926,37 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
     private void SendCmdTx()
     {
-        var p = ComposeCmdTxBuffer(_seqCmdTx++, (ushort)_sampleRateKhz, _txStepAttnDb, _paEnabled, _psFeedbackEnabled, _micControl, _lineInGain);
+        var cw = new CwKeyerWireConfig
+        {
+            Active = Volatile.Read(ref _cwActive),
+            Mode = _cwMode,
+            SpeedWpm = _cwSpeedWpm,
+            SidetoneHz = _cwSidetoneHz,
+            SidetoneLevel = _cwSidetoneLevel,
+        };
+        var p = ComposeCmdTxBuffer(_seqCmdTx++, (ushort)_sampleRateKhz, _txStepAttnDb, _paEnabled, _psFeedbackEnabled, _micControl, _lineInGain, cw);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1026));
+    }
+
+    /// <summary>
+    /// Configure the radio's <b>internal (FPGA) CW keyer</b> — issue #1032.
+    /// On Protocol 2 the host does not key CW: setting this (in CW mode) arms
+    /// the gateware so a physical key/paddle on the rear KEY jack keys the
+    /// transmitter directly. Latches the operator values and re-pushes the
+    /// TxSpecific packet so the radio honours them on the next transmit cycle
+    /// (load-bearing — the radio keeps its last-remembered config otherwise,
+    /// the same pihpsdr transmit_specific risk noted on the audio front-end).
+    /// No-op on the wire until the RX task is live; the values are latched and
+    /// emitted on the first CmdTx after connect.
+    /// </summary>
+    public void SetCwKeyerConfig(in CwKeyerWireConfig cw)
+    {
+        Volatile.Write(ref _cwActive, cw.Active);
+        _cwMode = cw.Mode;
+        _cwSpeedWpm = cw.SpeedWpm;
+        _cwSidetoneHz = cw.SidetoneHz;
+        _cwSidetoneLevel = cw.SidetoneLevel;
+        if (_rxTask is not null) SendCmdTx();
     }
 
     /// <summary>
@@ -1923,12 +2001,49 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // 57/58/59) — operator's normal voice TX has been validated working
     // with that wire form on G2 MkII, so we don't ship a wire change
     // beyond the PS-armed window in this patch.
-    internal static byte[] ComposeCmdTxBuffer(uint seq, ushort sampleRateKhz, byte txStepAttnDb, bool paEnabled, bool psEnabled, byte micControl = 0, byte lineInGain = 0)
+    internal static byte[] ComposeCmdTxBuffer(uint seq, ushort sampleRateKhz, byte txStepAttnDb, bool paEnabled, bool psEnabled, byte micControl = 0, byte lineInGain = 0, CwKeyerWireConfig cw = default)
     {
         var p = new byte[60];
         WriteBeU32(p, 0, seq);
         p[4] = 1;                 // num_dac
         WriteBeU16(p, 14, sampleRateKhz);
+
+        // Internal (FPGA) CW keyer — issue #1032. Byte 5 is the CW mode_control
+        // bitfield and is set ONLY in CW mode (cw.Active); bytes 6-13/17 carry
+        // the keyer parameters. Layout = pihpsdr new_protocol.c
+        // new_protocol_tx_specific (transmit_specific_buffer[5..17]) and
+        // OpenHPSDR Ethernet Protocol v4.4 "Transmitter Specific" (pp.29-30).
+        // When cw.Active is false byte 5 stays 0 and the CW bytes stay 0, so a
+        // non-CW (SSB/AM/FM/DIG) transmit is byte-identical to the historical
+        // wire form. The host never sets MOX for internal CW — the gateware
+        // self-keys off the rear KEY jack once byte-5 bit-1 is set.
+        if (cw.Active)
+        {
+            // Gateware-pinned bits use ternary-OR (not `if`) so the const
+            // false/true folds to an expression rather than unreachable code.
+            byte mode = CwModeCwSelected;
+            mode |= CwKeyerReverse ? CwModeReverse : (byte)0;
+            // Straight = no element timing (external keyer/bug pass-through);
+            // Iambic-A sets the iambic bit; Iambic-B sets iambic + Mode B.
+            if (cw.Mode == CwKeyerMode.IambicA) mode |= CwModeIambic;
+            else if (cw.Mode == CwKeyerMode.IambicB) mode |= (byte)(CwModeIambic | CwModeModeB);
+            mode |= cw.SidetoneLevel != 0 ? CwModeSidetone : (byte)0;
+            mode |= CwKeyerSpacing ? CwModeStrictSpacing : (byte)0;
+            mode |= CwKeyerBreakIn ? CwModeBreakIn : (byte)0;
+            p[5] = mode;
+
+            p[6] = (byte)(cw.SidetoneLevel & 0x7F);
+            WriteBeU16(p, 7, (ushort)Math.Clamp(cw.SidetoneHz, 0, 0xFFFF));
+            int wpm = Math.Clamp(cw.SpeedWpm, 1, 60);
+            p[9] = (byte)wpm;
+            p[10] = CwKeyerWeight;
+            WriteBeU16(p, 11, (ushort)Math.Clamp(CwKeyerHangMs, 0, 0xFFFF));
+            // RF (key-down) delay, clamped to 900/WPM — pihpsdr's documented
+            // FPGA iambic-keyer-bug workaround (new_protocol.c:1500-1503).
+            int rfDelay = Math.Min(CwKeyerRfDelayMs, 900 / wpm);
+            p[13] = (byte)Math.Clamp(rfDelay, 0, 255);
+            p[17] = CwKeyerRampMs;
+        }
 
         // Audio front-end (external-audio-jacks re-port). Byte 50 = mic_control
         // flags, byte 51 = line_in_gain — Thetis network.c:1234,1236. Both

@@ -1925,11 +1925,12 @@ public static class ZeusEndpoints
             var snapshot = store.Save(req);
             sidetone.SetPitchHz(snapshot.SidetoneHz);
             sidetone.SetGainDb(snapshot.SidetoneGainDb);
-            // Forward keyer speed (WPM) + mode to the radio's on-board iambic
-            // keyer (C&C 0x0B) so a paddle keys at the panel speed. No-op when
-            // no radio is connected (the value is cached + re-pushed on the
-            // next connect). See zeus-bks.
-            radio.SetCwKeyerConfig(snapshot.Wpm, snapshot.KeyerMode);
+            // Forward keyer speed (WPM) + mode + sidetone to the radio's
+            // on-board iambic keyer so a paddle keys at the panel speed:
+            // P1 → C&C 0x0B; P2 → TxSpecific internal-keyer arm (#1032). No-op
+            // when no radio is connected (cached + re-pushed on the next
+            // connect). See zeus-bks.
+            radio.SetCwKeyerConfig(snapshot.Wpm, snapshot.KeyerMode, snapshot.SidetoneHz, snapshot.SidetoneGainDb);
             return Results.Ok(snapshot);
         });
 
