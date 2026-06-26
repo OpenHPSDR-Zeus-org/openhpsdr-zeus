@@ -890,6 +890,14 @@ public static class ZeusHost
         builder.Services.AddHostedService(sp => sp.GetRequiredService<Cat.CatServer>());
         builder.Services.AddSingleton<CatManagementService>();
 
+        // Serial CAT ports (Thetis CAT1–4 parity) — the same Kenwood handler over
+        // up to four host serial devices for loggers/digimode apps wired through a
+        // virtual COM pair (com0com / socat). Store-only + hot-reconnect (no
+        // restart), mirroring the G2 front-panel bridge; all ports default off.
+        builder.Services.AddSingleton<CatSerialConfigStore>();
+        builder.Services.AddSingleton<Cat.CatSerialService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Cat.CatSerialService>());
+
         // ZeusChat — operator-to-operator chat over the Cloudflare relay.
         // Singleton (API surface) + hosted service (relay connection lifecycle),
         // same shape as SpotBroadcastService above. Opt-in persisted via

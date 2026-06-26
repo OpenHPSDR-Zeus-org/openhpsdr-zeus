@@ -2152,6 +2152,17 @@ public static class ZeusEndpoints
             return Results.Ok(r.SetZoom(req.Level));
         });
 
+        // Workspace UI zoom — scales the panel-grid cell pitch (see
+        // StateDto.WorkspaceZoomPct). Distinct from /api/rx/zoom (spectral). The
+        // server clamps Pct into range rather than 400-ing, so a slider step can
+        // never get stuck on an out-of-range value; the echoed state carries the
+        // accepted percent back for the optimistic-send reconcile.
+        app.MapPost("/api/ui/workspace-zoom", (WorkspaceZoomSetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.ui.workspaceZoom pct={Pct}", req.Pct);
+            return Results.Ok(r.SetWorkspaceZoom(req.Pct));
+        });
+
         // Band memory: last-used (hz, mode) per HF band. GET returns the full map so
         // the BandButtons UI can restore on load with one round-trip. PUT upserts one
         // entry — the web debounces writes so tuning doesn't hammer LiteDB.
@@ -3481,6 +3492,32 @@ public static class ZeusEndpoints
                 return Results.BadRequest(new { error = "bindAddress and port required" });
             var result = cat.TestPort(req.BindAddress.Trim(), req.Port);
             return Results.Ok(result);
+        });
+
+        // Serial CAT ports (Thetis CAT1–4). GET returns per-port config + live
+        // open/error status plus the host's enumerable serial devices (UI
+        // suggestions; pty/com0com pairs aren't enumerable so the field is
+        // free-form). PUT replaces all four port configs and hot-reconnects (no
+        // restart). POST /test probe-opens one port to verify it's usable.
+        app.MapGet("/api/cat/serial/status",
+            (Zeus.Server.Cat.CatSerialService svc) => Results.Ok(svc.Snapshot()));
+
+        app.MapPut("/api/cat/serial/config",
+            (CatSerialConfig req, CatSerialConfigStore store, Zeus.Server.Cat.CatSerialService svc) =>
+        {
+            var ports = req?.Ports ?? Array.Empty<CatSerialPortConfig>();
+            log.LogInformation("api.cat.serial.config ports=[{Ports}]",
+                string.Join(", ", ports.Select((p, i) => $"#{i + 1} {(p.Enabled ? $"{p.PortName}@{p.BaudRate}" : "off")}")));
+            store.Set(ports);
+            return Results.Ok(svc.Snapshot());
+        });
+
+        app.MapPost("/api/cat/serial/test",
+            (CatSerialTestRequest req, Zeus.Server.Cat.CatSerialService svc) =>
+        {
+            if (string.IsNullOrWhiteSpace(req?.PortName))
+                return Results.BadRequest(new { error = "portName required" });
+            return Results.Ok(svc.TestPort(req));
         });
 
         app.Map("/ws", async (HttpContext ctx, StreamingHub hub) =>

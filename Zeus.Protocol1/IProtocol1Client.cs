@@ -332,4 +332,33 @@ public interface IProtocol1Client : IDisposable
     /// the change is observed.
     /// </summary>
     void DetachRxSink();
+
+    /// <summary>
+    /// Attach the codec radio-mic / line-in handler (issue #992). While set, the
+    /// RX loop calls the handler synchronously with the 126 int16 mic samples
+    /// embedded in every standard EP6 packet (offsets 6..7 of each 8-byte sample
+    /// group). The samples are always 48 kHz at the radio's codec; at higher IQ
+    /// rates the gateware duplicates each sample N = rate/48 kHz times, so the
+    /// handler is responsible for decimating to 48 kHz. The handler runs on the
+    /// RX thread and must not block; the span is valid only for the call. Until
+    /// this is set, mic extraction is skipped entirely (no added per-packet cost
+    /// for radios in Host mode). Used by <c>DspPipelineService</c> to relay the
+    /// codec input (mic jack / line-in jack) into the TX audio chain when a
+    /// radio audio source is armed.
+    /// </summary>
+    void AttachRadioMicHandler(P1MicSampleHandler handler);
+
+    /// <summary>Detach the codec radio-mic handler; reverts to no extraction.</summary>
+    void DetachRadioMicHandler();
 }
+
+/// <summary>
+/// Synchronous handler for one EP6 packet's worth of codec mic / line-in
+/// samples (issue #992). The radio's codec digitises whichever input is
+/// selected (mic jack on RadioMic, line-in jack on RadioLineIn) and embeds the
+/// 16-bit samples in the same EP6 frame as the IQ stream. <paramref name="samples"/>
+/// carries the raw int16 mic samples in USB-frame order; the codec rate is
+/// fixed at 48 kHz, so at IQ rates above 48 kHz consecutive samples are
+/// duplicates and the handler must decimate by <c>iqRateHz / 48000</c>.
+/// </summary>
+public delegate void P1MicSampleHandler(ReadOnlySpan<short> samples, int iqRateHz);
