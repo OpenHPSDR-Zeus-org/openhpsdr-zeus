@@ -65,6 +65,7 @@ public class RadioStateStoreTests : IDisposable
                 MicGainDb = -7,
                 LevelerMaxGainDb = 12.5,
                 ZoomLevel = 4,
+                WorkspaceZoomPct = 130,
                 SsbFilterLoAbs = 300, SsbFilterHiAbs = 2400,
                 CwFilterLoAbs = 400, CwFilterHiAbs = 800,
                 SsbTxFilterLoAbs = 300, SsbTxFilterHiAbs = 2400,
@@ -104,6 +105,7 @@ public class RadioStateStoreTests : IDisposable
         Assert.Equal(-7, got.MicGainDb);
         Assert.Equal(12.5, got.LevelerMaxGainDb);
         Assert.Equal(4, got.ZoomLevel);
+        Assert.Equal(130, got.WorkspaceZoomPct);
         Assert.Equal(300, got.SsbFilterLoAbs);
         Assert.Equal(2400, got.SsbFilterHiAbs);
         Assert.Equal(400, got.CwFilterLoAbs);

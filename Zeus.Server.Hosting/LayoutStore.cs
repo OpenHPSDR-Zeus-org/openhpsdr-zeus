@@ -65,6 +65,7 @@ public sealed class LayoutStore : IDisposable
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<LayoutEntry> _legacy;
     private readonly ILiteCollection<RadioLayoutsEntry> _v2;
+    private readonly ILiteCollection<RadioSavedLayoutsEntry> _saved;
     private readonly ILogger<LayoutStore> _log;
     private readonly object _lock = new();
 
@@ -82,6 +83,8 @@ public sealed class LayoutStore : IDisposable
         _legacy.EnsureIndex(x => x.ProfileId, unique: true);
         _v2 = _db.GetCollection<RadioLayoutsEntry>("ui_layouts_v2");
         _v2.EnsureIndex(x => x.RadioKey, unique: true);
+        _saved = _db.GetCollection<RadioSavedLayoutsEntry>("ui_saved_layouts");
+        _saved.EnsureIndex(x => x.RadioKey, unique: true);
 
         _log.LogInformation("LayoutStore initialized at {Path}", dbPath);
     }
@@ -279,6 +282,111 @@ public sealed class LayoutStore : IDisposable
         }
     }
 
+    // -----------------------------------------------------------------
+    // Saved-layouts library (reusable presets, separate from the tabs)
+    // -----------------------------------------------------------------
+
+    /// <summary>
+    /// Read every saved layout (preset) for the given radio. Returns an empty
+    /// list when the radio has none yet — the library starts empty.
+    /// </summary>
+    public SavedLayoutsDto GetSavedLayouts(string radioKey)
+    {
+        radioKey = NormalizeRadioKey(radioKey);
+        lock (_lock)
+        {
+            var entry = _saved.FindOne(x => x.RadioKey == radioKey);
+            return entry is null
+                ? new SavedLayoutsDto(radioKey, Array.Empty<SavedLayoutDto>())
+                : ToSavedDto(entry);
+        }
+    }
+
+    /// <summary>
+    /// Create or replace a saved layout. Passing the id of an existing saved
+    /// layout overwrites its name/icon/description/arrangement in place — this
+    /// is the "replace" affordance (re-snapshot a preset from a fresh
+    /// workspace). A new id appends a new preset.
+    /// </summary>
+    public SavedLayoutsDto UpsertSavedLayout(
+        string radioKey,
+        string savedId,
+        string name,
+        string layoutJson,
+        string? icon = null,
+        string? description = null)
+    {
+        radioKey = NormalizeRadioKey(radioKey);
+        savedId = NormalizeLayoutId(savedId);
+        if (string.IsNullOrWhiteSpace(name)) name = savedId;
+        var normalisedIcon = NormalizeIcon(icon);
+        var normalisedDescription = NormalizeDescription(description);
+
+        lock (_lock)
+        {
+            var entry = _saved.FindOne(x => x.RadioKey == radioKey) ?? new RadioSavedLayoutsEntry
+            {
+                RadioKey = radioKey,
+                SavedLayouts = new List<SavedLayoutEntry>(),
+            };
+
+            var existing = entry.SavedLayouts.FirstOrDefault(l => l.SavedId == savedId);
+            if (existing is null)
+            {
+                entry.SavedLayouts.Add(new SavedLayoutEntry
+                {
+                    SavedId = savedId,
+                    Name = name,
+                    LayoutJson = layoutJson,
+                    UpdatedUtc = DateTime.UtcNow,
+                    Icon = normalisedIcon ?? string.Empty,
+                    Description = normalisedDescription ?? string.Empty,
+                });
+            }
+            else
+            {
+                existing.Name = name;
+                existing.LayoutJson = layoutJson;
+                existing.UpdatedUtc = DateTime.UtcNow;
+                if (icon is not null) existing.Icon = normalisedIcon ?? string.Empty;
+                if (description is not null) existing.Description = normalisedDescription ?? string.Empty;
+            }
+
+            if (entry.Id == 0) _saved.Insert(entry);
+            else _saved.Update(entry);
+
+            return ToSavedDto(entry);
+        }
+    }
+
+    /// <summary>Remove a saved layout from the library. No-op if absent.</summary>
+    public SavedLayoutsDto DeleteSavedLayout(string radioKey, string savedId)
+    {
+        radioKey = NormalizeRadioKey(radioKey);
+        savedId = NormalizeLayoutId(savedId);
+        lock (_lock)
+        {
+            var entry = _saved.FindOne(x => x.RadioKey == radioKey);
+            if (entry is null)
+                return new SavedLayoutsDto(radioKey, Array.Empty<SavedLayoutDto>());
+            entry.SavedLayouts.RemoveAll(l => l.SavedId == savedId);
+            _saved.Update(entry);
+            return ToSavedDto(entry);
+        }
+    }
+
+    private static SavedLayoutsDto ToSavedDto(RadioSavedLayoutsEntry e) => new(
+        e.RadioKey,
+        e.SavedLayouts
+            .Select(l => new SavedLayoutDto(
+                l.SavedId,
+                l.Name,
+                l.LayoutJson,
+                new DateTimeOffset(l.UpdatedUtc).ToUnixTimeMilliseconds(),
+                string.IsNullOrEmpty(l.Icon) ? null : l.Icon,
+                string.IsNullOrEmpty(l.Description) ? null : l.Description))
+            .ToList());
+
     private static RadioLayoutsDto ToDto(RadioLayoutsEntry e) => new(
         e.RadioKey,
         e.Layouts
@@ -362,6 +470,26 @@ public sealed class NamedLayoutEntry
     public DateTime UpdatedUtc { get; set; }
     // Optional presentation fields (issue #241 follow-up). Older rows that
     // predate these columns deserialise as empty strings under LiteDB.
+    public string Icon { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+}
+
+// Saved-layouts library — one row per radio holding a list of reusable layout
+// presets. Distinct from RadioLayoutsEntry (the live tabs): presets are never
+// "active", they are templates the operator applies on demand.
+public sealed class RadioSavedLayoutsEntry
+{
+    public int Id { get; set; }
+    public string RadioKey { get; set; } = string.Empty;
+    public List<SavedLayoutEntry> SavedLayouts { get; set; } = new();
+}
+
+public sealed class SavedLayoutEntry
+{
+    public string SavedId { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string LayoutJson { get; set; } = string.Empty;
+    public DateTime UpdatedUtc { get; set; }
     public string Icon { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
 }

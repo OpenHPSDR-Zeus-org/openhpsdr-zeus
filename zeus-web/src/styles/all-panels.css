@@ -725,6 +725,78 @@
   opacity: 1;
 }
 
+/* Workspace zoom cluster (− | nn% | +) — a floating pill sitting to the LEFT
+ * of the round Add Panel button. Same chrome vocabulary so the two read as a
+ * matched pair of workspace-level affordances. */
+.workspace-zoom-controls {
+  position: absolute;
+  right: 54px;
+  bottom: 12px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 2px;
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.015)),
+    rgba(12, 13, 15, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow:
+    0 8px 20px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  opacity: 0.68;
+  transition:
+    opacity var(--dur-fast),
+    border-color var(--dur-fast);
+}
+.workspace-zoom-controls:hover,
+.workspace-zoom-controls:focus-within {
+  opacity: 1;
+  border-color: rgba(255, 255, 255, 0.24);
+}
+.workspace-zoom-btn,
+.workspace-zoom-readout {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg-1);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  border-radius: 999px;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+.workspace-zoom-btn {
+  width: 28px;
+}
+.workspace-zoom-readout {
+  min-width: 44px;
+  padding: 0 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+.workspace-zoom-btn:hover:not(:disabled),
+.workspace-zoom-readout:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--fg-0);
+}
+.workspace-zoom-btn:disabled {
+  cursor: default;
+  opacity: 0.32;
+}
+.workspace-zoom-btn:focus-visible,
+.workspace-zoom-readout:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
 
 /* Categorized AddPanel modal — left rail of category chips, right pane of
  * panel cards. Stacks the rail vertically so all categories are reachable
@@ -1394,4 +1466,78 @@
 .layout-settings-delete:not(:disabled):focus-visible {
   border-color: var(--tx);
   color: var(--tx);
+}
+/* An armed two-click confirm (Apply/Delete in the library) shows its intent
+   at rest, not only on hover. */
+.layout-settings-library .btn.is-confirm {
+  border-color: var(--tx);
+  color: var(--tx);
+}
+
+/* Saved-layouts library — set off from the workspace fields by a hairline. */
+.layout-settings-library {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--panel-border);
+}
+.layout-settings-library-save {
+  margin-top: 8px;
+}
+.layout-settings-library-empty {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--fg-3);
+  font-style: italic;
+}
+.layout-settings-library-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.layout-settings-library-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+}
+.layout-settings-library-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: 12px;
+  color: var(--fg-1);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.layout-settings-library-icon {
+  font-size: 15px;
+  line-height: 1;
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji',
+    var(--font-sans);
+}
+.layout-settings-library-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 3px 8px;
+}
+.layout-settings-library-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+/* Compact button size for the per-row library actions. */
+.btn.xs {
+  padding: 0.2em 0.5em;
+  font-size: clamp(9px, 0.1vw + 8.5px, 11px);
+  min-height: 0;
 }

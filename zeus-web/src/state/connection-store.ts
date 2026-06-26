@@ -147,6 +147,9 @@ export type ConnectionState = {
   wdspNr3RnnrAvailable: boolean;
   nr3ModelName: string | null;
   zoomLevel: ZoomLevel;
+  // Workspace UI zoom (whole-percent cell-pitch scale; 100 = authored size).
+  // Server-persisted; FlexWorkspace reads this to scale the panel grid.
+  workspaceZoomPct: number;
   inflight: boolean;
   // Endpoint of the most recently successful /api/connect. Survives a
   // disconnect so ConnectPanel can float it to the top of the next scan.
@@ -178,6 +181,7 @@ export type ConnectionState = {
   setSelectedRxIndices: (indices: number[]) => void;
   toggleRxSelection: (index: number) => void;
   setZoomLevel: (level: ZoomLevel) => void;
+  setWorkspaceZoomPct: (pct: number) => void;
   setLastConnectedEndpoint: (ep: string | null) => void;
   setWisdomPhase: (phase: WisdomPhase) => void;
   setWisdomStatus: (status: string) => void;
@@ -246,6 +250,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   wdspNr3RnnrAvailable: false,
   nr3ModelName: null,
   zoomLevel: 1,
+  workspaceZoomPct: 100,
   inflight: false,
   lastConnectedEndpoint: null,
   // Default to 'ready' so a page-load before the WS attach doesn't show the
@@ -305,6 +310,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
         wdspNr3RnnrAvailable: s.wdspNr3RnnrAvailable,
         nr3ModelName: s.nr3ModelName,
         zoomLevel: s.zoomLevel,
+        workspaceZoomPct: s.workspaceZoomPct,
       };
     }),
   setInflight: (inflight) => set({ inflight }),
@@ -356,6 +362,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
         : { selectedRxIndices, focusedRxIndex };
     }),
   setZoomLevel: (zoomLevel) => set({ zoomLevel }),
+  setWorkspaceZoomPct: (workspaceZoomPct) => set({ workspaceZoomPct }),
   setLastConnectedEndpoint: (lastConnectedEndpoint) =>
     set({ lastConnectedEndpoint }),
   setWisdomPhase: (wisdomPhase) => set({ wisdomPhase }),
