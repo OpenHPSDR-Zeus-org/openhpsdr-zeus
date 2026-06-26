@@ -17,9 +17,10 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { setRadioLo, type ZoomLevel } from '../api/client';
+import { setRadioLo, setReceiverLo, type ZoomLevel } from '../api/client';
 import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { useConnectionStore } from '../state/connection-store';
+import { rxIndexOf, type ReceiverKey } from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
 
 const MAX_HZ = 60_000_000;
@@ -71,6 +72,60 @@ export function centerCtunForZoomIn(
       .catch(() => {});
   }
   return targetLoHz;
+}
+
+// Coalesce overlapping autopan POSTs — a fast tune burst can queue several
+// recentre commands; only the last one's applied LO should win.
+let autopanAbort: AbortController | null = null;
+
+/** Glide the CTUN view centre (hardware LO) to `loHz`, locally and on the
+ *  backend. Shares applyLocalCtunZoomCenter so the view-centre tween and the
+ *  radioLoHz store stay in lockstep exactly like the zoom-in recentre path.
+ *  No-op when CTUN is off (the view follows the dial there, so there is
+ *  nothing to recentre). Used by the filter-autopan keep-in-view logic. */
+export function panCtunCenterTo(loHz: number): void {
+  if (!useConnectionStore.getState().ctunEnabled) return;
+  const next = clampHz(loHz);
+  applyLocalCtunZoomCenter(next);
+  autopanAbort?.abort();
+  const ctrl = new AbortController();
+  autopanAbort = ctrl;
+  setRadioLo(next, ctrl.signal)
+    .then((state) => {
+      if (!ctrl.signal.aborted) applyLocalCtunZoomCenter(state.radioLoHz);
+    })
+    .catch(() => {});
+}
+
+// Per-receiver autopan POST coalescing — one in-flight recentre per RX index.
+const secondaryLoAborts = new Map<number, AbortController>();
+
+/** Glide ANY receiver's view centre to `hz` to keep its dial/filter in view.
+ *  RX1 (index 0) recentres the hardware NCO via {@link panCtunCenterTo};
+ *  secondary receivers glide their own view-centre tween optimistically and
+ *  POST the new DDC centre (server no-ops on P1 / CTUN-off, where frames then
+ *  reconcile the glide back). No-op outside CTUN — the view follows the dial
+ *  there, so there is nothing to recentre. */
+export function panReceiverCenterTo(receiver: ReceiverKey, hz: number): void {
+  const idx = rxIndexOf(receiver);
+  if (idx === 0) {
+    panCtunCenterTo(hz);
+    return;
+  }
+  if (!useConnectionStore.getState().ctunEnabled) return;
+  const next = clampHz(hz);
+  const vc = viewCenter.viewCenterFor(receiver);
+  const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
+  if (vc.isInitialized()) {
+    vc.nudgeTargetHz(next - vc.getTargetCenterHz());
+  } else {
+    vc.snapTo(next, s.hzPerPixel > 0 ? s.hzPerPixel : undefined);
+    vc.markOptimisticTune();
+  }
+  secondaryLoAborts.get(idx)?.abort();
+  const ctrl = new AbortController();
+  secondaryLoAborts.set(idx, ctrl);
+  setReceiverLo(idx, next, ctrl.signal).catch(() => {});
 }
 
 function applyLocalCtunZoomCenter(loHz: number): void {

@@ -1152,10 +1152,23 @@ public static class ZeusEndpoints
         // Configure any receiver by index for full multi-DDC (RX1=0, RX2=1,
         // RX3+=2..). Index 0/1 delegate to the RX1/RX2 setters; index >= 2 drives
         // an extra hardware DDC. Only supplied fields change.
-        app.MapPost("/api/receivers/{index:int}", (int index, ReceiverSetRequest req, RadioService r) =>
+        app.MapPost("/api/receivers/{index:int}", (int index, ReceiverSetRequest req, RadioService r, KiwiSdrService kiwi) =>
         {
             if (index < 0 || index >= Zeus.Contracts.WireContract.MaxReceivers)
                 return Results.BadRequest(new { error = $"receiver index out of range (0..{Zeus.Contracts.WireContract.MaxReceivers - 1})" });
+            // The reserved Kiwi slot is a remote receiver, not a hardware DDC:
+            // route tuning/mode/filter to the Kiwi service (enable/disable + URL
+            // live on /api/kiwi). Returns the same StateDto so the projected Kiwi
+            // entry round-trips back to the client.
+            if (index == Zeus.Contracts.WireContract.KiwiReceiverIndex)
+            {
+                log.LogInformation("api.receivers.kiwi vfoHz={VfoHz} mode={Mode} low={Low} high={High}",
+                    req.VfoHz, req.Mode, req.FilterLowHz, req.FilterHighHz);
+                // CTUN on → freeze the waterfall centre and roam the dial within
+                // the displayed span; off → re-centre on the dial.
+                kiwi.SetTuning(req.VfoHz, req.Mode, req.FilterLowHz, req.FilterHighHz, r.Snapshot().CtunEnabled);
+                return Results.Ok(r.Snapshot());
+            }
             log.LogInformation(
                 "api.receivers index={Index} enabled={Enabled} vfoHz={VfoHz} adc={Adc} mode={Mode}",
                 index, req.Enabled, req.VfoHz, req.AdcSource, req.Mode);
@@ -1173,13 +1186,36 @@ public static class ZeusEndpoints
 
         // Per-RX audio mute (RX1=0, RX2=1, RX3+=2..). Mirrors Thetis chkMUT /
         // chkRX2Mute — silences only this receiver's contribution to the mix.
-        app.MapPost("/api/receivers/{index:int}/mute", (int index, MuteSetRequest req, RadioService r) =>
+        app.MapPost("/api/receivers/{index:int}/mute", (int index, MuteSetRequest req, RadioService r, KiwiSdrService kiwi) =>
         {
             if (index < 0 || index >= Zeus.Contracts.WireContract.MaxReceivers)
                 return Results.BadRequest(new { error = $"receiver index out of range (0..{Zeus.Contracts.WireContract.MaxReceivers - 1})" });
             log.LogInformation("api.receivers.mute index={Index} muted={Muted}", index, req.Muted);
+            if (index == Zeus.Contracts.WireContract.KiwiReceiverIndex)
+            {
+                kiwi.SetMuted(req.Muted);
+                return Results.Ok(r.Snapshot());
+            }
             return Results.Ok(r.SetReceiverMuted(index, req.Muted));
         });
+
+        // KiwiSDR slice receiver config. GET returns current status (never the
+        // stored password — only HasPassword); POST patches enable/url/password
+        // and (re)connects. The Kiwi appears as the "Kiwi" receiver beside the
+        // hardware RXs once enabled with a URL.
+        app.MapGet("/api/kiwi", (KiwiSdrService kiwi) => Results.Ok(kiwi.GetConfig()));
+        app.MapPost("/api/kiwi", async (KiwiSetRequest req, KiwiSdrService kiwi) =>
+        {
+            log.LogInformation("api.kiwi enabled={Enabled} url={Url} pwSet={PwSet}",
+                req.Enabled, req.Url, req.Password is not null);
+            return Results.Ok(await kiwi.SetConfigAsync(req.Enabled, req.Url, req.Password, default));
+        });
+
+        // Public KiwiSDR directory for the Settings → KIWI map picker. Proxied
+        // server-side (the source is plain HTTP — mixed-content/CORS blocked in
+        // the browser); cached a couple of minutes in KiwiDirectoryService.
+        app.MapGet("/api/kiwi/directory", async (KiwiDirectoryService dir, HttpContext ctx) =>
+            Results.Ok(await dir.GetAsync(ctx.RequestAborted)));
 
         // VFO lock (Thetis chkVFOLock): blocks operator dial tuning; CAT/TCI
         // still tune. Pure software guard, no hardware effect.
@@ -1256,6 +1292,29 @@ public static class ZeusEndpoints
             }
             log.LogInformation("api.radio.lo hz={Hz}", req.Hz);
             return Results.Ok(r.SetRadioLo(req.Hz));
+        });
+
+        // Per-receiver DDC-centre pan. Index 0 is RX1's hardware NCO (delegates to
+        // /api/radio/lo's setter); index >= 1 recentres a secondary DDC (the
+        // client keep-in-view autopan's analogue of SetRadioLo). No-op for P1
+        // secondaries (shared NCO) / CTUN-off / disabled — see RequestSecondaryLo.
+        app.MapPost("/api/receivers/{index:int}/lo", (int index, RadioLoSetRequest req, RadioService r, DspPipelineService pipe, KiwiSdrService kiwi) =>
+        {
+            if (req.Hz < 0 || req.Hz > 60_000_000)
+            {
+                log.LogInformation("api.receivers.lo rejected index={Index} hz={Hz}", index, req.Hz);
+                return Results.BadRequest(new { error = "hz out of range [0, 60000000]" });
+            }
+            log.LogInformation("api.receivers.lo index={Index} hz={Hz}", index, req.Hz);
+            // Kiwi slice: pan its waterfall centre (no hardware DDC behind it).
+            if (index == Zeus.Contracts.WireContract.KiwiReceiverIndex)
+            {
+                kiwi.SetCenter(req.Hz);
+                return Results.Ok(r.Snapshot());
+            }
+            if (index <= 0) return Results.Ok(r.SetRadioLo(req.Hz));
+            pipe.RequestSecondaryLo(index, req.Hz);
+            return Results.Ok(r.Snapshot());
         });
 
         // Toggle CTUN (click-tune / centred tuning). When enabled, panadapter
@@ -1995,11 +2054,15 @@ public static class ZeusEndpoints
             return Results.Ok(saved);
         });
 
-        app.MapPost("/api/rx/zoom", (ZoomSetRequest req, RadioService r) =>
+        app.MapPost("/api/rx/zoom", (ZoomSetRequest req, RadioService r, KiwiSdrService kiwi) =>
         {
             log.LogInformation("api.rx.zoom level={Level}", req.Level);
             if (req.Level < SyntheticDspEngine.MinZoomLevel || req.Level > SyntheticDspEngine.MaxZoomLevel)
                 return Results.BadRequest(new { error = $"zoom level must be in [{SyntheticDspEngine.MinZoomLevel},{SyntheticDspEngine.MaxZoomLevel}]; got {req.Level}" });
+            // Zoom is a global setting; mirror it onto the Kiwi slice so its
+            // waterfall span follows the slider too (it re-tunes the remote
+            // KiwiSDR's SET zoom and re-emits frames at the new Hz/pixel).
+            kiwi.SetZoom(req.Level);
             return Results.Ok(r.SetZoom(req.Level));
         });
 
@@ -2832,6 +2895,14 @@ public static class ZeusEndpoints
             return Results.Ok(store.DeleteNamed(radio ?? "default", id));
         });
 
+        // Detached workspace windows (extra Photino frames popped off the dock)
+        // that were open at the last desktop shutdown. The desktop shell reads
+        // this once on startup and reopens each; web/headless clients never call
+        // it (the restore path is gated on the Photino bridge), so it returns an
+        // empty list there.
+        app.MapGet("/api/ui/workspace-windows", (OpenWorkspaceWindowsStore store) =>
+            Results.Ok(store.GetAll()));
+
         // Prefs-database (profile) selector. All Zeus prefs/settings/layouts live
         // in a single LiteDB resolved by PrefsDbPath.Get() at startup; the active
         // choice is a pointer file (NOT inside any DB). Switching applies on the
@@ -3402,6 +3473,22 @@ public static class ZeusEndpoints
         {
             hc.Stop();
             return Results.Ok(hc.Snapshot());
+        });
+
+        // LAN Browser proxy. Fetches a private-LAN device web page on the radio
+        // host's behalf and returns it (HTML rewritten so sub-resources route
+        // back through this same endpoint). Scoped to RFC1918 / IPv6-ULA targets
+        // by LanProxyService; loopback + public + cloud-metadata are refused.
+        // Tunnels transparently for remote operators (it's a same-origin /api GET).
+        app.MapGet("/api/lan/proxy", async (string? url, string? inline, LanProxyService proxy, HttpContext ctx, CancellationToken ct) =>
+        {
+            // inline=1 → self-contained HTML for an iframe srcdoc (the remote path,
+            // where the operator's browser can't load sub-resources from the LAN).
+            bool wantInline = inline is "1" or "true";
+            var result = await proxy.FetchAsync(url, wantInline, ct);
+            ctx.Response.StatusCode = result.Status;
+            ctx.Response.ContentType = result.ContentType ?? "application/octet-stream";
+            await ctx.Response.Body.WriteAsync(result.Body, ct);
         });
 
         return app;

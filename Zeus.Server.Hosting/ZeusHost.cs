@@ -295,6 +295,24 @@ public static class ZeusHost
         // resolves it and wires the Changed → PushHl2Gpio push. Shares
         // zeus-prefs.db (single global row); HL2-only on the wire.
         builder.Services.AddSingleton<Hl2GpioSettingsStore>();
+        // KiwiSDR slice receiver. The settings store persists the URL/password/
+        // enable flag; KiwiSdrService owns the remote connection and projects the
+        // "Kiwi" receiver into RadioService's receiver list via
+        // IKiwiReceiverProvider (registered below, BEFORE RadioService resolves so
+        // its optional ctor param is satisfied). Hosted so it (re)connects at
+        // startup and tears down on shutdown. No DI cycle: it depends only on the
+        // hub + settings store, never on RadioService. Its demodulated audio is
+        // pulled onto the shared RX mix bus by DspPipelineService via
+        // IKiwiAudioBus (registered here so the DSP service's optional ctor param
+        // resolves) — so the Kiwi mixes with the local RX rather than being a
+        // second device stream.
+        builder.Services.AddSingleton<KiwiSettingsStore>();
+        builder.Services.AddSingleton<KiwiSdrService>();
+        // Public KiwiSDR directory proxy for the Settings map picker.
+        builder.Services.AddSingleton<KiwiDirectoryService>();
+        builder.Services.AddSingleton<IKiwiReceiverProvider>(sp => sp.GetRequiredService<KiwiSdrService>());
+        builder.Services.AddSingleton<IKiwiAudioBus>(sp => sp.GetRequiredService<KiwiSdrService>());
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<KiwiSdrService>());
         builder.Services.AddSingleton<RadioService>();
         // Frees a Busy radio (drops its current owner) so the operator can take
         // it over from the Connect panel. Stateless — opens its own socket.
@@ -327,6 +345,14 @@ public static class ZeusHost
         // Radio-side broker glue (Phase 3). Inert until a remote-access password
         // is set; then it keeps a "host" socket on the broker and answers offers.
         builder.Services.AddHostedService<Zeus.Server.Hosting.Remote.RemoteBrokerClient>();
+        // LAN Browser proxy: fetches private-LAN device web UIs on behalf of the
+        // panel (esp. for remote operators whose browser can't reach the radio's
+        // LAN). No auto-redirect — LanProxyService follows + re-validates each hop
+        // against the private-range rule itself.
+        builder.Services.AddHttpClient(LanProxyService.HttpClientName,
+                c => c.Timeout = TimeSpan.FromSeconds(15))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+        builder.Services.AddSingleton<LanProxyService>();
         // RX audio publish seam (Phase 1). DspPipelineService.PublishAudio
         // fans each AudioFrame across every registered IRxAudioSink.
         //
@@ -579,6 +605,10 @@ public static class ZeusHost
         // Desktop main-window geometry (Photino). Only RunDesktop reads it; the
         // store is harmless to register in service/headless modes (no consumer).
         builder.Services.AddSingleton<WindowGeometryStore>();
+        // Detached workspace windows the operator left open at shutdown, reopened
+        // on the next desktop launch. Same desktop-only / harmless-elsewhere note
+        // as WindowGeometryStore above.
+        builder.Services.AddSingleton<OpenWorkspaceWindowsStore>();
         builder.Services.AddSingleton<RadioStateStore>();
         builder.Services.AddSingleton<QrzService>();
         builder.Services.AddSingleton<LogService>();
@@ -890,7 +920,28 @@ public static class ZeusHost
         staticContentTypes.Mappings[".onnx"] = "application/octet-stream";
         staticContentTypes.Mappings[".wasm"] = "application/wasm";
         staticContentTypes.Mappings[".mjs"] = "text/javascript";
-        app.UseStaticFiles(new Microsoft.AspNetCore.Builder.StaticFileOptions { ContentTypeProvider = staticContentTypes });
+        app.UseStaticFiles(new Microsoft.AspNetCore.Builder.StaticFileOptions
+        {
+            ContentTypeProvider = staticContentTypes,
+            // Cache policy is load-bearing for the "new features don't show up until
+            // Ctrl+Shift+R" bug. Without an explicit Cache-Control, ASP.NET only emits
+            // ETag/Last-Modified and the browser heuristically caches index.html AND
+            // sw.js — so a new deploy serves a stale index (old hashed chunks) and the
+            // service-worker update check never sees a fresh sw.js, so the "RELOAD NOW"
+            // prompt never fires. Content-hashed Vite output under /assets/ is safe to
+            // cache forever (the URL changes when the content does); everything else
+            // (index.html, sw.js, the web manifest, icons, the ONNX model) must
+            // revalidate every load. ETag keeps revalidation cheap (304s).
+            // See docs/lessons/service-worker-updates.md.
+            OnPrepareResponse = static ctx =>
+            {
+                var requestPath = ctx.Context.Request.Path.Value ?? string.Empty;
+                ctx.Context.Response.Headers.CacheControl =
+                    requestPath.StartsWith("/assets/", StringComparison.OrdinalIgnoreCase)
+                        ? "public, max-age=31536000, immutable"
+                        : "no-cache";
+            },
+        });
 
         // WDSP NR2 EMNR fopen()s "zetaHat.bin" and "calculus" by bare relative name
         // (native/wdsp/emnr.c:215,397). Anchor cwd to the assembly dir so those files

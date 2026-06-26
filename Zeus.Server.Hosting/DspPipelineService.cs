@@ -728,9 +728,17 @@ public class DspPipelineService : BackgroundService,
     // allocation (the scratch span below is reused every tick).
     internal readonly record struct RxAudioSlice(float[] Buffer, int Count);
     // Reused each tick to collect the enabled secondary RX audio blocks for the
-    // mixer. Sized for every secondary slot (1..N-1); only the populated prefix
-    // is passed to MixRxAudioN.
-    private readonly RxAudioSlice[] _mixSlices = new RxAudioSlice[MaxReceivers];
+    // mixer. Sized for every secondary slot (1..N-1) PLUS the Kiwi slice, which
+    // is mixed in on the same bus; only the populated prefix is passed to
+    // MixRxAudioN.
+    private readonly RxAudioSlice[] _mixSlices = new RxAudioSlice[MaxReceivers + 1];
+
+    // The Kiwi slice receiver feeds its demodulated audio onto the SAME RX mix
+    // bus as the hardware receivers (IKiwiAudioBus). Optional — null in tests and
+    // when no Kiwi service is registered. Drained into _kiwiMixBuf each tick,
+    // clocked by RX1, then averaged in by MixRxAudioN alongside RX2..RXn.
+    private readonly IKiwiAudioBus? _kiwiAudioBus;
+    private readonly float[] _kiwiMixBuf = new float[AudioDrainCapacity];
 
     // Protocol 2 path (parallel to the RadioService-owned P1 path). Held
     // directly here because RadioService is Protocol1Client-shaped and
@@ -815,6 +823,15 @@ public class DspPipelineService : BackgroundService,
     // AfGainDb in Receivers[i].
     private double _appliedRxAfGainDb;
 
+    // FreeDV decoded-speech AF gain (linear), slewed per audio tick. FreeDV's
+    // vocoder output level is independent of the pre-decode modem amplitude, so
+    // the WDSP panel gain (forced to unity in FreeDV) can't set the listening
+    // volume — the operator's AF is re-applied to the decoded speech here. Starts
+    // at unity so a non-FreeDV channel (ApplyFreeDvAfGain never runs) is
+    // byte-identical. See ApplyFreeDvAfGain and the FreeDV AF note in
+    // OnRadioStateChanged.
+    private double _freeDvAfGainLinear = 1.0;
+
     // Per-tick caps (dB) for the AF-gain and AGC-T register pushes to WDSP.
     // Both registers (panel.gain1, agc.max_gain) are applied by WDSP as
     // instant scalar multiplies — without a per-tick rate cap, a slider
@@ -834,6 +851,30 @@ public class DspPipelineService : BackgroundService,
     {
         double delta = target - current;
         return Math.Abs(delta) <= maxStep ? target : current + Math.Sign(delta) * maxStep;
+    }
+
+    // Apply the FreeDV decoded-speech AF gain in place. The WDSP panel gain is
+    // forced to unity in FreeDV (it would otherwise act on the pre-decode modem
+    // audio ProcessRx discards), so this is the only seam that sets FreeDV
+    // listening volume. Ramps from the previous block's gain to a rate-capped
+    // (AfGainSlewMaxDbPerTick) target across the block, mirroring the WDSP
+    // panel-gain slew, so a slider drag fades click-free instead of stair-
+    // stepping. Updates _freeDvAfGainLinear to the end-of-block gain.
+    private void ApplyFreeDvAfGain(Span<float> block, double targetDb)
+    {
+        double startGain = _freeDvAfGainLinear;
+        double startDb = 20.0 * Math.Log10(Math.Max(startGain, 1e-9));
+        double endDb = StepTowardCappedDb(startDb, targetDb, AfGainSlewMaxDbPerTick);
+        double endGain = Math.Pow(10.0, endDb / 20.0);
+        int n = block.Length;
+        if (n == 0) { _freeDvAfGainLinear = endGain; return; }
+        for (int i = 0; i < n; i++)
+        {
+            double t = (i + 1) / (double)n;
+            double g = startGain + (endGain - startGain) * t;
+            block[i] = (float)(block[i] * g);
+        }
+        _freeDvAfGainLinear = endGain;
     }
     // TX mic gain change-detect cache. NaN sentinel forces the first apply
     // even when the persisted value happens to equal 0 dB (the engine seam
@@ -1173,11 +1214,13 @@ public class DspPipelineService : BackgroundService,
         DisplaySettingsStore? displaySettings = null,
         FreeDvService? freeDv = null,
         Func<TxAudioIngest?>? txIngestFactory = null,
-        Nr3ModelStore? nr3ModelStore = null)
+        Nr3ModelStore? nr3ModelStore = null,
+        IKiwiAudioBus? kiwiAudioBus = null)
     {
         _radio = radio;
         _hub = hub;
         _freeDv = freeDv;
+        _kiwiAudioBus = kiwiAudioBus;
         // Materialise once at construction so the per-tick fan-out is an
         // array-index loop (no enumerator allocation, no LINQ on the hot path).
         _audioSinks = audioSinks.ToArray();
@@ -3491,10 +3534,21 @@ public class DspPipelineService : BackgroundService,
         // one-block constant multiply, so a slider drag stair-steps into a
         // click train. Secondary RX AF gain slews per-receiver inside
         // ApplyStateToSecondaryRxChannel (each receiver has its own slider).
-        if (s.RxAfGainDb != _appliedRxAfGainDb)
+        //
+        // FreeDV: WDSP's panel gain runs on the received OFDM modem audio, which
+        // ProcessRx then discards when it replaces the block in place with
+        // decoded speech (the vocoder output level is fixed by the codec, not the
+        // input amplitude) — so the WDSP panel gain can't set the listening
+        // volume. Drive the WDSP panel to unity in FreeDV so the decoder always
+        // sees a consistent-level feed (a low AF setting can't starve sync), and
+        // re-apply the operator's AF on the decoded speech in the audio tick
+        // (ApplyFreeDvAfGain / _freeDvAfGainLinear). On exit the latch re-slews
+        // the WDSP panel back to s.RxAfGainDb automatically.
+        double afTargetDb = freeDvMode ? 0.0 : s.RxAfGainDb;
+        if (afTargetDb != _appliedRxAfGainDb)
         {
             _appliedRxAfGainDb = StepTowardCappedDb(
-                _appliedRxAfGainDb, s.RxAfGainDb, AfGainSlewMaxDbPerTick);
+                _appliedRxAfGainDb, afTargetDb, AfGainSlewMaxDbPerTick);
             engine.SetRxAfGainDb(channel, _appliedRxAfGainDb);
         }
         // TX mic gain: dB → linear (10^(db/20)) at the engine seam. Conversion
@@ -4054,6 +4108,45 @@ public class DspPipelineService : BackgroundService,
             rx.LoHz = effB;
         }
         rx.LoInit = true;
+    }
+
+    /// <summary>
+    /// Pan a secondary receiver's DDC centre to <paramref name="hz"/> — the
+    /// client-side keep-in-view autopan's analogue of RX1's
+    /// <see cref="RadioService.SetRadioLo"/>. Under CTUN the centre is frozen and
+    /// the dial roams within the captured window, so the dial/filter can leave the
+    /// (much narrower) visible span long before <see cref="UpdateRxLo"/>'s
+    /// DDC-edge recentre fires; the client — which knows the visible span — calls
+    /// this to recentre before that happens.
+    ///
+    /// <para>Only meaningful for a true independent DDC (Protocol 2). P1 / synthetic
+    /// secondaries sub-receive RX1's shared NCO (their WDSP shift is RadioLoHz-
+    /// relative, see <see cref="ComputeSecondaryCtunShiftHz"/>), so their centre
+    /// can't move independently — no-op there. Also a no-op with CTUN off (the
+    /// centre follows the dial) or when the receiver is disabled.</para>
+    ///
+    /// <para>Re-applies the current state under <c>_engineLock</c> on the caller
+    /// thread, exactly like normal tuning via <see cref="RadioService.StateChanged"/>,
+    /// so the WDSP shift recompute and the P2 DDC retune land in lockstep with the
+    /// new centre. The new centre survives the <see cref="UpdateRxLo"/> calls inside
+    /// because the client keeps the dial within the captured window (visible span ⊆
+    /// DDC window), so the edge-recentre guard never trips.</para>
+    /// </summary>
+    public void RequestSecondaryLo(int rxIndex, long hz)
+    {
+        if (rxIndex < 1 || rxIndex >= MaxReceivers) return;
+        if (_p2Client is null) return; // P1 secondaries share RadioLoHz — not pannable
+        long clamped = Math.Clamp(hz, 0L, 60_000_000L);
+        lock (_engineLock)
+        {
+            var s = _radio.Snapshot();
+            if (!s.CtunEnabled || !SecondaryReceiverEnabled(rxIndex, s)) return;
+            var rx = _secondaryRx[rxIndex];
+            if (rx.LoInit && rx.LoHz == clamped) return; // already centred there
+            rx.LoHz = clamped;
+            rx.LoInit = true;
+            OnRadioStateChanged(s);
+        }
     }
 
     internal static int ComputeRx2CtunShiftHz(
@@ -5576,6 +5669,20 @@ public class DspPipelineService : BackgroundService,
             _mixSlices[mixSliceCount++] = new RxAudioSlice(sec.AudioBuf, n);
         }
 
+        // Kiwi slice (RxId 7): an INDEPENDENT remote receiver that rides the same
+        // RX1-clocked mix bus as the hardware secondaries. Drain at most
+        // audioSampleCount samples so it's fed at exactly the RX rate (its own
+        // clock differs from the radio ADC; IKiwiAudioBus.ReadAudio caps buffered
+        // latency to bound that drift), then average it in via MixRxAudioN. When
+        // the slice is disabled/muted AudioActive is false and this is one bool
+        // read. RX1 silent (audioSampleCount==0) reads nothing this tick.
+        if (audioSampleCount > 0 && _kiwiAudioBus is { AudioActive: true })
+        {
+            int want = Math.Min(audioSampleCount, _kiwiMixBuf.Length);
+            int n = _kiwiAudioBus.ReadAudio(_kiwiMixBuf.AsSpan(0, want));
+            if (n > 0) _mixSlices[mixSliceCount++] = new RxAudioSlice(_kiwiMixBuf, n);
+        }
+
         // RX1's own samples were already zeroed above when it's muted; tell the
         // mixer to drop RX1 from the divisor too, so an unmuted secondary plays at
         // full amplitude (RX2-only = mute RX1). With nothing audible the mixer
@@ -5648,7 +5755,17 @@ public class DspPipelineService : BackgroundService,
                 {
                     _freeDv.SyncMode(state.Mode);
                     if (_freeDv.Active && audioSampleCount > 0)
+                    {
                         _freeDv.ProcessRx(audioBuf.AsSpan(0, audioSampleCount));
+                        // AF (listening) volume for FreeDV is applied HERE, on the
+                        // decoded speech. WDSP's panel gain ran on the pre-decode
+                        // modem audio that ProcessRx just discarded, so without
+                        // this the AF slider has no effect on FreeDV volume. Placed
+                        // before the RX audio plugin + squelch to match normal-mode
+                        // ordering (WDSP applies AF before those managed inserts).
+                        ApplyFreeDvAfGain(
+                            audioBuf.AsSpan(0, audioSampleCount), state.RxAfGainDb);
+                    }
                 }
 
                 var rxAudioHandler = _rxAudioPluginHandler;

@@ -54,6 +54,10 @@ import {
   type WorkspaceTile,
 } from './workspace';
 import { AddPanelModal } from './AddPanelModal';
+import {
+  findLayoutTabAtPoint,
+  setLayoutTabDropTarget,
+} from './layout-tab-dnd';
 import { ScaleToFitTile } from './ScaleToFitTile';
 import { TileChrome } from './TileChrome';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -65,6 +69,7 @@ import {
 } from '../components/meter-group/meterGroupConfig';
 import { HeroPanel } from './panels/HeroPanel';
 import { UrlEmbedPanel } from './panels/UrlEmbedPanel';
+import { LanBrowserPanel } from './panels/LanBrowserPanel';
 import {
   parseUrlEmbedConfig,
   type UrlEmbedConfig,
@@ -262,6 +267,28 @@ function WorkspaceCanvas({
   const draggingRef = useRef(false);
   const skipPostDropLayoutChangeRef = useRef(false);
   const dragStartRef = useRef<WorkspaceDragStartSnapshot | null>(null);
+  // Cross-layout panel transfer: while a tile drag is live, track the pointer
+  // and remember which LeftLayoutBar tab (if any) it's hovering, so releasing
+  // over another layout moves the panel there instead of repositioning it on
+  // this workspace.
+  const moveTileToLayout = useLayoutStore((s) => s.moveTileToLayout);
+  const tileDragActiveRef = useRef(false);
+  const dropTargetLayoutIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const onPointerMove = (e: PointerEvent) => {
+      if (!tileDragActiveRef.current) return;
+      // A tab over THIS layout isn't a transfer target — dropping there is a
+      // normal reposition. Only foreign tabs arm the move.
+      const overId = findLayoutTabAtPoint(e.clientX, e.clientY);
+      const target = overId && overId !== layoutId ? overId : null;
+      if (dropTargetLayoutIdRef.current !== target) {
+        dropTargetLayoutIdRef.current = target;
+        setLayoutTabDropTarget(target);
+      }
+    };
+    window.addEventListener('pointermove', onPointerMove);
+    return () => window.removeEventListener('pointermove', onPointerMove);
+  }, [layoutId]);
   // Live viewport height of the (scrolling) workspace, in pixels. Only used to
   // report how many rows are currently visible to the add-panel pagination flow
   // (setViewportPage below); the fixed-cell geometry itself never depends on it.
@@ -514,6 +541,8 @@ function WorkspaceCanvas({
     oldItem: LayoutItem | null,
   ) => {
     draggingRef.current = true;
+    tileDragActiveRef.current = true;
+    dropTargetLayoutIdRef.current = null;
     skipPostDropLayoutChangeRef.current = false;
     dragStartRef.current = oldItem
       ? {
@@ -536,6 +565,32 @@ function WorkspaceCanvas({
     oldItem: LayoutItem | null,
     newItem: LayoutItem | null,
   ) => {
+    // Cross-layout transfer: the panel was released over a different layout's
+    // tab. Move it there and skip the normal reposition persist entirely — the
+    // tile no longer belongs to this workspace, so writing back the dragged
+    // geometry would resurrect it.
+    tileDragActiveRef.current = false;
+    const transferTarget = dropTargetLayoutIdRef.current;
+    dropTargetLayoutIdRef.current = null;
+    setLayoutTabDropTarget(null);
+    if (transferTarget && transferTarget !== layoutId) {
+      const movedUid =
+        dragStartRef.current?.item.i ?? oldItem?.i ?? newItem?.i ?? null;
+      draggingRef.current = false;
+      dragStartRef.current = null;
+      setGridInteraction(null);
+      if (movedUid) {
+        // Suppress the post-drop layout echo so RGL's re-render (which still
+        // momentarily holds the tile) doesn't re-persist it onto this layout.
+        skipPostDropLayoutChangeRef.current = true;
+        window.setTimeout(() => {
+          skipPostDropLayoutChangeRef.current = false;
+        }, 250);
+        moveTileToLayout(layoutId, transferTarget, movedUid);
+        return;
+      }
+    }
+
     const dragStart = dragStartRef.current;
     const finalItem = dragStart
       ? layout.find((item) => item.i === dragStart.item.i)
@@ -563,7 +618,7 @@ function WorkspaceCanvas({
         autoFitDroppedPanel(layout, colsRef.current, previousDropItem),
       );
     }
-  }, [persist]);
+  }, [persist, layoutId, moveTileToLayout]);
   const onResizeStop = useCallback((
     layout: Layout,
     oldItem: LayoutItem | null,
@@ -876,6 +931,18 @@ function PanelBody({
       />
     );
   }
+  if (tile.panelId === 'lanbrowser') {
+    return (
+      <LanBrowserTileBody
+        tile={tile}
+        layoutId={layoutId}
+        onRemove={onRemove}
+        tileLocked={tileLocked}
+        workspaceLocked={workspaceLocked}
+        onToggleLock={onToggleLock}
+      />
+    );
+  }
   const def = getPanelDef(tile.panelId);
   if (!def) return null;
   const Component = def.component;
@@ -1055,6 +1122,49 @@ function UrlEmbedTileBody({
 
   return (
     <UrlEmbedPanel
+      config={config}
+      setConfig={setConfig}
+      onRemove={onRemove}
+      tileLocked={tileLocked}
+      workspaceLocked={workspaceLocked}
+      onToggleLock={onToggleLock}
+    />
+  );
+}
+
+// LAN Browser shares the URL-embed per-tile config shape (url + title); only the
+// rendered component differs (it frames the server-side LAN proxy).
+function LanBrowserTileBody({
+  tile,
+  layoutId,
+  onRemove,
+  tileLocked,
+  workspaceLocked,
+  onToggleLock,
+}: {
+  tile: WorkspaceTile;
+  layoutId: string;
+  onRemove?: () => void;
+  tileLocked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
+}) {
+  const updateTileInstanceConfig = useLayoutStore(
+    (s) => s.updateTileInstanceConfigInLayout,
+  );
+  const config: UrlEmbedConfig = useMemo(
+    () => parseUrlEmbedConfig(tile.instanceConfig),
+    [tile.instanceConfig],
+  );
+  const setConfig = useCallback(
+    (next: UrlEmbedConfig) => {
+      updateTileInstanceConfig(layoutId, tile.uid, next);
+    },
+    [layoutId, tile.uid, updateTileInstanceConfig],
+  );
+
+  return (
+    <LanBrowserPanel
       config={config}
       setConfig={setConfig}
       onRemove={onRemove}

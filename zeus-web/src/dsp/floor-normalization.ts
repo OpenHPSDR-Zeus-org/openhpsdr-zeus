@@ -22,11 +22,14 @@
 // and the others washed-out or empty.
 //
 // Fix: every pane reports a smoothed estimate of its OWN noise floor here, and
-// at draw time shifts its dB window so its floor lands at the same colour as
-// the FOCUSED receiver's floor. The operator drags the slider while looking at
-// whatever RX they've focused; that same window then applies, anchored to each
-// pane's measured floor, across every band. The focused pane itself is never
-// shifted (offset 0), so single-RX behaviour is unchanged.
+// at draw time shifts its dB window so its floor lands at the same colour in
+// every band. The common anchor is the MEDIAN of all reported floors — no pane
+// is privileged, so adding/removing a band doesn't yank a reference pane around,
+// and one outlier band (dead, or stuffed with a contest signal) can't drag the
+// anchor the way a mean would. The single master dB slider then sets that shared
+// window relative to the median floor; each pane offsets from it by its own
+// measured floor, so they all stay evened-out. With one receiver the median IS
+// that receiver's floor (offset 0), so single-RX behaviour is unchanged.
 //
 // Indexed by 0-based rxIndex (RX1 = 0, RX2 = 1, RX3+ = 2..), matching
 // connection-store `focusedRxIndex` and `receiver-state` `rxIndexOf`.
@@ -40,11 +43,21 @@ const FLOOR_EMA_ALPHA = 0.1;
 
 // Clamp on the normalization shift so a transient bad estimate (e.g. a pane
 // momentarily full of a strong carrier) can never throw the window wildly.
-const MAX_OFFSET_DB = 40;
+// Real inter-band noise-floor spread is large — a busy 40m evening floors tens
+// of dB above a dead 10m/15m band — so this has to be wide enough to fully
+// align those extremes, while the robust 25th-percentile estimate (below) keeps
+// a carrier-stuffed pane from abusing the headroom.
+const MAX_OFFSET_DB = 80;
 
 // Reused scratch for the downsampled percentile sort — keeps the per-frame
 // estimate allocation-free. 256 samples is plenty for a robust low percentile.
 const scratch = new Float32Array(256);
+
+// Reused scratch for the median over reported floors. Sized well past any
+// realistic DDC count; floors beyond it are ignored (the median of the first
+// N is still representative). Keeps referenceFloorDb() allocation-free on the
+// per-frame redraw path.
+const refScratch = new Float64Array(32);
 
 /** Feed a fresh floor estimate (dB) for a receiver; smoothed via EMA. */
 export function reportReceiverFloorDb(rxIndex: number, floorDb: number): void {
@@ -61,23 +74,44 @@ export function getReceiverFloorDb(rxIndex: number): number | null {
   return floorByRx.get(rxIndex) ?? null;
 }
 
+/** Forget one receiver's floor (pane removed) so it leaves the median anchor. */
+export function forgetReceiverFloor(rxIndex: number): void {
+  floorByRx.delete(rxIndex);
+}
+
 /** Forget all receiver floors (receiver teardown / test reset). */
 export function resetReceiverFloors(): void {
   floorByRx.clear();
 }
 
 /**
- * dB-window offset to add to THIS pane's [dbMin, dbMax] so its noise floor
- * aligns to the focused receiver's floor. Returns 0 when this IS the focused
- * pane or when either floor is not yet known.
+ * Median of all reported receiver floors (dB) — the common normalization
+ * anchor and the "0 dB" reference the master scale reads against. Median, not
+ * mean, so one dead or carrier-stuffed band can't drag the anchor. Returns null
+ * until at least one floor has been reported. Allocation-free.
  */
-export function floorNormalizationOffsetDb(
-  thisRxIndex: number,
-  focusedRxIndex: number,
-): number {
-  if (thisRxIndex === focusedRxIndex) return 0;
+export function referenceFloorDb(): number | null {
+  let n = 0;
+  for (const v of floorByRx.values()) {
+    if (n >= refScratch.length) break;
+    refScratch[n++] = v;
+  }
+  if (n === 0) return null;
+  const view = refScratch.subarray(0, n);
+  view.sort();
+  const mid = n >> 1;
+  return n % 2 ? view[mid]! : (view[mid - 1]! + view[mid]!) / 2;
+}
+
+/**
+ * dB-window offset to add to THIS pane's [dbMin, dbMax] so its noise floor
+ * aligns to the shared median floor. Returns 0 when this pane's floor or the
+ * reference is not yet known, so an un-reported pane simply shows the raw
+ * window. Clamped to +/-MAX_OFFSET_DB against a transient bad estimate.
+ */
+export function floorNormalizationOffsetDb(thisRxIndex: number): number {
   const here = floorByRx.get(thisRxIndex);
-  const ref = floorByRx.get(focusedRxIndex);
+  const ref = referenceFloorDb();
   if (here == null || ref == null) return 0;
   const off = here - ref;
   return off < -MAX_OFFSET_DB ? -MAX_OFFSET_DB : off > MAX_OFFSET_DB ? MAX_OFFSET_DB : off;

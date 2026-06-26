@@ -44,14 +44,12 @@
 // License for details.
 
 import type { CSSProperties } from 'react';
-import { Copy, Headphones, Repeat2, Send, Volume2, VolumeX } from 'lucide-react';
+import { Headphones, Send, Volume2, VolumeX } from 'lucide-react';
 import {
   setReceiver,
   setReceiverMuted,
   setRx2,
   setTxReceiver,
-  setVfo,
-  swapVfos,
 } from '../../api/client';
 import { bandOf } from '../../components/design/data';
 import { receiverColorByIndex } from '../../components/spectrumReceiverColor';
@@ -111,11 +109,6 @@ export function VfoPanel() {
 
   const audibleOf = (index: number) =>
     !(receivers.find((r) => r.index === index)?.muted ?? false);
-
-  const copyBToA = () => {
-    useConnectionStore.setState({ vfoHz: vfoBHz });
-    setVfo(vfoBHz).then(applyState).catch(() => {});
-  };
 
   // MULTI RX master toggle: enable the whole multi-DDC set the operator
   // configured in Settings → Receivers (remembered count, default 2), or
@@ -270,49 +263,6 @@ export function VfoPanel() {
               />
               <span className="vfo-md__af-val">{afGainOf(active.index).toFixed(0)}</span>
             </label>
-          )}
-        </div>
-        {/* Dual-VFO tools — copy/swap RX1↔RX2. */}
-        <div className="vfo-md__tools" role="group" aria-label="RX1/RX2 copy and swap">
-          <button
-            type="button"
-            className="vfo-tool-key"
-            onClick={() => patchRx2({ vfoBHz: vfoHz })}
-            title="Copy RX1 to RX2"
-          >
-            <Copy size={12} />
-            <span>1&gt;2</span>
-          </button>
-          <button
-            type="button"
-            className="vfo-tool-key"
-            onClick={copyBToA}
-            disabled={!rx2Enabled}
-            title="Copy RX2 to RX1"
-          >
-            <Copy size={12} />
-            <span>2&gt;1</span>
-          </button>
-          <button
-            type="button"
-            className="vfo-tool-key"
-            onClick={() => swapVfos().then(applyState).catch(() => {})}
-            disabled={!rx2Enabled}
-            title="Swap RX1 and RX2"
-          >
-            <Repeat2 size={13} />
-            <span>Swap</span>
-          </button>
-          {multiRxOn && (
-            <button
-              type="button"
-              className="vfo-tool-key"
-              onClick={toggleMultiRx}
-              title="Disable extra receivers (back to RX1 only)"
-            >
-              <Headphones size={12} />
-              <span>MULTI off</span>
-            </button>
           )}
         </div>
       </div>

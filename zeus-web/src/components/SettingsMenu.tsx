@@ -42,6 +42,7 @@ import { TxAudioToolsPanel } from './TxAudioToolsPanel';
 import { DspSettingsPanel } from './DspSettingsPanel';
 import { PluginsPanel } from '../plugins/components/PluginsPanel';
 import { HamClockSettingsPanel } from './HamClockSettingsPanel';
+import { KiwiSettingsPanel } from './KiwiSettingsPanel';
 import { SpotsSettingsPanel } from './SpotsSettingsPanel';
 import { UpdatesPanel } from './UpdatesPanel';
 import { HardwareDiagnosticsPanel } from './HardwareDiagnosticsPanel';
@@ -59,6 +60,7 @@ export type SettingsTabId =
   | 'display'
   | 'plugins'
   | 'hamclock'
+  | 'kiwi'
   | 'spots'
   | 'server'
   | 'radio'
@@ -80,6 +82,7 @@ const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
   { id: 'display', label: 'DISPLAY' },
   { id: 'plugins', label: 'PLUGINS' },
   { id: 'hamclock', label: 'HAMCLOCK' },
+  { id: 'kiwi', label: 'KIWI SDR' },
   { id: 'spots', label: 'SPOTS' },
   { id: 'server', label: 'SERVER' },
   { id: 'radio', label: 'RADIO' },
@@ -209,6 +212,7 @@ export function SettingsView({ initialTab, onClose }: Props) {
           {activeTab === 'display' && <DisplayPanel />}
           {activeTab === 'plugins' && <PluginsPanel />}
           {activeTab === 'hamclock' && <HamClockSettingsPanel />}
+          {activeTab === 'kiwi' && <KiwiSettingsPanel />}
           {activeTab === 'spots' && <SpotsSettingsPanel />}
           {activeTab === 'server' && <ServerUrlPanel />}
           {activeTab === 'receivers' && <ReceiversPanel />}

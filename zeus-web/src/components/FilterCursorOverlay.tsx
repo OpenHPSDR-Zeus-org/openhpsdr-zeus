@@ -19,9 +19,11 @@ import { useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { useConnectionStore } from '../state/connection-store';
 import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import {
+  displayFilterEdgesHz,
   getReceiverFilterHighHz,
   getReceiverFilterLowHz,
   getReceiverMode,
+  getReceiverVfoHz,
   type ReceiverKey,
 } from '../state/receiver-state';
 import { resolvePanTuneTarget } from '../util/use-pan-tune-gesture';
@@ -122,9 +124,16 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
       const band = bandRef.current;
       if (band) {
         if (hzPerPixel > 0 && len > 0 && rectW > 0) {
-          const filterLowHz = getReceiverFilterLowHz(conn, receiver);
-          const filterHighHz = getReceiverFilterHighHz(conn, receiver);
           const mode = getReceiverMode(conn, receiver);
+          // FreeDV stores its passband USB-positive; re-sign to the convention
+          // sideband (LSB < 10 MHz) so the hover preview matches the real demod
+          // side. No-op for every other mode.
+          const { lowHz: filterLowHz, highHz: filterHighHz } = displayFilterEdgesHz(
+            mode,
+            getReceiverVfoHz(conn, receiver),
+            getReceiverFilterLowHz(conn, receiver),
+            getReceiverFilterHighHz(conn, receiver),
+          );
           const hzPerCssPx = (len * hzPerPixel) / rectW;
           const lowPx = filterLowHz / hzPerCssPx;
           const highPx = filterHighHz / hzPerCssPx;

@@ -361,6 +361,111 @@ describe('layout-store / workspace tile mutators', () => {
     expect(parsed.tiles[1]).toMatchObject({ uid, panelId: 'cw' });
   });
 
+  it('moveTileToLayout transfers a panel from the active layout to another', () => {
+    const activeWorkspace: WorkspaceLayout = {
+      schemaVersion: 8,
+      tiles: [
+        { uid: 'tile-keep', panelId: 'vfo', x: 0, y: 0, w: 6, h: 8 },
+        {
+          uid: 'tile-move',
+          panelId: 'cw',
+          x: 8,
+          y: 0,
+          w: 8,
+          h: 8,
+          instanceConfig: { foo: 1 },
+        },
+      ],
+    };
+    useLayoutStore.setState({
+      radioKey: 'radio-1',
+      layouts: [
+        { id: 'layout-a', name: 'A', layoutJson: JSON.stringify(activeWorkspace) },
+        {
+          id: 'layout-b',
+          name: 'B',
+          layoutJson: JSON.stringify(EMPTY_WORKSPACE_LAYOUT),
+        },
+      ],
+      activeLayoutId: 'layout-a',
+      workspace: activeWorkspace,
+      isLoaded: true,
+    });
+
+    const movedUid = useLayoutStore
+      .getState()
+      .moveTileToLayout('layout-a', 'layout-b', 'tile-move');
+
+    const state = useLayoutStore.getState();
+    expect(movedUid).toBe('tile-move');
+    // Active workspace (source) lost the tile, kept the other.
+    expect(state.workspace.tiles.map((t) => t.uid)).toEqual(['tile-keep']);
+    // Destination gained it, panel + instanceConfig preserved, re-placed.
+    const layoutB = state.layouts.find((l) => l.id === 'layout-b');
+    const parsed = JSON.parse(layoutB!.layoutJson) as WorkspaceLayout;
+    expect(parsed.tiles).toHaveLength(1);
+    expect(parsed.tiles[0]).toMatchObject({
+      uid: 'tile-move',
+      panelId: 'cw',
+      instanceConfig: { foo: 1 },
+      x: 0,
+      y: 0,
+    });
+  });
+
+  it('moveTileToLayout is a no-op for same source/target, missing target, or missing tile', () => {
+    const activeWorkspace: WorkspaceLayout = {
+      schemaVersion: 8,
+      tiles: [{ uid: 'tile-move', panelId: 'cw', x: 0, y: 0, w: 8, h: 8 }],
+    };
+    useLayoutStore.setState({
+      radioKey: 'radio-1',
+      layouts: [
+        { id: 'layout-a', name: 'A', layoutJson: JSON.stringify(activeWorkspace) },
+        {
+          id: 'layout-b',
+          name: 'B',
+          layoutJson: JSON.stringify(EMPTY_WORKSPACE_LAYOUT),
+        },
+      ],
+      activeLayoutId: 'layout-a',
+      workspace: activeWorkspace,
+      isLoaded: true,
+    });
+    const move = useLayoutStore.getState().moveTileToLayout;
+    expect(move('layout-a', 'layout-a', 'tile-move')).toBeNull();
+    expect(move('layout-a', 'no-such-layout', 'tile-move')).toBeNull();
+    expect(move('layout-a', 'layout-b', 'no-such-tile')).toBeNull();
+    // Source untouched after the failed moves.
+    expect(useLayoutStore.getState().workspace.tiles).toHaveLength(1);
+  });
+
+  it('moveTileToLayout refuses to move out of a locked source workspace', () => {
+    const activeWorkspace: WorkspaceLayout = {
+      schemaVersion: 8,
+      locked: true,
+      tiles: [{ uid: 'tile-move', panelId: 'cw', x: 0, y: 0, w: 8, h: 8 }],
+    };
+    useLayoutStore.setState({
+      radioKey: 'radio-1',
+      layouts: [
+        { id: 'layout-a', name: 'A', layoutJson: JSON.stringify(activeWorkspace) },
+        {
+          id: 'layout-b',
+          name: 'B',
+          layoutJson: JSON.stringify(EMPTY_WORKSPACE_LAYOUT),
+        },
+      ],
+      activeLayoutId: 'layout-a',
+      workspace: activeWorkspace,
+      isLoaded: true,
+    });
+    expect(
+      useLayoutStore.getState().moveTileToLayout('layout-a', 'layout-b', 'tile-move'),
+    ).toBeNull();
+    expect(useLayoutStore.getState().workspace.tiles).toHaveLength(1);
+  });
+
   it('debounced save persists the mutated layout after a quick layout switch', async () => {
     vi.useFakeTimers();
     const fetchMock = vi

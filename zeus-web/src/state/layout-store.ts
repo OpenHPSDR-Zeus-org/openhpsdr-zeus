@@ -144,6 +144,18 @@ interface LayoutState {
     panelId: string,
     opts?: { instanceConfig?: unknown },
   ) => string | null;
+  /** Move a tile from one layout to another. Removes it from `fromLayoutId`
+   *  and re-places it (first-fit) in `toLayoutId`, preserving panelId,
+   *  instanceConfig, and lock state. No-op if the source/target is the same,
+   *  the target layout doesn't exist, either workspace is locked, or the tile
+   *  isn't found. Drives the "drag a panel onto a layout tab to transfer it"
+   *  gesture in the LeftLayoutBar. Returns the (possibly new) tile uid in the
+   *  target layout, or null when nothing moved. */
+  moveTileToLayout: (
+    fromLayoutId: string,
+    toLayoutId: string,
+    uid: string,
+  ) => string | null;
   /** Remove the tile with the given uid. */
   removeTile: (uid: string) => void;
   /** Remove a tile from a specific layout without making it active. */
@@ -495,6 +507,51 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     };
     applyWorkspaceMutationForLayout(set, get, layoutId, next);
     return uid;
+  },
+
+  moveTileToLayout: (fromLayoutId, toLayoutId, uid) => {
+    if (fromLayoutId === toLayoutId) return null;
+    const state = get();
+    const fromTarget = findActive(state.layouts, fromLayoutId);
+    const fromIsActive = fromLayoutId === state.activeLayoutId;
+    if (!fromTarget && !fromIsActive) return null;
+    // The target must be a real saved layout — there's nowhere to put a tile
+    // in an unhydrated/unknown layout id.
+    const toTarget = findActive(state.layouts, toLayoutId);
+    if (!toTarget) return null;
+
+    const fromWorkspace = fromIsActive
+      ? state.workspace
+      : parseLayoutOrDefault(fromTarget!.layoutJson);
+    if (fromWorkspace.locked) return null;
+    const tile = fromWorkspace.tiles.find((t) => t.uid === uid);
+    if (!tile) return null;
+
+    const toIsActive = toLayoutId === state.activeLayoutId;
+    const toWorkspace = toIsActive
+      ? state.workspace
+      : parseLayoutOrDefault(toTarget.layoutJson);
+    if (toWorkspace.locked) return null;
+
+    // Place the incoming tile first-fit in the destination, carrying over its
+    // panel, per-instance config, and lock state. Geometry is recomputed for
+    // the destination grid — its origin in the source layout is meaningless
+    // there.
+    const placement = placeTileInGrid(tile.panelId, toWorkspace.tiles);
+    const moved: WorkspaceTile = { ...tile, ...placement };
+
+    // Two independent persists: drop from source, append to destination. The
+    // second get() inside applyWorkspaceMutationForLayout sees the first set's
+    // updated layouts, so the writes don't clobber one another.
+    applyWorkspaceMutationForLayout(set, get, fromLayoutId, {
+      ...fromWorkspace,
+      tiles: fromWorkspace.tiles.filter((t) => t.uid !== uid),
+    });
+    applyWorkspaceMutationForLayout(set, get, toLayoutId, {
+      ...toWorkspace,
+      tiles: [...toWorkspace.tiles, moved],
+    });
+    return moved.uid;
   },
 
   removeTile: (uid) => {

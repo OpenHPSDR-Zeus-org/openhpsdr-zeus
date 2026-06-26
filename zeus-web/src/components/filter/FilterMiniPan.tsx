@@ -57,6 +57,7 @@ import {
   type DetectedPeak,
 } from '../../dsp/signal-estimator';
 import {
+  displayFilterEdgesHz,
   getReceiverFilterHighHz,
   getReceiverFilterLowHz,
   getReceiverFilterPresetName,
@@ -288,12 +289,26 @@ function miniPanFilterForReceiver(
   c: ConnSnapshot,
   receiver: SpectrumReceiver,
 ): ActiveMiniPanFilter {
+  const mode = getReceiverMode(c, receiver);
+  const vfoHz = getReceiverVfoHz(c, receiver);
+  // FreeDV stores its passband USB-positive; re-sign to the band-convention
+  // sideband (LSB < 10 MHz) so the mini-pan window, walls, EQ bands and cut
+  // callouts all land on the side the demod actually is — matching the main
+  // panadapter passband/crosshair. Posting these signed edges on drag/wheel is
+  // safe: the backend takes abs() and re-signs from (mode, vfo) at the WDSP
+  // seam. No-op for every non-FreeDV mode. See displayFilterEdgesHz.
+  const { lowHz, highHz } = displayFilterEdgesHz(
+    mode,
+    vfoHz,
+    getReceiverFilterLowHz(c, receiver),
+    getReceiverFilterHighHz(c, receiver),
+  );
   return {
     receiver,
-    vfoHz: getReceiverVfoHz(c, receiver),
-    mode: getReceiverMode(c, receiver),
-    filterLowHz: getReceiverFilterLowHz(c, receiver),
-    filterHighHz: getReceiverFilterHighHz(c, receiver),
+    vfoHz,
+    mode,
+    filterLowHz: lowHz,
+    filterHighHz: highHz,
     filterPresetName: getReceiverFilterPresetName(c, receiver),
   };
 }

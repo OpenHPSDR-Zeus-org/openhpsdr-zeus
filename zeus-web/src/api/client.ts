@@ -418,6 +418,10 @@ export type RadioStateDto = {
 export type ReceiverDto = {
   index: number;
   enabled: boolean;
+  // Operator-facing display name. Hardware DDCs leave this null and fall back to
+  // an "RX{n}" label; the reserved KiwiSDR slice receiver (index
+  // WireContract.KiwiReceiverIndex) carries "Kiwi". See receiverLabel().
+  name?: string | null;
   // Which phase-synchronous 16-bit ADC feeds this DDC (0 or 1).
   adcSource: number;
   vfoHz: number;
@@ -430,6 +434,31 @@ export type ReceiverDto = {
   // Per-receiver audio mute (Thetis chkMUT/chkRX2Mute). The hero mixer + VFO
   // panel drive this via POST /api/receivers/{index}/mute.
   muted: boolean;
+};
+
+// Mirrors Zeus.Contracts.KiwiConfigDto — status of the KiwiSDR slice receiver.
+// `hasPassword` avoids ever shipping the stored secret to the client; `status`
+// is one of "disabled" | "connecting" | "connected" | "error" | "closed".
+export type KiwiConfigDto = {
+  enabled: boolean;
+  url: string | null;
+  hasPassword: boolean;
+  status: string;
+  statusDetail: string | null;
+};
+
+// Mirrors Zeus.Server.KiwiDirectoryEntry — one public KiwiSDR for the map
+// picker. `url` is the address to store/connect; `lat`/`lon` place the marker.
+export type KiwiDirectoryEntry = {
+  name: string;
+  url: string;
+  lat: number;
+  lon: number;
+  users: number;
+  usersMax: number;
+  online: boolean;
+  location: string | null;
+  snr: string | null;
 };
 
 // CFC mirrors Zeus.Contracts.CfcConfig. Bands array is fixed at 10 entries
@@ -2327,6 +2356,7 @@ function normalizeReceiver(raw: unknown, fallbackIndex: number): ReceiverDto {
   return {
     index: typeof r.index === 'number' ? r.index : fallbackIndex,
     enabled: typeof r.enabled === 'boolean' ? r.enabled : false,
+    name: typeof r.name === 'string' ? r.name : null,
     adcSource: typeof r.adcSource === 'number' ? r.adcSource : 0,
     vfoHz: typeof r.vfoHz === 'number' ? r.vfoHz : 0,
     mode: normalizeMode(r.mode),
@@ -5461,6 +5491,28 @@ export function setRadioLo(
   );
 }
 
+// Pan a receiver's DDC centre (the keep-in-view autopan lever). Index 0 is
+// RX1's hardware NCO (→ /api/radio/lo); index >= 1 recentres a secondary DDC
+// via /api/receivers/{index}/lo. The server no-ops the secondary path for P1
+// (shared NCO), CTUN-off, or a disabled receiver — see RequestSecondaryLo.
+export function setReceiverLo(
+  index: number,
+  hz: number,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  if (index <= 0) return setRadioLo(hz, signal);
+  return jsonFetch(
+    `/api/receivers/${index}/lo`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hz }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
 // Toggle CTUN (click-tune / centred tuning). Server returns the full updated
 // StateDto; on enable the hardware NCO is frozen at its current centre, on
 // disable it snaps back to the dial. See use-pan-tune-gesture.ts for how the
@@ -6784,6 +6836,50 @@ export async function setTwoTone(
       signal,
     },
     (raw) => raw as RadioStateDto,
+  );
+}
+
+// Normalise a wire KiwiConfigDto, tolerating an older/partial server response.
+function normalizeKiwiConfig(raw: unknown): KiwiConfigDto {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    enabled: typeof r.enabled === 'boolean' ? r.enabled : false,
+    url: typeof r.url === 'string' ? r.url : null,
+    hasPassword: typeof r.hasPassword === 'boolean' ? r.hasPassword : false,
+    status: typeof r.status === 'string' ? r.status : 'disabled',
+    statusDetail: typeof r.statusDetail === 'string' ? r.statusDetail : null,
+  };
+}
+
+// KiwiSDR slice receiver: GET /api/kiwi → current config + connection status.
+export async function getKiwiConfig(signal?: AbortSignal): Promise<KiwiConfigDto> {
+  return jsonFetch('/api/kiwi', { signal }, (raw) => normalizeKiwiConfig(raw));
+}
+
+// KiwiSDR slice receiver: POST /api/kiwi → apply config, returns updated status.
+// Only supplied fields change. An empty-string `password` clears the stored
+// password; omitting it leaves it unchanged.
+export async function setKiwiConfig(
+  req: { enabled?: boolean; url?: string; password?: string },
+  signal?: AbortSignal,
+): Promise<KiwiConfigDto> {
+  return jsonFetch(
+    '/api/kiwi',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+      signal,
+    },
+    (raw) => normalizeKiwiConfig(raw),
+  );
+}
+
+// Public KiwiSDR directory: GET /api/kiwi/directory → receivers for the map
+// picker. Proxied + cached server-side. Returns [] on any upstream failure.
+export async function getKiwiDirectory(signal?: AbortSignal): Promise<KiwiDirectoryEntry[]> {
+  return jsonFetch('/api/kiwi/directory', { signal }, (raw) =>
+    Array.isArray(raw) ? (raw as KiwiDirectoryEntry[]) : [],
   );
 }
 

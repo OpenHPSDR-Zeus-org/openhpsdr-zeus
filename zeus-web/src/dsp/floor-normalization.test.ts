@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   estimateRowFloorDb,
   floorNormalizationOffsetDb,
+  forgetReceiverFloor,
   getReceiverFloorDb,
+  referenceFloorDb,
   reportReceiverFloorDb,
   resetReceiverFloors,
 } from './floor-normalization';
@@ -31,32 +33,68 @@ describe('estimateRowFloorDb', () => {
   });
 });
 
+describe('referenceFloorDb', () => {
+  it('is null before any floor is reported', () => {
+    expect(referenceFloorDb()).toBeNull();
+  });
+
+  it('is the receiver floor itself with one pane', () => {
+    reportReceiverFloorDb(0, -123);
+    expect(referenceFloorDb()).toBe(-123);
+  });
+
+  it('is the median (odd count), robust to an outlier band', () => {
+    reportReceiverFloorDb(0, -135);
+    reportReceiverFloorDb(1, -120);
+    reportReceiverFloorDb(2, -160); // dead-band outlier
+    expect(referenceFloorDb()).toBe(-135); // middle value, not dragged by -160
+  });
+
+  it('averages the two middle values (even count)', () => {
+    reportReceiverFloorDb(0, -135);
+    reportReceiverFloorDb(1, -120);
+    expect(referenceFloorDb()).toBeCloseTo(-127.5, 5);
+  });
+});
+
 describe('floorNormalizationOffsetDb', () => {
-  it('is 0 for the focused pane itself', () => {
+  it('is 0 before any floor is reported', () => {
+    expect(floorNormalizationOffsetDb(0)).toBe(0);
+  });
+
+  it('is 0 for a lone pane (median is its own floor)', () => {
     reportReceiverFloorDb(0, -120);
-    expect(floorNormalizationOffsetDb(0, 0)).toBe(0);
+    expect(floorNormalizationOffsetDb(0)).toBe(0);
   });
 
-  it('is 0 when either floor is unknown', () => {
+  it('is 0 when this pane has not reported yet', () => {
     reportReceiverFloorDb(0, -120);
-    expect(floorNormalizationOffsetDb(1, 0)).toBe(0); // pane 1 unknown
-    expect(floorNormalizationOffsetDb(0, 2)).toBe(0); // focus 2 unknown
+    expect(floorNormalizationOffsetDb(1)).toBe(0); // pane 1 unknown
   });
 
-  it('shifts a noisier pane up by (here - focused)', () => {
-    reportReceiverFloorDb(0, -135); // focused RX1 floor (20m, quiet)
-    reportReceiverFloorDb(1, -120); // RX2 floor (40m, noisier)
-    // RX2 is 15 dB hotter, so its window shifts +15 so its floor still maps low.
-    expect(floorNormalizationOffsetDb(1, 0)).toBeCloseTo(15, 1);
-    // And the reciprocal: a quieter pane shifts down.
-    expect(floorNormalizationOffsetDb(0, 1)).toBeCloseTo(-15, 1);
+  it('offsets each pane from the median floor', () => {
+    reportReceiverFloorDb(0, -135); // quiet
+    reportReceiverFloorDb(1, -120); // noisier → median is -127.5
+    // Noisier pane shifts its window up so its floor still maps low; the quiet
+    // pane shifts down. Both are symmetric about the shared median.
+    expect(floorNormalizationOffsetDb(1)).toBeCloseTo(7.5, 1);
+    expect(floorNormalizationOffsetDb(0)).toBeCloseTo(-7.5, 1);
   });
 
-  it('clamps the offset to +/-40 dB', () => {
+  it('clamps the offset to +/-80 dB', () => {
     reportReceiverFloorDb(0, -200);
-    reportReceiverFloorDb(1, 0);
-    expect(floorNormalizationOffsetDb(1, 0)).toBe(40);
-    expect(floorNormalizationOffsetDb(0, 1)).toBe(-40);
+    reportReceiverFloorDb(1, 0); // median -100 → raw offsets +/-100
+    expect(floorNormalizationOffsetDb(1)).toBe(80);
+    expect(floorNormalizationOffsetDb(0)).toBe(-80);
+  });
+
+  it('drops a forgotten pane from the anchor', () => {
+    reportReceiverFloorDb(0, -135);
+    reportReceiverFloorDb(1, -120);
+    forgetReceiverFloor(1);
+    // Only RX1 left → median is its own floor → offset 0.
+    expect(referenceFloorDb()).toBe(-135);
+    expect(floorNormalizationOffsetDb(0)).toBe(0);
   });
 });
 
