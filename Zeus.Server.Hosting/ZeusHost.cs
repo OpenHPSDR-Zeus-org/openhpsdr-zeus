@@ -365,9 +365,22 @@ public static class ZeusHost
         // panel (esp. for remote operators whose browser can't reach the radio's
         // LAN). No auto-redirect — LanProxyService follows + re-validates each hop
         // against the private-range rule itself.
+        //
+        // Accept self-signed / hostname-mismatched TLS certs: LAN devices the
+        // operator browses to (routers at 192.168.x.1, NAS, printers, IoT) almost
+        // universally serve HTTPS with a self-signed cert, which a default
+        // HttpClient rejects ("The SSL connection could not be established"). The
+        // target is already constrained to RFC1918/ULA private space by
+        // LanProxyService.TryValidateTarget, so this only ever relaxes validation
+        // for the operator's own private network — never a public host.
         builder.Services.AddHttpClient(LanProxyService.HttpClientName,
                 c => c.Timeout = TimeSpan.FromSeconds(15))
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+                ServerCertificateCustomValidationCallback =
+                    HttpClientHandler.DangerousAcceptAnyServerCertificateValidator,
+            });
         builder.Services.AddSingleton<LanProxyService>();
         // RX audio publish seam (Phase 1). DspPipelineService.PublishAudio
         // fans each AudioFrame across every registered IRxAudioSink.

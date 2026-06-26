@@ -326,6 +326,50 @@ public sealed class RemoteWebRtcSessionTests
     }
 
     [Fact]
+    public async Task PostUnlock_QrzLookupAndChat_ReachLoopback()
+    {
+        // The remote operator is the authenticated station owner, so QRZ lookup
+        // and chat are 1:1 with the desk — formerly denied, now tunnelled. Only
+        // the credential/secret exfil paths above stay refused.
+        var seen = new List<string>();
+        var factory = new StubHttpClientFactory((req) =>
+        {
+            seen.Add(req.RequestUri!.AbsolutePath);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json"),
+            };
+        });
+        ApiSession(factory, out var server);
+        await using var client = new ProverClient(Password);
+        await UnlockAsync(server, client);
+
+        var qrz = await SendApiUntilReply(
+            client, 31, "POST", "/api/qrz/lookup", "{\"call\":\"KB2UKA\"}", "application/json");
+        using (var d = JsonDocument.Parse(qrz))
+            Assert.Equal(200, d.RootElement.GetProperty("status").GetInt32());
+
+        var chat = await SendApiUntilReply(
+            client, 32, "POST", "/api/chat/send", "{\"text\":\"hi\"}", "application/json");
+        using (var d = JsonDocument.Parse(chat))
+            Assert.Equal(200, d.RootElement.GetProperty("status").GetInt32());
+
+        Assert.Contains("/api/qrz/lookup", seen);
+        Assert.Contains("/api/chat/send", seen);
+        Assert.Equal(2, factory.CallCount);
+
+        server.Close();
+    }
+
+    [Fact]
+    public void OpusRx_IsEnabledByDefault()
+    {
+        // RX audio defaults to the Opus WebRTC-track path (jitter buffer + PLC,
+        // robust over the internet). ZEUS_REMOTE_OPUS_RX=0 opts back to PCM.
+        Assert.True(RemoteWebRtcSession.OpusRxEnabled);
+    }
+
+    [Fact]
     public async Task PreUnlock_ApiInput_DoesNothing()
     {
         var factory = new StubHttpClientFactory(_ =>
