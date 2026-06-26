@@ -165,6 +165,23 @@ public sealed class KiwiSdrTests : IDisposable
     }
 
     [Fact]
+    public async Task SetConfig_enabled_without_radio_parks_at_waiting_for_radio()
+    {
+        using var svc = NewService();
+        // No radio connected (the hosted service's ExecuteAsync never ran, so
+        // _radioConnected is false). Enabling the Kiwi must NOT open a remote
+        // connection — it parks at "waiting for radio" instead, because the Kiwi
+        // only streams once a radio is up to clock the shared RX mix bus.
+        var cfg = await svc.SetConfigAsync(
+            enabled: true, url: "sdr.example.org:8073", password: null, CancellationToken.None);
+
+        Assert.True(cfg.Enabled);
+        Assert.Equal("waiting", cfg.Status);
+        Assert.Equal("waiting for radio", cfg.StatusDetail);
+        Assert.False(svc.AudioActive);   // no client was opened
+    }
+
+    [Fact]
     public void ReadAudio_drains_what_was_enqueued_in_order()
     {
         using var svc = NewService();
