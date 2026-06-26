@@ -36,8 +36,14 @@
    *     than the window, so the workspace SCROLLS to reach the panels.
    * A panel saved beyond the monitor (from before this bound) is unreachable
    * even when maximized, so the add-panel flow closes those on first run;
-   * panels merely outside a small window are kept and reappear on maximize. */
+  * panels merely outside a small window are kept and reappear on maximize. */
   overflow: auto;
+  /* ResizeObserver measures the scrollport's content box. Without a reserved
+   * gutter, a vertical scrollbar that appears while the startup layout is
+   * settling steals inline space, which changes the measured width and can
+   * make the fixed-cell grid flip between widths. Keep that gutter stable from
+   * the first pass so startup cannot enter a scrollbar/measurement loop. */
+  scrollbar-gutter: stable;
   /* v3 Lifted Dark: workspace ground is the distinct mid-grey "table"
    * (--bg-workspace), so the chrome (--bg-0) and the panels (--bg-1) each
    * read as their own surface. */
@@ -110,7 +116,7 @@
  * chevron only on the SE corner. The old unqualified override pinned every
  * handle to right:2px;bottom:2px;cursor:se-resize — which stacked all eight in
  * the SE corner — so each direction now carries its own cursor instead. */
-.all-panels-grid .react-resizable-handle {
+.all-panels-grid .react-grid-item > .react-resizable-handle {
   background-image: none;
   width: 20px;
   height: 20px;
@@ -119,6 +125,32 @@
   transform: none;
   /* z-index here is low so the workspace's own dragging overlays still win. */
   z-index: 2;
+}
+.all-panels-grid
+  .react-grid-item
+  > .react-resizable-handle.react-resizable-handle-sw,
+.all-panels-grid
+  .react-grid-item
+  > .react-resizable-handle.react-resizable-handle-se,
+.all-panels-grid
+  .react-grid-item
+  > .react-resizable-handle.react-resizable-handle-nw,
+.all-panels-grid
+  .react-grid-item
+  > .react-resizable-handle.react-resizable-handle-ne,
+.all-panels-grid
+  .react-grid-item
+  > .react-resizable-handle.react-resizable-handle-w,
+.all-panels-grid
+  .react-grid-item
+  > .react-resizable-handle.react-resizable-handle-e,
+.all-panels-grid
+  .react-grid-item
+  > .react-resizable-handle.react-resizable-handle-n,
+.all-panels-grid
+  .react-grid-item
+  > .react-resizable-handle.react-resizable-handle-s {
+  transform: none;
 }
 /* Per-direction cursors. Positioning is inherited from the base react-resizable
  * stylesheet; we only restyle, we do not reposition. */
