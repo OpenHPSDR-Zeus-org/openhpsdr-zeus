@@ -80,16 +80,29 @@ ways to make it usable, each a real tradeoff:
   a large DSP effort (Fano over K=32) with no real upside since the format is
   standardised.
 
-**Recommendation: Option A** — a small, well-documented patch is the standard
-vendoring practice and gives the cleanest, testable, no-temp-file integration.
-It does edit vendored source, so it wants KB2UKA's explicit OK (the FT8 vendoring
-was kept pristine; this one deliberately wouldn't be). Multi-RX WSPR can still
-serialise decode (it runs once per 120 s) regardless of approach.
+**DECODER VALIDATED (round-trip passes).** The vendored decoder is proven to
+work: the `wspr_decode_roundtrip` CTest encodes `KB2UKA FN12 30` → synthesises
+its 4-FSK audio → writes a 114 s/12 kHz WAV → runs the decoder → recovers the
+message. The integration recipe that works **without editing vendored source**:
+compile `wsprd.c` with `-Dmain=wsprd_cli_main` (rename the CLI entry) + link the
+no-op `osdwspr_stub.c` (the OSD pass is optional Fortran, off by default) + feed
+a WAV and read the decoded lines. This keeps the vendored source **pristine** —
+so the earlier "needs sign-off to edit vendored source" concern is moot; we
+DON'T edit it.
 
-**Validation plan (self-contained, no external vector needed):** round-trip —
-`zeus_wspr_encode` a known message → synthesise its 4-FSK audio (wsprsim-style,
-~110.6 s at the decoder's rate) → decode → assert the message comes back. This
-is the decode-correctness CI gate.
+**Remaining: production C ABI.** The round-trip uses a temp WAV + stdout capture
+(POSIX `dup2`), which is fine for the test gate but not for the shipping
+`zeus_wspr_decode(samples, n, dialfreq, results[])` ABI. Two ways, now that the
+decoder is proven and the round-trip is a regression safety net:
+- **A′ — clean in-memory extraction**: refactor the decode body of
+  `wsprd_cli_main` into a function taking samples + returning a result struct
+  (the round-trip catches any regression). Best long-term; ~600-line move.
+- **B′ — keep the proven temp-WAV/stdout bridge** behind the ABI + a mutex
+  (WSPR decodes once/120 s, so serialising is fine). Lower effort, ships sooner.
+
+Multi-RX WSPR can serialise decode regardless. MSVC port still needed (wsprd.c
+uses `getopt`/`unistd.h` — a `win_compat.h` like the FT8 lib, and the stdout
+capture differs on Windows → favors A′ for cross-platform).
 
 ## Build & test
 

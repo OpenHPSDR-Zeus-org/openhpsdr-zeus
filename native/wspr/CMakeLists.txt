@@ -70,4 +70,29 @@ if(ZEUS_WSPR_TESTS)
         target_link_libraries(zeus_wspr_selftest PRIVATE m)
     endif()
     add_test(NAME wspr_encode_sync COMMAND zeus_wspr_selftest)
+
+    # Decode round-trip gate (POSIX only — captures the decoder's stdout via
+    # dup2). Compiles the full vendored decoder with wsprd.c's main() renamed to
+    # a callable entry, plus the no-op OSD stub (osdwspr.f90 is Fortran/optional).
+    # Proves encode -> synth -> decode recovers the message.
+    if(NOT WIN32)
+        add_executable(zeus_wspr_roundtrip
+            test/zeus_wspr_roundtrip.c
+            zeus_wspr.c
+            osdwspr_stub.c
+            ${WSPR_ENCODE_SRC}
+            ${WSPR_VENDOR}/wsprd.c
+            ${WSPR_VENDOR}/jelinek.c
+            ${WSPR_VENDOR}/metric_tables.c
+            ${WSPR_VENDOR}/pffft.c
+        )
+        target_include_directories(zeus_wspr_roundtrip PRIVATE ${WSPR_VENDOR})
+        # Rename wsprd.c's main() to a callable entry (only on that source).
+        set_source_files_properties(${WSPR_VENDOR}/wsprd.c
+            PROPERTIES COMPILE_DEFINITIONS "main=wsprd_cli_main")
+        # zeus_wspr.c must NOT also define printdata here (wsprd.c owns it).
+        target_compile_definitions(zeus_wspr_roundtrip PRIVATE ZEUS_WSPR_LINK_WSPRD)
+        target_link_libraries(zeus_wspr_roundtrip PRIVATE m)
+        add_test(NAME wspr_decode_roundtrip COMMAND zeus_wspr_roundtrip)
+    endif()
 endif()

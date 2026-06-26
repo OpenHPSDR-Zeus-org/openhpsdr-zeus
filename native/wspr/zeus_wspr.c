@@ -25,9 +25,13 @@
 extern int get_wspr_channel_symbols(const char* message, char* hashtab,
                                     char* loctab, unsigned char* symbols);
 
-// The vendored encoder/decoder reference a `printdata` global normally defined
-// in wsprd.c (the CLI main, not compiled into this lib). Provide it here.
+// The vendored encoder references a `printdata` global normally defined in
+// wsprd.c. In the encode-only lib, wsprd.c isn't linked, so provide it here.
+// When the decoder (wsprd.c) IS linked, it owns the definition — guard against
+// a duplicate via ZEUS_WSPR_LINK_WSPRD.
+#ifndef ZEUS_WSPR_LINK_WSPRD
 int printdata = 0;
+#endif
 
 // Callsign-hash table sizes the vendored code expects (32768 entries).
 #define ZW_HASHTAB_BYTES (32768 * 13)
