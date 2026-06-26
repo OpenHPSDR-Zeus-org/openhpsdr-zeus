@@ -91,8 +91,9 @@
 .ft8-ws-header {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 0 14px;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 6px 14px;
   background: var(--hud-panel-2);
   border-bottom: 1px solid var(--hud-cyan-line);
 }
@@ -102,7 +103,7 @@
   color: var(--hud-cyan);
   text-shadow: 0 0 8px var(--hud-cyan-soft);
 }
-.ft8-ws-clock { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--hud-text-dim); }
+.ft8-ws-clock { font-variant-numeric: tabular-nums; color: var(--hud-text-dim); }
 .ft8-ws-close {
   background: transparent;
   border: 1px solid var(--hud-cyan-line);
@@ -189,13 +190,15 @@
   font: inherit;
   text-transform: uppercase;
 }
-/* Visible, filled Exit button (was a near-invisible outline). */
+/* Visible, filled Exit button, pinned hard-right and never shrinking/clipping. */
 .ft8-ws-close {
+  margin-left: auto;
+  flex-shrink: 0;
   background: var(--hud-me);
   border: 1px solid var(--hud-me);
   color: #1a0604;
   border-radius: 3px;
-  padding: 3px 12px;
+  padding: 3px 14px;
   cursor: pointer;
   font: inherit;
   font-weight: 700;
