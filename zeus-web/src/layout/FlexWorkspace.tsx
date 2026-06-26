@@ -33,9 +33,17 @@ import {
   type LayoutItem,
 } from 'react-grid-layout';
 import { absoluteStrategy } from 'react-grid-layout/core';
-import { Plus, Puzzle, Settings } from 'lucide-react';
+import { Minus, Plus, Puzzle, Settings } from 'lucide-react';
 import { useWorkspace } from './WorkspaceContext';
 import { parseLayoutOrDefault, useLayoutStore } from '../state/layout-store';
+import { useConnectionStore } from '../state/connection-store';
+import {
+  setWorkspaceZoom,
+  WORKSPACE_ZOOM_DEFAULT,
+  WORKSPACE_ZOOM_MAX,
+  WORKSPACE_ZOOM_MIN,
+  WORKSPACE_ZOOM_STEP,
+} from '../api/client';
 import { getPanelDef } from './panels';
 import {
   WORKSPACE_RESIZE_COMPACTOR,
@@ -186,16 +194,19 @@ export function FlexWorkspace({
       />
       <TerminatorLines active={terminatorActive} />
       {showAddPanelModal && !addPanelOpen && (
-        <button
-          type="button"
-          className="workspace-add-panel-btn"
-          onClick={() => setAddPanelOpen(true)}
-          disabled={!isLoaded}
-          title="Add a panel to this workspace"
-          aria-label="Add panel"
-        >
-          <Plus size={18} strokeWidth={2.2} aria-hidden />
-        </button>
+        <>
+          <WorkspaceZoomControls />
+          <button
+            type="button"
+            className="workspace-add-panel-btn"
+            onClick={() => setAddPanelOpen(true)}
+            disabled={!isLoaded}
+            title="Add a panel to this workspace"
+            aria-label="Add panel"
+          >
+            <Plus size={18} strokeWidth={2.2} aria-hidden />
+          </button>
+        </>
       )}
       {showAddPanelModal && addPanelOpen && (
         <AddPanelModal
@@ -222,6 +233,78 @@ export function FlexWorkspace({
           </p>
         </ConfirmDialog>
       )}
+    </div>
+  );
+}
+
+// Floating workspace-zoom cluster (− | nn% | +) that sits beside the Add Panel
+// button. Steps the server-persisted WorkspaceZoomPct; the percent readout
+// doubles as a reset-to-100% button. Optimistic store write + POST + applyState
+// reconcile, mirroring how the spectral-zoom controls talk to the server.
+function WorkspaceZoomControls() {
+  const pct = useConnectionStore((s) => s.workspaceZoomPct);
+  const setWorkspaceZoomPct = useConnectionStore((s) => s.setWorkspaceZoomPct);
+  const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const apply = useCallback(
+    (next: number) => {
+      const clamped = Math.min(
+        WORKSPACE_ZOOM_MAX,
+        Math.max(WORKSPACE_ZOOM_MIN, Math.round(next)),
+      );
+      if (clamped === useConnectionStore.getState().workspaceZoomPct) return;
+      setWorkspaceZoomPct(clamped); // optimistic — grid rescales immediately
+      abortRef.current?.abort();
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+      setWorkspaceZoom(clamped, ctrl.signal)
+        .then((s) => {
+          if (!ctrl.signal.aborted) useConnectionStore.getState().applyState(s);
+        })
+        .catch(() => {
+          // Network/abort error: keep the optimistic value; the 1 Hz state
+          // poll reconciles to server truth on the next tick.
+        });
+    },
+    [setWorkspaceZoomPct],
+  );
+
+  return (
+    <div
+      className="workspace-zoom-controls"
+      role="group"
+      aria-label="Workspace zoom"
+    >
+      <button
+        type="button"
+        className="workspace-zoom-btn"
+        onClick={() => apply(pct - WORKSPACE_ZOOM_STEP)}
+        disabled={pct <= WORKSPACE_ZOOM_MIN}
+        title="Zoom workspace out"
+        aria-label="Zoom workspace out"
+      >
+        <Minus size={14} strokeWidth={2.4} aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="workspace-zoom-readout"
+        onClick={() => apply(WORKSPACE_ZOOM_DEFAULT)}
+        title="Reset workspace zoom to 100%"
+        aria-label={`Workspace zoom ${pct}% — click to reset to 100%`}
+      >
+        {pct}%
+      </button>
+      <button
+        type="button"
+        className="workspace-zoom-btn"
+        onClick={() => apply(pct + WORKSPACE_ZOOM_STEP)}
+        disabled={pct >= WORKSPACE_ZOOM_MAX}
+        title="Zoom workspace in"
+        aria-label="Zoom workspace in"
+      >
+        <Plus size={14} strokeWidth={2.4} aria-hidden />
+      </button>
     </div>
   );
 }
@@ -338,10 +421,19 @@ function WorkspaceCanvas({
     const id = window.setTimeout(() => setFrozenWidth(width), 150);
     return () => window.clearTimeout(id);
   }, [frozenWidth, mounted, width]);
+  // Workspace UI zoom (operator-set, server-persisted). A multiplier on the
+  // CELL PITCH — not a CSS transform — so RGL keeps doing its drag/resize math
+  // in real pixels and hit-testing stays correct at any zoom. zoom < 1 shrinks
+  // the cells, so monitorCols/monitorRows/visibleRows below all grow and the
+  // operator gets MORE grid to spread panels across; zoom > 1 enlarges the
+  // cells (fewer fit; the canvas scrolls when a layout outgrows the monitor).
+  const workspaceZoomPct = useConnectionStore((s) => s.workspaceZoomPct);
+  const zoomFactor = (workspaceZoomPct > 0 ? workspaceZoomPct : 100) / 100;
   const baseColWidth =
     frozenWidth > 0
-      ? (frozenWidth - WORKSPACE_GRID_MARGIN_PX * (WORKSPACE_GRID_COLS - 1)) /
-        WORKSPACE_GRID_COLS
+      ? ((frozenWidth - WORKSPACE_GRID_MARGIN_PX * (WORKSPACE_GRID_COLS - 1)) /
+          WORKSPACE_GRID_COLS) *
+        zoomFactor
       : 0;
   // The MONITOR's capacity in grid cells — the MAXIMUM field. The workspace
   // canvas is bounded to this (not to the live window), so a panel can never be
@@ -367,7 +459,7 @@ function WorkspaceCanvas({
           1,
           Math.floor(
             (screenAvailH + WORKSPACE_GRID_MARGIN_PX) /
-              (WORKSPACE_ROW_HEIGHT_PX + WORKSPACE_GRID_MARGIN_PX),
+              (WORKSPACE_ROW_HEIGHT_PX * zoomFactor + WORKSPACE_GRID_MARGIN_PX),
           ),
         )
       : 0;
@@ -419,7 +511,9 @@ function WorkspaceCanvas({
   // (h rows × a constant rowHeight), so the old shrink-to-fit solver and its
   // per-tile pixel compensation are gone: the render layout is simply the stored
   // geometry, clamped to each panel's maxW/maxH.
-  const rowHeight = WORKSPACE_ROW_HEIGHT_PX;
+  // Row pitch scales with the same zoom factor so cells grow/shrink uniformly
+  // (square-ish aspect preserved). RGL accepts a fractional rowHeight.
+  const rowHeight = WORKSPACE_ROW_HEIGHT_PX * zoomFactor;
   const rowMargin = WORKSPACE_GRID_MARGIN_PX;
 
   // Per-tile render placement = stored geometry clamped to the panel's caps. A

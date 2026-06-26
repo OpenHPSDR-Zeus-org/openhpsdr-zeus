@@ -239,6 +239,14 @@ export type ZoomLevel = number;
 export const ZOOM_MIN: ZoomLevel = 1;
 export const ZOOM_MAX: ZoomLevel = 32;
 
+// Workspace UI zoom as a whole-percent scale of the panel-grid cell pitch.
+// 100 = authored size. Distinct from the spectral ZoomLevel above. Range +
+// step mirror the backend clamp (RadioService.Min/MaxWorkspaceZoomPct).
+export const WORKSPACE_ZOOM_MIN = 50;
+export const WORKSPACE_ZOOM_MAX = 200;
+export const WORKSPACE_ZOOM_STEP = 10;
+export const WORKSPACE_ZOOM_DEFAULT = 100;
+
 export type AdcProtectionConfigDto = {
   enabled: boolean;
   attackMs: number;
@@ -337,6 +345,9 @@ export type RadioStateDto = {
   wdspNr3RnnrAvailable: boolean;
   nr3ModelName: string | null;
   zoomLevel: ZoomLevel;
+  // Workspace UI zoom (whole-percent cell-pitch scale; 100 = authored size).
+  // Server-persisted so it follows the radio across clients.
+  workspaceZoomPct: number;
   // PureSignal persisted settings — server is the source of truth, hydrated
   // into tx-store on connect so a fresh browser (no localStorage) sees the
   // operator's last dial-in. PsEnabled is the persisted standing arm
@@ -2430,6 +2441,7 @@ export function normalizeState(raw: unknown): RadioStateDto {
     wdspNr3RnnrAvailable: Boolean(r.wdspNr3RnnrAvailable),
     nr3ModelName: typeof r.nr3ModelName === 'string' ? r.nr3ModelName : null,
     zoomLevel: normalizeZoomLevel(r.zoomLevel),
+    workspaceZoomPct: normalizeWorkspaceZoomPct(r.workspaceZoomPct),
     // PureSignal persisted settings. Defaults match RadioService.cs init and
     // PsSettingsEntry — older servers without the fields fall back cleanly.
     psEnabled: typeof r.psEnabled === 'boolean' ? r.psEnabled : false,
@@ -2641,6 +2653,16 @@ function normalizeZoomLevel(v: unknown): ZoomLevel {
     return v;
   }
   return ZOOM_MIN;
+}
+
+// Clamp the server's workspace zoom percent into range, falling back to 100
+// for a missing/garbage field so a v1 server (no field) renders at authored
+// size rather than collapsing the grid.
+function normalizeWorkspaceZoomPct(v: unknown): number {
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    return Math.min(WORKSPACE_ZOOM_MAX, Math.max(WORKSPACE_ZOOM_MIN, Math.round(v)));
+  }
+  return WORKSPACE_ZOOM_DEFAULT;
 }
 
 function normalizeRadios(raw: unknown): RadioInfoDto[] {
@@ -6087,6 +6109,25 @@ export function setZoom(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ level }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// Workspace UI zoom — POSTs the new percent; the server clamps and echoes the
+// full state back for the optimistic-send + applyState reconcile. Distinct from
+// setZoom (spectral analyzer zoom).
+export function setWorkspaceZoom(
+  pct: number,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/ui/workspace-zoom',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pct }),
       signal,
     },
     normalizeState,

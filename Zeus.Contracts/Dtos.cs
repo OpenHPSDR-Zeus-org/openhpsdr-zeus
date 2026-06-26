@@ -972,6 +972,14 @@ public sealed record StateDto(
     int AttenDb = 0,
     NrConfig? Nr = null,
     int ZoomLevel = 1,
+    // Workspace UI zoom as a whole-percent scale of the panel-grid cell pitch
+    // (column width + row height). 100 = authored size; below 100 shrinks the
+    // cells so more grid fits the monitor (more usable panel space), above 100
+    // enlarges them. Purely a frontend display scale — NOT the spectral
+    // ZoomLevel above and NOT wired to the DSP. Persisted server-side so the
+    // operator's choice follows any client connecting to this radio. Defaulted
+    // so legacy state frames (no field) deserialize unchanged.
+    int WorkspaceZoomPct = 100,
     // Auto-attenuator control loop. When on (default), the server raises
     // AttOffsetDb by 1 per ~100 ms window in which any ADC-overload bit was
     // seen, and decays it by 1 per clean window. Ported from Thetis
@@ -1699,6 +1707,11 @@ public sealed record Nr2CoreConfigSetRequest(
 // on. The span-centering math lives in the engine; this contract just carries
 // the discrete factor on the wire.
 public sealed record ZoomSetRequest(int Level);
+
+// Workspace UI zoom — a whole-percent scale of the panel-grid cell pitch (see
+// StateDto.WorkspaceZoomPct). Distinct from ZoomSetRequest, which sets the
+// spectral analyzer zoom. The server clamps Pct into its allowed range.
+public sealed record WorkspaceZoomSetRequest(int Pct);
 
 public sealed record AutoAttSetRequest(bool Enabled);
 

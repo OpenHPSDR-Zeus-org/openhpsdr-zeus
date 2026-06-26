@@ -2152,6 +2152,17 @@ public static class ZeusEndpoints
             return Results.Ok(r.SetZoom(req.Level));
         });
 
+        // Workspace UI zoom — scales the panel-grid cell pitch (see
+        // StateDto.WorkspaceZoomPct). Distinct from /api/rx/zoom (spectral). The
+        // server clamps Pct into range rather than 400-ing, so a slider step can
+        // never get stuck on an out-of-range value; the echoed state carries the
+        // accepted percent back for the optimistic-send reconcile.
+        app.MapPost("/api/ui/workspace-zoom", (WorkspaceZoomSetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.ui.workspaceZoom pct={Pct}", req.Pct);
+            return Results.Ok(r.SetWorkspaceZoom(req.Pct));
+        });
+
         // Band memory: last-used (hz, mode) per HF band. GET returns the full map so
         // the BandButtons UI can restore on load with one round-trip. PUT upserts one
         // entry — the web debounces writes so tuning doesn't hammer LiteDB.
