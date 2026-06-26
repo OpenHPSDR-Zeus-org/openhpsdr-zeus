@@ -41,6 +41,9 @@ export interface Ft8Row extends Ft8DecodeDto {
 const MAX_ROWS = 500;
 
 interface Ft8State {
+  /** Workspace overlay visibility — independent of decoder enable so the shell
+   *  is viewable on a dev box without the radio / native lib. */
+  open: boolean;
   nativeAvailable: boolean;
   enabled: boolean;
   receiver: number;
@@ -49,6 +52,10 @@ interface Ft8State {
   rows: Ft8Row[];
   error: string | null;
 
+  /** Open the FT8 workspace and attempt to start decoding. */
+  openWorkspace: (opts?: { receiver?: number; protocol?: Ft8ProtocolName }) => void;
+  /** Close the workspace and stop decoding. */
+  closeWorkspace: () => void;
   /** Apply a 0x38 decode batch (newest rows first). */
   ingest: (batch: Ft8DecodeBatch) => void;
   /** Hydrate enable/native/protocol from GET /api/ft8. */
@@ -62,6 +69,7 @@ interface Ft8State {
 }
 
 export const useFt8Store = create<Ft8State>((set, get) => ({
+  open: false,
   nativeAvailable: false,
   enabled: false,
   receiver: -1,
@@ -69,6 +77,16 @@ export const useFt8Store = create<Ft8State>((set, get) => ({
   passes: 3,
   rows: [],
   error: null,
+
+  openWorkspace: (opts) => {
+    set({ open: true, protocol: opts?.protocol ?? get().protocol });
+    void get().enable(opts);
+  },
+
+  closeWorkspace: () => {
+    set({ open: false });
+    void get().disable();
+  },
 
   ingest: (batch) =>
     set((s) => {

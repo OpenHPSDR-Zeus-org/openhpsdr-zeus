@@ -47,6 +47,8 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import { ChevronLeft, ChevronRight, Download, Upload } from 'lucide-react';
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
+import { Ft8WorkspaceMount } from './layout/ft8/Ft8Workspace';
+import { useFt8Store } from './state/ft8-store';
 import { WorkspaceErrorBoundary } from './layout/WorkspaceErrorBoundary';
 import { AppErrorBoundary } from './layout/AppErrorBoundary';
 import {
@@ -428,6 +430,10 @@ export default function App() {
       ) {
         setSettingsView(true, hash as SettingsTabId);
         // Clear the hash after handling it
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      } else if (hash === 'ft8' || hash === 'ft4') {
+        // Engage the native FT8/FT4 workspace overlay.
+        useFt8Store.getState().openWorkspace({ protocol: hash === 'ft4' ? 'FT4' : 'FT8' });
         window.history.replaceState(null, '', window.location.pathname + window.location.search);
       }
     };
@@ -968,6 +974,11 @@ export default function App() {
     <DspSceneDiagnosticsPublisher />
     <AudioPlaybackDiagnosticsPublisher />
     <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
+      {/* FT8/FT4 native workspace — a fixed full-screen overlay shown when the
+          operator engages FT8 mode (open it via #ft8). Self-contained: renders
+          null when closed, so this is purely additive to the main console. */}
+      <Ft8WorkspaceMount />
+
       {/* Left layout bar — issue #241. Spans the full app height; lists named
           layouts for the active radio with switch/add/delete/reset actions. */}
       <LeftLayoutBar />
