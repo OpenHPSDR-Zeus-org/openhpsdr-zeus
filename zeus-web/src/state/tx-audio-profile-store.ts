@@ -190,6 +190,7 @@ export const useTxAudioProfileStore = create<TxAudioProfileState>((set, get) => 
         vstEngineAvailable: result.engineAvailable,
       });
       await audio.loadChainOrderFromServer();
+      useAudioSuiteStore.getState().bumpPluginSettingsRevision();
 
       set({ lastLoadedId: trimmed, busy: false });
       // Live state now matches the just-applied profile: that is the clean point.

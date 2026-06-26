@@ -174,6 +174,8 @@ When a new version is available, Zeus will show a notification in the Settings >
 - Settings: `%LOCALAPPDATA%\Zeus\zeus-prefs.db`
 - WDSP Wisdom: `%LOCALAPPDATA%\Zeus\wdspWisdom00`
 - Logs: `%LOCALAPPDATA%\Zeus\logs\`
+- Startup/crash diagnostics: `%LOCALAPPDATA%\Zeus\zeus-startup.log`
+- Native crash dumps and unclean-launch snapshots: `%LOCALAPPDATA%\Zeus\crash-dumps\`
 
 ### macOS
 - Settings: `~/Library/Application Support/Zeus/zeus-prefs.db`

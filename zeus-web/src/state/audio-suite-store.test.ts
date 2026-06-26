@@ -231,6 +231,7 @@ describe('audio-suite-store profile selection', () => {
     expect(useAudioSuiteStore.getState().selectedProfile).toBe('Native x1');
     expect(useAudioSuiteStore.getState().chainOrder).toEqual(['noise-gate', 'compressor']);
     expect(useAudioSuiteStore.getState().masterBypassed).toBe(false);
+    expect(useAudioSuiteStore.getState().pluginSettingsRevision).toBe(1);
   });
 
   it('switches to the processing mode returned by a profile apply', async () => {
@@ -260,6 +261,7 @@ describe('audio-suite-store profile selection', () => {
     expect(useAudioSuiteStore.getState().chainOrder).toEqual([
       'com.openhpsdr.zeus.vst.comp',
     ]);
+    expect(useAudioSuiteStore.getState().pluginSettingsRevision).toBe(1);
   });
 
   it('switches back to native mode returned by a profile apply', async () => {
@@ -297,6 +299,7 @@ describe('audio-suite-store profile selection', () => {
     expect(useAudioSuiteStore.getState().chainOrder).toEqual([
       'com.openhpsdr.zeus.samples.eq',
     ]);
+    expect(useAudioSuiteStore.getState().pluginSettingsRevision).toBe(1);
   });
 
   it('applies RX profiles through the RX suite endpoint only', async () => {
@@ -344,6 +347,7 @@ describe('audio-suite-store profile selection', () => {
     expect(useAudioSuiteStore.getState().rxVstEngineActive).toBe(true);
     expect(useAudioSuiteStore.getState().rxVstActivePlugins).toBe(1);
     expect(useAudioSuiteStore.getState().rxVstDegradedBlocks).toBe(3);
+    expect(useAudioSuiteStore.getState().pluginSettingsRevision).toBe(1);
   });
 
   it('reports profile apply failures', async () => {
@@ -357,6 +361,7 @@ describe('audio-suite-store profile selection', () => {
 
     expect(result).toEqual({ ok: false, error: 'missing profile' });
     expect(useAudioSuiteStore.getState().selectedProfile).toBe('');
+    expect(useAudioSuiteStore.getState().pluginSettingsRevision).toBe(0);
   });
 
   it('mirrors preview onto the TX monitor store', async () => {
