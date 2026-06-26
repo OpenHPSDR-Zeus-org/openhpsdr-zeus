@@ -33,6 +33,7 @@ import {
 } from 'react';
 import { LockKeyhole } from 'lucide-react';
 import { parseLayoutOrDefault, useLayoutStore } from '../state/layout-store';
+import { useSavedLayoutsStore } from '../state/saved-layouts-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import {
   LayoutSettingsModal,
@@ -56,9 +57,16 @@ export function LeftLayoutBar() {
   const addLayout = useLayoutStore((s) => s.addLayout);
   const removeLayout = useLayoutStore((s) => s.removeLayout);
   const updateLayoutMeta = useLayoutStore((s) => s.updateLayoutMeta);
+  const replaceActiveWorkspace = useLayoutStore((s) => s.replaceActiveWorkspace);
   const setWorkspaceLockedInLayout = useLayoutStore(
     (s) => s.setWorkspaceLockedInLayout,
   );
+  // Saved-layouts library (reusable presets, separate from the tabs).
+  const savedLayouts = useSavedLayoutsStore((s) => s.savedLayouts);
+  const saveWorkspaceToLibrary = useSavedLayoutsStore((s) => s.saveWorkspaceAs);
+  const replaceSavedLayout = useSavedLayoutsStore((s) => s.replaceWorkspace);
+  const updateSavedLayoutMeta = useSavedLayoutsStore((s) => s.updateMeta);
+  const deleteSavedLayout = useSavedLayoutsStore((s) => s.deleteSavedLayout);
   const isLoaded = useLayoutStore((s) => s.isLoaded);
   const settingsViewOpen = useLayoutStore((s) => s.settingsViewOpen);
   const setSettingsView = useLayoutStore((s) => s.setSettingsView);
@@ -89,6 +97,8 @@ export function LeftLayoutBar() {
   }, [rxTraceColor]);
 
   const [modal, setModal] = useState<ModalState>({ kind: 'closed' });
+  // Create-mode "Start from" selection: '' = blank, else a saved-layout id.
+  const [createSourceId, setCreateSourceId] = useState('');
   const [draggingLayoutId, setDraggingLayoutId] = useState<string | null>(null);
   const lockedLayoutIds = useMemo(
     () =>
@@ -100,7 +110,10 @@ export function LeftLayoutBar() {
     [layouts],
   );
 
-  const handleAdd = () => setModal({ kind: 'create' });
+  const handleAdd = () => {
+    setCreateSourceId('');
+    setModal({ kind: 'create' });
+  };
 
   const handleDelete = (id: string, name: string) => {
     if (layouts.length <= 1) return;
@@ -117,14 +130,23 @@ export function LeftLayoutBar() {
 
   const handleModalSave = (value: LayoutSettingsValue) => {
     if (modal.kind === 'create') {
+      // Seed the new workspace: a chosen saved layout's arrangement, or blank.
+      const source = createSourceId
+        ? savedLayouts.find((l) => l.id === createSourceId)
+        : undefined;
+      const base = source
+        ? parseLayoutOrDefault(source.layoutJson)
+        : EMPTY_WORKSPACE_LAYOUT;
+      const seeded = value.locked || source;
       addLayout(value.name, {
         icon: value.icon || undefined,
         description: value.description || undefined,
-        ...(value.locked
-          ? { workspace: { ...EMPTY_WORKSPACE_LAYOUT, locked: true } }
+        ...(seeded
+          ? { workspace: value.locked ? { ...base, locked: true } : base }
           : {}),
       });
     } else if (modal.kind === 'edit') {
+      // Save edits IN PLACE — never spawns a new tab.
       updateLayoutMeta(modal.id, {
         name: value.name,
         icon: value.icon,
@@ -135,21 +157,36 @@ export function LeftLayoutBar() {
     setModal({ kind: 'closed' });
   };
 
-  // Save as new — copy the CURRENT panel arrangement into a fresh saved layout
-  // and re-target the manager to it. addLayout makes the new layout active.
-  const handleSaveAsNew = (value: LayoutSettingsValue) => {
+  // Saved-layouts library handlers (manager mode) ----------------------------
+
+  // Snapshot the live workspace into a NEW saved layout, seeding its icon /
+  // description from the workspace being edited.
+  const handleSaveToLibrary = (name: string) => {
+    if (modal.kind !== 'edit') return;
     const ws = useLayoutStore.getState().workspace;
-    const newId = addLayout(value.name, {
-      icon: value.icon || undefined,
-      description: value.description || undefined,
-      workspace: value.locked ? { ...ws, locked: true } : ws,
+    const current = layouts.find((l) => l.id === modal.id);
+    void saveWorkspaceToLibrary(name, ws, {
+      ...(current?.icon ? { icon: current.icon } : {}),
+      ...(current?.description ? { description: current.description } : {}),
     });
-    setModal({ kind: 'edit', id: newId });
   };
 
-  // Delete from the manager — removeLayout promotes the next layout to active;
-  // follow it so the still-open manager keeps editing a valid layout.
-  const handleManagerDelete = (id: string) => {
+  // Apply (restore) a saved layout onto the current workspace in place.
+  const handleApplySaved = (id: string) => {
+    const saved = savedLayouts.find((l) => l.id === id);
+    if (!saved) return;
+    replaceActiveWorkspace(parseLayoutOrDefault(saved.layoutJson));
+  };
+
+  // Overwrite a saved layout with the current workspace arrangement.
+  const handleReplaceSaved = (id: string) => {
+    void replaceSavedLayout(id, useLayoutStore.getState().workspace);
+  };
+
+  // Delete the selected workspace tab from the manager — removeLayout promotes
+  // the next layout to active; follow it so the manager keeps editing a valid
+  // workspace.
+  const handleDeleteWorkspace = (id: string) => {
     removeLayout(id);
     const nextActive = useLayoutStore.getState().activeLayoutId;
     setModal({ kind: 'edit', id: nextActive });
@@ -293,12 +330,18 @@ export function LeftLayoutBar() {
 
       {modal.kind === 'create' && (
         <LayoutSettingsModal
-          title="New layout"
+          title="New workspace"
+          saveLabel="Create"
           initial={{
-            name: `Layout ${layouts.length + 1}`,
+            name: `Workspace ${layouts.length + 1}`,
             icon: '',
             description: '',
             locked: false,
+          }}
+          createSource={{
+            savedLayouts,
+            sourceId: createSourceId,
+            onSourceChange: setCreateSourceId,
           }}
           onSave={handleModalSave}
           onClose={() => setModal({ kind: 'closed' })}
@@ -314,17 +357,22 @@ export function LeftLayoutBar() {
             locked: parseLayoutOrDefault(editingLayout.layoutJson).locked === true,
           }}
           manager={{
-            layouts: layouts.map((l) => ({
+            workspaces: layouts.map((l) => ({
               id: l.id,
               name: l.name,
               ...(l.icon ? { icon: l.icon } : {}),
               locked: lockedLayoutIds.has(l.id),
             })),
             selectedId: modal.id,
-            onSelect: openManage,
-            onSaveAsNew: handleSaveAsNew,
-            onDelete: handleManagerDelete,
-            canDelete: layouts.length > 1,
+            onSelectWorkspace: openManage,
+            onDeleteWorkspace: handleDeleteWorkspace,
+            canDeleteWorkspace: layouts.length > 1,
+            savedLayouts,
+            onSaveWorkspaceToLibrary: handleSaveToLibrary,
+            onApplySaved: handleApplySaved,
+            onReplaceSaved: handleReplaceSaved,
+            onRenameSaved: (id, name) => void updateSavedLayoutMeta(id, { name }),
+            onDeleteSaved: (id) => void deleteSavedLayout(id),
           }}
           onSave={handleModalSave}
           onClose={() => setModal({ kind: 'closed' })}

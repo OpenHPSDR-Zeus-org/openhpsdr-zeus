@@ -1467,3 +1467,77 @@
   border-color: var(--tx);
   color: var(--tx);
 }
+/* An armed two-click confirm (Apply/Delete in the library) shows its intent
+   at rest, not only on hover. */
+.layout-settings-library .btn.is-confirm {
+  border-color: var(--tx);
+  color: var(--tx);
+}
+
+/* Saved-layouts library — set off from the workspace fields by a hairline. */
+.layout-settings-library {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--panel-border);
+}
+.layout-settings-library-save {
+  margin-top: 8px;
+}
+.layout-settings-library-empty {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--fg-3);
+  font-style: italic;
+}
+.layout-settings-library-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.layout-settings-library-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+}
+.layout-settings-library-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: 12px;
+  color: var(--fg-1);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.layout-settings-library-icon {
+  font-size: 15px;
+  line-height: 1;
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji',
+    var(--font-sans);
+}
+.layout-settings-library-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 3px 8px;
+}
+.layout-settings-library-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+/* Compact button size for the per-row library actions. */
+.btn.xs {
+  padding: 0.2em 0.5em;
+  font-size: clamp(9px, 0.1vw + 8.5px, 11px);
+  min-height: 0;
+}

@@ -1867,6 +1867,29 @@ public sealed record SaveNamedLayoutRequest(
 
 public sealed record SetActiveLayoutRequest(string RadioKey, string LayoutId);
 
+// Saved-layouts library — a per-radio pool of reusable layout PRESETS, kept
+// separate from the working tabs (`RadioLayoutsDto`). The operator snapshots a
+// good workspace arrangement into a saved layout so they can restore it later
+// (if they mess the live tab up) or seed a brand-new workspace from it. Saved
+// layouts are never "active"; they are templates, applied on demand.
+public sealed record SavedLayoutDto(
+    string Id,
+    string Name,
+    string LayoutJson,
+    long UpdatedUtc,
+    string? Icon = null,
+    string? Description = null);
+
+public sealed record SavedLayoutsDto(string RadioKey, IReadOnlyList<SavedLayoutDto> SavedLayouts);
+
+public sealed record SaveSavedLayoutRequest(
+    string RadioKey,
+    string SavedId,
+    string Name,
+    string LayoutJson,
+    string? Icon = null,
+    string? Description = null);
+
 // Prefs-database (profile) selector. All Zeus settings/layouts/prefs persist in
 // a single LiteDB file resolved by PrefsDbPath.Get() at startup. The operator
 // can keep several named databases and pick which is active from the connect
