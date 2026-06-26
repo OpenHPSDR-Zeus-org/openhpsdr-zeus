@@ -91,11 +91,14 @@
 .ft8-ws-header {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 10px 16px;
-  padding: 6px 14px;
+  gap: 16px;
+  /* Right padding reserves space for the absolutely-positioned Exit button so
+     header content never slides under it. The header row is a fixed 44px grid
+     row with overflow:hidden, so it must NOT wrap. */
+  padding: 0 104px 0 14px;
   background: var(--hud-panel-2);
   border-bottom: 1px solid var(--hud-cyan-line);
+  overflow: hidden;
 }
 .ft8-ws-title {
   font-weight: 700;
@@ -190,15 +193,19 @@
   font: inherit;
   text-transform: uppercase;
 }
-/* Visible, filled Exit button, pinned hard-right and never shrinking/clipping. */
+/* Visible, filled Exit button — pinned to the workspace's top-right corner
+   (absolute, out of the fixed-height header flow) so header crowding can never
+   clip it. The workspace is position:fixed, so this anchors to its corner. */
 .ft8-ws-close {
-  margin-left: auto;
-  flex-shrink: 0;
+  position: absolute;
+  top: 7px;
+  right: 12px;
+  z-index: 60;
   background: var(--hud-me);
   border: 1px solid var(--hud-me);
   color: #1a0604;
   border-radius: 3px;
-  padding: 3px 14px;
+  padding: 4px 16px;
   cursor: pointer;
   font: inherit;
   font-weight: 700;
