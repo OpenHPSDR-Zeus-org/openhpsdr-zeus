@@ -26,10 +26,15 @@ namespace Zeus.Server;
 // Zeus instance. Same pattern as DisplaySettingsStore.
 public sealed class ToolbarSettingsStore : IDisposable
 {
+    public const int DefaultStepHz = 500;
+    public const int MaxStepHz = 5_000;
+
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<ToolbarSettingsEntry> _docs;
     private readonly ILogger<ToolbarSettingsStore> _log;
     private readonly object _sync = new();
+    private bool _stepCacheLoaded;
+    private int? _cachedStepHz;
 
     public ToolbarSettingsStore(ILogger<ToolbarSettingsStore> log, string? dbPathOverride = null)
     {
@@ -54,15 +59,31 @@ public sealed class ToolbarSettingsStore : IDisposable
             var e = _docs.FindAll().FirstOrDefault();
             if (e is null)
             {
+                _cachedStepHz = null;
+                _stepCacheLoaded = true;
                 // Null fields tell the frontend the server has never stored a
                 // value, so it keeps its built-in defaults and pushes them up.
                 return new ToolbarSettingsDto(Mode: null, Band: null, Step: null, StepHz: null);
             }
+            _cachedStepHz = e.StepHz;
+            _stepCacheLoaded = true;
             return new ToolbarSettingsDto(
                 Mode: NormalizeSlots(e.Mode),
                 Band: NormalizeSlots(e.Band),
                 Step: NormalizeSlots(e.Step),
                 StepHz: e.StepHz);
+        }
+    }
+
+    public int CurrentStepHz
+    {
+        get
+        {
+            lock (_sync)
+            {
+                EnsureStepCacheLocked();
+                return NormalizeStepHz(_cachedStepHz);
+            }
         }
     }
 
@@ -85,10 +106,22 @@ public sealed class ToolbarSettingsStore : IDisposable
             e.UpdatedUtc = DateTime.UtcNow;
             if (e.Id == 0) _docs.Insert(e);
             else _docs.Update(e);
+            _cachedStepHz = e.StepHz;
+            _stepCacheLoaded = true;
         }
     }
 
     public void Dispose() => _db.Dispose();
+
+    internal static int NormalizeStepHz(int? stepHz) =>
+        stepHz is >= 1 and <= MaxStepHz ? stepHz.Value : DefaultStepHz;
+
+    private void EnsureStepCacheLocked()
+    {
+        if (_stepCacheLoaded) return;
+        _cachedStepHz = _docs.FindAll().FirstOrDefault()?.StepHz;
+        _stepCacheLoaded = true;
+    }
 
     // Favorite slots are always exactly three keys. A malformed array (wrong
     // length, null entries) is rejected as null so the frontend falls back to
