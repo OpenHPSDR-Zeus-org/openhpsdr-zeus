@@ -699,6 +699,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<ChainOrderService>();
         builder.Services.AddSingleton<RxChainOrderStore>();
         builder.Services.AddSingleton<RxChainOrderService>();
+        builder.Services.AddHostedService<TxAudioProfileStartupRepairService>();
 
         // AudioProfileService — named snapshots of the chain config
         // (active order + parked set + master bypass). Persists to

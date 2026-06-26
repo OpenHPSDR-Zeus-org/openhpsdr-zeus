@@ -184,4 +184,71 @@ public class TxAudioProfileStoreTests : IDisposable
         Assert.Null(TxAudioProfileStore.ParseJson("not json"));
         Assert.Null(TxAudioProfileStore.ParseJson(""));
     }
+
+    [Fact]
+    public void Upsert_SanitizesSparseUnsafeProfile()
+    {
+        using var store = NewStore();
+        var saved = store.Upsert(Sample("", "", mic: 99) with
+        {
+            LevelerMaxGainDb = double.PositiveInfinity,
+            TxLeveling = new TxLevelingConfig(
+                AlcMaxGainDb: double.NaN,
+                AlcDecayMs: -1,
+                LevelerDecayMs: 99_999,
+                CompressorGainDb: double.NaN),
+            CfcConfig = new CfcConfig(true, true, 0, 0, Array.Empty<CfcBand>()),
+            LowCutHz = 0,
+            HighCutHz = 0,
+            ChainOrder = null!,
+            ChainParked = null!,
+            VstPluginStates = null!,
+            NativePluginStates = null!,
+            TargetSpectralDensity = -1,
+        });
+
+        Assert.Equal("profile", saved.Id);
+        Assert.Equal("profile", saved.Name);
+        Assert.Equal(10, saved.MicGainDb);
+        Assert.Equal(8, saved.LevelerMaxGainDb);
+        Assert.Equal(3, saved.TxLeveling.AlcMaxGainDb);
+        Assert.Equal(1, saved.TxLeveling.AlcDecayMs);
+        Assert.Equal(5000, saved.TxLeveling.LevelerDecayMs);
+        Assert.Equal(10, saved.CfcConfig.Bands.Length);
+        Assert.Equal(150, saved.LowCutHz);
+        Assert.Equal(2900, saved.HighCutHz);
+        Assert.Empty(saved.ChainOrder);
+        Assert.Empty(saved.VstPluginStates);
+        Assert.Empty(saved.NativePluginStates);
+        Assert.Equal(55, saved.TargetSpectralDensity);
+    }
+
+    [Fact]
+    public async Task StartupRepair_ParksVstIdsFromNativeLastLoadedProfile()
+    {
+        using var profiles = NewStore();
+        using var chain = new ChainOrderStore(NullLogger<ChainOrderStore>.Instance, _dbPath);
+        const string vstId = "com.openhpsdr.zeus.vst.clear";
+        const string nativeId = "com.openhpsdr.zeus.samples.eq";
+
+        profiles.Upsert(Sample("unsafe", "Unsafe") with
+        {
+            ProcessingMode = "native",
+            ChainOrder = new List<string> { vstId, nativeId },
+            ChainParked = new List<string>(),
+            VstPluginStates = new Dictionary<string, string> { [vstId] = "opaque" },
+        });
+        profiles.SetLastLoadedId("unsafe");
+        chain.SetState(new List<string> { vstId, nativeId }, new List<string>());
+
+        var repair = new TxAudioProfileStartupRepairService(
+            profiles,
+            chain,
+            NullLogger<TxAudioProfileStartupRepairService>.Instance);
+
+        await repair.StartAsync(CancellationToken.None);
+
+        Assert.Contains(vstId, chain.GetParked());
+        Assert.DoesNotContain(nativeId, chain.GetParked());
+    }
 }

@@ -107,17 +107,7 @@ public sealed class TxAudioProfileService : IHostedService
         var parsed = TxAudioProfileStore.ParseJson(json)
             ?? throw new ArgumentException("File is not a valid TX audio profile (could not parse JSON).");
 
-        // Harden nullable members so a sparse file can't produce nulls that the
-        // ApplyAsync path iterates/dereferences.
-        var clean = parsed with
-        {
-            TxLeveling = parsed.TxLeveling ?? new TxLevelingConfig(),
-            CfcConfig = parsed.CfcConfig ?? CfcConfig.Default,
-            ChainOrder = parsed.ChainOrder ?? new List<string>(),
-            ChainParked = parsed.ChainParked ?? new List<string>(),
-            VstPluginStates = parsed.VstPluginStates ?? new Dictionary<string, string>(),
-            NativePluginStates = parsed.NativePluginStates ?? new Dictionary<string, Dictionary<string, string>>(),
-        };
+        var clean = SanitizeForCurrentInstall(parsed, fallbackName);
 
         var baseName = !string.IsNullOrWhiteSpace(clean.Name) ? clean.Name!.Trim()
             : !string.IsNullOrWhiteSpace(fallbackName) ? fallbackName!.Trim()
@@ -131,7 +121,7 @@ public sealed class TxAudioProfileService : IHostedService
             id = Slugify(name);
         }
 
-        var saved = _store.Upsert(clean with { Id = id, Name = name });
+        var saved = _store.Upsert(SanitizeForCurrentInstall(clean with { Id = id, Name = name }, name));
         _log.LogInformation("TX audio profile imported as '{Name}' (id={Id})", saved.Name, saved.Id);
         return saved;
     }
@@ -221,8 +211,9 @@ public sealed class TxAudioProfileService : IHostedService
     /// </summary>
     public async Task<TxAudioProfileDto?> ApplyAsync(string id, CancellationToken ct = default)
     {
-        var profile = _store.Get(id);
-        if (profile is null) return null;
+        var stored = _store.Get(id);
+        if (stored is null) return null;
+        var profile = SanitizeForCurrentInstall(stored, stored.Name);
 
         ApplyScalars(profile);
 
@@ -271,9 +262,55 @@ public sealed class TxAudioProfileService : IHostedService
 
     private bool IsVstPlugin(string pluginId)
     {
+        if (LooksLikeVstPluginId(pluginId)) return true;
         var p = _manager.Find(pluginId);
         return !string.IsNullOrEmpty(p?.Loaded.Manifest.Audio?.Vst3Path);
     }
+
+    private TxAudioProfileDto SanitizeForCurrentInstall(TxAudioProfileDto profile, string? fallbackName)
+    {
+        var clean = TxAudioProfileStore.Sanitize(profile, fallbackName: fallbackName);
+        var nativeMode = !string.Equals(clean.ProcessingMode, "vst", StringComparison.OrdinalIgnoreCase);
+
+        var order = new List<string>(clean.ChainOrder.Count);
+        var seenOrder = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var id in clean.ChainOrder)
+        {
+            if (nativeMode && IsVstPlugin(id)) continue;
+            if (seenOrder.Add(id)) order.Add(id);
+        }
+
+        var parked = new List<string>(clean.ChainParked.Count);
+        var seenParked = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var id in clean.ChainParked)
+        {
+            if (seenOrder.Contains(id)) continue;
+            if (seenParked.Add(id)) parked.Add(id);
+        }
+
+        var nativeStates = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+        foreach (var (id, state) in clean.NativePluginStates)
+        {
+            if (nativeMode && IsVstPlugin(id)) continue;
+            nativeStates[id] = state;
+        }
+
+        return clean with
+        {
+            ChainOrder = order,
+            ChainParked = parked,
+            VstPluginStates = nativeMode
+                ? new Dictionary<string, string>(StringComparer.Ordinal)
+                : clean.VstPluginStates,
+            NativePluginStates = nativeStates,
+        };
+    }
+
+    private static bool LooksLikeVstPluginId(string pluginId) =>
+        pluginId.Contains(".vst.", StringComparison.OrdinalIgnoreCase)
+        || pluginId.Contains(".rxvst.", StringComparison.OrdinalIgnoreCase)
+        || pluginId.Contains(".au.", StringComparison.OrdinalIgnoreCase)
+        || pluginId.Contains(".rxau.", StringComparison.OrdinalIgnoreCase);
 
     private static string Slugify(string name)
     {

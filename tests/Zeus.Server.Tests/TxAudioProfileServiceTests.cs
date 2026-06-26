@@ -257,6 +257,93 @@ public sealed class TxAudioProfileServiceTests : IDisposable
         Assert.NotNull(imported.TxLeveling);
     }
 
+    [Fact]
+    public void Import_NativeProfile_StripsVstEntriesFromActiveChain()
+    {
+        const string json = """
+        {
+          "id": "voodoo-4k",
+          "name": "VooDoo 4K",
+          "micGainDb": -1,
+          "levelerMaxGainDb": 7,
+          "txLeveling": { "levelerEnabled": true },
+          "cfcConfig": {
+            "enabled": true,
+            "postEqEnabled": true,
+            "preCompDb": 0.5,
+            "prePeqDb": 0,
+            "bands": [
+              { "freqHz": 80, "compLevelDb": 0.5, "postGainDb": -4 },
+              { "freqHz": 150, "compLevelDb": 1, "postGainDb": -2 },
+              { "freqHz": 250, "compLevelDb": 2, "postGainDb": -1 },
+              { "freqHz": 500, "compLevelDb": 3, "postGainDb": 0 },
+              { "freqHz": 900, "compLevelDb": 4, "postGainDb": 0.5 },
+              { "freqHz": 1500, "compLevelDb": 5, "postGainDb": 1 },
+              { "freqHz": 2200, "compLevelDb": 4.5, "postGainDb": 1.5 },
+              { "freqHz": 2800, "compLevelDb": 3.5, "postGainDb": 1.5 },
+              { "freqHz": 3500, "compLevelDb": 2, "postGainDb": -1 },
+              { "freqHz": 5000, "compLevelDb": 1, "postGainDb": -3 }
+            ]
+          },
+          "lowCutHz": 0,
+          "highCutHz": 4000,
+          "processingMode": "native",
+          "chainOrder": [
+            "com.openhpsdr.zeus.samples.noisegate",
+            "com.openhpsdr.zeus.vst.clear",
+            "com.openhpsdr.zeus.samples.eq"
+          ],
+          "chainParked": [ "com.openhpsdr.zeus.vst.clear" ],
+          "vstPluginStates": { "com.openhpsdr.zeus.vst.clear": "opaque" },
+          "nativePluginStates": {
+            "com.openhpsdr.zeus.samples.eq": { "bypass": "true" }
+          },
+          "targetSpectralDensity": 55
+        }
+        """;
+
+        var imported = _service.ImportProfile(json, "ignored");
+
+        Assert.Equal("voodoo-4k", imported.Id);
+        Assert.Equal("native", imported.ProcessingMode);
+        Assert.DoesNotContain("com.openhpsdr.zeus.vst.clear", imported.ChainOrder);
+        Assert.Contains("com.openhpsdr.zeus.samples.noisegate", imported.ChainOrder);
+        Assert.Contains("com.openhpsdr.zeus.samples.eq", imported.ChainOrder);
+        Assert.Empty(imported.VstPluginStates);
+        Assert.Equal("true", imported.NativePluginStates["com.openhpsdr.zeus.samples.eq"]["bypass"]);
+    }
+
+    [Fact]
+    public async Task Apply_NativeStoredProfile_DoesNotReplayVstChain()
+    {
+        await _mode.StartAsync(CancellationToken.None);
+        _profileStore.Upsert(new TxAudioProfileDto(
+            Id: "unsafe",
+            Name: "Unsafe",
+            MicGainDb: 0,
+            LevelerMaxGainDb: 8,
+            TxLeveling: new TxLevelingConfig(),
+            CfcConfig: CfcConfig.Default,
+            LowCutHz: 150,
+            HighCutHz: 2900,
+            ProcessingMode: "native",
+            MasterBypass: false,
+            ChainOrder: new List<string> { "com.openhpsdr.zeus.vst.clear", "com.openhpsdr.zeus.samples.eq" },
+            ChainParked: new List<string>(),
+            VstPluginStates: new Dictionary<string, string> { ["com.openhpsdr.zeus.vst.clear"] = "opaque" },
+            NativePluginStates: new Dictionary<string, Dictionary<string, string>>(),
+            TargetSpectralDensity: 55,
+            CreatedUtc: DateTime.UtcNow,
+            UpdatedUtc: DateTime.UtcNow));
+
+        var applied = await _service.ApplyAsync("unsafe");
+
+        Assert.NotNull(applied);
+        Assert.DoesNotContain("com.openhpsdr.zeus.vst.clear", applied!.ChainOrder);
+        Assert.Empty(applied.VstPluginStates);
+        Assert.Equal("unsafe", _service.LastLoadedId);
+    }
+
     public void Dispose()
     {
         _engine.DisposeAsync().AsTask().GetAwaiter().GetResult();

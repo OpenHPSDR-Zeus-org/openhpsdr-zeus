@@ -44,6 +44,9 @@ public sealed class TxAudioProfileStore : IDisposable
     // importable). LiteDB stays the source of truth; the folder is a write-through
     // mirror — best-effort, never allowed to break a DB write.
     private const string ProfileDirName = "tx-audio-profiles";
+    private const int DefaultLowCutHz = 150;
+    private const int DefaultHighCutHz = 2900;
+    private const int DefaultTargetSpectralDensity = 55;
 
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<TxAudioProfileEntry> _profiles;
@@ -86,6 +89,60 @@ public sealed class TxAudioProfileStore : IDisposable
 
     public static string NormalizeId(string id) => (id ?? "").Trim().ToLowerInvariant();
 
+    public static TxAudioProfileDto Sanitize(TxAudioProfileDto profile, string? fallbackId = null, string? fallbackName = null)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+
+        var id = NormalizeId(profile.Id);
+        if (string.IsNullOrWhiteSpace(id))
+            id = NormalizeId(fallbackId ?? "");
+        if (string.IsNullOrWhiteSpace(id))
+            id = "profile";
+
+        var name = !string.IsNullOrWhiteSpace(profile.Name)
+            ? profile.Name.Trim()
+            : !string.IsNullOrWhiteSpace(fallbackName)
+                ? fallbackName.Trim()
+                : id;
+
+        var low = Math.Clamp(Math.Abs(profile.LowCutHz), 0, 10_000);
+        var high = Math.Clamp(Math.Abs(profile.HighCutHz), 0, 10_000);
+        if (high < low) (low, high) = (high, low);
+        if (low == 0 && high == 0)
+        {
+            low = DefaultLowCutHz;
+            high = DefaultHighCutHz;
+        }
+
+        var now = DateTime.UtcNow;
+        var created = profile.CreatedUtc == default ? now : profile.CreatedUtc.ToUniversalTime();
+        var updated = profile.UpdatedUtc == default ? created : profile.UpdatedUtc.ToUniversalTime();
+
+        return profile with
+        {
+            Id = id,
+            Name = name,
+            MicGainDb = Math.Clamp(profile.MicGainDb, -40, 10),
+            LevelerMaxGainDb = ClampFinite(profile.LevelerMaxGainDb, 0.0, 20.0, 8.0),
+            TxLeveling = SanitizeTxLeveling(profile.TxLeveling),
+            CfcConfig = SanitizeCfc(profile.CfcConfig),
+            LowCutHz = low,
+            HighCutHz = high,
+            ProcessingMode = string.Equals(profile.ProcessingMode, "vst", StringComparison.OrdinalIgnoreCase)
+                ? "vst"
+                : "native",
+            ChainOrder = CleanStringList(profile.ChainOrder),
+            ChainParked = CleanStringList(profile.ChainParked),
+            VstPluginStates = CleanStringDictionary(profile.VstPluginStates),
+            NativePluginStates = CleanNestedStringDictionary(profile.NativePluginStates),
+            TargetSpectralDensity = Math.Clamp(profile.TargetSpectralDensity, 0, 100) == 0 && profile.TargetSpectralDensity != 0
+                ? DefaultTargetSpectralDensity
+                : Math.Clamp(profile.TargetSpectralDensity, 0, 100),
+            CreatedUtc = created,
+            UpdatedUtc = updated,
+        };
+    }
+
     public IReadOnlyList<TxAudioProfileDto> GetAll()
     {
         lock (_sync)
@@ -120,7 +177,8 @@ public sealed class TxAudioProfileStore : IDisposable
     public TxAudioProfileDto Upsert(TxAudioProfileDto profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
-        var id = NormalizeId(profile.Id);
+        var clean = Sanitize(profile);
+        var id = clean.Id;
         var nowUtc = DateTime.UtcNow;
 
         lock (_sync)
@@ -131,7 +189,7 @@ public sealed class TxAudioProfileStore : IDisposable
             var created = existing is null
                 ? nowUtc
                 : (TryDeserialize(existing)?.CreatedUtc ?? existing.CreatedUtc);
-            var normalized = profile with { Id = id, CreatedUtc = created, UpdatedUtc = nowUtc };
+            var normalized = clean with { Id = id, CreatedUtc = created, UpdatedUtc = nowUtc };
             var json = JsonSerializer.Serialize(normalized, JsonOptions);
 
             if (existing is null)
@@ -252,13 +310,93 @@ public sealed class TxAudioProfileStore : IDisposable
     {
         try
         {
-            return JsonSerializer.Deserialize<TxAudioProfileDto>(entry.ProfileJson, JsonOptions);
+            var parsed = JsonSerializer.Deserialize<TxAudioProfileDto>(entry.ProfileJson, JsonOptions);
+            return parsed is null ? null : Sanitize(parsed, entry.ProfileId);
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Ignoring invalid TX audio profile {ProfileId}", entry.ProfileId);
             return null;
         }
+    }
+
+    private static TxLevelingConfig SanitizeTxLeveling(TxLevelingConfig? cfg)
+    {
+        if (cfg is null) return new TxLevelingConfig();
+        return cfg with
+        {
+            AlcMaxGainDb = ClampFinite(cfg.AlcMaxGainDb, 0.0, 120.0, 3.0),
+            AlcDecayMs = Math.Clamp(cfg.AlcDecayMs, 1, 50),
+            LevelerDecayMs = Math.Clamp(cfg.LevelerDecayMs, 1, 5000),
+            CompressorGainDb = ClampFinite(cfg.CompressorGainDb, 0.0, 20.0, 0.0),
+        };
+    }
+
+    private static CfcConfig SanitizeCfc(CfcConfig? cfg)
+    {
+        if (cfg?.Bands is not { Length: 10 })
+            return CfcConfig.Default;
+
+        var defaults = CfcConfig.Default.Bands;
+        var bands = new CfcBand[10];
+        for (var i = 0; i < bands.Length; i++)
+        {
+            var band = cfg.Bands[i] ?? defaults[i];
+            var fallback = defaults[i];
+            bands[i] = new CfcBand(
+                FreqHz: ClampFinite(band.FreqHz, 0.0, 20_000.0, fallback.FreqHz),
+                CompLevelDb: ClampFinite(band.CompLevelDb, -60.0, 60.0, fallback.CompLevelDb),
+                PostGainDb: ClampFinite(band.PostGainDb, -60.0, 60.0, fallback.PostGainDb));
+        }
+
+        return cfg with
+        {
+            PreCompDb = ClampFinite(cfg.PreCompDb, -60.0, 60.0, 0.0),
+            PrePeqDb = ClampFinite(cfg.PrePeqDb, -60.0, 60.0, 0.0),
+            Bands = bands,
+        };
+    }
+
+    private static double ClampFinite(double value, double min, double max, double fallback) =>
+        double.IsFinite(value) ? Math.Clamp(value, min, max) : fallback;
+
+    private static List<string> CleanStringList(IEnumerable<string>? source)
+    {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var raw in source ?? Enumerable.Empty<string>())
+        {
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            var value = raw.Trim();
+            if (seen.Add(value)) result.Add(value);
+        }
+        return result;
+    }
+
+    private static Dictionary<string, string> CleanStringDictionary(IDictionary<string, string>? source)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (source is null) return result;
+        foreach (var (key, value) in source)
+        {
+            if (string.IsNullOrWhiteSpace(key) || value is null) continue;
+            result[key.Trim()] = value;
+        }
+        return result;
+    }
+
+    private static Dictionary<string, Dictionary<string, string>> CleanNestedStringDictionary(
+        IDictionary<string, Dictionary<string, string>>? source)
+    {
+        var result = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+        if (source is null) return result;
+        foreach (var (key, value) in source)
+        {
+            if (string.IsNullOrWhiteSpace(key)) continue;
+            var cleaned = CleanStringDictionary(value);
+            if (cleaned.Count > 0) result[key.Trim()] = cleaned;
+        }
+        return result;
     }
 
     public void Dispose() => _db.Dispose();
