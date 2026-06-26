@@ -15,6 +15,7 @@
 // the selected OS input device instead of getUserMedia.
 
 using System.Runtime.InteropServices;
+using System.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Hosting;
 using Zeus.Contracts;
@@ -54,6 +55,11 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
     // adds wire churn for no visible gain. See report for the trade-off.
     private const int PeakWindowSamples = 4800;     // 100 ms @ 48 kHz
 
+    // A native capture-device open can block inside miniaudio indefinitely when
+    // Windows reports a stale / exclusive / malformed endpoint. Keep that off
+    // the host startup path and bound individual selected/default attempts.
+    private static readonly TimeSpan DeviceOpenTimeout = TimeSpan.FromSeconds(5);
+
     private readonly TxAudioIngest _ingest;
     private readonly StreamingHub _hub;
     private readonly AudioPluginBridge _bridge;
@@ -62,6 +68,7 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
 
     private MiniAudioInput? _input;
     private readonly object _deviceSync = new();
+    private bool _shutdown;
     private string? _activeInputDeviceId;
     private readonly float[] _accum = new float[MicBlockSamples];
     private int _accumFill;
@@ -102,11 +109,19 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        lock (_deviceSync)
+        var thread = new Thread(() =>
         {
-            if (_input != null) return Task.CompletedTask;
-            OpenInputLocked(ConfiguredInputDeviceId);
-        }
+            lock (_deviceSync)
+            {
+                if (_shutdown || _input != null) return;
+                OpenInputLocked(ConfiguredInputDeviceId);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "zeus-mic-start",
+        };
+        thread.Start();
         return Task.CompletedTask;
     }
 
@@ -114,6 +129,7 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
     {
         lock (_deviceSync)
         {
+            _shutdown = true;
             try { _input?.Stop(); }
             catch (Exception ex) { _log.LogWarning(ex, "audio.native.tx stop threw"); }
         }
@@ -124,6 +140,7 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
     {
         lock (_deviceSync)
         {
+            _shutdown = true;
             CloseInputLocked(dispose: true);
         }
     }
@@ -145,45 +162,74 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
 
     private void OpenInputLocked(string? requestedDeviceId)
     {
-        try
+        var selected = !string.IsNullOrWhiteSpace(requestedDeviceId);
+        var input = OpenInputTimeboxed(requestedDeviceId, out var failure);
+        if (input != null)
         {
-            _input = CreateInput(requestedDeviceId);
-            _input.Start();
-            _activeInputDeviceId = NormalizeDeviceId(requestedDeviceId);
-            _log.LogInformation(
-                "audio.native.tx mic open device={Device} rate={Rate}Hz channels={Channels}",
-                _activeInputDeviceId is null ? "default" : "selected",
-                _input.SampleRate, _input.Channels);
-            return;
-        }
-        catch (Exception ex) when (!string.IsNullOrWhiteSpace(requestedDeviceId))
-        {
-            _log.LogWarning(ex, "audio.native.tx selected mic open failed; falling back to default");
-            CloseInputLocked(dispose: true);
-        }
-        catch (Exception ex)
-        {
-            // Don't kill the host; desktop mode without a working mic should
-            // still RX. The operator may not even have a mic plugged in.
-            _log.LogWarning(ex, "audio.native.tx mic open failed; TX uplink disabled");
-            CloseInputLocked(dispose: true);
+            AdoptInputLocked(input, requestedDeviceId);
             return;
         }
 
-        try
+        LogOpenGaveUp(selected ? "selected" : "default", failure);
+        if (!selected)
         {
-            _input = CreateInput(null);
-            _input.Start();
-            _activeInputDeviceId = null;
-            _log.LogInformation(
-                "audio.native.tx mic open device=default rate={Rate}Hz channels={Channels}",
-                _input.SampleRate, _input.Channels);
+            _log.LogWarning("audio.native.tx TX uplink disabled (no usable mic input)");
+            return;
         }
-        catch (Exception fallbackEx)
+
+        var fallback = OpenInputTimeboxed(null, out var fallbackFailure);
+        if (fallback != null)
         {
-            _log.LogWarning(fallbackEx, "audio.native.tx default mic fallback open failed; TX uplink disabled");
-            CloseInputLocked(dispose: true);
+            AdoptInputLocked(fallback, null);
+            return;
         }
+
+        LogOpenGaveUp("default fallback", fallbackFailure);
+        _log.LogWarning("audio.native.tx TX uplink disabled (no usable mic input)");
+    }
+
+    private MiniAudioInput? OpenInputTimeboxed(string? requestedDeviceId, out Exception? failure) =>
+        TimeboxedNativeOpen.Run(
+            () =>
+            {
+                MiniAudioInput? input = null;
+                try
+                {
+                    input = CreateInput(requestedDeviceId);
+                    input.Start();
+                    return input;
+                }
+                catch
+                {
+                    input?.Dispose();
+                    throw;
+                }
+            },
+            static input => input.Dispose(),
+            DeviceOpenTimeout,
+            out failure);
+
+    private void AdoptInputLocked(MiniAudioInput input, string? requestedDeviceId)
+    {
+        _input = input;
+        _activeInputDeviceId = NormalizeDeviceId(requestedDeviceId);
+        _log.LogInformation(
+            "audio.native.tx mic open device={Device} rate={Rate}Hz channels={Channels}",
+            _activeInputDeviceId is null ? "default" : "selected",
+            input.SampleRate, input.Channels);
+    }
+
+    private void LogOpenGaveUp(string which, Exception? failure)
+    {
+        if (failure != null)
+        {
+            _log.LogWarning(failure, "audio.native.tx {Which} mic open failed", which);
+            return;
+        }
+
+        _log.LogWarning(
+            "audio.native.tx {Which} mic open timed out after {Timeout:0.#}s; not blocking host startup",
+            which, DeviceOpenTimeout.TotalSeconds);
     }
 
     private MiniAudioInput CreateInput(string? deviceId) =>

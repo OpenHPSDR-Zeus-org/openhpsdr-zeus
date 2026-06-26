@@ -787,6 +787,7 @@ public sealed class FrontendDspSceneDiagnosticsService
         {
             "NR1" => "Anr",
             "NR2" => "Emnr",
+            "NR3" => "Rnnr",
             "NR4" => "Sbnr",
             "LIGHT" => "Off",
             "NOTCH" => "Off",
@@ -817,6 +818,7 @@ public sealed class FrontendDspSceneDiagnosticsService
         {
             "ANR" => "Anr",
             "EMNR" => "Emnr",
+            "RNNR" => "Rnnr",
             "SBNR" => "Sbnr",
             _ => null,
         };
