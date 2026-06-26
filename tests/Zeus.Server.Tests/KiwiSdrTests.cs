@@ -1,0 +1,299 @@
+using Microsoft.Extensions.Logging.Abstractions;
+using Zeus.Contracts;
+using Zeus.Server;
+
+namespace Zeus.Server.Tests;
+
+// KiwiSDR slice receiver: the Zeus-mode -> Kiwi demod word mapping, URL/endpoint
+// parsing, the persisted settings round-trip, and the IKiwiReceiverProvider
+// projection into RadioService's unified receiver list (reserved index
+// WireContract.KiwiReceiverIndex, labelled "Kiwi").
+public sealed class KiwiSdrTests : IDisposable
+{
+    private readonly string _dbPath =
+        Path.Combine(Path.GetTempPath(), $"zeus-prefs-kiwi-{Guid.NewGuid():N}.db");
+
+    public void Dispose()
+    {
+        foreach (var suffix in new[] { "", ".pa", ".dsp", ".kiwi" })
+        {
+            try { if (File.Exists(_dbPath + suffix)) File.Delete(_dbPath + suffix); } catch { }
+        }
+    }
+
+    [Theory]
+    [InlineData(RxMode.USB, "usb")]
+    [InlineData(RxMode.DIGU, "usb")]
+    [InlineData(RxMode.FreeDv, "usb")]
+    [InlineData(RxMode.LSB, "lsb")]
+    [InlineData(RxMode.DIGL, "lsb")]
+    [InlineData(RxMode.AM, "am")]
+    [InlineData(RxMode.DSB, "am")]
+    [InlineData(RxMode.SAM, "sam")]
+    [InlineData(RxMode.FM, "nbfm")]
+    [InlineData(RxMode.CWL, "cw")]
+    [InlineData(RxMode.CWU, "cw")]
+    public void KiwiMode_maps_zeus_mode_to_kiwi_word(RxMode mode, string expected)
+    {
+        Assert.Equal(expected, KiwiSdrService.KiwiMode(mode));
+    }
+
+    [Theory]
+    [InlineData("sdr.example.org", "sdr.example.org", 8073)]
+    [InlineData("sdr.example.org:8074", "sdr.example.org", 8074)]
+    [InlineData("ws://sdr.example.org:8075", "sdr.example.org", 8075)]
+    [InlineData("http://sdr.example.org:8076/", "sdr.example.org", 8076)]
+    [InlineData("http://sdr.example.org:8077/path/here", "sdr.example.org", 8077)]
+    [InlineData("  sdr.example.org:8078  ", "sdr.example.org", 8078)]
+    public void TryParseEndpoint_handles_url_forms(string url, string expHost, int expPort)
+    {
+        Assert.True(KiwiSdrService.TryParseEndpoint(url, out var host, out var port));
+        Assert.Equal(expHost, host);
+        Assert.Equal(expPort, port);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("ws://")]
+    public void TryParseEndpoint_rejects_empty(string url)
+    {
+        Assert.False(KiwiSdrService.TryParseEndpoint(url, out _, out _));
+    }
+
+    [Theory]
+    // A bare host (no scheme, no port) keeps the KiwiSDR default 8073.
+    [InlineData("sdr.example.org", "sdr.example.org", 8073, false)]
+    // http/ws with NO port → 80 (the kiwi proxy default — ~half the directory).
+    [InlineData("http://pb8w.proxy.kiwisdr.com", "pb8w.proxy.kiwisdr.com", 80, false)]
+    [InlineData("ws://sdr.example.org", "sdr.example.org", 80, false)]
+    // https/wss with NO port → 443 + secure.
+    [InlineData("https://sdr.example.org", "sdr.example.org", 443, true)]
+    [InlineData("wss://sdr.example.org/path", "sdr.example.org", 443, true)]
+    // An explicit :port always wins over the scheme default.
+    [InlineData("http://sdr.example.org:8076/", "sdr.example.org", 8076, false)]
+    [InlineData("sdr.example.org:8074", "sdr.example.org", 8074, false)]
+    public void TryParseEndpoint_port_follows_scheme(string url, string expHost, int expPort, bool expSecure)
+    {
+        Assert.True(KiwiSdrService.TryParseEndpoint(url, out var host, out var port, out var secure));
+        Assert.Equal(expHost, host);
+        Assert.Equal(expPort, port);
+        Assert.Equal(expSecure, secure);
+    }
+
+    [Theory]
+    [InlineData(RxMode.USB, 100, 2850)]
+    [InlineData(RxMode.DIGU, 100, 2850)]
+    [InlineData(RxMode.LSB, -2850, -100)]
+    [InlineData(RxMode.DIGL, -2850, -100)]
+    [InlineData(RxMode.AM, -4000, 4000)]
+    [InlineData(RxMode.SAM, -4000, 4000)]
+    [InlineData(RxMode.CWU, 300, 700)]
+    [InlineData(RxMode.CWL, -700, -300)]
+    [InlineData(RxMode.FM, -6000, 6000)]
+    public void DefaultPassband_is_signed_for_the_sideband(RxMode mode, int low, int high)
+    {
+        var (lo, hi) = KiwiSdrService.DefaultPassband(mode);
+        Assert.Equal(low, lo);
+        Assert.Equal(high, hi);
+        Assert.True(lo < hi); // KiwiSDR requires low_cut < high_cut
+    }
+
+    [Fact]
+    public void SettingsStore_round_trips_and_empty_password_clears()
+    {
+        using var store = new KiwiSettingsStore(NullLogger<KiwiSettingsStore>.Instance, _dbPath + ".kiwi");
+
+        // Default: disabled, nothing stored.
+        var def = store.Get();
+        Assert.False(def.Enabled);
+        Assert.Null(def.Url);
+        Assert.Null(def.Password);
+
+        store.Set(enabled: true, url: "sdr.example.org:8073", password: "secret");
+        var s1 = store.Get();
+        Assert.True(s1.Enabled);
+        Assert.Equal("sdr.example.org:8073", s1.Url);
+        Assert.Equal("secret", s1.Password);
+
+        // null password leaves it unchanged; empty string clears it.
+        store.Set(enabled: null, url: null, password: null);
+        Assert.Equal("secret", store.Get().Password);
+        store.Set(password: "");
+        Assert.Null(store.Get().Password);
+    }
+
+    [Fact]
+    public void RadioService_appends_kiwi_receiver_when_provider_returns_one()
+    {
+        using var pa = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, _dbPath + ".pa");
+        using var dsp = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath + ".dsp");
+        var provider = new FakeKiwiProvider();
+        var radio = new RadioService(NullLoggerFactory.Instance, dsp, pa, kiwiReceiverProvider: provider);
+
+        // Disabled: no Kiwi entry in the projected list.
+        Assert.DoesNotContain(
+            radio.Snapshot().Receivers!,
+            r => r.Index == WireContract.KiwiReceiverIndex);
+
+        // Enabled: the projected list carries the named entry at the reserved index.
+        provider.Receiver = new ReceiverDto(
+            Index: WireContract.KiwiReceiverIndex, Enabled: true, AdcSource: 0,
+            VfoHz: 7_055_000, Mode: RxMode.AM,
+            FilterLowHz: -4_000, FilterHighHz: 4_000, FilterPresetName: null,
+            AfGainDb: 0, SampleRateHz: 48_000, Muted: false, Name: "Kiwi");
+
+        var kiwi = radio.Snapshot().Receivers!.Single(r => r.Index == WireContract.KiwiReceiverIndex);
+        Assert.Equal("Kiwi", kiwi.Name);
+        Assert.Equal(7_055_000, kiwi.VfoHz);
+        Assert.Equal(RxMode.AM, kiwi.Mode);
+    }
+
+    // ---- IKiwiAudioBus: the Kiwi rides the shared RX mix bus ----------------
+
+    private KiwiSdrService NewService() => new(
+        new KiwiSettingsStore(NullLogger<KiwiSettingsStore>.Instance, _dbPath + ".kiwi"),
+        new StreamingHub(NullLogger<StreamingHub>.Instance),
+        NullLoggerFactory.Instance);
+
+    [Fact]
+    public void AudioActive_is_false_until_enabled_and_connected()
+    {
+        using var svc = NewService();
+        // Disabled by default → nothing to mix; the DSP tick skips the Kiwi.
+        Assert.False(svc.AudioActive);
+    }
+
+    [Fact]
+    public void ReadAudio_drains_what_was_enqueued_in_order()
+    {
+        using var svc = NewService();
+        svc.EnqueueAudioForTest(new float[] { 0.1f, 0.2f, 0.3f });
+
+        var dst = new float[5];
+        int n = svc.ReadAudio(dst);
+
+        Assert.Equal(3, n);
+        Assert.Equal(0.1f, dst[0]);
+        Assert.Equal(0.2f, dst[1]);
+        Assert.Equal(0.3f, dst[2]);
+        // Fully drained.
+        Assert.Equal(0, svc.ReadAudio(dst));
+    }
+
+    [Fact]
+    public void ReadAudio_drops_oldest_when_over_the_latency_cap()
+    {
+        using var svc = NewService();
+        // The remote runs on its own clock; if the bus runs far ahead of the
+        // radio that drains it, ReadAudio caps buffered latency to ~250 ms
+        // (12 000 samples @ 48 kHz) + the read size, dropping the OLDEST excess.
+        const int total = 30_000;
+        var enq = new float[total];
+        for (int i = 0; i < total; i++) enq[i] = i;        // ascending = age marker
+        svc.EnqueueAudioForTest(enq);
+
+        var dst = new float[1024];
+        int n = svc.ReadAudio(dst);
+
+        Assert.Equal(1024, n);
+        // After the drop, buffered depth must be within the cap (not the full
+        // 30 000) so monitor latency stays bounded.
+        Assert.True(svc.AudioBusDepthForTest <= 12_000,
+            $"expected bounded buffer, got {svc.AudioBusDepthForTest}");
+        // The samples returned are the NEWEST, not the stale head: the oldest
+        // were discarded, so the first returned sample is well past index 0.
+        Assert.True(dst[0] >= total - 12_000 - 1024,
+            $"expected freshest samples, got {dst[0]}");
+    }
+
+    // ---- KiwiDirectoryService: parse the public receiver list ---------------
+
+    [Theory]
+    [InlineData("(50.850000, -0.660000)", 50.85, -0.66)]
+    [InlineData("( 12.0 , -3.5 )", 12.0, -3.5)]
+    public void TryParseGps_parses_lat_lon(string gps, double lat, double lon)
+    {
+        Assert.True(KiwiDirectoryService.TryParseGps(gps, out var la, out var lo));
+        Assert.Equal(lat, la, 3);
+        Assert.Equal(lon, lo, 3);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("(0, 0)")]          // Null Island placeholder — rejected
+    [InlineData("(200, 5)")]        // out of range
+    [InlineData("not coords")]
+    public void TryParseGps_rejects_bad_or_placeholder(string gps)
+    {
+        Assert.False(KiwiDirectoryService.TryParseGps(gps, out _, out _));
+    }
+
+    [Fact]
+    public void Parse_extracts_receivers_from_the_js_wrapper()
+    {
+        const string body = """
+            // KiwiSDR.com receiver list
+            // banner comment
+            var kiwisdr_com =
+            [
+                {"name":"Chichester UK","url":"http://g8ure.ddns.net:8077","gps":"(50.85, -0.66)","users":"2","users_max":"4","offline":"no","status":"active","loc":"Chichester UK","snr":"42,45"},
+                {"name":"No GPS","url":"http://nogps.example:8073","users":"0","users_max":"8"},
+                {"name":"No URL","gps":"(10, 10)"},
+                {"name":"Dead","url":"http://dead.example:8073","gps":"(5, 5)","offline":"yes"}
+            ]
+            """;
+
+        var list = KiwiDirectoryService.Parse(body);
+
+        // Only the two entries with BOTH url and valid gps survive.
+        Assert.Equal(2, list.Count);
+        var ch = list[0];
+        Assert.Equal("Chichester UK", ch.Name);
+        Assert.Equal("http://g8ure.ddns.net:8077", ch.Url);
+        Assert.Equal(50.85, ch.Lat, 3);
+        Assert.Equal(-0.66, ch.Lon, 3);
+        Assert.Equal(2, ch.Users);
+        Assert.Equal(4, ch.UsersMax);
+        Assert.True(ch.Online);
+        // The url survives KiwiSdrService's own endpoint parser (round-trip).
+        Assert.True(KiwiSdrService.TryParseEndpoint(ch.Url, out _, out var port));
+        Assert.Equal(8077, port);
+        // The offline="yes" receiver is parsed but flagged not-online.
+        Assert.False(list[1].Online);
+    }
+
+    [Fact]
+    public void Parse_returns_empty_on_garbage()
+    {
+        Assert.Empty(KiwiDirectoryService.Parse(""));
+        Assert.Empty(KiwiDirectoryService.Parse("not json at all"));
+    }
+
+    [Fact]
+    public void Parse_tolerates_the_trailing_comma_the_generator_emits()
+    {
+        // The real rx.linkfanel.net file ends the array with `},\n]` — a trailing
+        // comma that System.Text.Json rejects by default. Regression guard.
+        const string body = """
+            // banner
+            var kiwisdr_com =
+            [
+                {"name":"A","url":"http://a.example:8073","gps":"(1, 2)"},
+                {"name":"B","url":"http://b.example:8073","gps":"(3, 4)"},
+            ]
+            ;
+            """;
+        var list = KiwiDirectoryService.Parse(body);
+        Assert.Equal(2, list.Count);
+        Assert.Equal("http://b.example:8073", list[1].Url);
+    }
+
+    private sealed class FakeKiwiProvider : IKiwiReceiverProvider
+    {
+        public ReceiverDto? Receiver;
+        public event Action? KiwiReceiverChanged;
+        public ReceiverDto? GetKiwiReceiver() => Receiver;
+        public void Raise() => KiwiReceiverChanged?.Invoke();
+    }
+}

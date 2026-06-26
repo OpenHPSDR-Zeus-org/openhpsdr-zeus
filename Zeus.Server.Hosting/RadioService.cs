@@ -356,7 +356,13 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null, Nr3ModelStore? nr3ModelStore = null, Hl2GpioSettingsStore? hl2GpioStore = null, BandMemoryStore? bandMemoryStore = null)
+    // Optional non-hardware KiwiSDR slice receiver. When present its entry is
+    // appended to the projected receiver list (reserved index
+    // WireContract.KiwiReceiverIndex) and a change re-broadcasts state. Null in
+    // tests / hosts without the Kiwi feature wired.
+    private readonly IKiwiReceiverProvider? _kiwiReceiverProvider;
+
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null, Nr3ModelStore? nr3ModelStore = null, Hl2GpioSettingsStore? hl2GpioStore = null, BandMemoryStore? bandMemoryStore = null, IKiwiReceiverProvider? kiwiReceiverProvider = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
@@ -390,6 +396,12 @@ public sealed class RadioService : IDisposable
             _hl2GpioStore.Changed += PushHl2Gpio;
         if (_preferredRadioStore is not null)
             _preferredRadioStore.Changed += RecomputePaAndPush;
+        // KiwiSDR slice: a change to the Kiwi receiver (enable/disable, tune,
+        // mute) re-projects + re-broadcasts state so the "Kiwi" entry appears /
+        // updates live on every client, exactly like a hardware DDC mutation.
+        _kiwiReceiverProvider = kiwiReceiverProvider;
+        if (_kiwiReceiverProvider is not null)
+            _kiwiReceiverProvider.KiwiReceiverChanged += () => StateChanged?.Invoke(Snapshot());
         _txIqSource = txIqSource;
         // Seed the on-board CW keyer config from persisted settings so a
         // reconnect after restart re-applies the operator's mode/speed
@@ -3761,6 +3773,12 @@ public sealed class RadioService : IDisposable
                 AfGainDb: e.AfGainDb, SampleRateHz: s.SampleRate,
                 Muted: e.Muted));
         }
+        // Non-hardware KiwiSDR slice (reserved index KiwiReceiverIndex). Appended
+        // out of the contiguous DDC run — it is a remote receiver, not a DDC, so
+        // it never participates in the no-gap cascade above. Null when disabled.
+        var kiwi = _kiwiReceiverProvider?.GetKiwiReceiver();
+        if (kiwi is not null)
+            list.Add(kiwi);
         return list;
     }
 

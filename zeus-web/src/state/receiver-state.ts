@@ -58,6 +58,18 @@ import {
  *  RX3+); `'A'`/`'B'` are legacy aliases for 0/1. */
 export type ReceiverKey = 'A' | 'B' | number;
 
+/** Reserved high index for the KiwiSDR slice receiver (mirrors
+ *  WireContract.KiwiReceiverIndex = MaxReceivers-1 = 7). It is a software
+ *  receiver, not a hardware DDC — it never counts toward the multi-RX count
+ *  stepper or the ADC-source list. */
+export const KIWI_RECEIVER_INDEX = 7;
+
+/** Operator-facing label for a receiver. Hardware DDCs carry no name and fall
+ *  back to "RX{n}" (1-based); the Kiwi slice receiver carries "Kiwi". */
+export function receiverLabel(r: { index: number; name?: string | null }): string {
+  return r.name ?? `RX${r.index + 1}`;
+}
+
 /** 0-based receiver index for a key. A → 0, B → 1, number → itself. */
 export function rxIndexOf(key: ReceiverKey): number {
   if (key === 'A') return 0;
