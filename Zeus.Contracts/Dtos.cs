@@ -891,6 +891,15 @@ public static class WireContract
     /// <c>Zeus.Protocol2.Protocol2Client.MaxRxDdc</c> references it so the wire
     /// foundation and the contract can never drift apart.</summary>
     public const int MaxReceivers = 8;
+
+    /// <summary>Reserved receiver index for the non-hardware KiwiSDR slice. It
+    /// sits at the very top of the DDC range so it never collides with the
+    /// contiguous hardware run (RX1..RX6, practical max 6 on a G2/Saturn).
+    /// Frames for the Kiwi receiver are broadcast with this value as their
+    /// <c>RxId</c>; the frontend routes them through the same per-RX render path
+    /// as a hardware DDC and labels the entry from <see cref="ReceiverDto.Name"/>
+    /// ("Kiwi") instead of "RX{Index+1}".</summary>
+    public const int KiwiReceiverIndex = MaxReceivers - 1;
 }
 
 /// <summary>Per-receiver (per-DDC) state for the multi-DDC model. Index 0 is
@@ -921,7 +930,13 @@ public sealed record ReceiverDto(
     // contribution while leaving every other receiver audible. Defaults false so
     // pre-mute wire frames deserialize unchanged. Mirrors the per-RX MUTE_RX1/
     // RX2 keypad controls.
-    bool Muted = false);
+    bool Muted = false,
+    // Optional human-facing label. Null for hardware DDC receivers — the UI
+    // derives their label from the index ("RX{Index+1}"). Set to a name (e.g.
+    // "Kiwi") for non-hardware software receivers such as the KiwiSDR slice that
+    // occupy a reserved high index (WireContract.KiwiReceiverIndex). Defaulted so
+    // pre-name wire frames deserialize unchanged.
+    string? Name = null);
 
 public sealed record StateDto(
     ConnectionStatus Status,
@@ -1384,6 +1399,30 @@ public sealed record ReceiverSetRequest(
     // label the operator picked, exactly as RX2 carries FilterPresetNameB. The
     // cuts in FilterLowHz/FilterHighHz remain authoritative for the DSP.
     string? FilterPresetName = null);
+
+/// <summary>Body of <c>POST /api/kiwi</c> — configure the KiwiSDR slice
+/// receiver. Every field is optional; only supplied fields change.
+/// <para><see cref="Url"/> is the KiwiSDR base URL or host:port (e.g.
+/// <c>sdr.example.org:8073</c> or <c>http://sdr.example.org:8073</c>). An empty
+/// <see cref="Password"/> string clears any stored password; null leaves it
+/// unchanged. Setting <see cref="Enabled"/> true with a URL present opens the
+/// connection; false tears it down.</para></summary>
+public sealed record KiwiSetRequest(
+    bool? Enabled = null,
+    string? Url = null,
+    string? Password = null);
+
+/// <summary>Status of the KiwiSDR slice receiver — the body of
+/// <c>GET /api/kiwi</c> and the value returned from <c>POST /api/kiwi</c>.
+/// <see cref="HasPassword"/> avoids ever returning the stored secret to the
+/// client; <see cref="Status"/> is a short connection-state word
+/// ("disabled", "connecting", "connected", "error").</summary>
+public sealed record KiwiConfigDto(
+    bool Enabled,
+    string? Url,
+    bool HasPassword,
+    string Status,
+    string? StatusDetail = null);
 
 /// <summary>Operator settings for the POTA/SOTA Spots feature. Persisted in
 /// zeus-prefs.db (<c>SpotsSettingsStore</c>) and shared with the frontend.
