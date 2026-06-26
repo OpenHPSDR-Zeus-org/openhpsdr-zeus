@@ -2255,7 +2255,13 @@ public sealed class WdspDspEngine : IDspEngine
         lock (_txaLock)
         {
             if (_txaChannelId is not int txa) return;
-            NativeMethods.SetTXABandpassFreqs(txa, lowHz, highHz);
+            // Same zero-width guard as the RX path (issue #1028): TX passes its
+            // signed pair straight to WDSP with no abs-fold, so a degenerate
+            // width would silence the on-air signal. The monitor mirror below
+            // routes through SetFilter -> ApplyBandpassForMode, which floors on
+            // its own.
+            var (txLow, txHigh) = FloorPassbandWidth(lowHz, highHz);
+            NativeMethods.SetTXABandpassFreqs(txa, txLow, txHigh);
         }
         // Mirror the filter onto the monitor channel so the preview stays at
         // the same bandwidth as the on-air signal. Stash the values regardless
@@ -3809,12 +3815,40 @@ public sealed class WdspDspEngine : IDspEngine
                 // AM/SAM/DSB/FM/DRM/SPEC: symmetric around 0.
                 low = -hi; high = hi; break;
         }
+        // Last-line guard against a zero/sub-floor-width passband reaching WDSP
+        // (issue #1028). A centre-zero filter that was clamped to a tiny signed
+        // width upstream can still abs-fold back to low == high here, which WDSP
+        // accepts and then passes nothing through — silent receiver, no error
+        // path anywhere. See FloorPassbandWidth.
+        (low, high) = FloorPassbandWidth(low, high);
         // Thetis rxa.cs:110-124: every filter change updates all three stages.
         // SetRXABandpassFreqs alone only affects bp1, which is bypassed for SSB.
         // nbp0 (RXANBPSetFreqs) is what actually carries the SSB passband.
         NativeMethods.SetRXABandpassFreqs(state.Id, low, high);
         NativeMethods.RXANBPSetFreqs(state.Id, low, high);
         NativeMethods.SetRXASNBAOutputBandwidth(state.Id, low, high);
+    }
+
+    // WDSP's bandpass stages silently pass NOTHING for a zero-width passband
+    // (low == high), taking the RX — or the TX/monitor chain — dead with no
+    // diagnostic anywhere (issue #1028: an operator's bandwidth slid to zero and
+    // audio dropped while every health check looked fine). This is the single
+    // point every RX / RX2 / monitor / channel-open filter push funnels through
+    // (and SetTxFilter applies the same guard to the TX bandpass), so flooring
+    // the FINAL signed width here makes the guarantee airtight regardless of
+    // mode, centre, or upstream caller — including a centre-zero filter that an
+    // upstream symmetric clamp left at low == high after abs-folding. Expands
+    // symmetrically about the centre so sideband placement is preserved. A no-op
+    // for every legitimate width (the narrowest shipped preset, CW at 25 Hz,
+    // sits well above this floor), so real filters reach WDSP byte-identical.
+    internal const double MinPassbandWidthHz = 10.0;
+
+    internal static (double low, double high) FloorPassbandWidth(double low, double high)
+    {
+        if (high - low >= MinPassbandWidthHz) return (low, high);
+        double center = (low + high) / 2.0;
+        double half = MinPassbandWidthHz / 2.0;
+        return (center - half, center + half);
     }
 
     private static RxaMode MapMode(RxMode mode) => mode switch
