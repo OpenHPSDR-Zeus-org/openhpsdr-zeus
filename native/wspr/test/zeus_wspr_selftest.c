@@ -6,6 +6,8 @@
 // an EXTERNAL reference, so this validates the encoder rather than itself.
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
 #include "../zeus_wspr.h"
 
 // The canonical WSPR sync vector (first 32 of 162). Every WSPR transmission
@@ -58,6 +60,39 @@ int main(void)
         }
     }
 
-    printf("OK: WSPR encode 162 symbols, sync vector matches, deterministic\n");
+    // Synthesize the 4-FSK audio for the encoded symbols and sanity-check it.
+    const int sr = 12000;
+    const int nspsym = (int)(sr * ZEUS_WSPR_SYMBOL_PERIOD_S + 0.5);
+    const long total = (long)nspsym * ZEUS_WSPR_NSYM;
+    float* audio = (float*)malloc(sizeof(float) * total);
+    if (audio == NULL) { fprintf(stderr, "FAIL: alloc\n"); return 1; }
+    int32_t ns = zeus_wspr_synth(sym, ZEUS_WSPR_NSYM, 1500.0f, sr, audio, (int32_t)total);
+    if (ns != (int32_t)total)
+    {
+        fprintf(stderr, "FAIL: synth returned %d, expected %ld\n", ns, total);
+        free(audio);
+        return 1;
+    }
+    double sumsq = 0.0;
+    for (long i = 0; i < total; ++i)
+    {
+        if (audio[i] < -1.0001f || audio[i] > 1.0001f)
+        {
+            fprintf(stderr, "FAIL: synth sample %ld out of range: %f\n", i, audio[i]);
+            free(audio);
+            return 1;
+        }
+        sumsq += (double)audio[i] * audio[i];
+    }
+    free(audio);
+    double rms = sqrt(sumsq / total);
+    if (rms < 0.5)  // a full-amplitude sine has rms ~0.707
+    {
+        fprintf(stderr, "FAIL: synth rms too low: %f\n", rms);
+        return 1;
+    }
+
+    printf("OK: WSPR encode (sync vector matches, deterministic) + synth %ld samples rms=%.3f\n",
+           total, rms);
     return 0;
 }

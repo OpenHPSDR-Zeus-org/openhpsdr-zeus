@@ -11,6 +11,13 @@
 
 #include <stdlib.h>
 #include <string.h>
+#ifndef _USE_MATH_DEFINES
+#define _USE_MATH_DEFINES
+#endif
+#include <math.h>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 // Vendored encoder (wsprsim_utils.c): packs the 50-bit message, applies the
 // K=32 r=1/2 convolutional FEC, interleaves, and merges the sync vector into
@@ -56,7 +63,47 @@ int32_t zeus_wspr_encode(const char* message, uint8_t* symbols, int32_t max_symb
     return ZEUS_WSPR_NSYM;
 }
 
+int32_t zeus_wspr_synth(const uint8_t* symbols, int32_t n_sym,
+                        float f0_hz, int32_t sample_rate,
+                        float* audio, int32_t max_samples)
+{
+    if (symbols == NULL || audio == NULL || n_sym <= 0 || sample_rate <= 0)
+        return -1;
+
+    // Samples per symbol at this rate (canonical 8192 @ 12 kHz).
+    int n_spsym = (int)(sample_rate * ZEUS_WSPR_SYMBOL_PERIOD_S + 0.5);
+    long total = (long)n_spsym * n_sym;
+    if (total > max_samples)
+        return -2;
+
+    double two_pi = 2.0 * M_PI;
+    double phase = 0.0;
+    long k = 0;
+    for (int s = 0; s < n_sym; ++s)
+    {
+        uint8_t tone = symbols[s] & 0x3;
+        double freq = (double)f0_hz + tone * ZEUS_WSPR_TONE_SPACING_HZ;
+        double dphi = two_pi * freq / sample_rate;
+        for (int i = 0; i < n_spsym; ++i, ++k)
+        {
+            audio[k] = (float)sin(phase);
+            phase += dphi;
+            if (phase > two_pi) phase -= two_pi;
+        }
+    }
+
+    // Short cosine ramps at the very start/end to limit key clicks.
+    int ramp = n_spsym / 8;
+    for (int i = 0; i < ramp && i < total; ++i)
+    {
+        float env = (float)((1.0 - cos(M_PI * i / ramp)) / 2.0);
+        audio[i] *= env;
+        audio[total - 1 - i] *= env;
+    }
+    return (int32_t)total;
+}
+
 const char* zeus_wspr_version(void)
 {
-    return "zeus_wspr 0.1 (K1JT/K9AN wsprd GPL-3, encode)";
+    return "zeus_wspr 0.2 (K1JT/K9AN wsprd GPL-3, encode + synth)";
 }

@@ -36,6 +36,26 @@ extern "C" {
 ZEUS_WSPR_API int32_t zeus_wspr_encode(const char* message,
                                        uint8_t* symbols, int32_t max_symbols);
 
+// WSPR tone spacing / symbol rate (Hz / baud) — 12000/8192, the canonical
+// values independent of the playback sample rate.
+#define ZEUS_WSPR_TONE_SPACING_HZ (12000.0 / 8192.0)
+#define ZEUS_WSPR_SYMBOL_PERIOD_S (8192.0 / 12000.0)
+
+// Synthesize continuous-phase 4-FSK audio for a WSPR symbol sequence (the TX
+// beacon waveform; also drives the decode round-trip test). WSPR is plain
+// continuous-phase FSK — no Gaussian pulse shaping — with short cosine ramps at
+// the ends to limit key clicks.
+//   symbols     n_sym tone indices (0..3) from zeus_wspr_encode
+//   n_sym       number of symbols (162 for a standard WSPR transmission)
+//   f0_hz       audio frequency of tone 0, e.g. 1500
+//   sample_rate Hz, e.g. 12000
+//   audio       caller-allocated output (length >= max_samples)
+//   max_samples capacity
+// Returns the number of samples written, or <0 on error.
+ZEUS_WSPR_API int32_t zeus_wspr_synth(const uint8_t* symbols, int32_t n_sym,
+                                      float f0_hz, int32_t sample_rate,
+                                      float* audio, int32_t max_samples);
+
 // Library version string (diagnostics / about panel).
 ZEUS_WSPR_API const char* zeus_wspr_version(void);
 

@@ -57,7 +57,42 @@ r=1/2 convolutional FEC + interleave + 162-bit sync vector.
 6. **Test vectors**: generate known message→symbols with the encoder and a WSPR
    `.wav` + known answer for the decode gate.
 
+## Decoder integration — OPEN DECISION (needs KB2UKA sign-off)
+
+The encoder was a clean function call. The **decoder is not**: `wsprd.c`'s decode
+logic lives **inline in `main()`** (a CLI that reads a `.wav`/`.c2` file, runs the
+candidate search + `sync_and_demodulate` + Fano/Jelinek decode loop, and prints
+results to stdout / `ALL_WSPR.TXT`). There is no callable `wspr_decode()`. Three
+ways to make it usable, each a real tradeoff:
+
+- **A — minimal documented patch (RECOMMENDED).** Lightly edit `wsprd.c` to wrap
+  the body of `main()` in a `wspr_decode_samples(idat, qdat, np, dialfreq,
+  callback)` function that `main()` then calls. wsprd has only ~7 module globals,
+  so this is a contained change. Cleanest callable + lets us pass samples
+  in-memory (no temp files) and collect decodes via callback. **Cost:** the
+  vendored source is no longer byte-pristine — carry the patch as a tracked
+  `vendor.patch` + document it here, applied on re-vendor.
+- **B — `-Dmain=wsprd_cli_main` + temp WAV + parse stdout.** Keep vendored source
+  pristine; write samples to a temp `.wav`, call the renamed main with synthetic
+  argv, capture stdout. **Cost:** fragile (stdout parsing, temp files), and
+  wsprd's globals make it **non-reentrant → not multi-RX-safe** without a mutex.
+- **C — clean-room re-implement the WSPR demod.** Permissive, multi-RX-clean, but
+  a large DSP effort (Fano over K=32) with no real upside since the format is
+  standardised.
+
+**Recommendation: Option A** — a small, well-documented patch is the standard
+vendoring practice and gives the cleanest, testable, no-temp-file integration.
+It does edit vendored source, so it wants KB2UKA's explicit OK (the FT8 vendoring
+was kept pristine; this one deliberately wouldn't be). Multi-RX WSPR can still
+serialise decode (it runs once per 120 s) regardless of approach.
+
+**Validation plan (self-contained, no external vector needed):** round-trip —
+`zeus_wspr_encode` a known message → synthesise its 4-FSK audio (wsprsim-style,
+~110.6 s at the decoder's rate) → decode → assert the message comes back. This
+is the decode-correctness CI gate.
+
 ## Build & test
 
-To be added with the shim + CMake. Until then the vendored source is reference
-only and not compiled into any target.
+Encoder builds today: `cmake -S native/wspr -B build && cmake --build build &&
+(cd build && ctest)` runs the sync-vector self-test. The decoder joins the build
+once the integration approach above is chosen.
