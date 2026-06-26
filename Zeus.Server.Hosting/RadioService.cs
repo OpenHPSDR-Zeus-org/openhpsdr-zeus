@@ -67,6 +67,14 @@ public sealed class RadioService : IDisposable
     internal const double MinAgcTopDb = 30.0;
     internal const double MaxAgcTopDb = 90.0;
 
+    // Floor (Hz) for the signed RX/TX bandpass width pushed through SetFilter.
+    // A zero-width bandpass means WDSP's RXASetPassband passes nothing through
+    // and the receiver goes silent (issue #1028 — operator's bandwidth slid to
+    // zero, audio dropped, no diagnostic complaint anywhere). 10 Hz is well
+    // below the narrowest shipped preset (CW F10 = 25 Hz) so legitimate widths
+    // are byte-identical; this is a panic floor, not a UI policy.
+    internal const int MinFilterWidthHz = 10;
+
     private readonly object _sync = new();
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<RadioService> _log;
@@ -1892,6 +1900,7 @@ public sealed class RadioService : IDisposable
         if (!Enum.IsDefined(receiver))
             throw new ArgumentOutOfRangeException(nameof(receiver), receiver, "Unknown VFO receiver");
         if (highHz < lowHz) (lowHz, highHz) = (highHz, lowHz);
+        (lowHz, highHz) = ClampMinFilterWidth(lowHz, highHz);
         RxMode modeAtSet = RxMode.USB;
         string? resolvedName = presetName;
         bool targetBAtSet = false;
@@ -1932,6 +1941,7 @@ public sealed class RadioService : IDisposable
     public StateDto SetTxFilter(int lowHz, int highHz)
     {
         if (highHz < lowHz) (lowHz, highHz) = (highHz, lowHz);
+        (lowHz, highHz) = ClampMinFilterWidth(lowHz, highHz);
         Mutate(s =>
         {
             int loAbs = Math.Min(Math.Abs(lowHz), Math.Abs(highHz));
@@ -1941,6 +1951,19 @@ public sealed class RadioService : IDisposable
         });
         FlushState();
         return Snapshot();
+    }
+
+    // Defensive floor for the signed (lo,hi) bandpass pair pushed to the engine
+    // — caller is responsible for ordering (hi >= lo). Expands symmetrically
+    // about the existing centre so sideband orientation is preserved (LSB stays
+    // negative, USB stays positive, CWU/CWL stay on their respective sides).
+    // Widths already at or above MinFilterWidthHz pass through unchanged.
+    internal static (int low, int high) ClampMinFilterWidth(int lowHz, int highHz)
+    {
+        if (highHz - lowHz >= MinFilterWidthHz) return (lowHz, highHz);
+        int center = (lowHz + highHz) / 2;
+        int half = MinFilterWidthHz / 2;
+        return (center - half, center + half);
     }
 
     public IReadOnlyList<FilterPresetDto> GetFilterPresets(RxMode mode)
