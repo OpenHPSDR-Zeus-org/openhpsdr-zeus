@@ -75,6 +75,44 @@ public class FreeDvModemTests
     }
 
     [Fact]
+    public void FinishTx_AndDrainTo_DoNotThrow_WhenIdleOrNativeMissing()
+    {
+        // Tail API must be safe to call regardless of native availability: when
+        // codec2 is absent FinishTx reports nothing pending and DrainTo clears
+        // the block. This is the contract the un-key path relies on.
+        using var modem = new FreeDvModem();
+        Assert.Equal(0, modem.FinishTx());
+        var block = new float[480];
+        Array.Fill(block, 0.5f);
+        Assert.Equal(0, modem.DrainTo(block));
+        Assert.All(block, s => Assert.Equal(0f, s)); // DrainTo silence-pads the empty queue
+    }
+
+    [SkippableFact]
+    public void FinishTx_CompletesResidualFrame_ThenDrainToEmpties()
+    {
+        using var modem = new FreeDvModem();
+        Skip.IfNot(modem.NativeAvailable, "codec2 native library absent — TX encode path not exercised.");
+
+        modem.Activate();
+        // Feed a sub-frame of mic speech (less than one codec2 frame) so a partial
+        // residual is left in the 8 kHz input ring — the end-of-over case.
+        var mic = new float[2400]; // 50 ms @ 48 kHz
+        for (int i = 0; i < mic.Length; i++) mic[i] = 0.2f * MathF.Sin(2f * MathF.PI * 800f * i / 48000f);
+        modem.ProcessTxInPlace((float[])mic.Clone());
+
+        int pending = modem.FinishTx();      // completes the final frame
+        Assert.True(pending > 0, "FinishTx should queue a completed final frame");
+        Assert.Equal(pending, modem.TxPendingOutSamples());
+
+        // Drain it out block by block; the queue must empty.
+        var blk = new float[480];
+        int guard = 0;
+        while (modem.DrainTo(blk) > 0 && guard++ < 10_000) { }
+        Assert.Equal(0, modem.TxPendingOutSamples());
+    }
+
+    [Fact]
     public void RxText_NullBeforeAnyDecode()
     {
         using var modem = new FreeDvModem();

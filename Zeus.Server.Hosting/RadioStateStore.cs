@@ -173,6 +173,11 @@ public sealed class RadioStateEntry
     // restart.
     public double LevelerMaxGainDb { get; set; } = 8.0;
     public int ZoomLevel { get; set; } = 1;
+    // Workspace UI zoom (whole-percent cell-pitch scale; see
+    // StateDto.WorkspaceZoomPct). Default 100 = authored size; legacy rows
+    // missing the field hydrate to that. Persisted so the operator's panel
+    // scale survives a restart, same as the other UI-facing snapshot fields.
+    public int WorkspaceZoomPct { get; set; } = 100;
     // Drive slider % (0..100). Default 0 mirrors RadioService._drivePct seed.
     public int DrivePct { get; set; }
     // TUN drive slider % (0..100). Default 10 mirrors RadioService._tunePct seed —

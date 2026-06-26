@@ -143,6 +143,53 @@ public class FreeDvResamplerTests
         Assert.Equal(600, interp.Process(new float[100], outp)); // 100 * 6
     }
 
+    [Fact]
+    public void PresenceBandTone_3kHz_IsPreserved()
+    {
+        // The fidelity fix: the prototype is long enough (and the cutoff high
+        // enough) that the 2.5–3.4 kHz speech presence band survives the
+        // 48k->8k->48k round trip. The old short/3.4 kHz design rolled 3 kHz off
+        // hard (the dull/"nasal" symptom); the new design keeps it near unity.
+        var dec = FreeDvResampler.NewDecimator();
+        var interp = FreeDvResampler.NewInterpolator();
+
+        int n = FsHigh;
+        var input = new float[n];
+        for (int i = 0; i < n; i++)
+            input[i] = MathF.Sin(2f * MathF.PI * 3000f * i / FsHigh);
+
+        var low = new float[FreeDvResampler.MaxDecimatedLength(n)];
+        int n8 = dec.Process(input, low);
+        var high = new float[FreeDvResampler.InterpolatedLength(n8)];
+        int n48 = interp.Process(low.AsSpan(0, n8), high);
+
+        double ratio = Rms(high, n48 / 4, n48 * 3 / 4) / Rms(input, n / 4, n * 3 / 4);
+        Assert.InRange(ratio, 0.70, 1.15);
+    }
+
+    [Fact]
+    public void ToneAboveNyquist_IsRejected_NoAliasing()
+    {
+        // A 5 kHz tone is above the 4 kHz (8 kHz-rate) Nyquist; the anti-alias
+        // low-pass must reject it before decimation so it cannot fold back into
+        // the voice band. Stopband sits below 4 kHz, so the round trip is ~silent.
+        var dec = FreeDvResampler.NewDecimator();
+        var interp = FreeDvResampler.NewInterpolator();
+
+        int n = FsHigh;
+        var input = new float[n];
+        for (int i = 0; i < n; i++)
+            input[i] = MathF.Sin(2f * MathF.PI * 5000f * i / FsHigh);
+
+        var low = new float[FreeDvResampler.MaxDecimatedLength(n)];
+        int n8 = dec.Process(input, low);
+        var high = new float[FreeDvResampler.InterpolatedLength(n8)];
+        int n48 = interp.Process(low.AsSpan(0, n8), high);
+
+        double ratio = Rms(high, n48 / 4, n48 * 3 / 4) / Rms(input, n / 4, n * 3 / 4);
+        Assert.True(ratio < 0.20, $"5 kHz leaked through at ratio {ratio:F3}");
+    }
+
     private static double Rms(float[] x, int lo, int hi)
     {
         double s = 0; int c = 0;

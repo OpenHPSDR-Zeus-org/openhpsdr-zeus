@@ -291,6 +291,27 @@ public sealed class Protocol1Client : IProtocol1Client
     /// <inheritdoc />
     public void DetachRxSink() => Interlocked.Exchange(ref _rxSink, null);
 
+    // ---- Codec radio-mic / line-in relay (issue #992) ---------------------
+    // The radio's TLV320 codec digitises the selected analog input (mic jack
+    // for RadioMic source, line-in jack for RadioLineIn) and ships those 16-bit
+    // samples inside every EP6 packet at offsets 6..7 of each 8-byte sample
+    // group. We drop them by default; if a handler is attached (set when a
+    // radio audio source is armed on a board with HasOnboardCodec) the RxLoop
+    // extracts them per packet and invokes the handler synchronously. volatile
+    // so a host-thread Attach/Detach is observed by the RX thread without a
+    // lock.
+    private volatile P1MicSampleHandler? _radioMicHandler;
+
+    /// <inheritdoc />
+    public void AttachRadioMicHandler(P1MicSampleHandler handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        _radioMicHandler = handler;
+    }
+
+    /// <inheritdoc />
+    public void DetachRadioMicHandler() => _radioMicHandler = null;
+
     /// <summary>
     /// Decode an HL2 4-DDC PS-armed EP6 packet — mi0bot's canonical layout
     /// (Thetis console.cs:8186-8265, networkproto1.c:WriteMainLoop_HL2,
@@ -890,6 +911,11 @@ public sealed class Protocol1Client : IProtocol1Client
         var sock = _socket!;
         var ct = _loopCts!.Token;
         var buffer = new byte[PacketParser.PacketLength];
+        // Per-call scratch for codec mic / line-in extraction (issue #992). Sized
+        // to one EP6 packet's worth of mic samples; allocated once outside the
+        // loop (CA2014 — stackalloc inside the per-packet hot path triggers a
+        // potential stack-overflow warning). Reused per packet.
+        var micScratch = new short[PacketParser.ComplexSamplesPerPacket];
         // perf3: reuse one SocketAddress across receives. The pre-.NET-8
         // `ReceiveFrom(..., ref EndPoint)` overload allocates a fresh
         // IPEndPoint via EndPoint.Create() on every call (per .NET runtime
@@ -1047,6 +1073,21 @@ public sealed class Protocol1Client : IProtocol1Client
                     HpsdrSampleRate.Rate384k => 384_000,
                     _ => 48_000,
                 };
+
+                // Codec mic / line-in relay (issue #992) — only when a radio audio
+                // source is armed (handler attached). Reuses the per-RxLoop scratch
+                // (above), no per-packet alloc, no work when the handler is null
+                // (Host source).
+                var micHandlerSnap = _radioMicHandler;
+                if (micHandlerSnap is not null)
+                {
+                    int micCount = PacketParser.ExtractMicSamples(buffer.AsSpan(0, n), micScratch);
+                    if (micCount > 0)
+                    {
+                        try { micHandlerSnap(new ReadOnlySpan<short>(micScratch, 0, micCount), rateHz); }
+                        catch (Exception ex) { _log.LogWarning(ex, "p1.rx radio-mic handler threw"); }
+                    }
+                }
 
                 // Pace the TX loop off the HL2's own clock. HL2 emits RX
                 // packets at (rateHz / 126) pkt/s; we want TX at (48_000/126)

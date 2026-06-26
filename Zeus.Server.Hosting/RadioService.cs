@@ -574,6 +574,7 @@ public sealed class RadioService : IDisposable
             WdspNr3RnnrAvailable: Zeus.Dsp.Wdsp.WdspDspEngine.Nr3RnnrAvailable,
             Nr3ModelName: _nr3ModelStore?.GetActiveModelName(),
             ZoomLevel: rsSnap?.ZoomLevel ?? 1,
+            WorkspaceZoomPct: ClampWorkspaceZoomPct(rsSnap?.WorkspaceZoomPct ?? DefaultWorkspaceZoomPct),
             AutoAttEnabled: _adcProtection.Enabled,
             AttOffsetDb: 0,         // always reset — control-loop accumulator
             AdcOverloadWarning: false,
@@ -3666,6 +3667,22 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
+    // Workspace UI zoom (cell-pitch scale, see StateDto.WorkspaceZoomPct). Pure
+    // frontend display value — persisted + rebroadcast here, no DSP side effect.
+    public const int MinWorkspaceZoomPct = 50;
+    public const int MaxWorkspaceZoomPct = 200;
+    public const int DefaultWorkspaceZoomPct = 100;
+
+    private static int ClampWorkspaceZoomPct(int pct) =>
+        Math.Clamp(pct, MinWorkspaceZoomPct, MaxWorkspaceZoomPct);
+
+    public StateDto SetWorkspaceZoom(int pct)
+    {
+        var clamped = ClampWorkspaceZoomPct(pct);
+        Mutate(s => s with { WorkspaceZoomPct = clamped });
+        return Snapshot();
+    }
+
     public void Dispose()
     {
         _paStore.Changed -= RecomputePaAndPush;
@@ -3831,6 +3848,7 @@ public sealed class RadioService : IDisposable
                 MicGainDb = snap.MicGainDb,
                 LevelerMaxGainDb = snap.LevelerMaxGainDb,
                 ZoomLevel = snap.ZoomLevel,
+                WorkspaceZoomPct = snap.WorkspaceZoomPct,
                 SsbFilterLoAbs = ssb.LoAbs,   SsbFilterHiAbs = ssb.HiAbs,
                 AmFilterLoAbs = am.LoAbs,     AmFilterHiAbs = am.HiAbs,
                 FmFilterLoAbs = fm.LoAbs,     FmFilterHiAbs = fm.HiAbs,

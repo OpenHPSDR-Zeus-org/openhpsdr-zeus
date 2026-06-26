@@ -119,6 +119,21 @@ public sealed class TxAudioIngest : IDisposable
     // mute by writing FROM this buffer, not by zeroing _scratchIq in place.
     private readonly float[] _muteIq = new float[4096];
 
+    // FreeDV end-of-over TX tail. Non-zero while the mic hot path must yield TX
+    // exclusively to DrainFreeDvTxTail (no double-feed into WDSP fexchange2),
+    // exactly as it defers to TxTuneDriver. Also the re-entrancy guard (CAS) so
+    // two rapid un-keys can't both drive ProcessTxBlock. Dedicated scratch so the
+    // drain (run on the un-key thread) never aliases _scratchMic/_scratchIq.
+    private int _tailDraining;
+    private readonly float[] _tailMic = new float[1024];
+    private readonly float[] _tailIq = new float[4096];
+    private const int TxRateHz = 48000;          // TX block / DAC rate
+    // Bench-tunable on the G2: hard ceiling on how long the un-key blocks while
+    // the final FreeDV frame clocks out, and the extra hold after the last block
+    // so the radio FIFO finishes transmitting before PTT drops.
+    private const int FreeDvTxTailMaxMs = 350;
+    private const int FreeDvTxTailGuardMs = 60;
+
     private long _totalMicSamples;
     private long _totalTxBlocks;
     private long _droppedFrames;
@@ -293,6 +308,102 @@ public sealed class TxAudioIngest : IDisposable
         _log = log;
         _handler = OnMicPcmBytesFromBrowserMic;
         _hub.MicPcmReceived += _handler;
+    }
+
+    /// <summary>
+    /// FreeDV end-of-over TX tail. Called by <see cref="TxService"/> on a genuine
+    /// un-key, BEFORE the wire MOX bit drops and while the WDSP TXA is still up.
+    /// Completes the final modem frame (RADE also appends its EOO callsign), then
+    /// clocks the queued modem audio out to the radio at the DAC rate so the
+    /// receiver gets WHOLE OFDM frames instead of a mid-symbol cut — the root
+    /// cause of end-of-over garble. Blocks the caller for the bounded tail
+    /// duration, then returns so PTT can drop. No-op unless FreeDV is engaged and
+    /// the engine is a real (TXA-capable) backend. Sets <see cref="_tailDraining"/>
+    /// so the mic hot path yields TX exclusively (no double-feed into fexchange2),
+    /// mirroring the tune-driver handoff. Runs on the un-key (API) thread; the
+    /// mic ingest runs on the audio thread — the _sync barrier below quiesces any
+    /// in-flight mic block before the drain feeds the ring.
+    /// </summary>
+    public void DrainFreeDvTxTail()
+    {
+        var freeDv = _freeDv;
+        if (freeDv is null || !freeDv.Active) return;
+        if (_txOwnedByTuneDriver()) return;        // TUN/two-tone owns TX
+        var engine = _engineProvider();
+        int blockSize = engine?.TxBlockSamples ?? 0;
+        int iqOut = engine?.TxOutputSamples ?? 0;
+        if (engine is null || blockSize <= 0 || iqOut <= 0
+            || blockSize > _tailMic.Length || 2 * iqOut > _tailIq.Length)
+            return;
+
+        // Claim TX exclusively (CAS — bail if another tail drain is already
+        // running). Then take _sync as a barrier so any mic critical section
+        // already in flight finishes before we feed the ring.
+        if (Interlocked.CompareExchange(ref _tailDraining, 1, 0) != 0) return;
+        lock (_sync) { _accumulatorFill = 0; }
+        try
+        {
+            // Complete the final frame so a well-formed last OFDM symbol exists.
+            freeDv.FinishTx();
+
+            long freq = System.Diagnostics.Stopwatch.Frequency;
+            long periodTicks = (long)(freq * (double)blockSize / TxRateHz);
+            long deadline = System.Diagnostics.Stopwatch.GetTimestamp();
+            long hardStop = deadline + (long)(freq * (FreeDvTxTailMaxMs / 1000.0));
+            int idle = 0;
+            while (System.Diagnostics.Stopwatch.GetTimestamp() < hardStop)
+            {
+                int real = freeDv.DrainTx(new Span<float>(_tailMic, 0, blockSize));
+                // DrainTx silence-pads a short block; once the queue is empty
+                // (two fully-silent blocks) stop so we don't key dead carrier.
+                if (real == 0) { if (++idle >= 2) break; }
+                else idle = 0;
+
+                int produced = engine.ProcessTxBlock(
+                    new ReadOnlySpan<float>(_tailMic, 0, blockSize),
+                    new Span<float>(_tailIq, 0, 2 * iqOut));
+                if (produced > 0)
+                {
+                    var iqSpan = new ReadOnlySpan<float>(_tailIq, 0, 2 * produced);
+                    _ring.Write(iqSpan);                                   // P1 EP2 packer
+                    _forwardP2?.Invoke(new ReadOnlyMemory<float>(_tailIq, 0, 2 * produced)); // P2 DUC
+                }
+
+                // Pace at the DAC rate so the radio FIFO transmits as we feed it.
+                deadline += periodTicks;
+                long remaining = deadline - System.Diagnostics.Stopwatch.GetTimestamp();
+                if (remaining > 0)
+                {
+                    int ms = (int)(remaining * 1000 / freq);
+                    if (ms > 0) Thread.Sleep(ms);
+                }
+                else deadline = System.Diagnostics.Stopwatch.GetTimestamp(); // re-anchor if behind
+            }
+
+            // Hold long enough for the radio FIFO to finish the last blocks before
+            // PTT drops (bench-tunable on the G2).
+            Thread.Sleep(FreeDvTxTailGuardMs);
+            _log.LogInformation("freedv.tx.tail drained, dropping PTT");
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "freedv.tx.tail drain threw");
+        }
+        finally
+        {
+            // Mirror the old MOX-falling-edge cleanup so the next over starts
+            // clean. The ring is already drained (we paced + guarded), so Clear
+            // only removes any safety remainder. _lastSeenMox=false stops the
+            // audio thread re-running the falling-edge clear after _moxOn flips.
+            lock (_sync)
+            {
+                _ring.Clear();
+                _accumulatorFill = 0;
+                _lastSeenMox = false;
+            }
+            freeDv.FlushTx();
+            Volatile.Write(ref _tailDraining, 0);
+        }
     }
 
     // FreeDV digital-voice modem coordinator. When FreeDV is the active mode,
@@ -528,6 +639,14 @@ public sealed class TxAudioIngest : IDisposable
 
         lock (_sync)
         {
+            // FreeDV end-of-over tail is clocking the final frame out on the
+            // un-key thread; yield TX exclusively (no second feeder on the WDSP
+            // TXA / radio IQ ring). Authoritative check under _sync — the drain
+            // sets _tailDraining then takes _sync as a barrier, so any frame that
+            // reaches here after that point bails. Drop the accumulator so no
+            // pre-tail remainder stitches onto the next over.
+            if (Volatile.Read(ref _tailDraining) != 0) { _accumulatorFill = 0; return; }
+
             // ATOMIC single-select gate (external-audio-jacks re-port, the
             // crux). This is the AUTHORITATIVE host/radio arbitration: it runs
             // in the SAME critical section as the accumulator append, so no flip

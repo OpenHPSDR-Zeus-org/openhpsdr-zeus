@@ -7,13 +7,25 @@
 //
 // Dependency-free streaming sample-rate conversion between the radio audio
 // rate (48 kHz) and the FreeDV modem rate (8 kHz). The ratio is exactly 6:1,
-// so a single Hamming-windowed-sinc prototype low-pass (cutoff ~3.4 kHz, well
-// above the FreeDV occupied bandwidth of ~2.4 kHz) drives both a decimator and
-// a polyphase interpolator. Both keep filter history across calls so block
+// so a single Hamming-windowed-sinc prototype low-pass drives both a decimator
+// and a polyphase interpolator. Both keep filter history across calls so block
 // boundaries are seamless, and both are pure span -> span with NO allocation
 // and NO locking — matching the realtime discipline of the Zeus audio bus
 // (AudioChain, FloatSpscRing). This replaces any external libsamplerate / soxr
 // dependency — important for the arm64 / Raspberry Pi targets.
+//
+// FIDELITY NOTE (voice clarity): this resampler is in BOTH speech paths — the
+// decoded-speech 8k->48k upsample the operator hears, and the mic-speech
+// 48k->8k downsample codec2 analyses. A short Hamming prototype has a wide
+// transition band, so a cutoff at 3.4 kHz left the passband flat only to
+// ~2.5 kHz — audibly dull/"nasal", because the 2.5–3.4 kHz speech presence band
+// rolled off. The prototype is now longer (40 taps/phase = 240-tap) with the
+// cutoff nudged to 3.5 kHz: the passband stays flat to ~3.2 kHz and the
+// stopband still lands below the 4 kHz (8 kHz-rate) Nyquist, so the speech band
+// survives without aliasing on decimation. The OFDM modem-in/out paths
+// (~2.4 kHz wide) are unaffected by the cutoff change. Cost is trivial
+// (~1.8M MACs/s) and group delay (~2.5 ms) is absorbed by the latency-bounded
+// rings.
 
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -26,8 +38,8 @@ internal static class FreeDvResampler
     internal const int Factor = 6;            // 48000 / 8000
     internal const int FsHigh = 48000;
     internal const int FsLow = 8000;
-    private const int TapsPerPhase = 16;      // -> 96-tap prototype, good stopband for voice
-    private const double CutoffHz = 3400.0;   // < 8 kHz Nyquist, above FreeDV ~2.4 kHz BW
+    private const int TapsPerPhase = 40;      // -> 240-tap prototype: flat to ~3.2 kHz, stopband < 4 kHz
+    private const double CutoffHz = 3500.0;   // < 4 kHz (8 kHz-rate) Nyquist, above FreeDV ~2.4 kHz BW
 
     // Prototype low-pass, normalized so DC gain == 1. Shared by both directions.
     private static readonly float[] Prototype = DesignLowpass(TapsPerPhase * Factor, CutoffHz, FsHigh);
