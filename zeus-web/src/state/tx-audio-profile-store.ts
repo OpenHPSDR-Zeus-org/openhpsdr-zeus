@@ -23,8 +23,10 @@ import { create } from 'zustand';
 import {
   applyTxAudioProfile,
   deleteTxAudioProfile,
+  exportTxAudioProfile,
   fetchLastLoadedTxAudioProfile,
   fetchTxAudioProfiles,
+  importTxAudioProfile,
   saveTxAudioProfile,
   type TxAudioProfileDto,
 } from '../api/client';
@@ -92,6 +94,10 @@ interface TxAudioProfileState {
   apply(id: string): Promise<TxAudioProfileMutationResult>;
   /** Delete a profile by id. */
   remove(id: string): Promise<TxAudioProfileMutationResult>;
+  /** Import a profile from a user-picked .json file; ADDS it (never applies it). */
+  importProfile(file: File, name?: string): Promise<TxAudioProfileMutationResult>;
+  /** Download a saved profile by id as a .json file. */
+  exportProfile(id: string): Promise<TxAudioProfileMutationResult>;
 }
 
 function errorText(err: unknown): string {
@@ -212,6 +218,38 @@ export const useTxAudioProfileStore = create<TxAudioProfileState>((set, get) => 
       return { ok: true };
     } catch (err) {
       set({ busy: false });
+      return { ok: false, error: errorText(err) };
+    }
+  },
+
+  importProfile: async (file, name) => {
+    if (get().busy) return { ok: false, error: 'Busy.' };
+    set({ busy: true });
+    try {
+      const imported = await importTxAudioProfile(file, name);
+      // Import only ADDS to the catalog (it doesn't apply or change the
+      // selection). Refresh the list so the new row appears in the dropdown.
+      await get().load();
+      set({ busy: false });
+      // Defensive: ensure the imported row is present even if the reload raced.
+      if (!get().profiles.some((p) => p.id === imported.id)) {
+        set((s) => ({ profiles: [...s.profiles, imported].sort((a, b) => a.id.localeCompare(b.id)) }));
+      }
+      return { ok: true };
+    } catch (err) {
+      set({ busy: false });
+      return { ok: false, error: errorText(err) };
+    }
+  },
+
+  exportProfile: async (id) => {
+    const trimmed = id.trim().toLowerCase();
+    if (!trimmed) return { ok: false, error: 'Profile id is required.' };
+    try {
+      // A pure download side-effect — no store state changes, so no busy gate.
+      await exportTxAudioProfile(trimmed);
+      return { ok: true };
+    } catch (err) {
       return { ok: false, error: errorText(err) };
     }
   },
