@@ -5,6 +5,7 @@ import { NR_CONFIG_DEFAULT } from '../api/client';
 import {
   adaptSmartNrToDspCapabilities,
   analyzeSmartNrCondition,
+  labelSmartNrProfile,
   recommendSmartNr,
   shapeSmartNrRecommendation,
 } from './smart-nr';
@@ -22,6 +23,16 @@ function noise(): Float32Array {
 
 function confidence(value = 0): Float32Array {
   return new Float32Array(WIDTH).fill(value);
+}
+
+function speechLikeSsbCopy(): { spec: Float32Array; conf: Float32Array } {
+  const spec = noise();
+  const conf = confidence();
+  for (let i = 64; i < 164; i += 4) {
+    spec[i] = NOISE_DB + 32;
+    conf[i] = 0.86;
+  }
+  return { spec, conf };
 }
 
 describe('smart NR supervisor', () => {
@@ -243,12 +254,7 @@ describe('smart NR supervisor', () => {
   });
 
   it('uses low-artifact NR2 for live-diagnostic coherent SSB copy assist', () => {
-    const spec = noise();
-    const conf = confidence();
-    for (let i = 64; i < 164; i += 4) {
-      spec[i] = NOISE_DB + 32;
-      conf[i] = 0.86;
-    }
+    const { spec, conf } = speechLikeSsbCopy();
 
     const rec = recommendSmartNr({
       spectrum: spec,
@@ -262,12 +268,62 @@ describe('smart NR supervisor', () => {
     expect(rec.condition.denseNoise).toBe(false);
     expect(rec.condition.tonalInterference).toBe(false);
     expect(rec.condition.coherentCopySignal).toBe(true);
+    expect(rec.condition.speechLikeVoice).toBe(true);
     expect(rec.nr.nrMode).toBe('Emnr');
     expect(rec.nr.emnrPost2Factor).toBe(11);
     expect(rec.nr.emnrPost2Nlevel).toBe(11);
     expect(rec.nr.nbMode).toBe('Off');
     expect(rec.nr.snbEnabled).toBe(false);
     expect(rec.reason).toContain('copy-assist');
+  });
+
+  it('prefers installed NR3/RNNoise for speech-like SSB copy', () => {
+    const { spec, conf } = speechLikeSsbCopy();
+
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      confidence: conf,
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'USB',
+      dsp: {
+        wdspActive: true,
+        wdspEmnrPost2Available: true,
+        wdspNr4SbnrAvailable: true,
+        wdspNr3RnnrAvailable: true,
+        nr3ModelName: 'hf-voice.rnn',
+      },
+    })!;
+
+    expect(rec.condition.speechLikeVoice).toBe(true);
+    expect(rec.condition.weakSparse).toBe(false);
+    expect(rec.nr.nrMode).toBe('Rnnr');
+    expect(rec.nr.snbEnabled).toBe(false);
+    expect(labelSmartNrProfile(rec.nr)).toBe('NR3');
+    expect(rec.reason).toContain('neural speech');
+  });
+
+  it('keeps fragile weak SSB on NR2 even when NR3 is installed', () => {
+    const spec = noise();
+    spec[120] = NOISE_DB + 14;
+
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'LSB',
+      dsp: {
+        wdspActive: true,
+        wdspEmnrPost2Available: true,
+        wdspNr4SbnrAvailable: true,
+        wdspNr3RnnrAvailable: true,
+        nr3ModelName: 'hf-voice.rnn',
+      },
+    })!;
+
+    expect(rec.condition.weakSparse).toBe(true);
+    expect(rec.condition.speechLikeVoice).toBe(false);
+    expect(rec.nr.nrMode).toBe('Emnr');
   });
 
   it('treats spread coherent SSB peaks as copy assist instead of a notch-only case', () => {
@@ -546,6 +602,25 @@ describe('smart NR supervisor', () => {
     expect(adapted.nr.emnrAeRun).toBe(true);
     expect(adapted.capabilityLimited).toBe(true);
     expect(adapted.capabilityRecommendation).toContain('post2');
+  });
+
+  it('downgrades NR3 recommendations to NR2 when no RNNoise model is ready', () => {
+    const adapted = adaptSmartNrToDspCapabilities(
+      { ...NR_CONFIG_DEFAULT, nrMode: 'Rnnr' },
+      {
+        wdspActive: true,
+        wdspEmnrPost2Available: true,
+        wdspNr4SbnrAvailable: true,
+        wdspNr3RnnrAvailable: true,
+        nr3ModelName: null,
+      },
+    );
+
+    expect(adapted.nr.nrMode).toBe('Emnr');
+    expect(adapted.nr.emnrAeRun).toBe(true);
+    expect(adapted.nr.emnrPost2Run).toBe(true);
+    expect(adapted.capabilityLimited).toBe(true);
+    expect(adapted.capabilityRecommendation).toContain('NR3/RNNoise');
   });
 
 });
