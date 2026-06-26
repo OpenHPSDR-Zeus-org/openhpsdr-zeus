@@ -53,15 +53,47 @@ namespace Zeus.Contracts;
 // names serialise camelCase on the wire (JsonSerializerDefaults.Web).
 
 /// <summary>
+/// An inline media attachment carried alongside a chat message. Photos are sent
+/// "like a text message": the bytes ride inside the message as a base64 data URL
+/// (<paramref name="DataUrl"/>, e.g. <c>data:image/jpeg;base64,…</c>) rather than
+/// via out-of-band blob storage. The web client downscales/compresses before
+/// sending so the encoded size stays within <see cref="MaxDataUrlLength"/> — the
+/// relay persists the whole message in a single Durable-Object value (128 KiB
+/// cap), so the attachment must comfortably fit under that with room to spare.
+/// <paramref name="Kind"/> is "image" for now (the only supported kind);
+/// unknown kinds are ignored by clients so future kinds stay compatible.
+/// </summary>
+public sealed record ChatAttachment(
+    string Kind,
+    string Mime,
+    string DataUrl,
+    string? Name = null,
+    int? Width = null,
+    int? Height = null,
+    int? Size = null)
+{
+    /// <summary>
+    /// Maximum accepted length of <see cref="DataUrl"/> (characters). Sized to
+    /// leave headroom under the relay's 128 KiB per-message storage value cap
+    /// once the surrounding JSON envelope is added. Enforced on both the Zeus
+    /// backend and the relay; the web client compresses to stay under it.
+    /// </summary>
+    public const int MaxDataUrlLength = 120_000;
+}
+
+/// <summary>
 /// A single chat message as broadcast by the relay (and echoed back to the
 /// sender for ordering). <paramref name="Ts"/> is epoch milliseconds.
+/// <paramref name="Attachment"/> is an optional inline photo (null for plain
+/// text messages — the overwhelming common case).
 /// </summary>
 public sealed record ChatMessage(
     string Id,
     string From,
     string Text,
     long Ts,
-    string Room);
+    string Room,
+    ChatAttachment? Attachment = null);
 
 /// <summary>
 /// A connected operator in the relay roster. <paramref name="FreqHz"/> is the
@@ -126,15 +158,19 @@ public sealed record ChatEnableRequest(bool Enabled);
 /// </summary>
 public sealed record ChatVisibleRequest(bool Visible);
 
-/// <summary>Outgoing message; <paramref name="Room"/> defaults to the public lobby.</summary>
-public sealed record ChatSendRequest(string Text, string? Room = null);
+/// <summary>Outgoing message; <paramref name="Room"/> defaults to the public lobby.
+/// <paramref name="Attachment"/> is an optional inline photo — when present the
+/// <paramref name="Text"/> may be empty (image-only message).</summary>
+public sealed record ChatSendRequest(string Text, string? Room = null, ChatAttachment? Attachment = null);
 
 /// <summary>A single-callsign request body for the friend endpoints
 /// (request / accept / deny / remove) and admin ban/unban.</summary>
 public sealed record ChatFriendRequest(string Callsign);
 
-/// <summary>Send a direct message to <paramref name="To"/>.</summary>
-public sealed record ChatDmRequest(string To, string Text);
+/// <summary>Send a direct message to <paramref name="To"/>.
+/// <paramref name="Attachment"/> is an optional inline photo — when present the
+/// <paramref name="Text"/> may be empty (image-only message).</summary>
+public sealed record ChatDmRequest(string To, string Text, ChatAttachment? Attachment = null);
 
 /// <summary>Admin: create a private group named <paramref name="Name"/>.</summary>
 public sealed record ChatRoomCreateRequest(string Name);

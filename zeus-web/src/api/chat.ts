@@ -29,6 +29,30 @@ export type ChatOperator = {
   since: number;
 };
 
+/**
+ * An inline media attachment carried with a message. Photos are sent "like a
+ * text message": the bytes ride inside the message as a base64 data URL. The
+ * client downscales/compresses before sending (see util/chat-image.ts) so the
+ * encoded size stays within the relay's per-message storage cap.
+ */
+export type ChatAttachment = {
+  /** Only "image" today; unknown kinds are ignored when rendering. */
+  kind: string;
+  /** MIME type, e.g. "image/jpeg". */
+  mime: string;
+  /** Base64 data URL — usable directly as an <img> src. */
+  dataUrl: string;
+  /** Original filename, if known. */
+  name: string | null;
+  width: number | null;
+  height: number | null;
+  /** Decoded byte size, if known. */
+  size: number | null;
+};
+
+/** Max length of an attachment data URL (chars). Mirrors the C#/relay caps. */
+export const MAX_ATTACHMENT_DATAURL_LEN = 120_000;
+
 export type ChatMessage = {
   id: string;
   from: string;
@@ -36,6 +60,8 @@ export type ChatMessage = {
   /** Epoch ms. */
   ts: number;
   room: string;
+  /** Optional inline photo; null for plain text messages. */
+  attachment: ChatAttachment | null;
 };
 
 export type ChatStatus = {
@@ -131,6 +157,30 @@ export function normalizeFriends(raw: unknown): ChatFriends {
   };
 }
 
+/**
+ * Parse an optional attachment. Returns null unless it is a well-formed image
+ * data URL within the size cap — a malformed/oversized attachment degrades the
+ * message to text-only rather than rendering a broken image.
+ */
+export function normalizeAttachment(raw: unknown): ChatAttachment | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const mime = typeof r.mime === 'string' ? r.mime : '';
+  const dataUrl = typeof r.dataUrl === 'string' ? r.dataUrl : '';
+  if (!mime.startsWith('image/')) return null;
+  if (!dataUrl.startsWith('data:image/')) return null;
+  if (dataUrl.length > MAX_ATTACHMENT_DATAURL_LEN) return null;
+  return {
+    kind: 'image',
+    mime,
+    dataUrl,
+    name: toStr(r.name),
+    width: toNum(r.width),
+    height: toNum(r.height),
+    size: toNum(r.size),
+  };
+}
+
 export function normalizeMessage(raw: unknown): ChatMessage {
   const r = (raw ?? {}) as Record<string, unknown>;
   return {
@@ -139,6 +189,7 @@ export function normalizeMessage(raw: unknown): ChatMessage {
     text: typeof r.text === 'string' ? r.text : '',
     ts: toNum(r.ts) ?? 0,
     room: typeof r.room === 'string' ? r.room : '',
+    attachment: normalizeAttachment(r.attachment),
   };
 }
 
@@ -203,13 +254,21 @@ export function chatSetVisible(visible: boolean, signal?: AbortSignal): Promise<
   );
 }
 
-export function chatSend(text: string, room?: string, signal?: AbortSignal): Promise<{ ok: boolean }> {
+export function chatSend(
+  text: string,
+  room?: string,
+  attachment?: ChatAttachment | null,
+  signal?: AbortSignal,
+): Promise<{ ok: boolean }> {
+  const body: Record<string, unknown> = { text };
+  if (room) body.room = room;
+  if (attachment) body.attachment = attachment;
   return jsonFetch(
     '/api/chat/send',
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(room ? { text, room } : { text }),
+      body: JSON.stringify(body),
       signal,
     },
     (raw) => ({ ok: Boolean((raw as { ok?: unknown } | null)?.ok) }),
@@ -282,8 +341,12 @@ export function chatRooms(signal?: AbortSignal): Promise<ChatRoom[]> {
   });
 }
 
-export const chatDm = (to: string, text: string, signal?: AbortSignal) =>
-  postOk('/api/chat/dm', { to, text }, signal);
+export const chatDm = (
+  to: string,
+  text: string,
+  attachment?: ChatAttachment | null,
+  signal?: AbortSignal,
+) => postOk('/api/chat/dm', attachment ? { to, text, attachment } : { to, text }, signal);
 
 export const chatRequestHistory = (room: string, signal?: AbortSignal) =>
   postOk('/api/chat/history', { room }, signal);

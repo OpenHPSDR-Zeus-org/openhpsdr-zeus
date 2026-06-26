@@ -55,6 +55,7 @@ import {
   normalizeRoom,
   type ChatOperator,
   type ChatMessage,
+  type ChatAttachment,
   type ChatStatus,
   type ChatRoom,
   type ChatFriends,
@@ -135,7 +136,9 @@ export type ChatStoreState = {
   setEnabled: (enabled: boolean) => Promise<void>;
   /** Report whether the Chat panel is currently displayed (gates presence). */
   setPanelVisible: (visible: boolean) => Promise<void>;
-  send: (text: string) => Promise<boolean>;
+  /** Send a message to the active room. `attachment` is an optional inline
+   *  photo; when present `text` may be empty (image-only message). */
+  send: (text: string, attachment?: ChatAttachment | null) => Promise<boolean>;
   loadHistory: () => Promise<void>;
   loadRoster: () => Promise<void>;
   loadRooms: () => Promise<void>;
@@ -250,17 +253,18 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
     }
   },
 
-  send: async (text) => {
+  send: async (text, attachment) => {
     const trimmed = text.trim();
-    if (!trimmed) return false;
+    // Allow an image-only message (empty text) when an attachment is present.
+    if (!trimmed && !attachment) return false;
     const { activeRoom, callsign } = get();
     try {
       if (activeRoom.startsWith('dm:')) {
         const other = dmOther(activeRoom, callsign);
         if (!other) return false;
-        await chatDm(other, trimmed);
+        await chatDm(other, trimmed, attachment);
       } else {
-        await chatSend(trimmed, activeRoom);
+        await chatSend(trimmed, activeRoom, attachment);
       }
       return true;
     } catch (err) {
@@ -492,4 +496,4 @@ export function ownCallsign(): string | null {
 }
 
 // Re-export the wire types so panels can import them from one place.
-export type { ChatOperator, ChatMessage, ChatStatus, ChatRoom } from '../api/chat';
+export type { ChatOperator, ChatMessage, ChatAttachment, ChatStatus, ChatRoom } from '../api/chat';
