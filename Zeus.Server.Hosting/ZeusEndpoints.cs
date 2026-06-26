@@ -2981,6 +2981,34 @@ public static class ZeusEndpoints
             return Results.Ok(store.DeleteNamed(radio ?? "default", id));
         });
 
+        // Saved-layouts library — reusable layout presets per radio, separate
+        // from the working tabs above. The operator snapshots a workspace into a
+        // preset (PUT), restores/seeds from it client-side, and manages the pool.
+        app.MapGet("/api/ui/saved-layouts", (string? radio, LayoutStore store) =>
+            Results.Ok(store.GetSavedLayouts(radio ?? "default")));
+
+        app.MapPut("/api/ui/saved-layouts", (SaveSavedLayoutRequest req, LayoutStore store) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.SavedId))
+                return Results.BadRequest(new { error = "savedId required" });
+            if (string.IsNullOrWhiteSpace(req.LayoutJson))
+                return Results.BadRequest(new { error = "layoutJson required" });
+            return Results.Ok(store.UpsertSavedLayout(
+                req.RadioKey ?? "default",
+                req.SavedId,
+                req.Name,
+                req.LayoutJson,
+                req.Icon,
+                req.Description));
+        });
+
+        app.MapDelete("/api/ui/saved-layouts", (string? radio, string? id, LayoutStore store) =>
+        {
+            if (string.IsNullOrWhiteSpace(id))
+                return Results.BadRequest(new { error = "id required" });
+            return Results.Ok(store.DeleteSavedLayout(radio ?? "default", id));
+        });
+
         // Detached workspace windows (extra Photino frames popped off the dock)
         // that were open at the last desktop shutdown. The desktop shell reads
         // this once on startup and reopens each; web/headless clients never call

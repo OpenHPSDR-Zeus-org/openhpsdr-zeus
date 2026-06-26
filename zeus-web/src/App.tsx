@@ -109,6 +109,7 @@ import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
 import { useTxStore } from './state/tx-store';
 import { useLayoutStore } from './state/layout-store';
+import { useSavedLayoutsStore } from './state/saved-layouts-store';
 import { useDisplaySettingsStore } from './state/display-settings-store';
 import { useCapabilitiesStore } from './state/capabilities-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
@@ -199,6 +200,8 @@ export default function App() {
   // landing flips this to e.g. "HermesLite2" / "AnanG2" and the store
   // re-fetches that radio's named-layout collection from the server.
   const loadLayoutsForRadio = useLayoutStore((s) => s.loadForRadio);
+  // The saved-layouts library is keyed on the same BoardKind as the tabs.
+  const loadSavedLayoutsForRadio = useSavedLayoutsStore((s) => s.loadForRadio);
   // Wait for the radio-store's initial fetch before loading any layout. Until
   // `radioLoaded` is true, `connected === 'Unknown'` is ambiguous: it could mean
   // "no radio" OR "not resolved yet". Loading 'default' eagerly here renders the
@@ -210,7 +213,8 @@ export default function App() {
     if (!radioLoaded) return;
     const key = radioConnected !== 'Unknown' ? radioConnected : 'default';
     void loadLayoutsForRadio(key);
-  }, [loadLayoutsForRadio, radioConnected, radioLoaded]);
+    void loadSavedLayoutsForRadio(key);
+  }, [loadLayoutsForRadio, loadSavedLayoutsForRadio, radioConnected, radioLoaded]);
   const activeLayoutId = useLayoutStore((s) => s.activeLayoutId);
 
   // Recover action for the workspace error boundary: reset the active layout to

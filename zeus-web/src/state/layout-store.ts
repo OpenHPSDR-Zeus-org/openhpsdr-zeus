@@ -133,6 +133,10 @@ interface LayoutState {
   /** Reset the active layout's tiles to DEFAULT_WORKSPACE_LAYOUT. The
    *  layout itself (id + name) is preserved. */
   resetActiveLayout: () => void;
+  /** Replace the active layout's entire workspace (tiles + lock) with the
+   *  given arrangement, keeping the layout's id/name/icon/description. Used to
+   *  apply or restore a saved-layout preset onto the current tab. Persists. */
+  replaceActiveWorkspace: (workspace: WorkspaceLayout) => void;
 
   // Tile mutators — operate on the active layout. Persisted via the same
   // debounced PUT to /api/ui/layouts.
@@ -459,6 +463,10 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     set({ layouts: next, workspace: DEFAULT_WORKSPACE_LAYOUT });
     cancelScheduledSave(radioKey, updated.id);
     void putNamedLayout(radioKey, updated);
+  },
+
+  replaceActiveWorkspace: (workspace) => {
+    applyWorkspaceMutationForLayout(set, get, get().activeLayoutId, workspace);
   },
 
   addTile: (panelId, opts) => {
