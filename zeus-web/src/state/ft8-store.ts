@@ -9,6 +9,15 @@
 // ptt-store split: REST for control state, WS push for the live stream.
 
 import { create } from 'zustand';
+import { nearestDigitalBand } from '../dsp/digital-segments';
+import {
+  configureRadioForDigital,
+  qsyToDigitalBand,
+  restoreRadio,
+  snapshotRadio,
+  type RadioModeSnapshot,
+} from './digital-mode';
+import { useConnectionStore } from './connection-store';
 
 export type Ft8ProtocolName = 'FT8' | 'FT4';
 
@@ -51,11 +60,20 @@ interface Ft8State {
   passes: number;
   rows: Ft8Row[];
   error: string | null;
+  /** Active band label (e.g. "20m") for the workspace band selector. */
+  band: string;
+  /** RX config captured at entry so exit restores the radio. */
+  priorRadio: RadioModeSnapshot | null;
 
-  /** Open the FT8 workspace and attempt to start decoding. */
+  /** Open the FT8 workspace: configure the radio (DIGU + wide filter + QSY to
+   *  the band dial) and start decoding. */
   openWorkspace: (opts?: { receiver?: number; protocol?: Ft8ProtocolName }) => void;
-  /** Close the workspace and stop decoding. */
+  /** Close the workspace, stop decoding, and restore the prior radio config. */
   closeWorkspace: () => void;
+  /** Switch FT8↔FT4 in-place (re-QSY + re-enable) without leaving the workspace. */
+  switchProtocol: (protocol: Ft8ProtocolName) => void;
+  /** QSY to a band's dial for the active protocol (workspace band buttons). */
+  qsyBand: (bandName: string) => void;
   /** Apply a 0x38 decode batch (newest rows first). */
   ingest: (batch: Ft8DecodeBatch) => void;
   /** Hydrate enable/native/protocol from GET /api/ft8. */
@@ -77,15 +95,44 @@ export const useFt8Store = create<Ft8State>((set, get) => ({
   passes: 3,
   rows: [],
   error: null,
+  band: '20m',
+  priorRadio: null,
 
   openWorkspace: (opts) => {
-    set({ open: true, protocol: opts?.protocol ?? get().protocol });
-    void get().enable(opts);
+    const protocol = opts?.protocol ?? get().protocol;
+    // Snapshot the radio once per entry so re-entry (protocol switch without
+    // closing) doesn't overwrite the original config with the DIGU state.
+    const prior = get().priorRadio ?? snapshotRadio();
+    const band = nearestDigitalBand(useConnectionStore.getState().vfoHz).name;
+    set({ open: true, protocol, band, priorRadio: prior });
+    void (async () => {
+      await configureRadioForDigital(protocol, band);
+      await get().enable({ ...opts, protocol });
+    })();
   },
 
   closeWorkspace: () => {
-    set({ open: false });
-    void get().disable();
+    const prior = get().priorRadio;
+    set({ open: false, priorRadio: null });
+    void (async () => {
+      await get().disable();
+      await restoreRadio(prior);
+    })();
+  },
+
+  switchProtocol: (protocol) => {
+    if (protocol === get().protocol) return;
+    const band = get().band;
+    set({ protocol });
+    void (async () => {
+      await configureRadioForDigital(protocol, band);
+      await get().enable({ protocol });
+    })();
+  },
+
+  qsyBand: (bandName) => {
+    set({ band: bandName });
+    void qsyToDigitalBand(get().protocol, bandName);
   },
 
   ingest: (batch) =>

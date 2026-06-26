@@ -694,13 +694,19 @@ export default function App() {
   }, [callsign]);
 
   // `/` focuses the callsign input so the operator can type a call and hit Enter.
+  // Alt+8 opens the FT8 workspace (interim trigger until FT8 is wired into the
+  // mode selector — reachable in desktop where there's no URL bar for #ft8).
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
-      if (e.key === '/' && !(t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement)) {
+      const typing = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement;
+      if (e.key === '/' && !typing) {
         e.preventDefault();
         csInputRef.current?.focus();
         csInputRef.current?.select();
+      } else if (e.altKey && (e.key === '8' || e.code === 'Digit8') && !typing) {
+        e.preventDefault();
+        useFt8Store.getState().openWorkspace({ protocol: 'FT8' });
       }
     };
     window.addEventListener('keydown', h);
