@@ -511,6 +511,32 @@ jobs:
           cp native/build-ft8/libzeus_ft8.so Zeus.Dsp/runtimes/linux-arm64/native/libzeus_ft8.so
           file Zeus.Dsp/runtimes/linux-arm64/native/libzeus_ft8.so
 
+      # ---------- zeus_wspr (native WSPR encode + decode core) ------------
+      # POSIX (decode uses mkdtemp/pthreads); bundles pffft, no FFTW. x64
+      # native; arm64 via the aarch64 cross toolchain. Windows is encode-only
+      # and not yet wired (needs a getopt/mkdtemp port).
+      - name: Build & stage zeus_wspr (x64)
+        if: matrix.arch == 'x64'
+        run: |
+          set -eux
+          cmake -S native/wspr -B native/build-wspr -DCMAKE_BUILD_TYPE=Release -DZEUS_WSPR_TESTS=OFF
+          cmake --build native/build-wspr --config Release --parallel
+          cp native/build-wspr/libzeus_wspr.so Zeus.Dsp/runtimes/linux-x64/native/libzeus_wspr.so
+          nm -D Zeus.Dsp/runtimes/linux-x64/native/libzeus_wspr.so | grep -c zeus_wspr
+
+      - name: Build & stage zeus_wspr (arm64)
+        if: matrix.arch == 'arm64'
+        run: |
+          set -eux
+          cmake -S native/wspr -B native/build-wspr \
+            -DCMAKE_BUILD_TYPE=Release -DZEUS_WSPR_TESTS=OFF \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc
+          cmake --build native/build-wspr --config Release --parallel
+          cp native/build-wspr/libzeus_wspr.so Zeus.Dsp/runtimes/linux-arm64/native/libzeus_wspr.so
+          file Zeus.Dsp/runtimes/linux-arm64/native/libzeus_wspr.so
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
