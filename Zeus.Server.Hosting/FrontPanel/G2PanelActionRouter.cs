@@ -57,13 +57,24 @@ public sealed class G2PanelActionRouter
     // cycles which parameter the MULTI encoder adjusts.
     private int _multiIndex;
 
-    // Net VFO-knob movement accumulated since the last service flush. The serial
-    // read path only adds to this counter; RadioService retunes happen off that
-    // path so a fast spin cannot backlog serial reads behind state broadcasts.
-    private long _pendingVfoSteps;
+    // Net VFO-knob movement accumulated since the last service flush. These are
+    // accelerated encoder ticks from the panel, not final Hz-step detents. The
+    // serial read path only adds to this counter; RadioService retunes happen
+    // off that path so a fast spin cannot backlog serial reads behind state
+    // broadcasts.
+    private long _pendingVfoTicks;
+
+    // DeskHPSDR's action layer keeps a VFO accumulator and divides by
+    // vfo_encoder_divisor before calling vfo_step(). Zeus computes the divisor
+    // from the selected toolbar step so coarse steps stay controllable while
+    // 1 Hz / 10 Hz steps remain responsive.
+    private long _vfoTickAccumulator;
 
     // Encoder step sizes.
     private const int FilterStepHz = 50;
+    private const int VfoEncoderReferenceStepHz = 10;
+    private const int MinVfoEncoderDivisor = 1;
+    private const int MaxVfoEncoderDivisor = 60;
     private const long RitStepHz = 10;
     private const long RitXitMax = 99_999; // Thetis udRIT/udXIT range
     private const double AfGainStepDb = 1.0;
@@ -143,24 +154,46 @@ public sealed class G2PanelActionRouter
 
     private void HandleVfo(int steps)
     {
-        Interlocked.Add(ref _pendingVfoSteps, steps);
+        Interlocked.Add(ref _pendingVfoTicks, steps);
     }
 
     public void FlushPendingVfo()
     {
-        long steps = Interlocked.Exchange(ref _pendingVfoSteps, 0);
-        if (steps == 0) return;
+        long ticks = Interlocked.Exchange(ref _pendingVfoTicks, 0);
+        if (ticks == 0) return;
 
         try
         {
-            var s = _radio.Snapshot();
             int stepHz = _toolbarSettings.CurrentStepHz;
-            _radio.SetVfo(ApplyVfoSteps(s.VfoHz, steps, stepHz));
+            var divided = DivideVfoEncoderTicks(_vfoTickAccumulator, ticks, stepHz);
+            _vfoTickAccumulator = divided.RemainderTicks;
+            if (divided.LogicalSteps == 0) return;
+
+            var s = _radio.Snapshot();
+            _radio.SetVfo(ApplyVfoSteps(s.VfoHz, divided.LogicalSteps, stepHz));
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "g2panel.vfo.flush.error steps={Steps}", steps);
+            _log.LogWarning(ex, "g2panel.vfo.flush.error ticks={Ticks}", ticks);
         }
+    }
+
+    internal static int VfoEncoderDivisorForStep(int stepHz)
+    {
+        int step = ToolbarSettingsStore.NormalizeStepHz(stepHz);
+        int divisor = (step + VfoEncoderReferenceStepHz - 1) / VfoEncoderReferenceStepHz;
+        return Math.Clamp(divisor, MinVfoEncoderDivisor, MaxVfoEncoderDivisor);
+    }
+
+    internal static (long LogicalSteps, long RemainderTicks) DivideVfoEncoderTicks(
+        long accumulatedTicks,
+        long incomingTicks,
+        int stepHz)
+    {
+        int divisor = VfoEncoderDivisorForStep(stepHz);
+        long total = accumulatedTicks + incomingTicks;
+        long logicalSteps = total / divisor;
+        return (logicalSteps, total - logicalSteps * divisor);
     }
 
     internal static long ApplyVfoSteps(long currentHz, long steps, int stepHz)

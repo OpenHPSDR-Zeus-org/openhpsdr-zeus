@@ -58,6 +58,41 @@ public sealed class G2PanelProtocolTests
     }
 
     [Theory]
+    [InlineData(1, 1)]
+    [InlineData(10, 1)]
+    [InlineData(50, 5)]
+    [InlineData(100, 10)]
+    [InlineData(500, 50)]
+    [InlineData(1000, 60)]
+    [InlineData(5000, 60)]
+    [InlineData(0, 50)]
+    public void Vfo_encoder_divisor_scales_with_configured_step(int stepHz, int expected)
+    {
+        Assert.Equal(expected, G2PanelActionRouter.VfoEncoderDivisorForStep(stepHz));
+    }
+
+    [Theory]
+    [InlineData(0, 49, 500, 0, 49)]
+    [InlineData(49, 1, 500, 1, 0)]
+    [InlineData(0, 128, 500, 2, 28)]
+    [InlineData(28, 22, 500, 1, 0)]
+    [InlineData(0, -49, 500, 0, -49)]
+    [InlineData(-49, -1, 500, -1, 0)]
+    [InlineData(0, 9, 10, 9, 0)]
+    public void Vfo_encoder_divider_preserves_remainder_between_flushes(
+        long accumulated,
+        long incoming,
+        int stepHz,
+        long expectedLogicalSteps,
+        long expectedRemainder)
+    {
+        var actual = G2PanelActionRouter.DivideVfoEncoderTicks(accumulated, incoming, stepHz);
+
+        Assert.Equal(expectedLogicalSteps, actual.LogicalSteps);
+        Assert.Equal(expectedRemainder, actual.RemainderTicks);
+    }
+
+    [Theory]
     [InlineData(7_145_000, 2, 500, 7_146_000)]
     [InlineData(7_145_800, 1, 1000, 7_147_000)]
     [InlineData(7_145_800, -1, 1000, 7_145_000)]
