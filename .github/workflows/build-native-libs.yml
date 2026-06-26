@@ -200,12 +200,15 @@ jobs:
       # Pure C99, no external deps (bundles its own KISS FFT), MSVC-clean for
       # both x64 and arm64 — same shape as miniaudio. Tests off for the lib-only
       # CI build (the corpus self-test runs under CTest, not here).
+      # ClangCL toolset: ft8_lib's vendored decode.c/monitor.c use C99 VLAs that
+      # MSVC cl.exe rejects but clang accepts — same fix Zeus uses for libspecbleach.
       - name: Configure zeus_ft8 (CMake)
         run: |
           $archFlag = if ("${{ matrix.arch }}" -eq "arm64") { "ARM64" } else { "x64" }
           cmake -S native/ft8 -B native/build-ft8 `
             -G "Visual Studio 17 2022" `
             -A $archFlag `
+            -T ClangCL `
             -DZEUS_FT8_TESTS=OFF
 
       - name: Build zeus_ft8

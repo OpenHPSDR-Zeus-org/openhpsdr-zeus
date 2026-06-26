@@ -18,7 +18,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#define _USE_MATH_DEFINES // MSVC: expose M_PI from <math.h>
 #include <math.h>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 #include "ft8/decode.h"
 #include "ft8/encode.h"

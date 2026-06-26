@@ -55,6 +55,14 @@ add_library(zeus_ft8 SHARED
 target_include_directories(zeus_ft8 PRIVATE ${FT8_VENDOR})
 # ft8_lib's message.c uses stpcpy where available.
 target_compile_definitions(zeus_ft8 PRIVATE HAVE_STPCPY)
+# MSVC gates M_PI behind _USE_MATH_DEFINES; define it for all sources on Windows.
+target_compile_definitions(zeus_ft8 PRIVATE $<$<PLATFORM_ID:Windows>:_USE_MATH_DEFINES>)
+
+# NOTE (Windows): ft8_lib's vendored decode.c / common/monitor.c use C99
+# variable-length arrays, which MSVC cl.exe rejects. Configure the Windows build
+# with the ClangCL toolset (clang supports VLAs), exactly as Zeus does for
+# libspecbleach: `cmake -G "Visual Studio 17 2022" -T ClangCL ...`. See
+# .github/workflows/build-native-libs.yml.
 
 if(WIN32)
     set_target_properties(zeus_ft8 PROPERTIES OUTPUT_NAME "zeus_ft8" PREFIX "")
