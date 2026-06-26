@@ -728,9 +728,17 @@ public class DspPipelineService : BackgroundService,
     // allocation (the scratch span below is reused every tick).
     internal readonly record struct RxAudioSlice(float[] Buffer, int Count);
     // Reused each tick to collect the enabled secondary RX audio blocks for the
-    // mixer. Sized for every secondary slot (1..N-1); only the populated prefix
-    // is passed to MixRxAudioN.
-    private readonly RxAudioSlice[] _mixSlices = new RxAudioSlice[MaxReceivers];
+    // mixer. Sized for every secondary slot (1..N-1) PLUS the Kiwi slice, which
+    // is mixed in on the same bus; only the populated prefix is passed to
+    // MixRxAudioN.
+    private readonly RxAudioSlice[] _mixSlices = new RxAudioSlice[MaxReceivers + 1];
+
+    // The Kiwi slice receiver feeds its demodulated audio onto the SAME RX mix
+    // bus as the hardware receivers (IKiwiAudioBus). Optional — null in tests and
+    // when no Kiwi service is registered. Drained into _kiwiMixBuf each tick,
+    // clocked by RX1, then averaged in by MixRxAudioN alongside RX2..RXn.
+    private readonly IKiwiAudioBus? _kiwiAudioBus;
+    private readonly float[] _kiwiMixBuf = new float[AudioDrainCapacity];
 
     // Protocol 2 path (parallel to the RadioService-owned P1 path). Held
     // directly here because RadioService is Protocol1Client-shaped and
@@ -1206,11 +1214,13 @@ public class DspPipelineService : BackgroundService,
         DisplaySettingsStore? displaySettings = null,
         FreeDvService? freeDv = null,
         Func<TxAudioIngest?>? txIngestFactory = null,
-        Nr3ModelStore? nr3ModelStore = null)
+        Nr3ModelStore? nr3ModelStore = null,
+        IKiwiAudioBus? kiwiAudioBus = null)
     {
         _radio = radio;
         _hub = hub;
         _freeDv = freeDv;
+        _kiwiAudioBus = kiwiAudioBus;
         // Materialise once at construction so the per-tick fan-out is an
         // array-index loop (no enumerator allocation, no LINQ on the hot path).
         _audioSinks = audioSinks.ToArray();
@@ -5657,6 +5667,20 @@ public class DspPipelineService : BackgroundService,
             // receivers you can still hear).
             if (IsReceiverMuted(state, ri)) continue;
             _mixSlices[mixSliceCount++] = new RxAudioSlice(sec.AudioBuf, n);
+        }
+
+        // Kiwi slice (RxId 7): an INDEPENDENT remote receiver that rides the same
+        // RX1-clocked mix bus as the hardware secondaries. Drain at most
+        // audioSampleCount samples so it's fed at exactly the RX rate (its own
+        // clock differs from the radio ADC; IKiwiAudioBus.ReadAudio caps buffered
+        // latency to bound that drift), then average it in via MixRxAudioN. When
+        // the slice is disabled/muted AudioActive is false and this is one bool
+        // read. RX1 silent (audioSampleCount==0) reads nothing this tick.
+        if (audioSampleCount > 0 && _kiwiAudioBus is { AudioActive: true })
+        {
+            int want = Math.Min(audioSampleCount, _kiwiMixBuf.Length);
+            int n = _kiwiAudioBus.ReadAudio(_kiwiMixBuf.AsSpan(0, want));
+            if (n > 0) _mixSlices[mixSliceCount++] = new RxAudioSlice(_kiwiMixBuf, n);
         }
 
         // RX1's own samples were already zeroed above when it's muted; tell the

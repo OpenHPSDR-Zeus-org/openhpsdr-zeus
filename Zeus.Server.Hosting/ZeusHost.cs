@@ -311,6 +311,24 @@ public static class ZeusHost
         // resolves it and wires the Changed → PushHl2Gpio push. Shares
         // zeus-prefs.db (single global row); HL2-only on the wire.
         builder.Services.AddSingleton<Hl2GpioSettingsStore>();
+        // KiwiSDR slice receiver. The settings store persists the URL/password/
+        // enable flag; KiwiSdrService owns the remote connection and projects the
+        // "Kiwi" receiver into RadioService's receiver list via
+        // IKiwiReceiverProvider (registered below, BEFORE RadioService resolves so
+        // its optional ctor param is satisfied). Hosted so it (re)connects at
+        // startup and tears down on shutdown. No DI cycle: it depends only on the
+        // hub + settings store, never on RadioService. Its demodulated audio is
+        // pulled onto the shared RX mix bus by DspPipelineService via
+        // IKiwiAudioBus (registered here so the DSP service's optional ctor param
+        // resolves) — so the Kiwi mixes with the local RX rather than being a
+        // second device stream.
+        builder.Services.AddSingleton<KiwiSettingsStore>();
+        builder.Services.AddSingleton<KiwiSdrService>();
+        // Public KiwiSDR directory proxy for the Settings map picker.
+        builder.Services.AddSingleton<KiwiDirectoryService>();
+        builder.Services.AddSingleton<IKiwiReceiverProvider>(sp => sp.GetRequiredService<KiwiSdrService>());
+        builder.Services.AddSingleton<IKiwiAudioBus>(sp => sp.GetRequiredService<KiwiSdrService>());
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<KiwiSdrService>());
         builder.Services.AddSingleton<RadioService>();
         // Frees a Busy radio (drops its current owner) so the operator can take
         // it over from the Connect panel. Stateless — opens its own socket.

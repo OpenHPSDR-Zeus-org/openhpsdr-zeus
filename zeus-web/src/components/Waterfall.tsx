@@ -57,7 +57,7 @@ import {
   useSignalEnhanceStore,
 } from '../dsp/signal-estimator';
 import { normalizeStitchedBins, stitchFloorShiftDb } from '../dsp/stitch-normalizer';
-import { getReceiverVfoHz, rxIndexOf, type ReceiverKey } from '../state/receiver-state';
+import { getReceiverVfoHz, KIWI_RECEIVER_INDEX, rxIndexOf, type ReceiverKey } from '../state/receiver-state';
 import { estimateRowFloorDb, forgetReceiverFloor, reportReceiverFloorDb } from '../dsp/floor-normalization';
 import { effectiveRxWfWindow, useRxDbWindowStore } from '../state/rx-db-window-store';
 import * as viewCenter from '../state/view-center';
@@ -280,12 +280,22 @@ export function Waterfall({
       const dbMin = popOn ? 0 : keyed ? wfTxDbMin : rxWin!.wfDbMin;
       const dbMax = popOn ? 1 : keyed ? wfTxDbMax : rxWin!.wfDbMax;
       renderer.setPopMode(popOn, popIntensity, reliefDepth, smoothness);
-      renderer.draw(
-        dbMin,
-        dbMax,
-        visualCenterHz(),
-        viewZoom.isInitialized() ? viewZoom.getDisplayedHzPerPixel() : null,
-      );
+      // Draw-time zoom span. Hardware DDCs follow the shared RX1-driven tween;
+      // the Kiwi slice receiver self-scales to its OWN current frame Hz/pixel so
+      // the renderer's viewScale (viewHzPerPixel / lastHzPerPixel) resolves to 1
+      // and its history fills the pane instead of being squished to the centre.
+      // Passing null keeps unit scale until a span is known. See
+      // displayedHzPerPixelFor.
+      const ownFrameHzPerPixel = selectDisplaySlice(useDisplayStore.getState(), receiver).hzPerPixel;
+      const viewHzPerPixel =
+        rxIndex === KIWI_RECEIVER_INDEX
+          ? ownFrameHzPerPixel > 0
+            ? viewZoom.displayedHzPerPixelFor(rxIndex, ownFrameHzPerPixel)
+            : null
+          : viewZoom.isInitialized()
+            ? viewZoom.getDisplayedHzPerPixel()
+            : null;
+      renderer.draw(dbMin, dbMax, visualCenterHz(), viewHzPerPixel);
     };
     const requestRedraw = () => {
       if (!isActive()) return;
