@@ -788,8 +788,14 @@ public static class ZeusEndpoints
         // host this plugin (RX VSTs load in-process; TX only with the dev opt-in).
         static IResult? VstEngineEditorGuard(string id, AudioProcessingModeService mode)
         {
+            // NB: the TX term is TxNativeEditorOptIn (legacy explicit opt-in),
+            // NOT the TX load default. The load default flipped on (2026-06-26)
+            // but the editor engine-redirect UX is deliberately decoupled so it
+            // doesn't change on platforms where in-process TX editor hosting is
+            // unverified. A genuinely-loaded TX plugin bypasses this guard via
+            // HostsPlugin upstream.
             var nativeLoadEnabled = VstDirectoryScanService.IsRxPluginId(id)
-                || Zeus.Plugins.Host.Audio.VstHostAudioPlugin.TxNativeLoadEnabled;
+                || Zeus.Plugins.Host.Audio.VstHostAudioPlugin.TxNativeEditorOptIn;
             var error = VstEditorHint.EngineUnavailableMessage(
                 mode.Mode, mode.EngineActive,
                 AudioProcessingModeService.FindEngineExe() is not null,

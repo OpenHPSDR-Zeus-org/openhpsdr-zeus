@@ -83,14 +83,27 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
     }
 
     /// <summary>
-    /// Whether the in-process bridge will natively host a TX-slot plugin. Now ON
-    /// by default (KB2UKA-approved, bench-verified 2026-06-26). Set
-    /// <c>ZEUS_DISABLE_TX_VST_LOAD=1</c> (or <c>ZEUS_DISABLE_VST_LOAD=1</c>) to
-    /// fall back to the crash-isolated out-of-process engine. Note the standing
-    /// caveat: a crashing in-process TX plugin can hard-crash the radio backend
-    /// mid-transmit — the reason this path was previously gated.
+    /// Editor-guard signal ONLY — whether the TX editor-open fallback should
+    /// treat TX as in-process-hostable when a plugin is <em>not</em> already
+    /// natively loaded. Deliberately <b>decoupled</b> from the TX <em>load</em>
+    /// default (<see cref="NativeLoadEnabled"/>, which now defaults TX on as of
+    /// 2026-06-26): it stays pinned to the pre-flip explicit <c>ZEUS_ENABLE_VST_LOAD</c>
+    /// opt-in so flipping the load default does not move the cross-platform
+    /// editor engine-redirect UX (Windows in-process TX editor hosting is
+    /// unverified). A TX plugin that actually loaded in-process is detected via
+    /// <c>AudioPluginBridge.HostsPlugin</c> upstream and bypasses the guard
+    /// regardless; this governs only the not-hosted fallback message. Mirrors the
+    /// pre-flip <c>TxNativeLoadEnabled</c> semantics exactly.
     /// </summary>
-    public static bool TxNativeLoadEnabled => NativeLoadEnabled("tx.post-leveler");
+    public static bool TxNativeEditorOptIn
+    {
+        get
+        {
+            if (NativeLoadEnabledOverride is { } forced) return forced;
+            if (Environment.GetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD") == "1") return false;
+            return Environment.GetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD") == "1";
+        }
+    }
 
     public Task InitializeAudioAsync(IAudioHost host, CancellationToken ct)
     {
