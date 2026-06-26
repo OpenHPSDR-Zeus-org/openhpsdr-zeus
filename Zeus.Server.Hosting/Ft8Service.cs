@@ -72,6 +72,15 @@ public sealed class Ft8Service : IHostedService, IDisposable
     /// <summary>True if the native decoder is present on this platform.</summary>
     public bool NativeAvailable => Ft8Decoder.IsAvailable;
 
+    /// <summary>True while a receiver is actively decoding.</summary>
+    public bool IsEnabled { get { lock (_gate) return _session is not null; } }
+
+    /// <summary>The receiver currently decoding, or -1 when disabled.</summary>
+    public int ActiveReceiver { get { lock (_gate) return _session?.Receiver ?? -1; } }
+
+    /// <summary>The protocol currently decoding (FT8 when disabled).</summary>
+    public Ft8Protocol ActiveProtocol { get { lock (_gate) return _session?.Protocol ?? Ft8Protocol.Ft8; } }
+
     /// <summary>
     /// Enter FT8/FT4 decode on a receiver. Idempotent; re-enabling resets the
     /// in-progress slot. Returns false if the native decoder is unavailable.

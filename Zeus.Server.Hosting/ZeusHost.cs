@@ -444,6 +444,9 @@ public static class ZeusHost
         // (Enable() returns false) when the zeus_ft8 native library is absent.
         builder.Services.AddSingleton<Ft8Service>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<Ft8Service>());
+        // Ft8BroadcastService — pushes each decoded slot to WS clients as a 0x38
+        // Ft8Decode frame for the FT8 workspace decode table.
+        builder.Services.AddHostedService<Ft8BroadcastService>();
         // FreeDvNativeInstaller — the in-app "Install FreeDV" downloader. codec2
         // can't be built on a stock operator machine, so when the bundled binary
         // is missing (older build / unshipped platform) this fetches the prebuilt
