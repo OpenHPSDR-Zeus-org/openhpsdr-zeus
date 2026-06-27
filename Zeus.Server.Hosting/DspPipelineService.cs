@@ -4304,7 +4304,8 @@ public class DspPipelineService : BackgroundService,
         int sampleRateKhz,
         byte numAdc,
         CancellationToken ct,
-        HpsdrBoardKind boardKind = HpsdrBoardKind.Unknown)
+        HpsdrBoardKind boardKind = HpsdrBoardKind.Unknown,
+        string? firmware = null)
     {
         if (_p2Client is not null)
             throw new InvalidOperationException("Already connected (P2).");
@@ -4446,7 +4447,7 @@ public class DspPipelineService : BackgroundService,
         // Pass the live client so RadioService can fire P2Connected with a
         // reference to the freshly-opened Protocol2Client. TxMetersService
         // subscribes through that event to hook hi-priority status (#174).
-        _radio.MarkProtocol2Connected(radioEndpoint.ToString(), rateHz, client, boardKind);
+        _radio.MarkProtocol2Connected(radioEndpoint.ToString(), rateHz, client, boardKind, firmware);
         // P2 G2/MkII default HW peak = 0.6121; ANAN-7000/8000 = 0.2899. The
         // RadioService switch covers both so we don't bake a value in here.
         // ConnectedBoardKind now returns the discovered board kind when the
