@@ -25,6 +25,15 @@ public sealed class DiagnosticLogBuffer
     private int _next;   // index of next write
     private int _count;  // number of valid entries (<= Capacity)
 
+    /// <summary>
+    /// Raised once per appended line, AFTER it lands in the ring, OUTSIDE the
+    /// buffer lock. Lets a live consumer (a maintainer support session's "log"
+    /// data channel) tail new lines as they arrive without polling. Subscribers
+    /// MUST be cheap and non-blocking — they run on whatever thread logged the
+    /// line; any exception they throw is swallowed so logging never fails.
+    /// </summary>
+    public event Action<string>? LineAdded;
+
     /// <summary>Append one formatted log line. Cheap; safe from any thread.</summary>
     public void Add(string line)
     {
@@ -34,6 +43,15 @@ public sealed class DiagnosticLogBuffer
             _ring[_next] = line;
             _next = (_next + 1) % Capacity;
             if (_count < Capacity) _count++;
+        }
+
+        // Fan out to live tailers outside the lock so a slow/misbehaving
+        // subscriber can never stall a logging thread or deadlock the ring.
+        var handler = LineAdded;
+        if (handler is not null)
+        {
+            try { handler(line); }
+            catch { /* a live tailer must never break logging */ }
         }
     }
 
