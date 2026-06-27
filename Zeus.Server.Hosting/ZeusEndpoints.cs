@@ -1925,11 +1925,12 @@ public static class ZeusEndpoints
             var snapshot = store.Save(req);
             sidetone.SetPitchHz(snapshot.SidetoneHz);
             sidetone.SetGainDb(snapshot.SidetoneGainDb);
-            // Forward keyer speed (WPM) + mode to the radio's on-board iambic
-            // keyer (C&C 0x0B) so a paddle keys at the panel speed. No-op when
-            // no radio is connected (the value is cached + re-pushed on the
-            // next connect). See zeus-bks.
-            radio.SetCwKeyerConfig(snapshot.Wpm, snapshot.KeyerMode);
+            // Forward keyer speed (WPM) + mode + sidetone to the radio's
+            // on-board iambic keyer so a paddle keys at the panel speed:
+            // P1 → C&C 0x0B; P2 → TxSpecific internal-keyer arm (#1032). No-op
+            // when no radio is connected (cached + re-pushed on the next
+            // connect). See zeus-bks.
+            radio.SetCwKeyerConfig(snapshot.Wpm, snapshot.KeyerMode, snapshot.SidetoneHz, snapshot.SidetoneGainDb);
             return Results.Ok(snapshot);
         });
 
@@ -2826,6 +2827,32 @@ public static class ZeusEndpoints
                 resolved.LineInGain));
         });
 
+        // Radio-side speaker output (Protocol-1 codec radios). GET reports the
+        // persisted opt-in plus whether it's currently effective for the connected
+        // board (a P1 codec radio, not the codec-less HL2, and not a P2 board —
+        // the Saturn/G2 appliance speaker path is independent). The frontend
+        // refetches this on connect to hydrate the toggle without touching the
+        // StateDto wire format.
+        app.MapGet("/api/radio/speaker-output", (RadioSpeakerSettingsStore store, RadioSpeakerAudioSink sink) =>
+            Results.Ok(new RadioSpeakerOutputDto(
+                Enabled: store.Enabled,
+                Available: sink.AvailableForConnectedBoard())));
+
+        // PUT the opt-in. Persisted globally; the store's Changed event clears the
+        // RX-audio ring when turned off so a later RX never replays a stale tail.
+        // The sink self-gates per frame (board + MOX + mono/48k), so the toggle is
+        // safe to flip at any time, including mid-session.
+        app.MapPut("/api/radio/speaker-output", (RadioSpeakerOutputSetRequest req, RadioSpeakerSettingsStore store, RadioSpeakerAudioSink sink) =>
+        {
+            if (req is null)
+                return Results.BadRequest(new { error = "body required" });
+
+            store.Set(req.Enabled);
+            return Results.Ok(new RadioSpeakerOutputDto(
+                Enabled: store.Enabled,
+                Available: sink.AvailableForConnectedBoard()));
+        });
+
         app.MapGet("/api/radio/power-calibration", (HardwareDiagnosticsService diag) =>
         {
             return Results.Ok(diag.PowerCalibrationSnapshot());
@@ -3291,6 +3318,12 @@ public static class ZeusEndpoints
         {
             restart.RequestRestart();
             return Results.Ok(new { restarting = true });
+        });
+
+        app.MapPost("/api/app/quit", (AppRestartService restart) =>
+        {
+            restart.RequestQuit();
+            return Results.Ok(new { quitting = true });
         });
 
         app.MapGet("/api/qrz/status", (QrzService qrz) => qrz.GetStatus());

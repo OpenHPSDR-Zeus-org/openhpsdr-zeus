@@ -36,6 +36,17 @@
 
 const floorByRx = new Map<number, number>();
 
+// The KiwiSDR slice receiver (reserved index — mirrors receiver-state
+// KIWI_RECEIVER_INDEX) is a FOREIGN remote receiver: a different site, antenna
+// and ADC calibration than the local hardware DDCs, so its absolute dB scale is
+// unrelated to theirs. It must normalise TO the hardware noise-floor anchor, but
+// must NOT help DEFINE it — co-anchoring drags the hardware panes toward the
+// Kiwi's (often very different) floor and, with just RX1 + Kiwi, leaves BOTH only
+// half-aligned, so the Kiwi pane washes out bright instead of matching RX1's dark
+// floor (operator report). Held as a local literal to avoid a dsp→state import
+// cycle.
+const KIWI_RX_INDEX = 7;
+
 // EMA smoothing for the per-receiver floor — fast enough to settle on a band
 // change within a couple of seconds, slow enough that the colours don't jitter
 // frame to frame as the instantaneous floor estimate wobbles.
@@ -85,14 +96,17 @@ export function resetReceiverFloors(): void {
 }
 
 /**
- * Median of all reported receiver floors (dB) — the common normalization
- * anchor and the "0 dB" reference the master scale reads against. Median, not
- * mean, so one dead or carrier-stuffed band can't drag the anchor. Returns null
- * until at least one floor has been reported. Allocation-free.
+ * Median of the reported HARDWARE receiver floors (dB) — the common
+ * normalization anchor and the "0 dB" reference the master scale reads against.
+ * Median, not mean, so one dead or carrier-stuffed band can't drag the anchor.
+ * The foreign Kiwi slice ({@link KIWI_RX_INDEX}) is excluded so it aligns to the
+ * hardware anchor without redefining it. Returns null until at least one
+ * hardware floor has been reported. Allocation-free.
  */
 export function referenceFloorDb(): number | null {
   let n = 0;
-  for (const v of floorByRx.values()) {
+  for (const [idx, v] of floorByRx) {
+    if (idx === KIWI_RX_INDEX) continue;
     if (n >= refScratch.length) break;
     refScratch[n++] = v;
   }

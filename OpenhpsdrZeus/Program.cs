@@ -689,8 +689,36 @@ public partial class Program
 
             // Never open larger than the visible work area: a size saved on a
             // bigger monitor would otherwise hang the frame off the edges.
-            var w = Math.Min(desiredWidth, work.Width);
-            var h = Math.Min(desiredHeight, work.Height);
+            var availW = work.Width;
+            var availH = work.Height;
+
+            // On Linux, keep the frame strictly INSIDE the work area. A GTK
+            // window whose size meets or exceeds the available work area gets
+            // auto-maximized by the Wayland compositor (KWin / Mutter / wlroots),
+            // and a maximized GTK frame is drawn borderless — no titlebar — which
+            // the operator reads as "opens fullscreen with no titlebar". The
+            // SetMinWidth/SetMinHeight pinned at 1280x800 make this unavoidable on
+            // small panels (e.g. the 8" 1280x800 CM5 DSI screen): the minimum
+            // itself is >= the work area once a desktop panel is subtracted, so
+            // GTK can't shrink the frame and the compositor maximizes it. Reserve
+            // a margin AND relax the runtime minimum to that margin-inset size so
+            // the frame is provably smaller than the work area and stays a normal
+            // decorated window. Windows/macOS keep decorations at work-area size,
+            // so this whole branch is Linux-only to leave them untouched.
+            if (OperatingSystem.IsLinux())
+            {
+                const int LinuxWorkAreaMargin = 48;
+                availW = Math.Max(640, work.Width - LinuxWorkAreaMargin);
+                availH = Math.Max(480, work.Height - LinuxWorkAreaMargin);
+                // Lower the floor so the size below actually takes effect instead
+                // of being clamped back up by the geometry hint (which would
+                // re-trigger the auto-maximize).
+                if (availW < window.MinWidth) window.MinWidth = availW;
+                if (availH < window.MinHeight) window.MinHeight = availH;
+            }
+
+            var w = Math.Min(desiredWidth, availW);
+            var h = Math.Min(desiredHeight, availH);
             window.Size = new System.Drawing.Size(w, h);
 
             // Centre within the work area, then clamp so the title bar is always

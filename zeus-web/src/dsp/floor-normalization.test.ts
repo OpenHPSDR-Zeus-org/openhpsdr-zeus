@@ -98,6 +98,34 @@ describe('floorNormalizationOffsetDb', () => {
   });
 });
 
+describe('Kiwi slice (index 7) is a foreign RX — aligns to, but never defines, the anchor', () => {
+  it('is excluded from the reference median', () => {
+    reportReceiverFloorDb(0, -135); // hardware RX1
+    reportReceiverFloorDb(7, -100); // Kiwi — must not move the anchor
+    expect(referenceFloorDb()).toBe(-135);
+  });
+
+  it('aligns the Kiwi fully to the hardware anchor (not half-way)', () => {
+    reportReceiverFloorDb(0, -140); // quiet hardware RX
+    reportReceiverFloorDb(7, -100); // noisier remote Kiwi
+    // Kiwi shifts its whole window up by the full floor delta so its floor lands
+    // at the hardware floor's colour — NOT the half-shift a shared median gives.
+    expect(floorNormalizationOffsetDb(7)).toBeCloseTo(40, 1);
+  });
+
+  it('does not pull the hardware panes (RX1 offset stays 0 with only the Kiwi alongside)', () => {
+    reportReceiverFloorDb(0, -140);
+    reportReceiverFloorDb(7, -100);
+    expect(floorNormalizationOffsetDb(0)).toBe(0);
+  });
+
+  it('falls back to no shift when no hardware floor has reported yet', () => {
+    reportReceiverFloorDb(7, -100); // Kiwi alone → anchor null → raw window
+    expect(referenceFloorDb()).toBeNull();
+    expect(floorNormalizationOffsetDb(7)).toBe(0);
+  });
+});
+
 describe('reportReceiverFloorDb EMA', () => {
   it('seeds on first report then smooths', () => {
     reportReceiverFloorDb(3, -100);

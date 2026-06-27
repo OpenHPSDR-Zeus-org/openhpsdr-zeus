@@ -30,6 +30,29 @@ public sealed class AppRestartService
     // or stop a sidecar). Best-effort — failures are swallowed.
     public Action? OnRestartRequested { get; set; }
 
+    // Exit the running Zeus process without relaunching. Used by the login
+    // dialog's Exit button to close the app. Same clean teardown as the restart
+    // path (Environment.Exit unwinds the Photino window without re-entering a
+    // torn-down WebView2 apartment), minus the detached relauncher helper.
+    public void RequestQuit()
+    {
+        try
+        {
+            OnRestartRequested?.Invoke();
+        }
+        catch
+        {
+            // Never block the exit on a best-effort hook.
+        }
+
+        // Let the in-flight HTTP response flush before the process dies.
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(300).ConfigureAwait(false);
+            Environment.Exit(0);
+        });
+    }
+
     public void RequestRestart()
     {
         var exe = Environment.ProcessPath
