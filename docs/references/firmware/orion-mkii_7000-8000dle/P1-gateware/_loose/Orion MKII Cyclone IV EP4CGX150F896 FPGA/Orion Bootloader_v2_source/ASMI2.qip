@@ -1,0 +1,8 @@
+set_global_assignment -name IP_TOOL_NAME "ALTASMI_PARALLEL"
+set_global_assignment -name IP_TOOL_VERSION "13.0"
+set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) "ASMI2.v"]
+set_global_assignment -name MISC_FILE [file join $::quartus(qip_path) "ASMI2.bsf"]
+set_global_assignment -name MISC_FILE [file join $::quartus(qip_path) "ASMI2_inst.v"]
+set_global_assignment -name MISC_FILE [file join $::quartus(qip_path) "ASMI2_bb.v"]
+set_global_assignment -name MISC_FILE [file join $::quartus(qip_path) "ASMI2.inc"]
+set_global_assignment -name MISC_FILE [file join $::quartus(qip_path) "ASMI2.cmp"]

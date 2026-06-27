@@ -1,0 +1,4 @@
+Fixed L&R Rx audio swap,
+Ethernet timing changes,
+PS DDC0/DDC1 syncro changes,
+Retimed and performed FPGA timing closure.

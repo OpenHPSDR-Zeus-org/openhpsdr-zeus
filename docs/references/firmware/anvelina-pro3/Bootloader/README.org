@@ -1,0 +1,15 @@
+#+LANGUAGE:  en
+#+STARTUP: showeverything
+
+* Anvelina PROIII Bootloader Source Code
+
+See:
+
+[[https://github.com/n1gp/Anvelina_PROIII][Anvelina_PROIII]]
+
+for the Protocol 2 Application code.
+
+Note:
+Back-dated Remote.v since the bootloader reconfigure wasn't working.
+Try to keep this version of Remote.v or figure out what has changed
+in the newer versions (post 11.1).

@@ -1,0 +1,302 @@
+# Copyright (C) 1991-2008 Altera Corporation
+# Your use of Altera Corporation's design tools, logic functions 
+# and other software and tools, and its AMPP partner logic 
+# functions, and any output files from any of the foregoing 
+# (including device programming or simulation files), and any 
+# associated documentation or information are expressly subject 
+# to the terms and conditions of the Altera Program License 
+# Subscription Agreement, Altera MegaCore Function License 
+# Agreement, or other applicable license agreement, including, 
+# without limitation, that your use is for the sole purpose of 
+# programming logic devices manufactured by Altera and sold by 
+# Altera or its authorized distributors.  Please refer to the 
+# applicable agreement for further details.
+
+
+# The default values for assignments are stored in the file
+#		Hermes_assignment_defaults.qdf
+# If this file doesn't exist, and for assignments not listed, see file
+#		assignment_defaults.qdf
+
+# Altera recommends that you do not modify this file. This
+# file is updated automatically by the Quartus II software
+# and any changes you make may be lost or overwritten.
+
+
+set_global_assignment -name FAMILY "Cyclone III"
+set_global_assignment -name DEVICE EP3C40Q240C8
+set_global_assignment -name TOP_LEVEL_ENTITY Hermes
+set_global_assignment -name ORIGINAL_QUARTUS_VERSION 8.1
+set_global_assignment -name PROJECT_CREATION_TIME_DATE "23:16:18  APRIL 18, 2011"
+set_global_assignment -name LAST_QUARTUS_VERSION 13.1
+set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -section_id Top
+set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
+set_global_assignment -name LL_ROOT_REGION ON -section_id "Root Region"
+set_global_assignment -name LL_MEMBER_STATE LOCKED -section_id "Root Region"
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 85
+set_global_assignment -name DEVICE_FILTER_PACKAGE "ANY QFP"
+set_global_assignment -name DEVICE_FILTER_PIN_COUNT 240
+set_global_assignment -name USE_CONFIGURATION_DEVICE ON
+set_global_assignment -name LL_ROOT_REGION ON -entity Mercury -section_id "Root Region"
+set_global_assignment -name LL_MEMBER_STATE LOCKED -entity Mercury -section_id "Root Region"
+set_instance_assignment -name CLOCK_SETTINGS IFCLK -to IFCLK
+set_instance_assignment -name CLOCK_SETTINGS CMCLK -to CMCLK
+set_instance_assignment -name CLOCK_SETTINGS CBCLK -to CBCLK
+set_instance_assignment -name CLOCK_SETTINGS CLRCIN -to CLRCIN
+set_instance_assignment -name CLOCK_SETTINGS CLRCOUT -to CLRCOUT
+set_instance_assignment -name CLOCK_SETTINGS TLV2208_125Mhz -to LTC2208_125Mhz
+set_instance_assignment -name CLOCK_SETTINGS OSC_10MHz -to OSC_10MHZ
+set_global_assignment -name FORCE_CONFIGURATION_VCCIO ON
+set_global_assignment -name RESERVE_ALL_UNUSED_PINS_WEAK_PULLUP "AS INPUT TRI-STATED"
+set_global_assignment -name ALLOW_POWER_UP_DONT_CARE OFF
+set_global_assignment -name POWER_PRESET_COOLING_SOLUTION "23 MM HEAT SINK WITH 200 LFPM AIRFLOW"
+set_global_assignment -name POWER_BOARD_THERMAL_MODEL "NONE (CONSERVATIVE)"
+set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -section_id Top
+set_global_assignment -name STRATIX_DEVICE_IO_STANDARD "3.3-V LVCMOS"
+set_global_assignment -name VERILOG_INPUT_VERSION SYSTEMVERILOG_2005
+set_global_assignment -name VERILOG_SHOW_LMF_MAPPING_MESSAGES OFF
+set_location_assignment PIN_226 -to MOSI
+set_location_assignment PIN_232 -to CLRCOUT
+set_location_assignment PIN_236 -to CLRCIN
+set_location_assignment PIN_224 -to SSCK
+set_location_assignment PIN_218 -to DACD[11]
+set_location_assignment PIN_219 -to DACD[12]
+set_location_assignment PIN_221 -to DACD[13]
+set_location_assignment PIN_194 -to SHDN
+set_location_assignment PIN_196 -to DACD[1]
+set_location_assignment PIN_200 -to DACD[3]
+set_location_assignment PIN_201 -to DACD[4]
+set_location_assignment PIN_202 -to DACD[5]
+set_location_assignment PIN_207 -to DACD[7]
+set_location_assignment PIN_214 -to DACD[8]
+set_location_assignment PIN_176 -to INA[6]
+set_location_assignment PIN_31 -to PHY_RX_CLOCK
+set_location_assignment PIN_33 -to CLK_25MHZ
+set_location_assignment PIN_152 -to LTC2208_122MHz
+set_location_assignment PIN_150 -to _122MHz
+set_location_assignment PIN_149 -to PHY_CLK125
+set_location_assignment PIN_89 -to OSC_10MHZ
+set_location_assignment PIN_84 -to FPGA_PTT
+set_location_assignment PIN_76 -to KEY_DOT
+set_location_assignment PIN_73 -to KEY_DASH
+set_location_assignment PIN_63 -to NCONFIG
+set_location_assignment PIN_110 -to MODE2
+set_location_assignment PIN_146 -to OVERFLOW
+set_location_assignment PIN_142 -to DEBUG_LED3
+set_location_assignment PIN_139 -to DEBUG_LED4
+set_location_assignment PIN_133 -to USEROUT2
+set_location_assignment PIN_177 -to INA[5]
+set_location_assignment PIN_173 -to INA[7]
+set_location_assignment PIN_169 -to INA[9]
+set_location_assignment PIN_161 -to INA[13]
+set_location_assignment PIN_184 -to INA[3]
+set_location_assignment PIN_189 -to DITH
+set_location_assignment PIN_195 -to DACD[0]
+set_location_assignment PIN_203 -to DACD[6]
+set_location_assignment PIN_216 -to DACD[9]
+set_location_assignment PIN_223 -to CMCLK
+set_location_assignment PIN_230 -to CMODE
+set_location_assignment PIN_235 -to CDOUT
+set_location_assignment PIN_45 -to PHY_TX[2]
+set_location_assignment PIN_49 -to PHY_TX[1]
+set_location_assignment PIN_50 -to PHY_TX[0]
+set_location_assignment PIN_56 -to PHY_RESET_N
+set_location_assignment PIN_6 -to PHY_RX[0]
+set_location_assignment PIN_44 -to PHY_TX[3]
+set_location_assignment PIN_51 -to PHY_MDC
+set_location_assignment PIN_52 -to PHY_MDIO
+set_location_assignment PIN_37 -to DEBUG_LED6
+set_location_assignment PIN_43 -to PHY_TX_CLOCK
+set_location_assignment PIN_41 -to PHY_TX_EN
+set_location_assignment PIN_21 -to PHY_RX[3]
+set_location_assignment PIN_18 -to PHY_RX[2]
+set_location_assignment PIN_13 -to PHY_RX[1]
+set_location_assignment PIN_55 -to PHY_INT_N
+set_location_assignment PIN_57 -to ADCMISO
+set_location_assignment PIN_78 -to ADCMOSI
+set_location_assignment PIN_80 -to Status_LED
+set_location_assignment PIN_88 -to IO4
+set_location_assignment PIN_111 -to DEBUG_LED7
+set_location_assignment PIN_112 -to DEBUG_LED8
+set_location_assignment PIN_93 -to DEBUG_LED2
+set_location_assignment PIN_98 -to PTT
+set_location_assignment PIN_99 -to IO5
+set_location_assignment PIN_100 -to IO6
+set_location_assignment PIN_103 -to DEBUG_LED9
+set_location_assignment PIN_106 -to DEBUG_LED10
+set_location_assignment PIN_118 -to nADCCS
+set_location_assignment PIN_126 -to IO8
+set_location_assignment PIN_127 -to USEROUT6
+set_location_assignment PIN_144 -to FPGA_PLL
+set_location_assignment PIN_145 -to RAND
+set_location_assignment PIN_128 -to USEROUT5
+set_location_assignment PIN_131 -to USEROUT4
+set_location_assignment PIN_132 -to USEROUT3
+set_location_assignment PIN_134 -to USEROUT1
+set_location_assignment PIN_135 -to USEROUT0
+set_location_assignment PIN_137 -to DAC_ALC
+set_location_assignment PIN_143 -to PGA
+set_location_assignment PIN_164 -to INA[11]
+set_location_assignment PIN_159 -to INA[15]
+set_location_assignment PIN_160 -to INA[14]
+set_location_assignment PIN_162 -to INA[12]
+set_location_assignment PIN_166 -to INA[10]
+set_location_assignment PIN_171 -to INA[8]
+set_location_assignment PIN_187 -to INA[0]
+set_location_assignment PIN_188 -to DEBUG_LED5
+set_location_assignment PIN_183 -to INA[4]
+set_location_assignment PIN_185 -to INA[2]
+set_location_assignment PIN_186 -to INA[1]
+set_location_assignment PIN_197 -to DACD[2]
+set_location_assignment PIN_217 -to DACD[10]
+set_location_assignment PIN_239 -to CDIN
+set_location_assignment PIN_240 -to CBCLK
+set_location_assignment PIN_113 -to RX_DV
+set_location_assignment PIN_231 -to nCS
+set_location_assignment PIN_39 -to ATTN_DATA
+set_location_assignment PIN_69 -to ATTN_LE
+set_location_assignment PIN_38 -to SI
+set_location_assignment PIN_68 -to SCK
+set_location_assignment PIN_94 -to ANT_TUNE
+set_global_assignment -name CYCLONEII_RESERVE_NCEO_AFTER_CONFIGURATION "USE AS REGULAR IO"
+set_location_assignment PIN_22 -to ATTN_CLK
+set_location_assignment PIN_82 -to ADCCLK
+set_location_assignment PIN_95 -to IO1
+set_location_assignment PIN_46 -to IO2
+set_location_assignment PIN_81 -to SPI_SDO
+set_location_assignment PIN_83 -to SPI_SCK
+set_location_assignment PIN_70 -to SO
+set_location_assignment PIN_87 -to CS
+set_global_assignment -name GENERATE_RBF_FILE ON
+set_global_assignment -name CRC_ERROR_OPEN_DRAIN OFF
+set_global_assignment -name OUTPUT_IO_TIMING_NEAR_END_VMEAS "HALF VCCIO" -rise
+set_global_assignment -name OUTPUT_IO_TIMING_NEAR_END_VMEAS "HALF VCCIO" -fall
+set_global_assignment -name OUTPUT_IO_TIMING_FAR_END_VMEAS "HALF SIGNAL SWING" -rise
+set_global_assignment -name OUTPUT_IO_TIMING_FAR_END_VMEAS "HALF SIGNAL SWING" -fall
+set_location_assignment PIN_117 -to J15_6
+set_location_assignment PIN_114 -to J15_5
+set_global_assignment -name SEARCH_PATH Documents/Hermes/Hermes_v1.8/ -tag from_archive
+set_global_assignment -name SEARCH_PATH Hermes_v1.9/ -tag from_archive
+set_global_assignment -name SYNTH_TIMING_DRIVEN_SYNTHESIS ON
+set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP ON
+set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
+set_global_assignment -name ROUTER_TIMING_OPTIMIZATION_LEVEL MAXIMUM
+set_global_assignment -name OPTIMIZE_MULTI_CORNER_TIMING ON
+set_global_assignment -name TIMEQUEST_MULTICORNER_ANALYSIS ON
+set_global_assignment -name ROUTER_CLOCKING_TOPOLOGY_ANALYSIS ON
+set_global_assignment -name ENABLE_BENEFICIAL_SKEW_OPTIMIZATION ON
+set_global_assignment -name OPTIMIZE_HOLD_TIMING "ALL PATHS"
+set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to PHY_CLK125
+set_global_assignment -name CYCLONEII_OPTIMIZATION_TECHNIQUE SPEED
+set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC ON
+set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON
+set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
+set_global_assignment -name ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION AUTO
+set_global_assignment -name MUX_RESTRUCTURE AUTO
+set_global_assignment -name STATE_MACHINE_PROCESSING "USER-ENCODED"
+set_global_assignment -name SEARCH_PATH "100% timing met_v4.7/" -tag from_archive
+set_global_assignment -name SEARCH_PATH Polyphase_FIR/ -tag from_archive
+set_global_assignment -name SMART_RECOMPILE ON
+set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
+set_location_assignment PIN_9 -to PWM_out
+set_global_assignment -name MISC_FILE Hermes.dpf
+set_global_assignment -name VERILOG_FILE square.v
+set_global_assignment -name VERILOG_FILE sqroot.v
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefI5_1025_EER.mif
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firrom1_1025.v
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firram36I_205.v
+set_global_assignment -name VERILOG_FILE "Polyphase_FIR/FirInterp5_1025_EER .v"
+set_global_assignment -name VERILOG_FILE sine_table.v
+set_global_assignment -name VERILOG_FILE sidetone.v
+set_global_assignment -name VERILOG_FILE profile_ROM.v
+set_global_assignment -name VERILOG_FILE profile.v
+set_global_assignment -name VERILOG_FILE Multiply2.v
+set_global_assignment -name VERILOG_FILE iambic.v
+set_global_assignment -name VERILOG_FILE divide2.v
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/CicInterpM5.v
+set_global_assignment -name VERILOG_FILE receiver2.v
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firromI_1024.v
+set_global_assignment -name QIP_FILE Polyphase_FIR/firromI_1024.qip
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firram36I_1024.v
+set_global_assignment -name QIP_FILE Polyphase_FIR/firram36I_1024.qip
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/FirInterp8_1024.v
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefI8_1024.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefFb.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefFa.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefEb.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefEa.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefD.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefC.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefB.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefA.mif
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firram48.v
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firx4r4.v
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firx2r2.v
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firromH.v
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firram36.v
+set_global_assignment -name QIP_FILE Polyphase_FIR/firram36.qip
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firfilt.v
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8H.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8G.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8F.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8E.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8D.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8C.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8B.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8A.mif
+set_global_assignment -name TEXT_FILE Polyphase_FIR/coefL8.txt
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8.mif
+set_global_assignment -name LICENSE_FILE Polyphase_FIR/coefL8.dat
+set_global_assignment -name VERILOG_FILE PHY_fifo.v
+set_global_assignment -name VERILOG_FILE sp_rcv_ctrl.v
+set_global_assignment -name VERILOG_FILE Attenuator.v
+set_global_assignment -name VERILOG_FILE CRC32.v
+set_global_assignment -name VERILOG_FILE ASMI.v
+set_global_assignment -name VERILOG_FILE PHY_Rx_fifo.v
+set_global_assignment -name VERILOG_FILE Led_control.v
+set_global_assignment -name VERILOG_FILE Led_flash.v
+set_global_assignment -name VERILOG_FILE MDIO.v
+set_global_assignment -name VERILOG_FILE Rx_MAC.v
+set_global_assignment -name VERILOG_FILE Tx_MAC.v
+set_global_assignment -name VERILOG_FILE ASMI_interface.v
+set_global_assignment -name VERILOG_FILE DHCP.v
+set_global_assignment -name VERILOG_FILE EEPROM.v
+set_global_assignment -name VERILOG_FILE EPCS_fifo.v
+set_global_assignment -name VERILOG_FILE PLL_clocks.v
+set_global_assignment -name VERILOG_FILE Tx_fifo.v
+set_global_assignment -name VERILOG_FILE varcic.v
+set_global_assignment -name VERILOG_FILE Apollo.v
+set_global_assignment -name VERILOG_FILE C10_PLL.v
+set_global_assignment -name VERILOG_FILE C122_PLL.v
+set_global_assignment -name VERILOG_FILE cdc_mcp.v
+set_global_assignment -name VERILOG_FILE cdc_sync.v
+set_global_assignment -name VERILOG_FILE cic.v
+set_global_assignment -name VERILOG_FILE cic_comb.v
+set_global_assignment -name VERILOG_FILE cic_integrator.v
+set_global_assignment -name VERILOG_FILE cicint.v
+set_global_assignment -name VERILOG_FILE clk_div.v
+set_global_assignment -name VERILOG_FILE cordic.v
+set_global_assignment -name VERILOG_FILE cpl_cordic.v
+set_global_assignment -name VERILOG_FILE debounce.v
+set_global_assignment -name VERILOG_FILE FIFO.v
+set_global_assignment -name VERILOG_FILE Hermes.v
+set_global_assignment -name VERILOG_FILE Hermes_ADC.v
+set_global_assignment -name VERILOG_FILE Hermes_clk_lrclk_gen.v
+set_global_assignment -name VERILOG_FILE Hermes_Tx_fifo_ctrl.v
+set_global_assignment -name VERILOG_FILE HPF_select.v
+set_global_assignment -name VERILOG_FILE I2S_rcv.v
+set_global_assignment -name VERILOG_FILE I2S_xmit.v
+set_global_assignment -name VERILOG_FILE LPF_select.v
+set_global_assignment -name VERILOG_FILE phase_accumulator.v
+set_global_assignment -name VERILOG_FILE pulsegen.v
+set_global_assignment -name VERILOG_FILE receiver.v
+set_global_assignment -name VERILOG_FILE SPI.v
+set_global_assignment -name VERILOG_FILE TLV320_SPI.v
+set_global_assignment -name QIP_FILE PLL_IF.qip
+set_global_assignment -name QIP_FILE PLL_clocks.qip
+set_global_assignment -name QIP_FILE SP_fifo.qip
+set_global_assignment -name QIP_FILE PHY_fifo.qip
+set_global_assignment -name QIP_FILE square.qip
+set_global_assignment -name QIP_FILE sqroot.qip
+set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top

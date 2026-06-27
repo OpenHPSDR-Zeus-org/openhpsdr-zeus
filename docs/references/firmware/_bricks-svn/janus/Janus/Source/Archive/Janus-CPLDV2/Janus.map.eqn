@@ -1,0 +1,921 @@
+-- Copyright (C) 1991-2005 Altera Corporation
+-- Your use of Altera Corporation's design tools, logic functions 
+-- and other software and tools, and its AMPP partner logic 
+-- functions, and any output files any of the foregoing 
+-- (including device programming or simulation files), and any 
+-- associated documentation or information are expressly subject 
+-- to the terms and conditions of the Altera Program License 
+-- Subscription Agreement, Altera MegaCore Function License 
+-- Agreement, or other applicable license agreement, including, 
+-- without limitation, that your use is for the sole purpose of 
+-- programming logic devices manufactured by Altera and sold by 
+-- Altera or its authorized distributors.  Please refer to the 
+-- applicable agreement for further details.
+--clock_by_2 is clock_by_2
+--operation mode is normal
+
+clock_by_2_lut_out = !clock_by_2;
+clock_by_2 = DFFEAS(clock_by_2_lut_out, CLK_24MHZ, VCC, , , , , , );
+
+
+--TLV_nCS is TLV_nCS
+--operation mode is normal
+
+TLV_nCS_lut_out = A1L53 # TLV[0] & TLV[2] & A1L36;
+TLV_nCS = DFFEAS(TLV_nCS_lut_out, CLK_24MHZ, VCC, , , , , , );
+
+
+--ad_reset is ad_reset
+--operation mode is normal
+
+ad_reset_lut_out = ad_count[25];
+ad_reset = DFFEAS(ad_reset_lut_out, CLK_24MHZ, VCC, , , , , , );
+
+
+--TLV_CLK is TLV_CLK
+--operation mode is normal
+
+TLV_CLK_lut_out = TLV[2] & TLV_CLK # !TLV[2] & (TLV[1] & (!TLV[0]) # !TLV[1] & TLV_CLK);
+TLV_CLK = DFFEAS(TLV_CLK_lut_out, CLK_24MHZ, VCC, , , , , , );
+
+
+--data is data
+--operation mode is normal
+
+data_lut_out = A1L25 # A1L26 # A1L27 & A1L28;
+data = DFFEAS(data_lut_out, CLK_24MHZ, VCC, , A1L12, , , , );
+
+
+--TLV[2] is TLV[2]
+--operation mode is normal
+
+TLV[2]_lut_out = A1L37 # TLV[2] & A1L38 & A1L139;
+TLV[2] = DFFEAS(TLV[2]_lut_out, CLK_24MHZ, VCC, , , , , , );
+
+
+--TLV[1] is TLV[1]
+--operation mode is normal
+
+TLV[1]_lut_out = !TLV[2] & (TLV[0] $ TLV[1]);
+TLV[1] = DFFEAS(TLV[1]_lut_out, CLK_24MHZ, VCC, , , , , , );
+
+
+--TLV[0] is TLV[0]
+--operation mode is normal
+
+TLV[0]_lut_out = TLV[2] & !TLV[1] & (!TLV[0] # !A1L138) # !TLV[2] & (!TLV[0]);
+TLV[0] = DFFEAS(TLV[0]_lut_out, CLK_24MHZ, VCC, , , , , , );
+
+
+--A1L53 is TLV_nCS~111
+--operation mode is normal
+
+A1L53 = TLV[2] & TLV_nCS # !TLV[2] & (TLV[1] & TLV_nCS # !TLV[1] & (!TLV[0]));
+
+
+--load[2] is load[2]
+--operation mode is normal
+
+load[2]_lut_out = load[2] $ (load[1] & load[0]);
+load[2] = DFFEAS(load[2]_lut_out, index, VCC, , , , , , );
+
+
+--load[1] is load[1]
+--operation mode is normal
+
+load[1]_lut_out = A1L135;
+load[1] = DFFEAS(load[1]_lut_out, index, VCC, , , , , , );
+
+
+--load[0] is load[0]
+--operation mode is normal
+
+load[0]_lut_out = !load[0];
+load[0] = DFFEAS(load[0]_lut_out, index, VCC, , , , , , );
+
+
+--A1L36 is Select~538
+--operation mode is normal
+
+A1L36 = load[2] & load[1] & load[0] & !TLV[1];
+
+
+--ad_count[25] is ad_count[25]
+--operation mode is normal
+
+ad_count[25]_carry_eqn = A1L118;
+ad_count[25]_lut_out = ad_count[25] $ (ad_count[25]_carry_eqn);
+ad_count[25] = DFFEAS(ad_count[25]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+
+--bit_count[2] is bit_count[2]
+--operation mode is normal
+
+bit_count[2]_lut_out = A1L124 & bit_count[2] # !A1L124 & (bit_count[2] $ A1L28 # !TLV[2]);
+bit_count[2] = DFFEAS(bit_count[2]_lut_out, CLK_24MHZ, VCC, , , , , , );
+
+
+--TLV_data[11] is TLV_data[11]
+--operation mode is normal
+
+TLV_data[11]_lut_out = tdata[11];
+TLV_data[11] = DFFEAS(TLV_data[11]_lut_out, CLK_24MHZ, VCC, , A1L12, , , , );
+
+
+--TLV_data[10] is TLV_data[10]
+--operation mode is normal
+
+TLV_data[10]_lut_out = tdata[10];
+TLV_data[10] = DFFEAS(TLV_data[10]_lut_out, CLK_24MHZ, VCC, , A1L12, , , , );
+
+
+--bit_count[0] is bit_count[0]
+--operation mode is normal
+
+bit_count[0]_lut_out = A1L38 & (bit_count[0] $ !A1L139 # !TLV[2]) # !A1L38 & bit_count[0];
+bit_count[0] = DFFEAS(bit_count[0]_lut_out, CLK_24MHZ, VCC, , , , , , );
+
+
+--bit_count[1] is bit_count[1]
+--operation mode is normal
+
+bit_count[1]_lut_out = A1L124 & bit_count[1] # !A1L124 & (bit_count[1] $ !bit_count[0] # !TLV[2]);
+bit_count[1] = DFFEAS(bit_count[1]_lut_out, CLK_24MHZ, VCC, , , , , , );
+
+
+--A1L23 is Mux~449
+--operation mode is normal
+
+A1L23 = bit_count[0] & (TLV_data[11] # !bit_count[1]) # !bit_count[0] & (TLV_data[10] & bit_count[1]);
+
+
+--TLV_data[9] is TLV_data[9]
+--operation mode is normal
+
+TLV_data[9]_lut_out = tdata[9];
+TLV_data[9] = DFFEAS(TLV_data[9]_lut_out, CLK_24MHZ, VCC, , A1L12, , , , );
+
+
+--TLV_data[1] is TLV_data[1]
+--operation mode is normal
+
+TLV_data[1]_lut_out = tdata[1];
+TLV_data[1] = DFFEAS(TLV_data[1]_lut_out, CLK_24MHZ, VCC, , A1L12, , , , );
+
+
+--bit_count[3] is bit_count[3]
+--operation mode is normal
+
+bit_count[3]_lut_out = A1L124 & bit_count[3] # !A1L124 & (bit_count[3] $ !A1L121 # !TLV[2]);
+bit_count[3] = DFFEAS(bit_count[3]_lut_out, CLK_24MHZ, VCC, , , , , , );
+
+
+--A1L24 is Mux~450
+--operation mode is normal
+
+A1L24 = bit_count[3] & (TLV_data[9] # bit_count[1]) # !bit_count[3] & (TLV_data[1] & !bit_count[1]);
+
+
+--A1L25 is Mux~451
+--operation mode is normal
+
+A1L25 = !bit_count[2] & A1L23 & A1L24;
+
+
+--A1L140 is rtl~38
+--operation mode is normal
+
+A1L140 = !bit_count[2] & !bit_count[3] & !bit_count[0];
+
+
+--TLV_data[4] is TLV_data[4]
+--operation mode is normal
+
+TLV_data[4]_lut_out = tdata[4];
+TLV_data[4] = DFFEAS(TLV_data[4]_lut_out, CLK_24MHZ, VCC, , A1L12, , , , );
+
+
+--TLV_data[0] is TLV_data[0]
+--operation mode is normal
+
+TLV_data[0]_lut_out = tdata[0];
+TLV_data[0] = DFFEAS(TLV_data[0]_lut_out, CLK_24MHZ, VCC, , A1L12, , , , );
+
+
+--A1L26 is Mux~452
+--operation mode is normal
+
+A1L26 = A1L140 & (bit_count[1] & TLV_data[4] # !bit_count[1] & (TLV_data[0]));
+
+
+--TLV_data[12] is TLV_data[12]
+--operation mode is normal
+
+TLV_data[12]_lut_out = tdata[12];
+TLV_data[12] = DFFEAS(TLV_data[12]_lut_out, CLK_24MHZ, VCC, , A1L12, , , , );
+
+
+--A1L27 is Mux~453
+--operation mode is normal
+
+A1L27 = bit_count[2] & (bit_count[3] & TLV_data[12] # !bit_count[3] & (TLV_data[4]));
+
+
+--A1L28 is Mux~454
+--operation mode is normal
+
+A1L28 = !bit_count[0] & !bit_count[1];
+
+
+--A1L12 is Decoder~94
+--operation mode is normal
+
+A1L12 = TLV[0] & (!TLV[2] & !TLV[1]);
+
+
+--A1L138 is rtl~0
+--operation mode is normal
+
+A1L138 = !load[0] # !load[1] # !load[2];
+
+
+--A1L37 is Select~539
+--operation mode is normal
+
+A1L37 = TLV[0] & (TLV[1] & (!TLV[2]) # !TLV[1] & !A1L138 & TLV[2]);
+
+
+--A1L38 is Select~540
+--operation mode is normal
+
+A1L38 = !TLV[0] & !TLV[1];
+
+
+--A1L139 is rtl~1
+--operation mode is normal
+
+A1L139 = !bit_count[2] & !bit_count[3] & !bit_count[0] & !bit_count[1];
+
+
+--index is index
+--operation mode is normal
+
+index_lut_out = index $ (A1L38 & (A1L139 # !TLV[2]));
+index = DFFEAS(index_lut_out, CLK_24MHZ, VCC, , , , , , );
+
+
+--A1L135 is load~100
+--operation mode is normal
+
+A1L135 = load[1] $ load[0];
+
+
+--ad_count[24] is ad_count[24]
+--operation mode is arithmetic
+
+ad_count[24]_carry_eqn = A1L116;
+ad_count[24]_lut_out = ad_count[24] $ (!ad_count[24]_carry_eqn);
+ad_count[24] = DFFEAS(ad_count[24]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L118 is ad_count[24]~215
+--operation mode is arithmetic
+
+A1L118 = CARRY(ad_count[24] & (!A1L116));
+
+
+--A1L124 is bit_count[0]~638
+--operation mode is normal
+
+A1L124 = TLV[0] # TLV[1] # TLV[2] & A1L139;
+
+
+--tdata[11] is tdata[11]
+--operation mode is normal
+
+tdata[11]_lut_out = load[1] # !load[0];
+tdata[11] = DFFEAS(tdata[11]_lut_out, index, VCC, , A1L138, , , , );
+
+
+--tdata[10] is tdata[10]
+--operation mode is normal
+
+tdata[10]_lut_out = !A1L135;
+tdata[10] = DFFEAS(tdata[10]_lut_out, index, VCC, , A1L138, , , , );
+
+
+--tdata[9] is tdata[9]
+--operation mode is normal
+
+tdata[9]_lut_out = load[2] & (!load[0]) # !load[2] & !load[1];
+tdata[9] = DFFEAS(tdata[9]_lut_out, index, VCC, , A1L138, , , , );
+
+
+--tdata[1] is tdata[1]
+--operation mode is normal
+
+tdata[1]_lut_out = load[2] & (!load[1] & !load[0]);
+tdata[1] = DFFEAS(tdata[1]_lut_out, index, VCC, , A1L138, , , , );
+
+
+--A1L121 is add~422
+--operation mode is normal
+
+A1L121 = bit_count[2] # bit_count[0] # bit_count[1];
+
+
+--tdata[4] is tdata[4]
+--operation mode is normal
+
+tdata[4]_lut_out = !load[2] & !load[0] & (load[1]);
+tdata[4] = DFFEAS(tdata[4]_lut_out, index, VCC, , A1L138, , , , );
+
+
+--tdata[0] is tdata[0]
+--operation mode is normal
+
+tdata[0]_lut_out = !load[2] & (load[1] $ load[0]);
+tdata[0] = DFFEAS(tdata[0]_lut_out, index, VCC, , A1L138, , , , );
+
+
+--tdata[12] is tdata[12]
+--operation mode is normal
+
+tdata[12]_lut_out = !load[1] & (load[0] # !load[2]);
+tdata[12] = DFFEAS(tdata[12]_lut_out, index, VCC, , A1L138, , , , );
+
+
+--ad_count[23] is ad_count[23]
+--operation mode is arithmetic
+
+ad_count[23]_carry_eqn = A1L114;
+ad_count[23]_lut_out = ad_count[23] $ (ad_count[23]_carry_eqn);
+ad_count[23] = DFFEAS(ad_count[23]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L116 is ad_count[23]~219
+--operation mode is arithmetic
+
+A1L116 = CARRY(!A1L114 # !ad_count[23]);
+
+
+--ad_count[22] is ad_count[22]
+--operation mode is arithmetic
+
+ad_count[22]_carry_eqn = A1L112;
+ad_count[22]_lut_out = ad_count[22] $ (!ad_count[22]_carry_eqn);
+ad_count[22] = DFFEAS(ad_count[22]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L114 is ad_count[22]~223
+--operation mode is arithmetic
+
+A1L114 = CARRY(ad_count[22] & (!A1L112));
+
+
+--ad_count[21] is ad_count[21]
+--operation mode is arithmetic
+
+ad_count[21]_carry_eqn = A1L110;
+ad_count[21]_lut_out = ad_count[21] $ (ad_count[21]_carry_eqn);
+ad_count[21] = DFFEAS(ad_count[21]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L112 is ad_count[21]~227
+--operation mode is arithmetic
+
+A1L112 = CARRY(!A1L110 # !ad_count[21]);
+
+
+--ad_count[20] is ad_count[20]
+--operation mode is arithmetic
+
+ad_count[20]_carry_eqn = A1L108;
+ad_count[20]_lut_out = ad_count[20] $ (!ad_count[20]_carry_eqn);
+ad_count[20] = DFFEAS(ad_count[20]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L110 is ad_count[20]~231
+--operation mode is arithmetic
+
+A1L110 = CARRY(ad_count[20] & (!A1L108));
+
+
+--ad_count[19] is ad_count[19]
+--operation mode is arithmetic
+
+ad_count[19]_carry_eqn = A1L106;
+ad_count[19]_lut_out = ad_count[19] $ (ad_count[19]_carry_eqn);
+ad_count[19] = DFFEAS(ad_count[19]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L108 is ad_count[19]~235
+--operation mode is arithmetic
+
+A1L108 = CARRY(!A1L106 # !ad_count[19]);
+
+
+--ad_count[18] is ad_count[18]
+--operation mode is arithmetic
+
+ad_count[18]_carry_eqn = A1L104;
+ad_count[18]_lut_out = ad_count[18] $ (!ad_count[18]_carry_eqn);
+ad_count[18] = DFFEAS(ad_count[18]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L106 is ad_count[18]~239
+--operation mode is arithmetic
+
+A1L106 = CARRY(ad_count[18] & (!A1L104));
+
+
+--ad_count[17] is ad_count[17]
+--operation mode is arithmetic
+
+ad_count[17]_carry_eqn = A1L102;
+ad_count[17]_lut_out = ad_count[17] $ (ad_count[17]_carry_eqn);
+ad_count[17] = DFFEAS(ad_count[17]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L104 is ad_count[17]~243
+--operation mode is arithmetic
+
+A1L104 = CARRY(!A1L102 # !ad_count[17]);
+
+
+--ad_count[16] is ad_count[16]
+--operation mode is arithmetic
+
+ad_count[16]_carry_eqn = A1L100;
+ad_count[16]_lut_out = ad_count[16] $ (!ad_count[16]_carry_eqn);
+ad_count[16] = DFFEAS(ad_count[16]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L102 is ad_count[16]~247
+--operation mode is arithmetic
+
+A1L102 = CARRY(ad_count[16] & (!A1L100));
+
+
+--ad_count[15] is ad_count[15]
+--operation mode is arithmetic
+
+ad_count[15]_carry_eqn = A1L98;
+ad_count[15]_lut_out = ad_count[15] $ (ad_count[15]_carry_eqn);
+ad_count[15] = DFFEAS(ad_count[15]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L100 is ad_count[15]~251
+--operation mode is arithmetic
+
+A1L100 = CARRY(!A1L98 # !ad_count[15]);
+
+
+--ad_count[14] is ad_count[14]
+--operation mode is arithmetic
+
+ad_count[14]_carry_eqn = A1L96;
+ad_count[14]_lut_out = ad_count[14] $ (!ad_count[14]_carry_eqn);
+ad_count[14] = DFFEAS(ad_count[14]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L98 is ad_count[14]~255
+--operation mode is arithmetic
+
+A1L98 = CARRY(ad_count[14] & (!A1L96));
+
+
+--ad_count[13] is ad_count[13]
+--operation mode is arithmetic
+
+ad_count[13]_carry_eqn = A1L94;
+ad_count[13]_lut_out = ad_count[13] $ (ad_count[13]_carry_eqn);
+ad_count[13] = DFFEAS(ad_count[13]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L96 is ad_count[13]~259
+--operation mode is arithmetic
+
+A1L96 = CARRY(!A1L94 # !ad_count[13]);
+
+
+--ad_count[12] is ad_count[12]
+--operation mode is arithmetic
+
+ad_count[12]_carry_eqn = A1L92;
+ad_count[12]_lut_out = ad_count[12] $ (!ad_count[12]_carry_eqn);
+ad_count[12] = DFFEAS(ad_count[12]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L94 is ad_count[12]~263
+--operation mode is arithmetic
+
+A1L94 = CARRY(ad_count[12] & (!A1L92));
+
+
+--ad_count[11] is ad_count[11]
+--operation mode is arithmetic
+
+ad_count[11]_carry_eqn = A1L90;
+ad_count[11]_lut_out = ad_count[11] $ (ad_count[11]_carry_eqn);
+ad_count[11] = DFFEAS(ad_count[11]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L92 is ad_count[11]~267
+--operation mode is arithmetic
+
+A1L92 = CARRY(!A1L90 # !ad_count[11]);
+
+
+--ad_count[10] is ad_count[10]
+--operation mode is arithmetic
+
+ad_count[10]_carry_eqn = A1L88;
+ad_count[10]_lut_out = ad_count[10] $ (!ad_count[10]_carry_eqn);
+ad_count[10] = DFFEAS(ad_count[10]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L90 is ad_count[10]~271
+--operation mode is arithmetic
+
+A1L90 = CARRY(ad_count[10] & (!A1L88));
+
+
+--ad_count[9] is ad_count[9]
+--operation mode is arithmetic
+
+ad_count[9]_carry_eqn = A1L86;
+ad_count[9]_lut_out = ad_count[9] $ (ad_count[9]_carry_eqn);
+ad_count[9] = DFFEAS(ad_count[9]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L88 is ad_count[9]~275
+--operation mode is arithmetic
+
+A1L88 = CARRY(!A1L86 # !ad_count[9]);
+
+
+--ad_count[8] is ad_count[8]
+--operation mode is arithmetic
+
+ad_count[8]_carry_eqn = A1L84;
+ad_count[8]_lut_out = ad_count[8] $ (!ad_count[8]_carry_eqn);
+ad_count[8] = DFFEAS(ad_count[8]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L86 is ad_count[8]~279
+--operation mode is arithmetic
+
+A1L86 = CARRY(ad_count[8] & (!A1L84));
+
+
+--ad_count[7] is ad_count[7]
+--operation mode is arithmetic
+
+ad_count[7]_carry_eqn = A1L82;
+ad_count[7]_lut_out = ad_count[7] $ (ad_count[7]_carry_eqn);
+ad_count[7] = DFFEAS(ad_count[7]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L84 is ad_count[7]~283
+--operation mode is arithmetic
+
+A1L84 = CARRY(!A1L82 # !ad_count[7]);
+
+
+--ad_count[6] is ad_count[6]
+--operation mode is arithmetic
+
+ad_count[6]_carry_eqn = A1L80;
+ad_count[6]_lut_out = ad_count[6] $ (!ad_count[6]_carry_eqn);
+ad_count[6] = DFFEAS(ad_count[6]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L82 is ad_count[6]~287
+--operation mode is arithmetic
+
+A1L82 = CARRY(ad_count[6] & (!A1L80));
+
+
+--ad_count[5] is ad_count[5]
+--operation mode is arithmetic
+
+ad_count[5]_carry_eqn = A1L78;
+ad_count[5]_lut_out = ad_count[5] $ (ad_count[5]_carry_eqn);
+ad_count[5] = DFFEAS(ad_count[5]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L80 is ad_count[5]~291
+--operation mode is arithmetic
+
+A1L80 = CARRY(!A1L78 # !ad_count[5]);
+
+
+--ad_count[4] is ad_count[4]
+--operation mode is arithmetic
+
+ad_count[4]_carry_eqn = A1L76;
+ad_count[4]_lut_out = ad_count[4] $ (!ad_count[4]_carry_eqn);
+ad_count[4] = DFFEAS(ad_count[4]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L78 is ad_count[4]~295
+--operation mode is arithmetic
+
+A1L78 = CARRY(ad_count[4] & (!A1L76));
+
+
+--ad_count[3] is ad_count[3]
+--operation mode is arithmetic
+
+ad_count[3]_carry_eqn = A1L74;
+ad_count[3]_lut_out = ad_count[3] $ (ad_count[3]_carry_eqn);
+ad_count[3] = DFFEAS(ad_count[3]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L76 is ad_count[3]~299
+--operation mode is arithmetic
+
+A1L76 = CARRY(!A1L74 # !ad_count[3]);
+
+
+--ad_count[2] is ad_count[2]
+--operation mode is arithmetic
+
+ad_count[2]_carry_eqn = A1L72;
+ad_count[2]_lut_out = ad_count[2] $ (!ad_count[2]_carry_eqn);
+ad_count[2] = DFFEAS(ad_count[2]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L74 is ad_count[2]~303
+--operation mode is arithmetic
+
+A1L74 = CARRY(ad_count[2] & (!A1L72));
+
+
+--ad_count[1] is ad_count[1]
+--operation mode is arithmetic
+
+ad_count[1]_carry_eqn = A1L70;
+ad_count[1]_lut_out = ad_count[1] $ (ad_count[1]_carry_eqn);
+ad_count[1] = DFFEAS(ad_count[1]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L72 is ad_count[1]~307
+--operation mode is arithmetic
+
+A1L72 = CARRY(!A1L70 # !ad_count[1]);
+
+
+--ad_count[0] is ad_count[0]
+--operation mode is arithmetic
+
+ad_count[0]_lut_out = !ad_count[0];
+ad_count[0] = DFFEAS(ad_count[0]_lut_out, CLK_24MHZ, VCC, , !ad_count[25], , , , );
+
+--A1L70 is ad_count[0]~311
+--operation mode is arithmetic
+
+A1L70 = CARRY(ad_count[0]);
+
+
+--CAL is CAL
+--operation mode is input
+
+CAL = INPUT();
+
+
+--FSYNC is FSYNC
+--operation mode is input
+
+FSYNC = INPUT();
+
+
+--YA7 is YA7
+--operation mode is input
+
+YA7 = INPUT();
+
+
+--YC3 is YC3
+--operation mode is input
+
+YC3 = INPUT();
+
+
+--YA6 is YA6
+--operation mode is input
+
+YA6 = INPUT();
+
+
+--YB3 is YB3
+--operation mode is input
+
+YB3 = INPUT();
+
+
+--YC1 is YC1
+--operation mode is input
+
+YC1 = INPUT();
+
+
+--YC6 is YC6
+--operation mode is input
+
+YC6 = INPUT();
+
+
+--YA3 is YA3
+--operation mode is input
+
+YA3 = INPUT();
+
+
+--CLK_24MHZ is CLK_24MHZ
+--operation mode is input
+
+CLK_24MHZ = INPUT();
+
+
+--LRCLK is LRCLK
+--operation mode is input
+
+LRCLK = INPUT();
+
+
+--CDOUT is CDOUT
+--operation mode is input
+
+CDOUT = INPUT();
+
+
+--PTT is PTT
+--operation mode is input
+
+PTT = INPUT();
+
+
+--SDOUT is SDOUT
+--operation mode is input
+
+SDOUT = INPUT();
+
+
+--SCLK is SCLK
+--operation mode is input
+
+SCLK = INPUT();
+
+
+--CBCLK is CBCLK
+--operation mode is output
+
+CBCLK = OUTPUT(YA7);
+
+
+--CDIN is CDIN
+--operation mode is output
+
+CDIN = OUTPUT(YC3);
+
+
+--CLRCIN is CLRCIN
+--operation mode is output
+
+CLRCIN = OUTPUT(YA6);
+
+
+--CLRCOUT is CLRCOUT
+--operation mode is output
+
+CLRCOUT = OUTPUT(YA6);
+
+
+--CMCLK is CMCLK
+--operation mode is output
+
+CMCLK = OUTPUT(clock_by_2);
+
+
+--CMODE is CMODE
+--operation mode is output
+
+CMODE = OUTPUT(VCC);
+
+
+--DFS0 is DFS0
+--operation mode is output
+
+DFS0 = OUTPUT(YB3);
+
+
+--DFS1 is DFS1
+--operation mode is output
+
+DFS1 = OUTPUT(YC1);
+
+
+--EXP1 is EXP1
+--operation mode is output
+
+EXP1 = OUTPUT(YB3);
+
+
+--EXP2 is EXP2
+--operation mode is output
+
+EXP2 = OUTPUT(YC1);
+
+
+--EXP3 is EXP3
+--operation mode is output
+
+EXP3 = OUTPUT(GND);
+
+
+--EXP4 is EXP4
+--operation mode is output
+
+EXP4 = OUTPUT(GND);
+
+
+--HPF is HPF
+--operation mode is output
+
+HPF = OUTPUT(VCC);
+
+
+--IPWM is IPWM
+--operation mode is output
+
+IPWM = OUTPUT(YC6);
+
+
+--MCLK is MCLK
+--operation mode is output
+
+MCLK = OUTPUT(clock_by_2);
+
+
+--nCS is nCS
+--operation mode is output
+
+nCS = OUTPUT(TLV_nCS);
+
+
+--nRST is nRST
+--operation mode is output
+
+nRST = OUTPUT(ad_reset);
+
+
+--QPWM is QPWM
+--operation mode is output
+
+QPWM = OUTPUT(YA3);
+
+
+--SMODE1 is SMODE1
+--operation mode is output
+
+SMODE1 = OUTPUT(VCC);
+
+
+--SMODE2 is SMODE2
+--operation mode is output
+
+SMODE2 = OUTPUT(VCC);
+
+
+--SSCK is SSCK
+--operation mode is output
+
+SSCK = OUTPUT(TLV_CLK);
+
+
+--MOSI is MOSI
+--operation mode is output
+
+MOSI = OUTPUT(data);
+
+
+--ZCAL is ZCAL
+--operation mode is output
+
+ZCAL = OUTPUT(VCC);
+
+
+--YB7 is YB7
+--operation mode is output
+
+YB7 = OUTPUT(CLK_24MHZ);
+
+
+--YB4 is YB4
+--operation mode is output
+
+YB4 = OUTPUT(LRCLK);
+
+
+--YC2 is YC2
+--operation mode is output
+
+YC2 = OUTPUT(CDOUT);
+
+
+--YB1 is YB1
+--operation mode is output
+
+YB1 = OUTPUT(PTT);
+
+
+--YB5 is YB5
+--operation mode is output
+
+YB5 = OUTPUT(SDOUT);
+
+
+--YB6 is YB6
+--operation mode is output
+
+YB6 = OUTPUT(SCLK);
+
+

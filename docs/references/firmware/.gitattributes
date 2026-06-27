@@ -1,0 +1,9 @@
+# Verbatim vendor firmware/gateware mirror — do NOT normalize line endings or
+# treat as text for diffs. Upstream authored these (often on Windows); we mirror
+# them byte-for-byte for reference reading, not editing.
+* -text
+
+# ...except our own tooling, which must stay LF to run on Linux/macOS.
+_tools/*.sh text eol=lf
+_tools/*.py text eol=lf
+*.md text eol=lf

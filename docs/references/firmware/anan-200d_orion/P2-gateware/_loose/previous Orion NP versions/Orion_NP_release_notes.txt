@@ -1,0 +1,81 @@
+Release notes for Orion NP MkI firmware
+
+2016	Dec 29	- port of Angelia_15Dec2016 code to Orion using Quartus Prime Lite v16.0
+		- updated all megafunctions and regenerated afresh all PLL megafunctions
+		- moved _122_90 clock output from C122_PLL/.c1 to PLL_IF/.c3, changed phase 
+		shift from 90 to 60 degrees
+		- added Orion mic PTT/tip/ring/selection code
+		- added external 10MHz ref input
+		- added OSC_enable code
+		- changed hardware ID to 05 for Orion ID
+		- changed C122_PLL/.c0 output from 80khz to 10MHz
+		- changed 122.88MHz clock XOR to operate at 10MHz vs 80khz				
+		- changed phase shift for PLL_IF/.c1 output (CBCLK) from 0 to 90 degrees
+		- added additional 3 receivers (NR = 7)
+		- changed firmware version number to v0.1
+		- closed timing
+	
+	Dec 30	- changed hardware ID to 04 for Orion MkI (ID = 5 is for Orion MkII)
+		- changed version number to 0.2
+
+2017 	Jan 1	- enabled HW_timeout feature
+		- changed phase shift of PLL_IF/.c3 to 45 degrees 
+		- changed version number to 0.3
+
+	Jan 2	- fixed reverse logic tip/ring select bug in mic PTT code
+		- closed timing
+		- changed version number to 0.4
+					
+	Jan 18 	- hard coded inputs for the receiver modules as follows:
+			temp_ADC[0] -> DDC0 
+			temp_DACD   -> DDC1
+			temp_ADC[0] -> DDC2
+			temp_ADC[1] -> DDC3
+			temp_ADC[0] -> DDC4
+			temp_ADC[1] -> DDC5
+			temp_ADC[1] -> DDC6
+		- removed code referencing input switching options for the receiver modules
+		- added input switching option for DDC2 only (temp_DACD or temp_ADC[1]) to allow both 
+			Diversity and PureSignal operations
+		- changed phase shift for PLL_IF/.c3 to 180 degrees
+		- changed version number to v0.5
+		- closed timing
+
+	Feb 6 	- replaced Ethernet folder with the Ethernet folder from Angelia_NP_v10.6
+			to capture changes to DHCP code that fix DHCP lease renewal issues
+		- changed lines 599 and 652 in Orion.v for new DHCP lease renewal code	
+		- removed debounced_PTT as input from FPGA_PTT assignment statement, to fix possible pop/click
+			audio generation on Rx-to-Tx transitions
+		- changed phase shift of PLL_IF/.c3 to 15 degrees 
+		- changed version number to v0.6
+		- removed all max/min delay constraints, compiled, retimed
+
+	Feb 10	- re-instated software-selectable ADC/DDC assignments
+		- changed ref clock for DACD[*] output delay constraints to DACD_clock in Orion.sdc
+		- changed protocol document number to v3.3
+		- changed version number to 0.7
+		- removed all max/min delay contraints, compiled
+		- retimed and compiled iteratively until timing was met
+
+	Mar 6	- modified the Rx FIFO megafunctions by selecting the "Add an extra MSB to usedw port(s)" option to
+			to keep the "used word" counter from going to zero when/if the FIFO becomes completely 
+			full, to avoid Rx IQ data halts that occurred in previous firmware versions when the 
+			Rx FIFO became full
+		- changed variable length of Rx_used variable in Orion.v to 12 bits vs 11 bits previously
+		- changed version number to v0.8
+		- removed all max/min delay constraints in Orion.sdc, compiled
+		- retimed & compiled iteratively until timing closed
+					
+	Mar 7	- changed Tx1_IQ_fifo to use option "add MSB to usedw", increased word size to [12:0]write_used 
+		- changed almost_full and almost_empty code for Tx1_IQ_fifo to fix sporadic IQ loss during Tx
+		- changed version number to v0.9
+		- removed all max/min delay constraints in Orion.sdc
+		- retimed/compiled iteratively until timing closed
+					
+	Mar 9	- increased bootloader area in ASMI.v to 2MB vs 1MB, set erase boundary limit to 
+			6MB, set FPGA image starting address to 24'h200000
+		- changed firmware version number to v1.0 (did not the re-time the solution afresh)					
+					
+		- changed FW version number to v1.1
+		- removed all max/min delay constraints from Orion.sdc
+		- retimed/compiled iteratively until timing closed

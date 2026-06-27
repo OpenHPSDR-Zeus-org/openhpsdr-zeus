@@ -1,0 +1,49 @@
+2020    Jan 4 - (N1GP) Fixed DHCP issue where a dhcp transaction not bound for the local MAC would get passed up and interfere
+                         with ongoing network traffic. Passed dhcp_enable down to udp_recv.v so the request was only considered when enabled.
+                         Changed bias_ctrl to atu_ctrl for future ATU and enforced that TR relay was disabled if PA_Enable was set to disable.
+                         - Changed FW version number to v2.0 
+
+2021    Jun 7 - (N1GP) Added support for KSZ9031 Ethernet Phy (automatically detects either 9021 or 9031), removed/fixed stuck mode in sdr_send.v,
+                         merged HL2 dhcp updates in, forced PHY_TX_CLOCK to use dedicated PLL_1 output (Orion.qsf) which required use of 135 degrees
+                         phase -vs- 90. NR=8 8 separate bands in CW SkimServ and SparkSDR @192K OK. Can run 2 Rx's @ 1536K in Thetis now without Seq errors.
+
+2021    Aug 3 - (N1GP) Added beta_version for better tracking of test releases (byte 23 of discovery, per protocol2 doc v3.8).
+                       Experimenting with phase step adjustment of tx_pll PHY_TX_CLOCK.
+                       Added sequence error (from host data) reporting back to the host in high priority packet.
+                         - Changed FW version number to v2.1 
+
+2021    Aug 10 - (N1GP) Updated to Quartus 20.1. Removed for loops in sdr_send.v, added a resyncronising mechanism
+                       to sdr_send.v such that if the fifo gets out of order (manifests as a high noise floor in panadapter)
+                       it can be reordered due to an extra bit (9 bits) in the fifo data used to show MSB. 
+                       Tested 14 receiver slices, takes 94% of resources.
+
+2021    Sep 1 - (N1GP) Added autonegotiated 100T/1000T support, merged from the HL folks.
+                       Also added a dedicated DDC for providing DAC data for Pure Signal.
+                       (This has been removed as it would not pass timing for many Orion2 boards).
+
+2022    Apr 21 - (N1GP) Added a dedicated RX slice for the temp_DAC output. This is used for puresignal
+                       and is intended to be more stable and lock in more quickly due to being switched
+                       at 192KHz -vs- 122.88MHz.
+
+2022    May 1 - (N1GP) Changed SPI clock in Orion_ADC.v from 25% to 50% as some users reported
+                       instability in the 12V reading and the adc78h90 is spec'd @  min %40 / max %60
+
+2022    Aug 10 - (N1GP) Added support for Orion MkIII via a new Quartus Project Revision.
+                       Files with Orion_MkIII..., note that a MkIII build defines ORION_MKIII
+
+2024    Jan 7 - (N1GP) Added use of Alex1's upper 16 bits for TX relay control. Namely the ANT1-3 bits.
+                       This is to avoid RF appearing on an RX only ANT due to a later arrival of a HP 
+                       message telling us to switch the ANT when we are already in TX mode sending RF.
+                       The client program should send this before going to TX.
+
+2025    Feb 15 - (N1GP) Added keyout to bit 7 of CC_encoder data byte 0. This can be used to
+                        generate a sidetone on the client software. Also now latching ADC0 & ADC1 overload
+                        so if it happens only once it gets sent in CC_encoder. CC_encoder was sending
+                        every 50ms, now every 200ms unless PTT or realtime events.
+
+2026    Jan 31 - (N1GP) Added ability to send discovery reply while in 'run' mode. Also added code to respect
+                        the new ports sent to General_CC so applications don't have to use default ports.
+
+2026    Mar 17 - (N1GP) Added ADC maximum magnitude to CC_encoder output, used when overload bit is set
+                        so client can use an auto attenuate algorythm.
+

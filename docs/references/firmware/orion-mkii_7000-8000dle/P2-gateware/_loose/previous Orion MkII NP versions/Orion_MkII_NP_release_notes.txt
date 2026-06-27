@@ -1,0 +1,156 @@
+Release notes for Orion MkII NP  (for Orion MkII/ANAN-8000DLE)
+					 					 
+	- Using Quartus Prime Lite v16.0
+		
+	Dec 29	- port of Angelia_15Dec2016 code to Orion
+		- updated all megafunctions and regenerated afresh all PLL megafunctions
+		- moved _122_90 clock output from C122_PLL/.c1 to PLL_IF/.c3, changed phase 
+			shift from 90 to 60 degrees
+		- added Orion mic PTT/tip/ring/selection code
+		- added external 10MHz ref input
+		- added OSC_enable code
+		- changed hardware ID to 05 for Orion ID
+		- changed C122_PLL/.c0 output from 80khz to 10MHz
+		- changed 122.88MHz clock XOR to operate at 10MHz vs 80khz				
+		- changed phase shift for PLL_IF/.c1 output (CBCLK) from 0 to 90 degrees
+		- added additional 3 receivers (NR = 7)
+		- changed firmware version number to v0.1
+		- closed timing	
+	Dec 30	- changed hardware ID to 04 for Orion MkI (ID = 5 is for Orion MkII)
+		- changed version number to 0.2					
+  2017	Jan 1	- enabled HW_timeout feature
+		- changed phase shift of PLL_IF/.c3 to 45 degrees 
+		- changed version number to 0.3
+	Jan 2	- fixed mic PTT bug
+		- changed version number to 0.4
+					
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+	
+  2017	Jan 2 	- port from Orion_NP_v0.4 (Orion MkI) to the Orion MkII board
+		- increased the number of bits used by DACD from the cordic from 14 to 16 bits
+		- changed DACD from 2's complement format to offset binary format for the MkII Tx DAc
+		- increased Alex data word size from 32 bits to 48 bits in Orion.v, High_Priority_CC.v,
+			and SPI.v
+		- modified High_Priority_CC.v to properly parse the 48-bit Alex data word for MkII
+		- changed hardware ID to 5 for Orion MkII
+		- added DRV_PA_EN, SW1, and CTRL_TRSW code and FPGA pin assignments for MkII
+		- modified 10MHz ref and 122.88MHZ XOR code for MkII board use
+		- eliminated EXT_C10_PLL, not needed for the MkII board
+		- removed OSC_ENABLE, not needed on the MkII board
+		- set phase shift for PLL_IF/.c3 output from 45 to 90 degrees
+		- changed version number to v2.2 (Orion MkII NP)
+					
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+	Feb 11	- port from Orion_MkII_NP_v2.2 (uses software-selectable ADC/DDC assignments)
+		- replaced entire Ethernet folder with Ethernet folder from Orion_MkII_NP_v0.2
+			to capture the DHCP lease renewal fixes of v0.2
+		- changed network_state to match v0.2 DHCP lease renewal fixes of v0.2
+		- changed DACD to correctly form the offset binary format for the MAX5891 DAC
+		- added IO4 inhibit to DACD assignment to zero DACD when IO4 is asserted
+		- removed debounce_PTT from input conditions of FPGA_PTT assignment, to prevent possible
+			pops/clicks of audio on Rx-to-Tx transitions
+		- changed version number to v0.3
+		- removed all max/min delay constraints in Orion.sdc, re-compiled, retimed/compiled
+			iteratively until closed timing achieved
+					
+	Mar 6 	- modified the following megafunctions to add an additional MSB to fix the empty fifo problem
+			Rx_fifo: increased Rx_used to [11:0] Rx_used[0:NR-2]
+			Rx_Audio_fifo (although usedw not implemented in Orion.v)
+			SP_fifo (although usedw not implemented in Orion.v)
+			Tx1_IQ_fifo: increased write_used to [12:0] write_used in Orion.v
+			(Mic_fifo: additional MSB bit was previously implemented)
+		- zero'd the two LSBs of DACD before conversion to offset binary format
+		- changed almost_full and almost_empty code for Tx1_IQ_fifo to fix sporadic Tx halts
+		- changed version number to v0.4
+		- changed protocol version number to v3.3
+		- removed all max/min delay constraints
+		- iteratively compiled, retimed until timing met
+
+	Mar 9	- fixed ASMI code for EPCS128 larger bootloader area (2MB vs 1MB),
+			increased erase boundary to 6MB, set FPGA image starting position at 2MB
+		- changed firmware version number to v0.5 (released for testing)
+
+		- changed FW version number to v0.6
+		- removed all max/min delay constraints from Orion.sdc
+		- retimed/compiled iteratively until timing closed (released for testing)
+
+	Mar 17	- changed bit size of C122_cordic_i_output to 23 bits
+		- changed method of converting from signed binary to offset binary for DACD
+		- added a one-spi-clock delay to SPI.v code when the Alex_SPI_Tx data word changes
+			to allow the data word to become stable before sending it to the bus
+		- changed FW version to v0.7
+		- removed all max/min delay constraints from Orion.sdc
+		- retimed/compiled iteratively until timing closed
+
+	Mar 18	- removed yesterday's on-spi-clock delay coding in SPI.v
+		- modified SPI.v to send Alex data word twice when the Alex data word changes
+		- changed FW version number to v0.8
+		- removed all max/min delay constraints from Orion.sdc
+		- retimed/compiled iteratively until timing closed					
+
+	Mar 19	- changed CTRL_TRSW assignment to: 
+			assign CTRL_TRSW = FPGA_PTT && XVTR_ENABLE;
+		- corrected line 281 in send_sdr.v to send only 60 bytes total for CC_data
+		- corrected definition of CC_data to 8 bits wide by 56 words deep:
+			wire [7:0]CC_data[0:55]
+		- added User_ADC1 (AIN3) and User_ADC2 (AIN4) to CC_data, available on both Rx and Tx				
+		- assigned user digital inputs to byte 55 of CC_data in CC_encoder.v (via User_IO) as follows:
+			byte 55[0] = IO4 input
+			byte 55[1] = IO5 input
+			byte 55[2] = IO6 input
+			byte 55[3] = IO8 input
+			byte 55[4] = IO2 input
+			byte 55[5] = not assigned
+			byte 55[6] = not assigned
+			byte 55[7] = not assigned
+			which when incorporated and sent out in the High Priority Status packet via sdr_send.v
+			conforms to the new-protocol specification for byte 59 user inputs: 
+			byte 59[0] = IO4 input
+			byte 59[1] = IO5 input
+			byte 59[2] = IO6 input
+			byte 59[3] = IO8 input
+			byte 59[4] = IO2 input
+			byte 59[5] = not assigned
+			byte 59[6] = not assigned
+			byte 59[7] = not assigned
+		- added byte 1400 to the High_Priority_CC packet as follows:
+			byte 1400[0] = XVTR_enable (0 = disabled, 1 = enabled)
+			byte 1400[1] = IO1 output to enable/mute audio (0=audio enabled, 1= mute)
+			byte 1400[2] = not assigned
+			byte 1400[3] = not assigned
+			byte 1400[4] = not assigned
+			byte 1400[5] = not assigned
+			byte 1400[6] = not assigned
+			byte 1400[7] = not assigned
+			for support of the ANAN-8000DLE
+		- changed FW version to v0.9
+		- removed all max/min delay constraints from Orion.sdc
+		- retimed/compiled iteratively until timing closed	
+					
+	Mar 22	- changed definition and ref clock for temp_DACD and DACD
+		- reduced width of cordic_i_output to 22 bits
+		- changed version number to v1.0
+		- retimed/compiled iteratively until timing closed	
+		
+	Mar 23	- changed user digital IO connections as follows:
+			IO5 = TX INHIBIT, pin 16 of J16, 8000DLE rear panel DIG IN 1 (low = Tx inhibited, high = Tx uninhibited)
+			IO8 = External CW Key, pin 13 of J16, 8000DLE rear panel DIG IN 2
+		- added debounce to IO8 and IO5 inputs
+		- changed iambic.v to set IO8 as ext CW key input
+		- changed PLL_IF/.c3 phase angle to 120 degrees
+		- changed FW version number to v1.1
+		- removed all max/min delay constraints from Orion.sdc
+		- retimed/compiled iteratively until timing closed	
+		
+	Apr 17	- added peak detect for AIN1 (FWD_PWR) and AIN2 (REV_PWR):
+		- replaced Orion_ADC.v with version from Orion_MkII_v1.6
+		- added pk_detect_reset and pk_detect_ack to Orion.v and CC_encoder.v
+		- added PLL_30MHz/.c0 to generate 30.72MHz clock for Orion_ADC,
+			results in a 7.68MHz clock to the ADC78H90 chip increasing 
+			AIN conversion rates x10
+		- changed to values[6] <= 16'h70FF in Ethernet/phy_cfg.v for PHY clk skew settings
+		- changed version number to v1.2
+		- removed all max/min delay constraints from Orion.sdc
+		- iteratively retimed/compiled until timing closed
+					

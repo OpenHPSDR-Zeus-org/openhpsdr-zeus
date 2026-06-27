@@ -1,0 +1,16 @@
+Fitter Status : Successful - Thu Feb 13 11:37:38 2025
+Quartus Prime Version : 20.1.1 Build 720 11/11/2020 SJ Lite Edition
+Revision Name : Bootloader
+Top-level Entity Name : Bootloader
+Family : Cyclone IV E
+Device : EP4CE115F29I7
+Timing Models : Final
+Total logic elements : 1,938 / 114,480 ( 2 % )
+    Total combinational functions : 1,620 / 114,480 ( 1 % )
+    Dedicated logic registers : 1,292 / 114,480 ( 1 % )
+Total registers : 1292
+Total pins : 39 / 529 ( 7 % )
+Total virtual pins : 0
+Total memory bits : 10,384 / 3,981,312 ( < 1 % )
+Embedded Multiplier 9-bit elements : 0 / 532 ( 0 % )
+Total PLLs : 1 / 4 ( 25 % )

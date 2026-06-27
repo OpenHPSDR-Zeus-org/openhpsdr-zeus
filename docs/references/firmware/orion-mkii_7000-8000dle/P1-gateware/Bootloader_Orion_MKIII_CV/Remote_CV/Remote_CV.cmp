@@ -1,0 +1,15 @@
+	component Remote_CV is
+		port (
+			busy        : out std_logic;                                        -- busy
+			clock       : in  std_logic                     := 'X';             -- clk
+			data_in     : in  std_logic_vector(23 downto 0) := (others => 'X'); -- data_in
+			data_out    : out std_logic_vector(23 downto 0);                    -- data_out
+			param       : in  std_logic_vector(2 downto 0)  := (others => 'X'); -- param
+			read_param  : in  std_logic                     := 'X';             -- read_param
+			reconfig    : in  std_logic                     := 'X';             -- reconfig
+			reset       : in  std_logic                     := 'X';             -- reset
+			reset_timer : in  std_logic                     := 'X';             -- reset_timer
+			write_param : in  std_logic                     := 'X'              -- write_param
+		);
+	end component Remote_CV;
+

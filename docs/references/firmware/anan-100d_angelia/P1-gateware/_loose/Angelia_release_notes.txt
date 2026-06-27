@@ -1,0 +1,66 @@
+Angelia_v5.7 release notes
+
+2017 Jan 22	- ported the Quartus II v13.1 design to Quartus Prime Lite v16.0
+		- regenerated all megafunctions to v16.0 megafunctions instead
+		- removed software DDC input selection code, hard-coded DDC inputs as follows:							
+			DDC0 <= temp_ADC[0]
+			DDC1 <= temp_ADC[1]
+			DDC2 <= temp_ADC[0]
+			DDC3 <= temp_ADC[0]
+			DDC4 <= temp_DACD (on Tx) temp_ADC[1] (on Rx)
+			DDC5 <= temp_ADC[0]
+			DDC6 <= temp_ADC[1]							
+		- removed C10_PLL
+		- changed C122_PLL/.c0 output to 10.000MHz
+		- changed 122.88 MHz module lock XOR feedback to operate at 10MHz vs 80KHz
+		- added C122_PLL_SHIFT to obtain a phase shifted 122.88MHz clock for DACD (TxDAC) generation
+		- replaced ASMI constraints in Angelia.sdc using the v16.0 AMSI path versions to constrain the new I/O ports/paths
+		- set the PLL_IF outputs to:
+			PLL_IF/.c0 = 48 MHz
+			PLL_IF/.c1 = 12.288 MHz
+			PLL_IF/.c2 = 3.072 MHz 90 deg phase shift
+			PLL_IF/.c3 = 48 KHz
+		- set C122_SHIFT_PLL/.c0 = 122.88 MHz with 15 deg phase shift
+		- changed version number to v5.5
+		- removed all max/min delay timing constraints in Angelia.sdc, compiled
+		- closed timing, re-compiled
+	Jan 28	- removed clean_PTT_in as an input to FPGA_PTT to prevent PTT timing problems with software
+		- recompiled, closed timing	
+
+	Jan 29	- reinstated software-commanded assignments of ADCs to DDCs
+		- set C122_SHIFT_PLL/.c0 phase shift to 18 degrees
+		- changed version number to v5.6
+		- recompiled, closed timing
+			
+	Feb 1   - set C122_SHIFT_PLL/.c0 phase shift to 15 degrees
+		- changed DDC0 clock to DACD_clock instead of C122_clk
+		- removed output port constraint for DACD[*] paths,  added a corresponding false path 
+			constraint in Angelia.sdc to avoid triggering the associated Quartus TimeQuest complaint
+		- changed version number to 5.7
+
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+	Apr 15	- ported to Quartus Prime Lite v16.1
+		- upgraded all megafunctions to v16.1 versions
+		- implemented peak detection for AIN1 and AIN2:
+			-created userADC_clk, 30.72MHz clock for Angelia_ADC.v which provides a 7.68MHz clock to 
+				the ADC78H90 chip, increasing its previous sampling rate x10
+			-replaced Angelia_ADC.v with version from Orion_MkII_v1.6 firmware
+			-replaced Angelia_Tx_fifo_ctrl.v with version from Orion_MkII_v1.6 firmware
+			-added pk_detect_reset and pk_detect_ack to Orion.v, Orion_ADC, and Orion_Tx_fifo_ctrl				
+		- added clean_PTT_in to FPGA_PTT to fix bug with external PTT IN via pin13 on ANAN-100D accessory jack
+		- added userADC_clk as a 30.72MHz generated clock to Angelia.sdc
+		- changed FW version number to v5.8
+		- removed all max_delay and min_delay constraints from Orion.sdc
+		- retimed/compiled iteratively until timing closed
+
+	Jul 18	- fixed 6-rcvr & 7-rcvr operations by adding 6-rcvr and 7-rcvr options to numloops and pads in Angelia_Tx_fifo_cntrl.v 
+		- changed version number to v5.9
+		- recompiled, retimed, closed timing. 
+
+	Nov 30   - implemented PS_enabled C&C bit (C2[6] when C0=0010_010x) to allow Rx5 freq to be modified during Tx and Rx
+			when PureSignal is inactive
+		- changed FW version number to v6.0
+		- removed all set_max_delay constraints from Orion.sdc, recompiled, added new set_max_delay
+			constraints as needed to close timing
+		- compiled using Quartus Prime Lite v16.1

@@ -1,0 +1,3 @@
+GPSD_OPTIONS="-n"
+DEVICES="/dev/ttyPS1 /dev/pps0"
+GPSD_SOCKET="/var/run/gpsd.sock"

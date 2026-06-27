@@ -1,0 +1,233 @@
+/*
+
+Format changed to match Protocol Discussion paper 5 Dec 2014
+
+
+ This is priority C&C data from the hardware. It is sent whenever data changes and every **mS	
+
+			The format is as follows:
+		 RAM Byte Data
+				0	Seq #							[31:24]
+				1	Seq #							[23:16]
+				2	Seq #							[15:8]
+				3	Seq #							[7:0]
+			0	4	Bits - PTT, Dot, Dash	[0] = PTT, [1] = Dot, [2] = Dash, [3] = new_frequency, [4] = locked_10MHz [7] = keyout
+			1	5	Bits - ADC Overload		[0] = ADC0…[7] = ADC7
+			2	6	Exciter Power 0			[15:8]
+			3	7	Exciter Power 0			[7:0]
+			4	8	Exciter Power 1			[15:8]
+			5	9	Exciter Power 1			[7:0]
+			6	10	Exciter Power 2			[15:8]
+			7	11	Exciter Power 2			[7:0]
+			8	12	Exciter Power 3			[15:8]
+			9	13	Exciter Power 3			[7:0]
+			10	14	Forward Power - Alex 0 	[15:8]  (Set to zero if Alex not selected)
+			11	15	Forward Power - Alex 0 	[7:0]   (Set to zero if Alex not selected)
+			12	16	Forward Power - Alex 1	[15:8]
+			13	17	Forward Power - Alex 1	[7:0]
+			14	18	Forward Power - Alex 2	[15:8]
+			15	19	Forward Power - Alex 2	[7:0]
+			16	20	Forward Power - Alex 3	[15:8]
+			17	21	Forward Power - Alex 3	[7:0]
+			18	22	Reverse Power - Alex 0 	[15:8]  (Set to zero if Alex not selected)
+			19	23	Reverse Power - Alex 0 	[7:0]   (Set to zero if Alex not selected)
+			20	24	Reverse Power - Alex 1	[15:8]
+			21	25	Reverse Power - Alex 1	[7:0]
+			22	26	Reverse Power - Alex 2	[15:8]
+			23	27	Reverse Power - Alex 2	[7:0]
+			24	28	Reverse Power - Alex 3	[15:8]
+			25	29	Reverse Power - Alex 3	[7:0]
+			26	30	Debug Data (FW debug)	[15:8]
+			27	31	Debug Data (FW debug)	[7:0]
+			28	32	Sequence Errors		[31:24]
+			29	33	Sequence Errors		[23:16]
+			30	34	Sequence Errors		[15:8]
+			31	35	Sequence Errors		[7:0]
+			
+			RAM 32 to 34 and Bytes 36 to 38 currently not used.
+
+			35	39	ADC0 max magnitude			[15:8]
+			36	40	ADC0 max magnitude			[7:0]
+			37	41	ADC1 max magnitude			[15:8]
+			38	42	ADC1 max magnitude			[7:0]
+
+			RAM 39 to 44 and Bytes 43 to 48 currently not used.
+
+			45	49	Supply Volts				[15:8]
+			46	50	Supply Volts				[7:0]
+			47	51	User ADC3					[15:8]
+			48	52	User ADC3					[7:0]
+			49	53	User ADC2					[15:8]
+			50	54	User ADC2					[7:0]
+			51	55	User ADC1					[15:8]
+			52	56	User ADC1					[7:0]
+			53	57	User ADC0					[15:8]
+			54	58	User ADC0					[7:0]
+			55	59	Bits - User logic in		[0] = IO0….[7] = IO7
+
+
+2018  Mar 28 - Added FPGA_PTT input, if set then update rate = 1mS so the FW & REV data is 
+				   received by Thetis fast enough to calculate SWR. 
+							
+*/
+
+module CC_encoder (
+							input clock,					// tx_clock  125MHz
+							input ACK,
+							input PTT,
+							input Dot,
+							input Dash,
+							input keyout,
+							input frequency_change[0:NR-1], 
+							input locked_10MHz,
+							input ADC0_overload,
+							input [15:0]ADC0_mag,
+							input [15:0]Exciter_power,
+							input [15:0]FWD_power,
+							input [15:0]REV_power,
+							input [15:0]Supply_volts,
+							input [15:0]User_ADC1,
+							input [15:0]User_ADC2,
+							input [3:0] User_IO,
+							input pk_detect_ack,		// from Orion_ADC
+							input FPGA_PTT,
+							input [15:0] Debug_data,
+							input [31:0] sequence_errors,
+						
+							output reg [7:0] CC_data[0:55],
+							output reg ready,
+							output reg pk_detect_reset // to Orion_ADC 
+							
+							);
+							
+
+parameter [24:0] update_rate = 25'd200; 					// number of mS between updates if no change in data	
+parameter NR;
+
+// move all C&C data to tx_clock domain
+
+reg ADC0_overload_send;
+reg [15:0] ADC0_peak;
+reg [7:0] memory[0:56];    // 57 by 8 bit ram
+reg [7:0] temp[0:56];
+reg [7:0] previous[0:1];
+reg new_frequency;
+reg [$clog2(NR)-1:0] x;
+
+// initial clear of all RAM
+reg [6:0] t;
+initial
+for (t = 0; t < 57; t++)
+begin 
+	memory[t] = 8'd0;
+	temp[t]   = 8'd0;
+end
+	
+
+always @ (posedge clock)
+begin 
+
+	begin 
+		if (frequency_change[0] || frequency_change[1] ) 		// this is from Rx clock domain!!
+			new_frequency <= 1'b1;
+		else new_frequency <= 0;	
+	end
+
+	{memory[0],    temp[0]}  <=  {temp[0],  keyout, 2'b0, locked_10MHz, new_frequency, Dash, Dot, PTT};  // sent in real time
+	//isolate memory[1] / overload bits, so they don't get overwritten during send
+//	{memory[1],    temp[1]}  <=  {temp[1],  6'b0, ADC1_overload_send, ADC0_overload_send};
+	{memory[2],    temp[2]}  <=  {temp[2],  Exciter_power[15:8]};
+	{memory[3],    temp[3]}	 <=  {temp[3],  Exciter_power[7:0]};		
+	{memory[10],  temp[10]}  <= {temp[10],  FWD_power[15:8]};
+	{memory[11],  temp[11]}  <= {temp[11],  FWD_power[7:0]};
+	{memory[18],  temp[18]}  <= {temp[18],  REV_power[15:8]};
+	{memory[19],  temp[19]}  <= {temp[19],  REV_power[7:0]};	
+	
+	// RAM 20 - 26 not presently used - intialised to zero
+	{memory[26],  temp[26]}  <= {temp[26],  Debug_data[15:8]};
+	{memory[27],  temp[27]}  <= {temp[27],  Debug_data[7:0]};
+	{memory[28],  temp[28]}  <= {temp[28],  sequence_errors[31:24]};
+	{memory[29],  temp[29]}  <= {temp[29],  sequence_errors[23:16]};
+	{memory[30],  temp[30]}  <= {temp[30],  sequence_errors[15:8]};
+	{memory[31],  temp[31]}  <= {temp[31],  sequence_errors[7:0]};
+
+	// RAM 32 - 44 not presently used - intialised to zero
+	{memory[45],  temp[45]}  <= {temp[45],  Supply_volts[15:8]}; 								
+	{memory[46],  temp[46]}  <= {temp[46],  Supply_volts[7:0]}; 
+	
+	// RAM 47 - 50 not presently used - intialised to zero
+	{memory[51],  temp[51]}  <= {temp[51], User_ADC2[15:8]};
+	{memory[52],  temp[52]}  <= {temp[52], User_ADC2[7:0]};
+	{memory[53],  temp[53]}  <= {temp[53], User_ADC1[15:8]};		// User_ADC1 input 
+	{memory[54],  temp[54]}  <= {temp[54], User_ADC1[7:0]};	
+	{memory[55],  temp[55]}  <= {temp[55],  4'b0, User_IO};		// sent in real time
+				   memory[56]   <= 8'd0;  									// spare
+end	
+	
+// set ready flag when C&C data changes. Clear flag when ACK received
+
+
+reg [1:0]  state = 0;
+reg [5:0] count = 0;
+reg [24:0] counter = 0;
+
+// if Txing or overload then use 1mS update rate, otherwise 200mS
+reg [24:0]  rate;
+assign rate = (FPGA_PTT || ADC0_overload_send) ? 25'd125000 : 25'd25000000;
+
+always @ (posedge clock)	
+begin
+	if (counter >= rate) begin	
+		counter <= 25'd0;
+		state <= 1;
+	end
+	else counter <= counter + 25'd1;
+
+	// latch in ADC* OL-ON condition, it may get cleared after packet is sent
+	if (ADC0_overload) ADC0_overload_send <= 1'b1;
+
+	case(state)	
+	0: begin 
+		// get peak magnitudes
+		if(ADC0_mag > ADC0_peak) ADC0_peak <= ADC0_mag;
+
+		// check for inputs that we report in real time
+		if ((memory[0] != previous[0]) || (memory[55] != previous[1])) begin 
+			CC_data[0]  <= memory[0];
+			CC_data[55] <= memory[55];
+			previous[0] <= memory[0];
+			previous[1] <= memory[55];
+			counter <= 0;							// no need to send a periodic update							
+			state <= 1;
+		end
+		else
+			for (count = 6'd0; count < 6'd56; count = count + 6'd1) // update all status (56 bytes)
+				if (count != 6'd1 && count != 6'd35 && count != 6'd36) CC_data[count] <= memory[count]; // skip overload
+		end 
+		
+	1: begin 
+		// send latched overloads
+		CC_data[1]  <=  {7'b0, ADC0_overload_send};
+		CC_data[35]  <=  ADC0_peak[15:8];
+		CC_data[36]  <=  ADC0_peak[7:0];
+		ready <= 1'b1;
+		if (ACK) begin 
+			ADC0_overload_send <= ADC0_overload;
+			ADC0_peak <= 16'd0;
+			pk_detect_reset <= 1'b1;	// signal Orion_ADC to begin new pk detect interval
+			counter <= 25'd0;
+			count <= 6'b0;
+			ready <= 1'b0;
+			state <= 0;
+		end
+		if (pk_detect_ack) pk_detect_reset <= 1'b0;  // clear pk detect reset once Orion_ADC receives interval reset signal
+	end  
+
+default: state <= 0;
+endcase 
+
+end
+
+
+
+endmodule

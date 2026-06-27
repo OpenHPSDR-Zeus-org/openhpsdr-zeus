@@ -1,0 +1,124 @@
+	Change log:
+
+	 2  Mar  2012  - Released as V1.3
+	 5  April      - Added wide spectrum support. Set serial numbers for Penny and Mercury to zero
+	               - Added support for second receiver - Joe Martin, K5SO
+	               - Released as V1.4
+	13  April      - Fixed bug in TLV320 code that muted audio when Line-in select.
+	               - J13 in selects Apollo and out Alex
+	               - Released as V1.5
+	14  April      - Added user input IO8
+					   - Released as V1.6
+	21  April      - Added support for Alex in auto mode
+						- tidy LED designations
+						- Designated V1.7
+	28  April      - Increased Apollo clock from 30kHz to 150kHz	
+	 5  July       - Fixed sync byte error in Apollo.v and MAC address read error in EEPROM.v
+	               - Increased wide spectrum FIFO from 4k to 16k
+	13             - Increased wide spectrum FIFO to 32k for testing by DL3HVH
+	18             - Test code for Hermes VNA, set to one receiver
+	                 In VNA mode set the Rx and Tx CORDIC phase words to be equal. Set the I input of the Tx CORDIC to
+						  0 and the Q to 0x7FFF/1.7 to remove the CORDIC gain.  Run the VNA when the PTT from the PC is active.
+	 6  Aug        - using CIC and CFIR outputs with I of Tx cordic set to 0 and Q to 0x7FFF/1.7	. See line 1307.	
+   11  Sep        - Use C&C (when C0 = 0001 001x, C2[7]]) to enable VNA mode. 
+   15  Sep        - Set wide spectrum FIFO to 16k.  Enabled second receiver.
+					   - Alex/Apollo selected via C&C rather than J13 											
+                  - released as V1.7
+	23  Sep			- changes by Joe K5SO
+							- Modified FilterSelect to match USB protocol document v1.42 spec for C2[5] when C0[7:1]=0001001
+							- Added dual-Rx automatic Alex LPF/HPF filter switching logic 
+							- Added additional Alex LPF filter switching logic during transmit to accommodate SPLT mode operation correctly
+							- Modified Alex Tx RED LED operation to illuminate when transmitting
+							- Modified HPF/LPF automatic frequency switch-point logic  
+							- Added manual Alex switching logic
+							- Added line-in gain control
+						- Renamed version number to V1.8
+	28 Oct			- changes by Joe K5SO
+							- Added 0-31 dB step option for input attenuator
+						- Renamed version number to V1.9
+	27 Nov			- added TimeQuest Hermes.sdc timing constraint file 
+						- commented out the Apollo module
+						- implemented four receivers
+						- renamed the version number to v4.5
+						- reduced the number of receivers to two once again
+						- added back the Apollo module
+						- used a new TimeQuest .sdc file from Phil
+						- fixed bug with automatic Alex filter selection
+						- renamed the version number to v4.6
+	29 Nov			- increased # of receivers to four
+						- modified the Alex switching code
+						- renamed version to v2.0
+	6  Dec			- added 5 receivers, using Alex VE3NEA's rx modules
+						- modified Alex automatic switching
+	8  Dec			- fixed bug with Rx 5 operation
+	14 December		- modified the receiver module to yield 6 dB greater overall gain, to match Mercury rx module gain
+	17 Dec         - Modified Rx_MAC to use a FIFO to convert from nibble to byte.
+					   - Enabled directed ARP rather than just broadcast
+	30 Dec			- added Alex T/R relay disable option (C&C bit C3[7] when C0=0001_001x, 0=T/R relay enabled, 1=T/R relay disabled)
+						- added abilty to set/read IP address without being in Bootloader mode.
+						- now using Quartus II V12.1
+						- released as v2.1
+	8 Jan 2013		- fixed ethernet ARP request response bug
+					   - modified Apollo code so PTT timer works
+						- changed FSM from 1 Hot to User Encoded so Apollo code works.
+						- Changed Apollo PLL clock from 150kHz to 30kHz.
+						- released as v2.2
+	26             - Replaced FIR with Polyphase FIR. Modified variCIC to decimate from 2...40. Increased max sampling rate to 960kHz
+	               - Reduced receivers to 4 with sampling rates of 48/96/192/384ksps.
+						- Added UDP/IP set IP address
+	10             - Modified Polyphase filter. 
+						- Increased time out for ARP and ping
+						- 4 receivers with 48/96/192/384ksps.
+	12             - 5 receivers - 96% full
+	16					- released as version 2.3
+	2 Mar          - Added ARP/Ping time out mod from Metis.
+						- replace pin defs ready for 1000T code - released as same version
+	7 May				- fixed Alex 6m preamp switching bug
+						- reduced the Alex SPI bus speed by half to permit longer ribbon cable connections to Alex, 
+						- assigned unused Rx freqs to the Tx freq,
+						- changed the 1.5MHz HPF filter switchover freq to 1416 KHz and the 80m LPF switchover freq
+						  to 2400 KHz to accommodate "stitched" mode rx at up to 384 ksps sampling rates,
+						- changed version number to 2.4
+	27 May			- temporary predistortion version - assigned Tx output to Rx5 input - changed version to v0.4
+	 4             - By4 gain = unity and increase other FIR to unity.  Reduce peak frequency error by making error symetrical.
+	 6             - Increase Tx cFIR to 1024 coefficients. 
+	18             - Enabled VNA features and select Rx5 on Rx 
+	24 Jan  2014   - Released as V2.5
+	30 Jan  2014   - Fixed bug whereby Rx5 was not set to correct frequency but followed Tx frequency.
+						  Released as V2.5a.
+	14 Mar  2014	- Fully constrained the firmware design using Hermes.sdc constraints, closed timing failures, timing met 100%. 
+						- Changed firmware version number to v2.6
+	 7 Apr  2014   - Correct error in frequency to phase rounding
+						- Changed firmware version number to v2.7
+	 9 May  2014   - Added FPGA keyer and CW generation.  Turn off iFIR and iCIC when FPGA keyer selected to reduce current drain
+					   - Changed firmware version to v2.8
+	 4 Jun 2014 	- Fixed bug in iambic.v
+						- Reduced receiver number to 4
+						- Moved PureSignal feedback to receivers 3 & 4 on Tx
+						- Using receiver2 module for Rx3 and Rx4
+						- Added C&C bit control of Rx attenuation to use when Tx is active, atten value for this case is
+							contained in bits C3[4:0] when C0 = 0001_110x.
+						- closed timing
+	 10 Jun 2014	- Fixed bug with firmware CW keying
+						- Added "PureSignal Enable" control using C&C bit C2[6] when C0=0001_010x; 0 = disabled, 1 =  enabled
+						  This bit controls what input is used for Rx4 during Tx; 0 = temp_ADC (duplex operations), 1 = DACD (PureSignal operations)
+						- changed version number to v2.9
+	 12 Jun 2014   - Updated Apollo code
+	 20 Jun 2014   - Merge EER code
+	  4 Aug 2014   - Added max and min values for envelope PWM. When C0=0010_001x, C1 = Min [9:2]  C2 = Min [1:0]  C3 = Max [9:2] C4 = Max [1:0]
+						- DEBUG_LED1 now used for PWM signal.
+	  9 Aug 2014	- Fixed bug in PTT logic that prevented PTT OUT and non-break-in CW mode from
+							working when keyed from the external PPT IN on the acc'y jack
+	 15 Aug 2014   - Add pipeline to Envelope square and square root functions (100 clock cycles)
+						- Scalled Tx iFIR for Envelope so that unity I&Q give unity envelope
+						- Added PWM shutdown if IO5 (J16 pin 16) held low.
+	 18 Oct 2014   - Updated sdc - false paths to slow I/O.
+						- Changed PWM output pin to use fast I/O
+						- changed version number to v3.0
+	 19 Jan 2014   - Replaced ~PTT with clean_PTT_in i.e. debounced PTT signal.
+						- changed version number to v3.1	
+	20 Mar 2017		- modified SPI.v to send Alex data word twice each time the data word changes
+						- changed version number to v3.2
+						- removed all max_delay and min_delay constraints from Hermes.sdc
+						- re-timed/re-compiled iteratively until timing closed
+
