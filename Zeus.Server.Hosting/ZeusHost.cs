@@ -49,11 +49,36 @@ public static class ZeusHost
             // time we get here data is already checkpointed and the OS releases the
             // named mutex on process exit, so the throw is benign — swallow it and
             // exit 0 instead of letting it abort the process. (Desktop/--server
-            // modes use StartAsync/StopAsync and never hit this path.)
+            // modes drive shutdown through StopAndDispose below, which guards the
+            // same throw.)
             Console.Error.WriteLine(
                 $"shutdown: ignored benign LiteDB shared-mutex dispose error: {ex.GetBaseException().Message}");
         }
         return 0;
+    }
+
+    /// <summary>
+    /// Drive a clean shutdown for the desktop / --server entry points: signal all
+    /// hosted services to stop, then dispose the DI container so every
+    /// <see cref="IAsyncDisposable"/> singleton (notably the audio-plugin bridge
+    /// and the out-of-process VST engines) tears down before the process exits.
+    /// Without the DisposeAsync step, native plugin timer threads outlive the
+    /// process teardown and macOS reports a segfault dialog on window close
+    /// (issue #1065). The benign-LiteDB-mutex catch is the same guard
+    /// <see cref="RunAsync"/> uses for service mode.
+    /// </summary>
+    public static void StopAndDispose(WebApplication app)
+    {
+        app.StopAsync().GetAwaiter().GetResult();
+        try
+        {
+            app.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+        catch (Exception ex) when (IsBenignShutdownDisposeError(ex))
+        {
+            Console.Error.WriteLine(
+                $"shutdown: ignored benign LiteDB shared-mutex dispose error: {ex.GetBaseException().Message}");
+        }
     }
 
     // True for the LiteDB shared-connection Mutex.ReleaseMutex() thread-affinity

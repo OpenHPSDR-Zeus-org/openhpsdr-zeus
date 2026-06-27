@@ -660,7 +660,12 @@ public partial class Program
         // native window was still alive. We deliberately do NOT save here — the
         // window is torn down and its size getters are unsafe to read.
         Console.WriteLine("Window closed; stopping backend.");
-        app.StopAsync().GetAwaiter().GetResult();
+        // Dispose the host (not just StopAsync) so every IAsyncDisposable singleton
+        // — notably AudioPluginBridge and the out-of-process VST engines — tears
+        // down cleanly. Without DisposeAsync, native plugin timer threads (JUCE)
+        // keep running while the process exits and macOS pops a "Zeus quit
+        // unexpectedly" segfault dialog (#1065).
+        ZeusHost.StopAndDispose(app);
         return 0;
     }
 
@@ -1194,7 +1199,9 @@ public partial class Program
         window.WaitForClose();
 
         Console.WriteLine("Status window closed; stopping backend.");
-        app.StopAsync().GetAwaiter().GetResult();
+        // Mirror RunDesktop: dispose the host so IAsyncDisposable singletons get
+        // a clean shutdown (#1065).
+        ZeusHost.StopAndDispose(app);
         return 0;
     }
 }
