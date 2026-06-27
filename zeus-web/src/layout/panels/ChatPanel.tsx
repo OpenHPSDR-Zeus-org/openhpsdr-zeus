@@ -2265,7 +2265,12 @@ export function ChatPanel() {
         </div>
 
         {/* ── Right column: tab bar + thread + composer ── */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        {/* minWidth:0 is load-bearing — without it this flex child keeps its
+            content's intrinsic min-content width (the tab strip's TabItems are
+            flexShrink:0), so the whole column overflows the body and gets clipped
+            instead of the inner tab bar scrolling. That left scrollWidth ===
+            clientWidth, so the overflow arrows never lit up. */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0 }}>
 
           {/* ── Tab bar ── */}
           <div
