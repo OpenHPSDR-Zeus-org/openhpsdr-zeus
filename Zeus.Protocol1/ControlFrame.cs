@@ -732,7 +732,8 @@ internal static class ControlFrame
         CcRegister evenRegister,
         CcRegister oddRegister,
         in CcState state,
-        ITxIqSource? iqSource = null)
+        ITxIqSource? iqSource = null,
+        IRxAudioSource? rxAudioSource = null)
     {
         if (packet.Length != PacketLength)
             throw new ArgumentException("packet span must be 1032 bytes", nameof(packet));
@@ -746,8 +747,8 @@ internal static class ControlFrame
         packet[3] = 0x02;
         BinaryPrimitives.WriteUInt32BigEndian(packet[4..8], sendSequence);
 
-        WriteUsbFrame(packet.Slice(8, UsbFrameLength), evenRegister, in state, iqSource);
-        WriteUsbFrame(packet.Slice(8 + UsbFrameLength, UsbFrameLength), oddRegister, in state, iqSource);
+        WriteUsbFrame(packet.Slice(8, UsbFrameLength), evenRegister, in state, iqSource, rxAudioSource);
+        WriteUsbFrame(packet.Slice(8 + UsbFrameLength, UsbFrameLength), oddRegister, in state, iqSource, rxAudioSource);
     }
 
     /// <summary>
@@ -766,7 +767,7 @@ internal static class ControlFrame
     /// <summary>Number of IQ samples per 504-byte EP2 USB-frame payload (63 × 8 bytes).</summary>
     internal const int IqSamplesPerUsbFrame = 63;
 
-    private static void WriteUsbFrame(Span<byte> frame, CcRegister register, in CcState state, ITxIqSource? source)
+    private static void WriteUsbFrame(Span<byte> frame, CcRegister register, in CcState state, ITxIqSource? source, IRxAudioSource? rxAudioSource = null)
     {
         frame[0] = 0x7F;
         frame[1] = 0x7F;
@@ -793,11 +794,22 @@ internal static class ControlFrame
         // is identical across all Protocol-1 boards (HL2, Hermes, ANAN-class,
         // Orion-MkII). PA enable is driven by the C0 MOX bit + board-specific
         // DriveFilter C2 bits in WriteCcBytes — see issue #294.
-        if (source is null || !state.Mox)
+        if (!state.Mox)
         {
-            // frame[8..] was cleared by BuildDataPacket; leave zero.
+            // RX: the radio is not transmitting, so the EP2 I/Q slots stay zero
+            // (no carrier) and the L/R slots may carry demodulated RX audio so
+            // the radio's onboard codec drives its speaker/headphone/line-out
+            // jacks (faithful to Thetis, which sends RX audio inline on EP2).
+            // When no RX-audio source is plumbed, or the ring is empty, the L/R
+            // slots stay zero — byte-identical to a radio that carries no audio.
+            // HL2 has no codec and ignores L/R; the host simply never feeds the
+            // ring for it, so this branch leaves the frame all-zero there too.
+            if (rxAudioSource is not null) WriteRxAudioLr(frame[8..], rxAudioSource);
             return;
         }
+
+        // From here MOX is engaged; the TX I/Q path needs a real source.
+        if (source is null) return;
 
         // The HL2's TXG stage (DriveFilter C1 = DriveLevel byte) scales the
         // transmit path by drive%. Scaling IQ here on top would double-multiply
@@ -836,6 +848,32 @@ internal static class ControlFrame
         LastMeanAbs = (int)(sumAbs / (2 * IqSamplesPerUsbFrame));
         LastFirstI = firstI;
         LastFirstQ = firstQ;
+    }
+
+    /// <summary>
+    /// Fill the L/R audio slots (bytes 0..3 of each 8-byte group) of one EP2
+    /// USB-frame payload from the RX-audio source, leaving the I/Q slots (4..7)
+    /// untouched. The mono sample is written to BOTH the left and right channels
+    /// as big-endian s16: duplicating mono sidesteps the per-board hardware L/R
+    /// swap entirely (both channels carry identical audio), exactly as the
+    /// Saturn/G2 P2 speaker sink already does. On underrun the source returns
+    /// fewer samples than requested and the remaining groups keep their cleared
+    /// (zero) L/R, which is silence rather than wrap noise.
+    /// </summary>
+    private static void WriteRxAudioLr(Span<byte> payload, IRxAudioSource rxAudioSource)
+    {
+        Span<short> mono = stackalloc short[IqSamplesPerUsbFrame];
+        int n = rxAudioSource.Read(mono);
+        for (int s = 0; s < n; s++)
+        {
+            int off = s * 8;
+            byte hi = (byte)((mono[s] >> 8) & 0xFF);
+            byte lo = (byte)(mono[s] & 0xFF);
+            payload[off + 0] = hi;   // L high byte
+            payload[off + 1] = lo;   // L low byte
+            payload[off + 2] = hi;   // R high byte
+            payload[off + 3] = lo;   // R low byte
+        }
     }
 
     // Diagnostic tap — read by Protocol1Client.TxLoopAsync to log what's

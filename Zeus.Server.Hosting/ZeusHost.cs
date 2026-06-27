@@ -300,6 +300,22 @@ public static class ZeusHost
         builder.Services.AddSingleton<Zeus.Protocol1.TxIqRing>();
         builder.Services.AddSingleton<Zeus.Protocol1.ITxIqSource>(sp =>
             sp.GetRequiredService<Zeus.Protocol1.TxIqRing>());
+        // RX-audio → radio codec speaker path (Protocol-1). RxAudioRing is the RX
+        // counterpart of TxIqRing on the same EP2 frame: RadioSpeakerAudioSink
+        // writes demodulated RX audio into it and Protocol1Client (constructed
+        // inside RadioService) drains it into the frame's L/R slots so the radio's
+        // onboard codec drives its speaker/headphone/line-out jacks. Registered
+        // before RadioService so the latter's optional IRxAudioSource? ctor param
+        // resolves. The IRxAudioSink mapping is added unconditionally (both host
+        // modes) and self-gates per frame; the Protocol-2 Saturn/G2 appliance
+        // speaker path is separate (SaturnSpeakerAudioSink) and untouched here.
+        builder.Services.AddSingleton<Zeus.Protocol1.RxAudioRing>();
+        builder.Services.AddSingleton<Zeus.Protocol1.IRxAudioSource>(sp =>
+            sp.GetRequiredService<Zeus.Protocol1.RxAudioRing>());
+        builder.Services.AddSingleton<RadioSpeakerSettingsStore>();
+        builder.Services.AddSingleton<RadioSpeakerAudioSink>();
+        builder.Services.AddSingleton<IRxAudioSink>(sp =>
+            sp.GetRequiredService<RadioSpeakerAudioSink>());
         // Global (per-radio) TX-audio source store (external-audio-jacks
         // re-port). Registered before RadioService so the latter's optional
         // AudioSettingsStore? ctor param resolves it and wires the Changed →
@@ -365,9 +381,22 @@ public static class ZeusHost
         // panel (esp. for remote operators whose browser can't reach the radio's
         // LAN). No auto-redirect — LanProxyService follows + re-validates each hop
         // against the private-range rule itself.
+        //
+        // Accept self-signed / hostname-mismatched TLS certs: LAN devices the
+        // operator browses to (routers at 192.168.x.1, NAS, printers, IoT) almost
+        // universally serve HTTPS with a self-signed cert, which a default
+        // HttpClient rejects ("The SSL connection could not be established"). The
+        // target is already constrained to RFC1918/ULA private space by
+        // LanProxyService.TryValidateTarget, so this only ever relaxes validation
+        // for the operator's own private network — never a public host.
         builder.Services.AddHttpClient(LanProxyService.HttpClientName,
                 c => c.Timeout = TimeSpan.FromSeconds(15))
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+                ServerCertificateCustomValidationCallback =
+                    HttpClientHandler.DangerousAcceptAnyServerCertificateValidator,
+            });
         builder.Services.AddSingleton<LanProxyService>();
         // RX audio publish seam (Phase 1). DspPipelineService.PublishAudio
         // fans each AudioFrame across every registered IRxAudioSink.

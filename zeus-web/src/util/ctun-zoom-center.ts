@@ -20,7 +20,7 @@
 import { setRadioLo, setReceiverLo, type ZoomLevel } from '../api/client';
 import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { useConnectionStore } from '../state/connection-store';
-import { rxIndexOf, type ReceiverKey } from '../state/receiver-state';
+import { getReceiverVfoHz, KIWI_RECEIVER_INDEX, rxIndexOf, type ReceiverKey } from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
 
 const MAX_HZ = 60_000_000;
@@ -72,6 +72,21 @@ export function centerCtunForZoomIn(
       .catch(() => {});
   }
   return targetLoHz;
+}
+
+// On zoom-IN under CTUN, re-centre the Kiwi slice on its own dial. The global
+// ZoomControl only re-centres RX1 (centerCtunForZoomIn above), so without this
+// the Kiwi's frozen CTUN waterfall centre stays put while the span shrinks — its
+// dial (and the passband overlay that hangs off it) drift to the pane edge as
+// you zoom in (operator report: "zoom breaks the Kiwi filter + waterfall").
+// No-op when zooming out, CTUN off, or the Kiwi slice isn't enabled. Mirrors the
+// RX1 path but targets the Kiwi's independent waterfall centre via SetCenter.
+export function centerKiwiForZoomIn(currentZoom: ZoomLevel, nextZoom: ZoomLevel): void {
+  if (nextZoom <= currentZoom) return;
+  const s = useConnectionStore.getState();
+  if (!s.ctunEnabled) return;
+  if (!s.receivers.some((r) => r.index === KIWI_RECEIVER_INDEX)) return;
+  panReceiverCenterTo(KIWI_RECEIVER_INDEX, getReceiverVfoHz(s, KIWI_RECEIVER_INDEX));
 }
 
 // Coalesce overlapping autopan POSTs — a fast tune burst can queue several

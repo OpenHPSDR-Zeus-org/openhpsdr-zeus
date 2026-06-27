@@ -63,7 +63,15 @@ public sealed class WindowGeometryStore : IDisposable
         {
             var e = _docs.FindAll().FirstOrDefault();
             if (e is null)
-                return new WindowGeometry(DefaultWidth, DefaultHeight, Maximized: false);
+                // Fresh install: open maximized (full screen) on every platform.
+                // The G2's built-in panel and other small/embedded displays expect
+                // a full-screen client (matching deskhpsdr), and the desktop hosts
+                // benefit from the same default. The frame still carries its
+                // titlebar because RunDesktop seats a normal restored size first
+                // and relaxes the min size to fit small panels before maximizing —
+                // see PlaceWindowOnVisibleWorkArea. Once the operator
+                // resizes/un-maximizes, the saved doc below is authoritative.
+                return new WindowGeometry(DefaultWidth, DefaultHeight, Maximized: true);
             return new WindowGeometry(
                 ClampWidth(e.Width),
                 ClampHeight(e.Height),

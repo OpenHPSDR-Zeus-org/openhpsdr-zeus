@@ -28,6 +28,7 @@ import {
   fetchTxAudioProfiles,
   importTxAudioProfile,
   saveTxAudioProfile,
+  type ApplyTxAudioProfileResultDto,
   type TxAudioProfileDto,
 } from '../api/client';
 import { useAudioSuiteStore } from './audio-suite-store';
@@ -80,6 +81,8 @@ interface TxAudioProfileState {
   dirty: boolean;
   /** Snapshot of the live settings as they were at the last apply/save (clean). */
   baseline: string | null;
+  /** Bumped after a successful profile apply/import so plugin panels remount and refetch settings. */
+  applyRevision: number;
 
   /** Re-baseline to the current live state (called after apply/save => clean). */
   markClean(): void;
@@ -94,7 +97,7 @@ interface TxAudioProfileState {
   apply(id: string): Promise<TxAudioProfileMutationResult>;
   /** Delete a profile by id. */
   remove(id: string): Promise<TxAudioProfileMutationResult>;
-  /** Import a profile from a user-picked .json file; ADDS it (never applies it). */
+  /** Import a profile from a user-picked .json file and apply it immediately. */
   importProfile(file: File, name?: string): Promise<TxAudioProfileMutationResult>;
   /** Download a saved profile by id as a .json file. */
   exportProfile(id: string): Promise<TxAudioProfileMutationResult>;
@@ -104,6 +107,28 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+async function reconcileAppliedProfile(result: ApplyTxAudioProfileResultDto): Promise<void> {
+  // Drive the live UI from the returned StateDto — same body the existing
+  // reconcilers parse (mic/leveler/cfc/filter all live in StateDto).
+  const conn = useConnectionStore.getState();
+  const tx = useTxStore.getState();
+  conn.applyState(result.state);
+  tx.hydrateFromState(result.state);
+
+  // Reconcile the Audio Suite chain/mode/bypass from the apply response, then
+  // resync the full chain order + parked set from the server so the rack UI
+  // (and any open Audio Suite window) reflects the applied chain.
+  const audio = useAudioSuiteStore.getState();
+  useAudioSuiteStore.setState({
+    chainOrder: result.pluginIds,
+    processingMode: result.processingMode,
+    masterBypassed: result.masterBypass,
+    vstEngineActive: result.engineActive,
+    vstEngineAvailable: result.engineAvailable,
+  });
+  await audio.loadChainOrderFromServer();
+}
+
 export const useTxAudioProfileStore = create<TxAudioProfileState>((set, get) => ({
   profiles: [],
   loaded: false,
@@ -111,6 +136,7 @@ export const useTxAudioProfileStore = create<TxAudioProfileState>((set, get) => 
   busy: false,
   dirty: false,
   baseline: null,
+  applyRevision: 0,
 
   markClean: () => {
     set({ baseline: snapshotTxAudioLive(), dirty: false });
@@ -170,29 +196,9 @@ export const useTxAudioProfileStore = create<TxAudioProfileState>((set, get) => 
     set({ busy: true });
     try {
       const result = await applyTxAudioProfile(trimmed);
+      await reconcileAppliedProfile(result);
 
-      // Drive the live UI from the returned StateDto — same body the existing
-      // reconcilers parse (mic/leveler/cfc/filter all live in StateDto).
-      const conn = useConnectionStore.getState();
-      const tx = useTxStore.getState();
-      conn.applyState(result.state);
-      tx.hydrateFromState(result.state);
-
-      // Reconcile the Audio Suite chain/mode/bypass from the apply response, then
-      // resync the full chain order + parked set from the server so the rack UI
-      // (and any open Audio Suite window) reflects the applied chain.
-      const audio = useAudioSuiteStore.getState();
-      useAudioSuiteStore.setState({
-        chainOrder: result.pluginIds,
-        processingMode: result.processingMode,
-        masterBypassed: result.masterBypass,
-        vstEngineActive: result.engineActive,
-        vstEngineAvailable: result.engineAvailable,
-      });
-      await audio.loadChainOrderFromServer();
-      useAudioSuiteStore.getState().bumpPluginSettingsRevision();
-
-      set({ lastLoadedId: trimmed, busy: false });
+      set((s) => ({ lastLoadedId: trimmed, busy: false, applyRevision: s.applyRevision + 1 }));
       // Live state now matches the just-applied profile: that is the clean point.
       get().markClean();
       return { ok: true };
@@ -228,14 +234,18 @@ export const useTxAudioProfileStore = create<TxAudioProfileState>((set, get) => 
     set({ busy: true });
     try {
       const imported = await importTxAudioProfile(file, name);
-      // Import only ADDS to the catalog (it doesn't apply or change the
-      // selection). Refresh the list so the new row appears in the dropdown.
+      // Import a recovered/shared profile and make it live immediately. Refresh
+      // the list first so the new row appears in the dropdown even if applying
+      // the profile fails later.
       await get().load();
-      set({ busy: false });
       // Defensive: ensure the imported row is present even if the reload raced.
       if (!get().profiles.some((p) => p.id === imported.id)) {
         set((s) => ({ profiles: [...s.profiles, imported].sort((a, b) => a.id.localeCompare(b.id)) }));
       }
+      const applied = await applyTxAudioProfile(imported.id);
+      await reconcileAppliedProfile(applied);
+      set((s) => ({ lastLoadedId: imported.id, busy: false, applyRevision: s.applyRevision + 1 }));
+      get().markClean();
       return { ok: true };
     } catch (err) {
       set({ busy: false });

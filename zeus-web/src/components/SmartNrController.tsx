@@ -186,6 +186,15 @@ export function SmartNrController() {
         return;
       }
       refreshDspCapabilities(now);
+      const runtimeCapabilities: SmartNrDspCapabilities = {
+        ...(dspCapabilities ?? {
+          wdspActive: true,
+          wdspEmnrPost2Available: true,
+          wdspNr4SbnrAvailable: true,
+        }),
+        wdspNr3RnnrAvailable: conn.wdspNr3RnnrAvailable,
+        nr3ModelName: conn.nr3ModelName,
+      };
 
       const display = useDisplayStore.getState();
       const rxMeters = useRxMetersStore.getState();
@@ -214,6 +223,7 @@ export function SmartNrController() {
           adcHeadroomDb: rx.adcHeadroomDb,
           agcGain: rx.agcGain,
         },
+        dsp: runtimeCapabilities,
         current: conn.nr,
         mode: conn.mode,
       });
@@ -221,7 +231,7 @@ export function SmartNrController() {
 
       const capability = adaptSmartNrToDspCapabilities(
         shapeSmartNrRecommendation(rec, settings),
-        dspCapabilities,
+        runtimeCapabilities,
       );
       const shaped = capability.nr;
       const heldByRxChain = shouldHoldForRxChain(rx);

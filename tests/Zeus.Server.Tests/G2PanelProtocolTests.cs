@@ -58,6 +58,108 @@ public sealed class G2PanelProtocolTests
     }
 
     [Theory]
+    [InlineData(1, "AfRx2")]
+    [InlineData(2, "AgcRx2")]
+    [InlineData(3, "AfRx1")]
+    [InlineData(4, "AgcRx1")]
+    [InlineData(5, "Multi")]
+    [InlineData(6, "Drive")]
+    [InlineData(7, "RitXit")]
+    [InlineData(8, "Atten")]
+    [InlineData(9, "FilterHigh")]
+    [InlineData(10, "FilterLow")]
+    [InlineData(11, "DivGain")]
+    [InlineData(12, "DivPhase")]
+    public void G2_ultra_encoder_map_matches_deskhpsdr_type5_defaults(
+        int encoderId,
+        string expectedAction)
+    {
+        Assert.Equal(expectedAction, G2PanelActionRouter.G2UltraEncoderActionName(encoderId));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(13)]
+    [InlineData(20)]
+    public void G2_ultra_unassigned_encoder_ids_are_ignored(int encoderId)
+    {
+        Assert.Null(G2PanelActionRouter.G2UltraEncoderActionName(encoderId));
+    }
+
+    [Theory]
+    [InlineData(1, 0, 1, "ToggleMuteRx2")]
+    [InlineData(2, 0, 1, "ToggleMuteRx1")]
+    [InlineData(3, 0, 1, "CycleMulti")]
+    [InlineData(4, 0, 1, "AtuTune")]
+    [InlineData(5, 0, 1, "ToggleTwoTone")]
+    [InlineData(6, 0, 1, "ToggleTune")]
+    [InlineData(7, 0, 1, "ToggleMox")]
+    [InlineData(8, 0, 1, "ToggleCtun")]
+    [InlineData(9, 0, 1, "ToggleLock")]
+    [InlineData(10, 0, 1, "SwapVfos")]
+    [InlineData(11, 0, 1, "CycleRitXit")]
+    [InlineData(12, 0, 1, "ClearRitXit")]
+    [InlineData(13, 0, 1, "FilterCutDefault")]
+    [InlineData(14, 1, 0, "ModePlus")]
+    [InlineData(15, 1, 0, "FilterPlus")]
+    [InlineData(16, 0, 1, "BandPlus")]
+    [InlineData(17, 0, 1, "ModeMinus")]
+    [InlineData(18, 0, 1, "FilterMinus")]
+    [InlineData(19, 0, 1, "BandMinus")]
+    [InlineData(20, 0, 1, "CopyAtoB")]
+    [InlineData(21, 0, 1, "CopyBtoA")]
+    [InlineData(22, 0, 1, "ToggleSplit")]
+    [InlineData(23, 1, 0, "ToggleSnb")]
+    [InlineData(24, 1, 0, "ToggleNb")]
+    [InlineData(25, 1, 0, "CycleNr")]
+    [InlineData(27, 0, 1, "Band160")]
+    [InlineData(28, 0, 1, "Band80")]
+    [InlineData(29, 0, 1, "Band60")]
+    [InlineData(30, 0, 1, "Band40")]
+    [InlineData(31, 0, 1, "Band30")]
+    [InlineData(32, 0, 1, "Band20")]
+    [InlineData(33, 0, 1, "Band17")]
+    [InlineData(34, 0, 1, "Band15")]
+    [InlineData(35, 0, 1, "Band12")]
+    [InlineData(36, 0, 1, "Band10")]
+    [InlineData(37, 0, 1, "Band6")]
+    [InlineData(38, 0, 1, "BandLfMf")]
+    [InlineData(41, 0, 1, "ToggleDiversity")]
+    public void G2_ultra_button_map_matches_deskhpsdr_type5_defaults(
+        int buttonId,
+        int previousValue,
+        int value,
+        string expectedAction)
+    {
+        Assert.Equal(expectedAction, G2PanelActionRouter.G2UltraButtonActionNameForTransition(
+            buttonId,
+            previousValue,
+            value));
+    }
+
+    [Theory]
+    [InlineData(14)]
+    [InlineData(15)]
+    [InlineData(16)]
+    [InlineData(23)]
+    [InlineData(24)]
+    [InlineData(25)]
+    public void G2_ultra_menu_long_press_transitions_are_ignored_by_zeus(int buttonId)
+    {
+        Assert.Null(G2PanelActionRouter.G2UltraButtonActionNameForTransition(buttonId, 1, 2));
+    }
+
+    [Theory]
+    [InlineData(26)]
+    [InlineData(39)]
+    [InlineData(40)]
+    [InlineData(42)]
+    public void G2_ultra_reserved_buttons_are_ignored(int buttonId)
+    {
+        Assert.Null(G2PanelActionRouter.G2UltraButtonActionNameForTransition(buttonId, 0, 1));
+    }
+
+    [Theory]
     [InlineData(1, 1)]
     [InlineData(10, 1)]
     [InlineData(50, 5)]

@@ -135,12 +135,19 @@ public sealed class RadioService : IDisposable
     // edge is crossed or a PA setting is edited, we recompute without needing
     // to wait for the next SetDrive call.
     private int _drivePct;
-    // On-board CW keyer config (C&C 0x0B), forwarded to the connected P1
-    // client and re-pushed on reconnect. Seeded from CwSettingsStore in the
-    // ctor; updated at runtime via SetCwKeyerConfig from the CW settings
-    // endpoint. Default mode 0 (straight) is safe — see zeus-bks.
+    // On-board CW keyer config, forwarded to the connected client and
+    // re-pushed on reconnect. Seeded from CwSettingsStore in the ctor; updated
+    // at runtime via SetCwKeyerConfig from the CW settings endpoint. Default
+    // mode 0 (straight) is safe — see zeus-bks.
+    //   P1: speed + mode go to C&C register 0x0B (already wired).
+    //   P2: speed + mode + sidetone arm the radio's internal keyer via the
+    //       TxSpecific packet — issue #1032. Sidetone freq/gain are cached
+    //       here too so the P2 keyer's radio-generated sidetone tracks the
+    //       operator's CW pitch/level.
     private int _cwKeyerWpm;
     private int _cwKeyerMode;
+    private int _cwSidetoneHz = CwSettingsStore.DefaultSidetoneHz;
+    private double _cwSidetoneGainDb = CwSettingsStore.DefaultSidetoneGainDb;
     // Independent TUN drive %. When TUN is keyed, the recompute uses this in
     // place of _drivePct so the operator can pre-set a lower tune level (and
     // the same per-band PA gain gives equal watts at equal percentages). piHPSDR
@@ -364,13 +371,19 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
+    // Optional RX-audio source for the Protocol-1 EP2 L/R slots (radio-codec
+    // speaker output). Drained by Protocol1Client during RX; fed host-side by
+    // RadioSpeakerAudioSink. Null in tests / hosts without the feature wired,
+    // in which case P1 frames carry no RX audio (legacy behaviour).
+    private readonly Zeus.Protocol1.IRxAudioSource? _rxAudioSource;
+
     // Optional non-hardware KiwiSDR slice receiver. When present its entry is
     // appended to the projected receiver list (reserved index
     // WireContract.KiwiReceiverIndex) and a change re-broadcasts state. Null in
     // tests / hosts without the Kiwi feature wired.
     private readonly IKiwiReceiverProvider? _kiwiReceiverProvider;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null, Nr3ModelStore? nr3ModelStore = null, Hl2GpioSettingsStore? hl2GpioStore = null, BandMemoryStore? bandMemoryStore = null, IKiwiReceiverProvider? kiwiReceiverProvider = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null, Nr3ModelStore? nr3ModelStore = null, Hl2GpioSettingsStore? hl2GpioStore = null, BandMemoryStore? bandMemoryStore = null, IKiwiReceiverProvider? kiwiReceiverProvider = null, Zeus.Protocol1.IRxAudioSource? rxAudioSource = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
@@ -411,6 +424,7 @@ public sealed class RadioService : IDisposable
         if (_kiwiReceiverProvider is not null)
             _kiwiReceiverProvider.KiwiReceiverChanged += () => StateChanged?.Invoke(Snapshot());
         _txIqSource = txIqSource;
+        _rxAudioSource = rxAudioSource;
         // Seed the on-board CW keyer config from persisted settings so a
         // reconnect after restart re-applies the operator's mode/speed
         // before they touch the panel — otherwise a paddle op who saved
@@ -421,6 +435,8 @@ public sealed class RadioService : IDisposable
             var cw = cwSettingsStore.Get();
             Volatile.Write(ref _cwKeyerWpm, cw.Wpm);
             Volatile.Write(ref _cwKeyerMode, (int)cw.KeyerMode);
+            _cwSidetoneHz = cw.SidetoneHz;
+            _cwSidetoneGainDb = cw.SidetoneGainDb;
         }
 
         // Load persisted DSP settings from the store, or use defaults if not found
@@ -808,6 +824,23 @@ public sealed class RadioService : IDisposable
         get { lock (_sync) return _activeClient is not null || _p2Active; }
     }
 
+    /// <summary>True while a Protocol-1 client owns the connection — i.e. the
+    /// EP2 TX loop (and its RX-audio L/R slots) is live. RadioSpeakerAudioSink
+    /// gates on this so it only feeds the P1 RxAudioRing when something will
+    /// actually drain it.</summary>
+    internal bool IsProtocol1Active
+    {
+        get { lock (_sync) return _activeClient is not null; }
+    }
+
+    /// <summary>Cheap MOX accessor (no Receivers projection, unlike Snapshot).
+    /// Used on the per-AudioFrame path to skip feeding RX audio to the radio
+    /// codec while transmitting.</summary>
+    internal bool IsMox
+    {
+        get { lock (_sync) return _mox; }
+    }
+
     public StateDto Snapshot() { lock (_sync) return _state with { Receivers = ProjectReceivers(_state), MaxReceivers = EffectiveMaxReceivers }; }
 
     /// <summary>Current operator preamp toggle. PreampOn isn't on the
@@ -912,9 +945,13 @@ public sealed class RadioService : IDisposable
             if (_activeClient is not null)
                 throw new InvalidOperationException("Already connected. Disconnect first.");
 
+            // Drop any RX-audio buffered from a previous session so a fresh
+            // P1 connect starts from silence rather than replaying a stale tail.
+            (_rxAudioSource as Zeus.Protocol1.RxAudioRing)?.Clear();
             client = new Protocol1Client(
                 _loggerFactory.CreateLogger<Protocol1Client>(),
-                _txIqSource);
+                _txIqSource,
+                _rxAudioSource);
             client.AdcOverloadObserved += OnAdcOverload;
             client.Disconnected += OnClientDisconnected;
             _activeClient = client;
@@ -1887,7 +1924,15 @@ public sealed class RadioService : IDisposable
         // needs the new tuning before the next IQ block arrives. P2 is
         // pushed via DspPipelineService.OnRadioStateChanged.
         if (!targetBAtSet)
+        {
             ActiveClient?.SetVfoAHz(CwOffset.EffectiveLoHz(mode, newVfoAHz));
+            // Entering/leaving CW toggles the P2 internal keyer (TxSpecific
+            // byte-5 CW-select). Re-push so a paddle keys the radio the moment
+            // the operator is in CW, and the bit clears on the way back to
+            // SSB/AM/FM. P1's keyer is mode-agnostic (always-on in CW via the
+            // 0x0B rotation) so this is a no-op there. Issue #1032.
+            PushCwToP2();
+        }
 
         return Snapshot();
     }
@@ -2704,17 +2749,98 @@ public sealed class RadioService : IDisposable
     }
 
     /// <summary>
-    /// Forward the on-board CW keyer config (speed + mode) to the connected
-    /// radio's C&amp;C register 0x0B, and remember it so a reconnect re-applies
-    /// it. Called by the CW settings endpoint whenever the operator changes
-    /// WPM or keyer mode. No-op (cached only) when no radio is connected.
-    /// See zeus-bks.
+    /// Forward the on-board CW keyer config to the connected radio and
+    /// remember it so a reconnect re-applies it. Called by the CW settings
+    /// endpoint whenever the operator changes WPM, keyer mode, or sidetone.
+    /// No-op (cached only) when no radio is connected. See zeus-bks.
+    /// <list type="bullet">
+    /// <item>P1: speed + mode go to C&amp;C register 0x0B (already wired).</item>
+    /// <item>P2: speed + mode + sidetone arm the radio's internal keyer via
+    /// the TxSpecific packet so a paddle on the rear KEY jack keys the
+    /// transmitter — issue #1032.</item>
+    /// </list>
     /// </summary>
-    public void SetCwKeyerConfig(int wpm, CwKeyerMode mode)
+    public void SetCwKeyerConfig(int wpm, CwKeyerMode mode, int sidetoneHz, double sidetoneGainDb)
     {
         Volatile.Write(ref _cwKeyerWpm, wpm);
         Volatile.Write(ref _cwKeyerMode, (int)mode);
+        lock (_sync) { _cwSidetoneHz = sidetoneHz; _cwSidetoneGainDb = sidetoneGainDb; }
         ActiveClient?.SetCwKeyerConfig(wpm, mode);
+        PushCwToP2();
+    }
+
+    // 1 while a host-driven CW source (CwEngine / MoxSource.Cwx — keyboard,
+    // macros, TCI/CAT keying) is keying. The P2 internal (FPGA) keyer must NOT
+    // be armed at the same time: doing so would put two T/R masters on the air
+    // (host MOX + carrier IQ vs. the gateware self-keying with break-in). This
+    // mirrors pihpsdr, which only arms the internal keyer when
+    // !CAT_cw && !MIDI_cw (new_protocol.c:1463-1465). Gating on the host CW
+    // source (not host MOX) is deliberate: a paddle-driven internal-keyer TX
+    // can raise host MOX via an opt-in PTT-IN→MOX setting, and gating on MOX
+    // there would oscillate (disarm→drop→re-arm). Volatile int for lock-free
+    // cross-thread reads in PushCwToP2.
+    private int _hostCwKeying;
+
+    /// <summary>
+    /// Mark the host CW sender (CwEngine, <see cref="MoxSource.Cwx"/>) as
+    /// keying or idle. While keying, the Protocol-2 internal keyer is disarmed
+    /// (TxSpecific byte-5 cleared) so host-keyed and FPGA-keyed CW are mutually
+    /// exclusive — the pihpsdr model. Re-pushes immediately so the arm state
+    /// tracks the host sender edge. No-op on P1 (no <c>_p2Client</c>).
+    /// </summary>
+    public void SetHostCwKeying(bool active)
+    {
+        Volatile.Write(ref _hostCwKeying, active ? 1 : 0);
+        PushCwToP2();
+    }
+
+    /// <summary>
+    /// Map the operator's CW sidetone gain (dB) onto the Protocol-2 radio
+    /// sidetone level (0-127, TxSpecific byte 6). A muted sidetone (gain at or
+    /// below the floor) sends level 0, which clears the sidetone bit.
+    /// </summary>
+    private static byte CwSidetoneLevelFromGainDb(double gainDb)
+    {
+        if (gainDb <= -60.0) return 0;
+        double level = 100.0 * Math.Pow(10.0, gainDb / 20.0);
+        return (byte)Math.Clamp((int)Math.Round(level), 0, 127);
+    }
+
+    /// <summary>
+    /// Push the internal-keyer config to the Protocol-2 client (no-op on P1,
+    /// whose keyer is driven via <c>ActiveClient</c>). The radio's internal
+    /// keyer is armed only in CW mode (byte-5 bit-1), so this is called on
+    /// connect, on a CW-settings change, and on every mode change so byte 5
+    /// toggles as the operator enters/leaves CW.
+    /// </summary>
+    private void PushCwToP2()
+    {
+        var p2 = _p2Client;
+        if (p2 is null) return;
+        // Snapshot mode + sidetone together under the one lock — the sidetone
+        // fields are non-atomic (double) and written from the settings thread,
+        // so reading them lock-free would risk a torn value on 32-bit ARM (Pi).
+        RxMode mode;
+        int sidetoneHz;
+        double sidetoneGainDb;
+        lock (_sync)
+        {
+            mode = _state.Mode;
+            sidetoneHz = _cwSidetoneHz;
+            sidetoneGainDb = _cwSidetoneGainDb;
+        }
+        // Arm only in CW mode AND when the host CW sender is idle (see
+        // SetHostCwKeying) — never two T/R masters at once.
+        bool active = mode is RxMode.CWU or RxMode.CWL
+            && Volatile.Read(ref _hostCwKeying) == 0;
+        p2.SetCwKeyerConfig(new Zeus.Protocol2.CwKeyerWireConfig
+        {
+            Active = active,
+            Mode = (CwKeyerMode)Volatile.Read(ref _cwKeyerMode),
+            SpeedWpm = Volatile.Read(ref _cwKeyerWpm),
+            SidetoneHz = sidetoneHz,
+            SidetoneLevel = CwSidetoneLevelFromGainDb(sidetoneGainDb),
+        });
     }
 
     // Independent TUN drive %. Applies on the very next frame if TUN is already
@@ -3962,6 +4088,11 @@ public sealed class RadioService : IDisposable
         // operator sees realistic numbers when they open the PA panel.
         RecomputePaAndPush();
         ApplyG2AdcOptionsToP2Client(client, ConnectedBoardKind);
+        // Arm the internal CW keyer with the operator's persisted WPM / mode /
+        // sidetone so a paddle on the rear KEY jack works on first connect
+        // without touching the CW panel — mirrors the P1 connect push. Byte-5
+        // CW-select only actually engages once the radio is in CW mode. #1032.
+        PushCwToP2();
         // Fire AFTER the state mutation + PA recompute so subscribers see a
         // fully-coherent RadioService when they read board kind / snapshot.
         if (client is not null) P2Connected?.Invoke(client);

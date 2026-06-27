@@ -44,13 +44,14 @@
 // License for details.
 
 import { createContext, useContext, useEffect, type RefObject } from 'react';
-import { setRadioLo, setZoom, ZOOM_MAX, ZOOM_MIN, type RadioStateDto, type ZoomLevel } from '../api/client';
+import { setRadioLo, setReceiverLo, setZoom, ZOOM_MAX, ZOOM_MIN, type RadioStateDto, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import {
   getReceiverVfoFromState,
   getReceiverVfoHz,
   isSecondaryReceiver,
+  KIWI_RECEIVER_INDEX,
   optimisticSetReceiverVfo,
   postReceiverVfo,
   rxIndexOf,
@@ -62,7 +63,7 @@ import { useNotchStore } from '../state/notch-store';
 import * as viewCenter from '../state/view-center';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 import { roundToStep } from './number';
-import { applyCtunZoomCenterAfterState, centerCtunForZoomIn } from './ctun-zoom-center';
+import { applyCtunZoomCenterAfterState, centerCtunForZoomIn, centerKiwiForZoomIn } from './ctun-zoom-center';
 import { rulerDragTargetHz } from './use-ruler-pan-gesture';
 
 const MAX_HZ = 60_000_000;
@@ -357,6 +358,17 @@ export function usePanTuneGesture(
     const tuneReceiver = options.tuneReceiver ?? receiver;
     const dragMode = options.dragMode ?? 'tune';
     const panIsSecondary = isSecondaryReceiver(receiver);
+    // The Kiwi slice has an INDEPENDENT waterfall centre (SetCenter / the per-RX
+    // /lo endpoint) that is decoupled from its demod dial — exactly like RX1's
+    // CTUN-frozen NCO, and unlike a hardware secondary DDC whose centre IS its
+    // VFO. So a ruler-pan must move the Kiwi's centre, NOT retune its dial:
+    // posting the VFO under CTUN only roams the dial inside the frozen window and
+    // never streams the panned-to band (operator report: "drag pan doesn't load
+    // the rest of the waterfall"). Route the Kiwi pan-centre through SetCenter.
+    const panIsKiwi = rxIndexOf(receiver) === KIWI_RECEIVER_INDEX;
+    // RX1 and the Kiwi pan an independent centre; true hardware secondaries pan
+    // by retuning their VFO (the DDC follows it).
+    const panUsesCenter = panIsKiwi || !panIsSecondary;
     const touchPinchOnly = options.touchMode === 'pinch-only';
 
     type Drag = {
@@ -457,17 +469,31 @@ export function usePanTuneGesture(
     // follows their VFO, so a ruler/pan drag retunes the VFO. RX1 (index 0)
     // repositions the hardware radio LO.
     const fallbackPanCenterHz = () =>
-      panIsSecondary
-        ? getReceiverVfoHz(useConnectionStore.getState(), receiver)
-        : Number(selectDisplaySlice(useDisplayStore.getState(), receiver).centerHz);
+      panUsesCenter
+        ? Number(selectDisplaySlice(useDisplayStore.getState(), receiver).centerHz)
+        : getReceiverVfoHz(useConnectionStore.getState(), receiver);
     const writePanCenter = (hz: number) => {
+      // The Kiwi centre lives server-side (no connection-store field); the pan
+      // view-centre tween carries the optimistic motion until frames reconcile.
+      if (panIsKiwi) return;
       if (panIsSecondary) optimisticSetReceiverVfo(receiver, hz);
       else useConnectionStore.setState({ radioLoHz: hz });
     };
     const postPanCenter = (hz: number, signal?: AbortSignal) =>
-      panIsSecondary ? postReceiverVfo(receiver, hz, signal) : setRadioLo(hz, signal);
+      panIsKiwi
+        ? setReceiverLo(rxIndexOf(receiver), hz, signal)
+        : panIsSecondary
+          ? postReceiverVfo(receiver, hz, signal)
+          : setRadioLo(hz, signal);
     const appliedPanCenterFromState = (state: RadioStateDto) =>
-      panIsSecondary ? getReceiverVfoFromState(state, receiver) : state.radioLoHz;
+      // The Kiwi's centre isn't carried in the StateDto — the next DisplayFrame
+      // reconciles it (view-center.reconcileFrame), so report the commanded value
+      // here to leave the tween untouched on the POST round-trip.
+      panIsKiwi
+        ? commandedPanHz()
+        : panIsSecondary
+          ? getReceiverVfoFromState(state, receiver)
+          : state.radioLoHz;
     const commandedPanHz = () =>
       pendingPanHz ?? (panVc.isInitialized() ? panVc.getTargetCenterHz() : fallbackPanCenterHz());
     const readPanViewport = (): { centerHz: number; spanHz: number } | null => {
@@ -604,6 +630,9 @@ export function usePanTuneGesture(
         rxIndexOf(receiver) === 0 && rxIndexOf(tuneReceiver) === 0
           ? centerCtunForZoomIn(cur, next, ctrl.signal)
           : null;
+      // Zoom is global — re-centre the Kiwi slice on its dial too (self-guards on
+      // CTUN + Kiwi-enabled + zoom-in), whichever panel the wheel is over.
+      centerKiwiForZoomIn(cur, next);
       setZoom(next, ctrl.signal)
         .then((s) => {
           if (!ctrl.signal.aborted) {

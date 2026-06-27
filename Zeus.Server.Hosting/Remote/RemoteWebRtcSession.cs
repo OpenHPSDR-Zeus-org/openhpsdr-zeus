@@ -60,14 +60,16 @@ public sealed class RemoteWebRtcSession
     private int _lastAudioSeq = -1;
     private bool _audioWired;
 
-    // SOTA RX audio (opt-in, bench-gated): when ZEUS_REMOTE_OPUS_RX is set, RX
-    // audio is Opus-encoded onto the outbound WebRTC audio track instead of raw
-    // PCM over the unreliable "frames" data channel — native browser jitter
-    // buffer + PLC + ~50× less bandwidth. Default OFF so the proven PCM path is
-    // unchanged until this is bench-verified against a real radio + internet hop.
+    // SOTA RX audio: RX audio is Opus-encoded onto the outbound WebRTC audio
+    // track instead of raw PCM over the unreliable "frames" data channel — the
+    // browser's native adaptive jitter buffer + packet-loss concealment make it
+    // robust over an internet hop (the PCM path has neither: maxRetransmits:0,
+    // no reorder/jitter handling, so WAN loss = choppy/silent audio) at ~50×
+    // less bandwidth. Default ON; set ZEUS_REMOTE_OPUS_RX=0 to fall back to the
+    // legacy PCM-over-datachannel path if the Opus track ever misbehaves.
     internal static readonly bool OpusRxEnabled =
         (Environment.GetEnvironmentVariable("ZEUS_REMOTE_OPUS_RX") ?? "")
-            .Trim() is "1" or "true" or "TRUE" or "True";
+            .Trim() is not ("0" or "false" or "FALSE" or "False" or "off" or "OFF");
     private RemoteRxAudioPipeline? _rxAudio;
 
     // Post-unlock binary stream-request control frames (RX monitoring, Phase A):
@@ -106,20 +108,22 @@ public sealed class RemoteWebRtcSession
     ///   /api/remote/password   — remote-access session password store/status
     ///                            (a write here would let a remote change the
     ///                            very password gating it)
-    ///   /api/qrz               — QRZ status carries the signed-in operator's
-    ///                            callsign/identity; login/credentials live here
-    ///   /api/chat              — chat identity/roster/friends derive from the
-    ///                            QRZ session; conservative full-prefix deny
     ///   /api/prefs/databases/export — downloads the entire prefs LiteDB
     ///                            (contains the QRZ password + remote verifier)
     ///   /api/log/export        — full logbook export (PII / ADIF dump)
+    ///
+    /// NOTE: /api/qrz and /api/chat were previously fully denied here, but the
+    /// remote operator IS the authenticated station owner (SPAKE2+ session
+    /// password proven) — they should reach QRZ lookup and chat exactly as they
+    /// do at the desk (1:1 remote). Both are now allowed; the residual exposure
+    /// (a remote session can change the QRZ login/API key, and chat posts under
+    /// the station callsign) is accepted as operator-equivalent access. The
+    /// truly destructive surfaces above stay denied.
     /// Conservative by design: when unsure, deny.
     /// </summary>
     private static readonly string[] DeniedPathPrefixes =
     {
         "/api/remote/password",
-        "/api/qrz",
-        "/api/chat",
         "/api/prefs/databases/export",
         "/api/log/export",
     };
