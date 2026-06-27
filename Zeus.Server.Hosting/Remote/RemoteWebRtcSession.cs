@@ -126,6 +126,11 @@ public sealed class RemoteWebRtcSession
         "/api/remote/password",
         "/api/prefs/databases/export",
         "/api/log/export",
+        // /api/support — the maintainer-support Allow/Deny surface. It is the
+        // OPERATOR's local decision point; a remote peer (even the authenticated
+        // station owner) must never approve a read-only support session for itself
+        // or another admin through the tunnel (remote-diag P3).
+        "/api/support",
     };
 
     /// <summary>

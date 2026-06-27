@@ -71,6 +71,34 @@ public static class ZeusEndpoints
                 return Results.Ok(diag.Build(req));
             });
 
+        // Maintainer remote-support: the OPERATOR's local decision surface for an
+        // inbound read-only diagnostics request (remote-diag P3). The request
+        // arrives over the broker and is parked by SupportRequestCoordinator; these
+        // endpoints let the in-app Allow/Deny UI (P5) list and answer it. They are
+        // intentionally LOCAL only — the support tunnel's allowlist excludes
+        // /api/support and the operator tunnel denies it, so a remote peer can
+        // never approve a session for itself.
+        app.MapGet("/api/support/pending",
+            (Zeus.Server.Hosting.Support.SupportRequestCoordinator coord) => Results.Ok(coord.Pending()));
+
+        app.MapPost("/api/support/approve",
+            (SupportDecisionRequest req, Zeus.Server.Hosting.Support.SupportRequestCoordinator coord) =>
+            {
+                var id = req.RequestId ?? "";
+                var ok = coord.Approve(id);
+                log.LogInformation("api.support.approve id={RequestId} ok={Ok}", id, ok);
+                return ok ? Results.Ok(new { ok = true }) : Results.NotFound(new { ok = false });
+            });
+
+        app.MapPost("/api/support/deny",
+            (SupportDecisionRequest req, Zeus.Server.Hosting.Support.SupportRequestCoordinator coord) =>
+            {
+                var id = req.RequestId ?? "";
+                var ok = coord.Deny(id);
+                log.LogInformation("api.support.deny id={RequestId} ok={Ok}", id, ok);
+                return ok ? Results.Ok(new { ok = true }) : Results.NotFound(new { ok = false });
+            });
+
         // Capabilities snapshot — host-mode + platform metadata. Frontend
         // fetches once on app mount; future feature gates will reattach as
         // the new plugin system fills the FeatureMatrix. The HttpContext-
@@ -5067,6 +5095,8 @@ public static class ZeusEndpoints
 }
 
 internal sealed record NativeMuteRequest(bool Muted);
+/// <summary>Operator Allow/Deny body for a maintainer remote-support request (remote-diag P3).</summary>
+internal sealed record SupportDecisionRequest(string? RequestId);
 internal sealed record NativeAudioDevicesSetRequest(string? InputDeviceId, string? OutputDeviceId);
 internal sealed record NativeAudioDeviceDto(string Id, string Name, bool IsDefault);
 internal sealed record NativeAudioDevicesResponse(

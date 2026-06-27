@@ -405,6 +405,26 @@ public static class ZeusHost
         // Radio-side broker glue (Phase 3). Inert until a remote-access password
         // is set; then it keeps a "host" socket on the broker and answers offers.
         builder.Services.AddHostedService<Zeus.Server.Hosting.Remote.RemoteBrokerClient>();
+
+        // Maintainer remote-support (remote-diag P3): a SECOND, strictly read-only
+        // session type over the same tunnel for diagnosing a consented user's
+        // crashes/bugs. Three collaborators:
+        //   • SupportGrantStore — the radio's local authority; holds the single-use,
+        //     short-TTL grant the operator's "Allow" mints (ADR-0008 end-to-end gate).
+        //   • SupportRequestCoordinator — request→Allow/Deny orchestration the in-app
+        //     prompt (P5) and the broker client (P3b) hang off.
+        //   • SupportWebRtcService — answers a support offer ONLY against a live
+        //     grant, with a diagnostics-only allowlist + a live-log channel.
+        // Inert until the operator both opts in and approves a specific request.
+        builder.Services.AddSingleton<Zeus.Server.Hosting.Support.SupportGrantStore>();
+        builder.Services.AddSingleton<Zeus.Server.Hosting.Support.SupportRequestCoordinator>();
+        builder.Services.AddSingleton<Zeus.Server.Hosting.Support.SupportWebRtcService>(sp =>
+            new Zeus.Server.Hosting.Support.SupportWebRtcService(
+                sp.GetRequiredService<Zeus.Server.Hosting.Support.SupportGrantStore>(),
+                sp.GetRequiredService<ILogger<Zeus.Server.Hosting.Support.SupportWebRtcService>>(),
+                sp.GetService<DiagnosticLogBuffer>(),
+                sp.GetService<IHttpClientFactory>(),
+                options.HttpPort != 0 ? $"http://127.0.0.1:{options.HttpPort}" : null));
         // LAN Browser proxy: fetches private-LAN device web UIs on behalf of the
         // panel (esp. for remote operators whose browser can't reach the radio's
         // LAN). No auto-redirect — LanProxyService follows + re-validates each hop
