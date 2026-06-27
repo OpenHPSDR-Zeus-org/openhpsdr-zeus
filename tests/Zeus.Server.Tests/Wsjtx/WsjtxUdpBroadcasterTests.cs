@@ -89,6 +89,46 @@ public sealed class WsjtxUdpBroadcasterTests : IDisposable
     }
 
     [Fact]
+    public async Task SendQsoLogged_Emits_Type5_Alongside_Type12()
+    {
+        using var listener = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        var port = ((IPEndPoint)listener.Client.LocalEndPoint!).Port;
+
+        using var store = new WsjtxConfigStore(NullLogger<WsjtxConfigStore>.Instance, _prefsDbPath);
+        var (bc, mgmt, entry, _) = await BuildAsync(store);
+        mgmt.SetConfig(new WsjtxRuntimeConfig(
+            Enabled: true, Host: "127.0.0.1", Port: port, SendQsoLogged: true));
+
+        await bc.BroadcastLoggedQsoAsync(entry);
+
+        // Two datagrams must arrive: a type-12 LoggedADIF and a type-5 QSOLogged
+        // (order not asserted). Both carry the WSJT-X magic.
+        var types = new List<uint>();
+        for (int i = 0; i < 2; i++)
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            var result = await listener.ReceiveAsync(cts.Token);
+            Assert.Equal(new byte[] { 0xAD, 0xBC, 0xCB, 0xDA }, result.Buffer[..4]);
+            types.Add(System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(result.Buffer.AsSpan(8, 4)));
+        }
+        Assert.Contains(WsjtxMessage.LoggedAdifType, types);
+        Assert.Contains(WsjtxMessage.QsoLoggedType, types);
+    }
+
+    [Fact]
+    public async Task Multicast_Broadcast_Never_Throws()
+    {
+        using var store = new WsjtxConfigStore(NullLogger<WsjtxConfigStore>.Instance, _prefsDbPath);
+        var (bc, mgmt, entry, _) = await BuildAsync(store);
+        mgmt.SetConfig(new WsjtxRuntimeConfig(
+            Enabled: true, Transport: "multicast", MulticastGroup: "224.0.0.73", MulticastTtl: 1, Port: 2237));
+
+        // A multicast send must complete without surfacing an exception into the
+        // log POST path, regardless of whether anything is joined to the group.
+        await bc.BroadcastLoggedQsoAsync(entry);
+    }
+
+    [Fact]
     public async Task Enabled_Send_To_Dead_Endpoint_Never_Throws()
     {
         // Reserve a loopback port, then close it so nothing is listening. A UDP

@@ -112,4 +112,94 @@ public sealed class WsjtxManagementServiceTests : IDisposable
         Assert.Equal(2333, reloaded.Port);
         Assert.Equal("Shack", reloaded.InstanceId);
     }
+
+    [Fact]
+    public void Defaults_Transport_Is_Plain_Unicast()
+    {
+        using var store = NewStore();
+        var cfg = NewService(store).GetConfig();
+        Assert.Equal("unicast", cfg.Transport);
+        Assert.Equal("224.0.0.73", cfg.MulticastGroup);
+        Assert.Equal(1, cfg.MulticastTtl);
+        Assert.False(cfg.SendQsoLogged);
+        Assert.False(cfg.SendLiveDecodes);
+    }
+
+    [Theory]
+    [InlineData("multicast", "multicast")]
+    [InlineData("MULTICAST", "multicast")]
+    [InlineData("unicast", "unicast")]
+    [InlineData("garbage", "unicast")]
+    [InlineData("", "unicast")]
+    public void SetConfig_Normalizes_Transport(string input, string expected)
+    {
+        using var store = NewStore();
+        var status = NewService(store).SetConfig(new WsjtxRuntimeConfig(Enabled: true, Transport: input));
+        Assert.Equal(expected, status.Transport);
+    }
+
+    [Theory]
+    [InlineData("224.0.0.73", true)]
+    [InlineData("239.255.255.255", true)]
+    [InlineData("224.0.0.0", true)]
+    [InlineData("223.255.255.255", false)]
+    [InlineData("240.0.0.0", false)]
+    [InlineData("192.168.1.1", false)]
+    [InlineData("not-an-ip", false)]
+    public void IsMulticastIPv4_Recognizes_The_Class_D_Range(string addr, bool expected)
+    {
+        Assert.Equal(expected, WsjtxManagementService.IsMulticastIPv4(addr));
+    }
+
+    [Fact]
+    public void SetConfig_Falls_Back_On_Bad_Multicast_Group()
+    {
+        using var store = NewStore();
+        var status = NewService(store).SetConfig(
+            new WsjtxRuntimeConfig(Enabled: true, Transport: "multicast", MulticastGroup: "10.0.0.1"));
+        Assert.Equal("224.0.0.73", status.MulticastGroup); // unicast/garbage group rejected
+    }
+
+    [Fact]
+    public void SetConfig_Keeps_Valid_Multicast_Group()
+    {
+        using var store = NewStore();
+        var status = NewService(store).SetConfig(
+            new WsjtxRuntimeConfig(Enabled: true, Transport: "multicast", MulticastGroup: "239.1.2.3"));
+        Assert.Equal("239.1.2.3", status.MulticastGroup);
+    }
+
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(-5, 1)]
+    [InlineData(1, 1)]
+    [InlineData(32, 32)]
+    [InlineData(255, 255)]
+    [InlineData(999, 255)]
+    public void SetConfig_Clamps_Ttl(int input, int expected)
+    {
+        using var store = NewStore();
+        var status = NewService(store).SetConfig(
+            new WsjtxRuntimeConfig(Enabled: true, MulticastTtl: input));
+        Assert.Equal(expected, status.MulticastTtl);
+    }
+
+    [Fact]
+    public void SetConfig_Persists_New_Fields_Across_Store_Instances()
+    {
+        using (var store = NewStore())
+        {
+            NewService(store).SetConfig(new WsjtxRuntimeConfig(
+                Enabled: true, Transport: "multicast", MulticastGroup: "239.5.6.7",
+                MulticastTtl: 8, SendQsoLogged: true, SendLiveDecodes: true));
+        }
+
+        using var reopened = NewStore();
+        var reloaded = NewService(reopened).GetConfig();
+        Assert.Equal("multicast", reloaded.Transport);
+        Assert.Equal("239.5.6.7", reloaded.MulticastGroup);
+        Assert.Equal(8, reloaded.MulticastTtl);
+        Assert.True(reloaded.SendQsoLogged);
+        Assert.True(reloaded.SendLiveDecodes);
+    }
 }

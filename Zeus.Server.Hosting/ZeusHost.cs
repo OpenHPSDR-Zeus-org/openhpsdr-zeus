@@ -913,6 +913,12 @@ public static class ZeusHost
         builder.Services.AddSingleton<WsjtxConfigStore>();
         builder.Services.AddSingleton<WsjtxManagementService>();
         builder.Services.AddSingleton<Wsjtx.WsjtxUdpBroadcaster>();
+        // WsjtxLiveEmitter — the optional live WSJT-X stream (Heartbeat/Status/
+        // Decode/WSPRDecode) GridTracker / JTAlert consume. Leaf subscriber to
+        // Ft8Service/WsprService/RadioService; gated on Enabled && SendLiveDecodes
+        // so the default path emits nothing. SEND-ONLY via the broadcaster.
+        builder.Services.AddSingleton<Wsjtx.WsjtxLiveEmitter>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Wsjtx.WsjtxLiveEmitter>());
 
         // Digital-mode spotting uploaders — FT8/FT4 decodes to PSK Reporter and
         // WSPR spots to WSPRnet. NEW network egress; both DISABLED by default and
