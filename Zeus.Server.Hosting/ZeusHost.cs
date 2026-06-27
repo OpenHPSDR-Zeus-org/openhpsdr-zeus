@@ -904,6 +904,18 @@ public static class ZeusHost
         builder.Services.AddSingleton<WsjtxManagementService>();
         builder.Services.AddSingleton<Wsjtx.WsjtxUdpBroadcaster>();
 
+        // Digital-mode spotting uploaders — FT8/FT4 decodes to PSK Reporter and
+        // WSPR spots to WSPRnet. NEW network egress; both DISABLED by default and
+        // additionally no-op until operator callsign + grid are resolved. The two
+        // reporters are leaf subscribers to Ft8Service/WsprService — they enqueue/
+        // POST only and never touch the radio/DSP/TX path.
+        builder.Services.AddSingleton<SpottingSettingsStore>();
+        builder.Services.AddSingleton<SpottingManagementService>();
+        builder.Services.AddSingleton<Spotting.PskReporterReporter>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Spotting.PskReporterReporter>());
+        builder.Services.AddSingleton<Spotting.WsprnetReporter>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Spotting.WsprnetReporter>());
+
         // ZeusChat — operator-to-operator chat over the Cloudflare relay.
         // Singleton (API surface) + hosted service (relay connection lifecycle),
         // same shape as SpotBroadcastService above. Opt-in persisted via

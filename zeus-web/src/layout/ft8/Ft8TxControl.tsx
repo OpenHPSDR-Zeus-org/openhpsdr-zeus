@@ -18,6 +18,7 @@ import { useState } from 'react';
 import { setTun } from '../../api/client';
 import { DriveSlider } from '../../components/DriveSlider';
 import { TunePowerSlider } from '../../components/TunePowerSlider';
+import { FT8_MAX_TX_OFFSET_HZ, FT8_MIN_OFFSET_HZ } from '../../dsp/ft8-passband';
 import { genCq, genTx4, genTx5 } from '../../dsp/ft8-sequencer';
 import type { Ft8TxRunnerView } from '../../dsp/ft8-tx-runner';
 import { useFt8TxStore } from '../../state/ft8-tx-store';
@@ -109,8 +110,8 @@ export function Ft8TxControl({ runner, myCall, myGrid }: Ft8TxControlProps) {
           <span>OFFSET</span>
           <input
             type="number"
-            min={0}
-            max={2500}
+            min={FT8_MIN_OFFSET_HZ}
+            max={FT8_MAX_TX_OFFSET_HZ}
             step={1}
             value={Math.round(runner.audioHz)}
             disabled={qso.holdTxFreq}

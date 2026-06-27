@@ -22,6 +22,13 @@
 export const FT8_MIN_OFFSET_HZ = 0;
 export const FT8_MAX_OFFSET_HZ = 3000;
 
+/** The TX audio-offset range — narrower than the RX search span so a transmitted
+ *  tone stays comfortably inside the SSB passband. This is the SINGLE source of
+ *  truth for TX-offset clamping: the waterfall click, the OFFSET input, and the
+ *  controller (`setTxFreq`) all clamp to it so click, type, and the value POSTed
+ *  to the keyer always agree. Distinct from the wider RX `FT8_MAX_OFFSET_HZ`. */
+export const FT8_MAX_TX_OFFSET_HZ = 2500;
+
 /** Snap a waterfall click to a nearby decode when the cursor lands within this
  *  many screen pixels of a decoded signal's audio offset. Light, ham-friendly. */
 export const DECODE_SNAP_RADIUS_PX = 30;
@@ -146,5 +153,12 @@ export function resolveWaterfallClick(
   offsetHz: number,
   holdTxFreq: boolean,
 ): WaterfallClickResult {
-  return { rxFocusHz: offsetHz, txOffsetHz: holdTxFreq ? null : offsetHz };
+  // RX focus follows the full search span; the TX offset is clamped to the
+  // narrower TX range so a click past it can't stage an out-of-band tone.
+  return {
+    rxFocusHz: offsetHz,
+    txOffsetHz: holdTxFreq
+      ? null
+      : clampOffsetHz(offsetHz, FT8_MIN_OFFSET_HZ, FT8_MAX_TX_OFFSET_HZ),
+  };
 }

@@ -11,6 +11,7 @@ import { useConnectionStore } from '../../state/connection-store';
 import { useOperatorStore } from '../../state/operator-store';
 import { DIGITAL_BANDS } from '../../dsp/digital-segments';
 import { WsprTxControl } from './WsprTxControl';
+import { SpottingIndicator } from './SpottingIndicator';
 import '../../styles/ft8-theme.css';
 
 function useUtcClock(): string {
@@ -140,7 +141,10 @@ export function WsprWorkspace({ onClose }: { onClose?: () => void }) {
         </span>
         <span>{rows.length} spots</span>
         {error && <span className="warn">{error}</span>}
-        <span style={{ marginLeft: 'auto' }}>WSPR native · {band}</span>
+        <span style={{ marginLeft: 'auto' }}>
+          <SpottingIndicator kind="wsprnet" />
+        </span>
+        <span>WSPR native · {band}</span>
       </footer>
     </div>
   );

@@ -24,6 +24,7 @@ import { Ft8TxControl } from './Ft8TxControl';
 import { Ft8ReceivePanel } from './Ft8ReceivePanel';
 import { Ft8ActivityLog } from './Ft8ActivityLog';
 import { Ft8Stats } from './Ft8Stats';
+import { SpottingIndicator } from './SpottingIndicator';
 import '../../styles/ft8-theme.css';
 
 export interface Ft8WorkspaceProps {
@@ -123,6 +124,15 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
       tx.markLogged();
     }
   };
+
+  // Hydrate the logbook once when the workspace opens. The mode-picker opens
+  // this overlay directly, so without this the Activity Log and the
+  // worked-before / new-grid highlighting stay empty until SpotsPanel mounts or
+  // the first QSO is logged. addLogEntry re-loads after each write, so this only
+  // covers the initial fetch.
+  useEffect(() => {
+    void useLoggerStore.getState().loadEntries();
+  }, []);
 
   // Esc closes the workspace.
   useEffect(() => {
@@ -281,6 +291,9 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
         <span>{decodeCount} decodes</span>
         {error && <span className="warn">{error}</span>}
         <span style={{ marginLeft: 'auto' }}>
+          <SpottingIndicator kind="psk" />
+        </span>
+        <span>
           {protocol} native · {band}
         </span>
       </footer>

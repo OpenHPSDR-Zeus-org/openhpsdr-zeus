@@ -3413,6 +3413,20 @@ public static class ZeusEndpoints
             return Results.Ok(status);
         });
 
+        // Digital-mode spotting uploaders (FT8/FT4 -> PSK Reporter, WSPR ->
+        // WSPRnet). NEW network egress, both DISABLED by default; config applies
+        // live (the uploaders only send UDP/HTTP — there is no listener).
+        app.MapGet("/api/spotting/status", (SpottingManagementService spotting) => spotting.GetStatus());
+
+        app.MapPost("/api/spotting/config", (SpottingRuntimeConfig req, SpottingManagementService spotting) =>
+        {
+            log.LogInformation(
+                "api.spotting.config psk={Psk} wsprnet={Wspr}",
+                req.PskReporterEnabled, req.WsprnetEnabled);
+            var status = spotting.SetConfig(req);
+            return Results.Ok(status);
+        });
+
         app.Map("/ws", async (HttpContext ctx, StreamingHub hub) =>
         {
             if (!ctx.WebSockets.IsWebSocketRequest)
