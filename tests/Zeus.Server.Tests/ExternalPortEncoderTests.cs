@@ -80,6 +80,35 @@ public class ExternalPortEncoderTests
         Assert.Equal(RadioProtocol.Protocol1, ExternalPortEncoders.DefaultProtocolFor(HpsdrBoardKind.HermesLite2));
     }
 
+    [Fact]
+    public void For_HermesII_OnProtocol2_RoutesToProtocol2Encoder()
+    {
+        // ANAN-10E (HermesII) ships with either P1 or P2 firmware; the operator
+        // flashes one of the two. Default dispatch (no protocol argument) picks
+        // the P1 encoder because that's HermesII's historical transport. When
+        // the live connection IS Protocol 2, the dispatch must honour the
+        // explicit protocol argument and route to the P2 encoder so the byte-50
+        // / byte-51 mic_control + line_in_gain bits actually reach the wire
+        // (issue #1053).
+        var encoder = ExternalPortEncoders.For(
+            HpsdrBoardKind.HermesII, OrionMkIIVariant.G2, RadioProtocol.Protocol2);
+        Assert.IsType<Protocol2PortEncoder>(encoder);
+    }
+
+    [Fact]
+    public void P2Encoder_OnHermesII_RadioLineIn_SetsLineInBit()
+    {
+        // HermesII has HasOnboardCodec=true (TLV320 codec + line-in jack), so
+        // the P2 encoder must emit byte-50 bit 0 when the operator selects
+        // RadioLineIn. Without this the radio's codec stays on its default mic
+        // input and no audio is heard on the line-in jack (issue #1053).
+        var encoder = ExternalPortEncoders.For(
+            HpsdrBoardKind.HermesII, OrionMkIIVariant.G2, RadioProtocol.Protocol2);
+        var state = new ExternalPortState(Source: TxAudioSource.RadioLineIn, LineInGain: 17);
+        Assert.Equal((byte)0x01, encoder.EncodeP2MicControlByte(in state));
+        Assert.Equal((byte)17, encoder.EncodeP2LineInGainByte(in state));
+    }
+
     // ---- byte-identity: encoder output == wire path for the default state ----
 
     [Theory]
