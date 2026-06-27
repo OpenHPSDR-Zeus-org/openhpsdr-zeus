@@ -674,53 +674,55 @@ public partial class Program
     [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "_exit")]
     private static extern void LibcImmediateExit(int status);
 
-    // Orderly host teardown for the Photino desktop / status-window paths, which
-    // drive the host lifecycle by hand (Photino owns the main thread, so we can't
-    // use app.Run()).
+    // Shutdown for the Photino desktop / status-window paths, which drive the host
+    // lifecycle by hand (Photino owns the main thread, so we can't use app.Run()).
     //
-    // Two layered reasons this is non-trivial:
+    // The hard constraint: a third-party in-process JUCE plugin (e.g. a Waves /
+    // Supertone Audio Unit loaded via the macOS AU bridge) keeps its OWN background
+    // juce::Timer thread that managed code cannot stop. ANY teardown of that
+    // plugin's JUCE MessageManager while the thread is live is a use-after-free
+    // (SIGSEGV in juce::MessageQueue::post). DISPOSING THE HOST TRIGGERS EXACTLY
+    // THAT: AudioPluginBridge.DisposeAsync unloads the AU
+    // (AudioComponentInstanceDispose), tearing the MessageManager down under the
+    // live Timer thread. (An earlier fix disposed the host then _exit'd — but the
+    // crash is DURING dispose, before _exit is ever reached.) So we must NEVER
+    // dispose the host on the way out.
     //
-    // 1. DISPOSE, not just stop. The paths historically called only StopAsync and
-    //    returned — which stops hosted services but never disposes the DI
-    //    container, so no IAsyncDisposable singleton's DisposeAsync ran. Disposing
-    //    the host runs AudioPluginBridge.DisposeAsync (AudioChain teardown) and
-    //    RxVstEngineService.DisposeAsync (out-of-process VST engine kill, so it
-    //    isn't orphaned). The web/service path gets this free via app.RunAsync()'s
-    //    finally block.
-    //
-    // 2. HARD-EXIT after the orderly shutdown. Disposing OUR managed chain is not
-    //    enough: a third-party in-process JUCE plugin (e.g. a Waves / Supertone
-    //    Audio Unit loaded through the macOS AU bridge) keeps its OWN background
-    //    juce::Timer thread alive that managed code cannot reach. If we then return
-    //    from Main, the CLR runs C-runtime static destructors, which free the
-    //    plugin's JUCE MessageManager while that Timer thread is still posting to
-    //    it → SIGSEGV in juce::MessageQueue::post (the "Zeus quit unexpectedly"
-    //    dialog on window close). After the orderly StopAsync + DisposeAsync above
-    //    (prefs flushed, LiteDB closed, engines killed), there is nothing left we
-    //    need the static-destructor phase for, so on macOS/Linux we _exit(2): the
-    //    kernel reaps the lingering plugin thread without running the destructors
-    //    it would fault in. Windows desktop does not host the in-process AU bridge,
-    //    so it returns normally (and avoids the WebView2 ProcessExit deadlock noted
-    //    above).
+    // Instead: StopAsync() the host — this stops hosted services (kills the
+    // out-of-process RX VST engine, stops sidecars) but does NOT unload the
+    // in-process AU (the bridge's StopAsync only unsubscribes) — then explicitly
+    // kill the out-of-process TX VST engine (it runs no JUCE in our process, so
+    // disposing it is safe) so it isn't orphaned by the hard exit, then on
+    // macOS/Linux _exit(2): the kernel reaps the live plugin thread WITHOUT running
+    // any destructor it could fault in. LiteDB writes are committed transactionally,
+    // so skipping graceful disposal is durability-safe. Windows hosts no in-process
+    // AU bridge, so it returns normally (and avoids the WebView2 ProcessExit
+    // deadlock noted above).
     private static void ShutdownDesktopHost(WebApplication app)
     {
         // Deliberate shutdown — tell any supervising sidecar this is a clean exit,
-        // not a crash, BEFORE we tear the host down or _exit(2).
+        // not a crash, BEFORE we stop the host or _exit(2).
         SupportSidecar.MarkCleanExit();
 
-        StopAndDisposeHost(app);
+        // Stop hosted services WITHOUT disposing the host (see why above).
+        try { app.StopAsync().GetAwaiter().GetResult(); }
+        catch { /* best effort — never block the exit */ }
+
+        // Kill the out-of-process TX VST engine explicitly (it would otherwise only
+        // be torn down by the host DisposeAsync we deliberately skip). No in-process
+        // JUCE, so this cannot trigger the plugin-thread race.
+        try
+        {
+            if (app.Services.GetService(typeof(Zeus.Plugins.Host.Audio.VstEngineController)) is IAsyncDisposable engine)
+                engine.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+        catch { /* best effort */ }
 
         Console.Out.Flush();
         Console.Error.Flush();
         if (OperatingSystem.IsWindows())
-            return; // no in-process JUCE plugins on Windows desktop; return normally
+            return; // no in-process AU bridge on Windows desktop; return normally
         try { LibcImmediateExit(0); } catch { /* fall through to a normal return */ }
-    }
-
-    private static void StopAndDisposeHost(WebApplication app)
-    {
-        app.StopAsync().GetAwaiter().GetResult();
-        ((IAsyncDisposable)app).DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 
     // Photino occasionally opens the frame off the visible desktop on
