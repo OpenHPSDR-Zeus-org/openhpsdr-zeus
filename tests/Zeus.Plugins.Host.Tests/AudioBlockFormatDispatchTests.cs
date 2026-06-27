@@ -12,6 +12,9 @@ namespace Zeus.Plugins.Host.Tests;
 /// and a default manifest still loads via a VST3 path (filesystem identity),
 /// not an AU registry triple.
 /// </summary>
+// Sets the process-global NativeLoadEnabledOverride static in its ctor —
+// serialise with the other load-gate tests so it can't clobber their override.
+[Collection("LoadSensitive")]
 public class AudioBlockFormatDispatchTests : IDisposable
 {
     public AudioBlockFormatDispatchTests() => VstHostAudioPlugin.NativeLoadEnabledOverride = true;
