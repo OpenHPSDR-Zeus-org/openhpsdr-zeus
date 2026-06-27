@@ -1,5 +1,6 @@
 import type { SignalRoom } from './signal-room';
 import type { RateLimiter } from './rate-limiter';
+import type { PresenceRoom } from './presence';
 
 /** Worker environment bindings (see wrangler.toml). */
 export interface Env {
@@ -8,6 +9,28 @@ export interface Env {
 
   /** Per-IP connection rate limiter DO (shared pattern with the chat relay). */
   RATE_DO: DurableObjectNamespace<RateLimiter>;
+
+  /**
+   * Credential-based admin store (D1 `zeus-admin`), shared with the chat relay.
+   * Single source of truth for who is an admin: callsign ownership (QRZ) AND a
+   * stored credential. See ADMIN_AUTH_DESIGN.md and migrations/0001_admin.sql.
+   */
+  ADMIN_DB: D1Database;
+
+  /**
+   * Presence DO: a single object tracking operators whose sidecar has registered
+   * as support-available (heartbeats, ~90s expiry). Listed via /admin/presence.
+   */
+  PRESENCE: DurableObjectNamespace<PresenceRoom>;
+
+  /**
+   * Bootstrap admin seeded on first /admin request when `admins` is empty
+   * (created_by 'bootstrap'). Set BOTH via `wrangler secret put`. Optional —
+   * absent means no bootstrap admin is created (legacy env.ADMINS still migrates).
+   */
+  ADMIN_BOOTSTRAP_CALLSIGN?: string;
+  /** Bootstrap admin's initial password (see ADMIN_BOOTSTRAP_CALLSIGN). */
+  ADMIN_BOOTSTRAP_PASSWORD?: string;
 
   /**
    * QRZ-login enforcement for the HOST (radio) side. Default "on": only the
@@ -24,4 +47,11 @@ export interface Env {
   TURN_KEY_ID?: string;
   /** Cloudflare Realtime TURN API token (set via `wrangler secret put`). */
   TURN_API_TOKEN?: string;
+
+  /**
+   * Legacy comma-separated admin callsigns. Only used at bootstrap: any callsign
+   * here is seeded as a password-less admin row the first time `admins` is empty,
+   * so chat-admin keeps working pre-migration. Not consulted after that.
+   */
+  ADMINS?: string;
 }

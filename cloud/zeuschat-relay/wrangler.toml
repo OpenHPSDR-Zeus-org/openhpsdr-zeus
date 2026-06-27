@@ -28,6 +28,15 @@ class_name = "ChatRoom"
 name = "RATE_DO"
 class_name = "RateLimiter"
 
+# Shared credential-based admin store (same D1 database as the broker). The relay
+# reads the enabled-admin callsign list from it; the broker owns writes. Use the
+# SAME database_name/database_id printed by `wrangler d1 create zeus-admin` in
+# cloud/zeus-remote-broker — do NOT create a second database.
+[[d1_databases]]
+binding = "ADMIN_DB"
+database_name = "zeus-admin"
+database_id = "REPLACE_WITH_d1_create_OUTPUT"
+
 # SQLite-backed DO namespaces (free-plan compatible).
 [[migrations]]
 tag = "v1"
