@@ -1,0 +1,7 @@
+{
+	"common_dir" : "/disk2/ham/LATEST/FW_1.8/Orion_NP_v1.7/",
+	"acds_version" : "Version 18.1.0",
+	"platform" : "linux",
+	"os" : "Ubuntu 14.04.5",
+	"qpf" : "Orion.qpf"
+}

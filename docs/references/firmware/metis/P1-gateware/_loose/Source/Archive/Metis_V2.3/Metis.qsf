@@ -1,0 +1,186 @@
+# -------------------------------------------------------------------------- #
+#
+# Copyright (C) 1991-2010 Altera Corporation
+# Your use of Altera Corporation's design tools, logic functions 
+# and other software and tools, and its AMPP partner logic 
+# functions, and any output files from any of the foregoing 
+# (including device programming or simulation files), and any 
+# associated documentation or information are expressly subject 
+# to the terms and conditions of the Altera Program License 
+# Subscription Agreement, Altera MegaCore Function License 
+# Agreement, or other applicable license agreement, including, 
+# without limitation, that your use is for the sole purpose of 
+# programming logic devices manufactured by Altera and sold by 
+# Altera or its authorized distributors.  Please refer to the 
+# applicable agreement for further details.
+#
+# -------------------------------------------------------------------------- #
+#
+# Quartus II
+# Version 9.1 Build 350 03/24/2010 Service Pack 2 SJ Web Edition
+# Date created = 17:20:09  November 07, 2010
+#
+# -------------------------------------------------------------------------- #
+#
+# Notes:
+#
+# 1) The default values for assignments are stored in the file:
+#		Metis_assignment_defaults.qdf
+#    If this file doesn't exist, see file:
+#		assignment_defaults.qdf
+#
+# 2) Altera recommends that you do not modify this file. This
+#    file is updated automatically by the Quartus II software
+#    and any changes you make may be lost or overwritten.
+#
+# -------------------------------------------------------------------------- #
+
+
+set_global_assignment -name FAMILY "Cyclone III"
+set_global_assignment -name DEVICE EP3C40Q240C8
+set_global_assignment -name TOP_LEVEL_ENTITY Metis
+set_global_assignment -name ORIGINAL_QUARTUS_VERSION "9.1 SP2"
+set_global_assignment -name PROJECT_CREATION_TIME_DATE "17:20:09  NOVEMBER 07, 2010"
+set_global_assignment -name LAST_QUARTUS_VERSION 12.1
+set_global_assignment -name USE_GENERATED_PHYSICAL_CONSTRAINTS OFF -section_id eda_blast_fpga
+set_global_assignment -name SEARCH_PATH "C:\\HPSDR\\trunk\\WIP\\OzyII\\Verilog\\common/"
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 85
+set_global_assignment -name NOMINAL_CORE_SUPPLY_VOLTAGE 1.2V
+set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -entity OzyII -section_id Top
+set_global_assignment -name PARTITION_COLOR 16764057 -entity OzyII -section_id Top
+set_global_assignment -name LL_ROOT_REGION ON -entity OzyII -section_id "Root Region"
+set_global_assignment -name LL_MEMBER_STATE LOCKED -entity OzyII -section_id "Root Region"
+set_location_assignment PIN_45 -to ATLAS_C23
+set_location_assignment PIN_49 -to ATLAS_C22
+set_location_assignment PIN_55 -to ATLAS_C20
+set_location_assignment PIN_57 -to ATLAS_C19
+set_location_assignment PIN_78 -to ATLAS_C15
+set_location_assignment PIN_88 -to ATLAS_A12
+set_location_assignment PIN_94 -to ATLAS_A11
+set_location_assignment PIN_98 -to ATLAS_A10
+set_location_assignment PIN_100 -to ATLAS_A9
+set_location_assignment PIN_131 -to ATLAS_A2
+set_location_assignment PIN_132 -to HEART_BEAT
+set_location_assignment PIN_217 -to RAM_A3
+set_location_assignment PIN_207 -to RAM_A9
+set_location_assignment PIN_196 -to RAM_A7
+set_location_assignment PIN_194 -to RAM_A5
+set_location_assignment PIN_183 -to PHY_MDIO
+set_location_assignment PIN_176 -to PHY_RESET_N
+set_location_assignment PIN_171 -to RAM_A10
+set_location_assignment PIN_166 -to RAM_A12
+set_location_assignment PIN_164 -to RAM_A13
+set_location_assignment PIN_56 -to ATLAS_A20
+set_location_assignment PIN_84 -to ATLAS_A13
+set_location_assignment PIN_110 -to ATLAS_A7
+set_location_assignment PIN_114 -to ATLAS_A5
+set_location_assignment PIN_235 -to RAM_A0
+set_location_assignment PIN_230 -to RAM_A1
+set_location_assignment PIN_223 -to RAM_A2
+set_location_assignment PIN_216 -to RAM_A4
+set_location_assignment PIN_203 -to RAM_A8
+set_location_assignment PIN_195 -to RAM_A6
+set_location_assignment PIN_184 -to PHY_MDC
+set_location_assignment PIN_169 -to RAM_A11
+set_location_assignment PIN_51 -to ATLAS_C21
+set_location_assignment PIN_52 -to ATLAS_A21
+set_location_assignment PIN_112 -to ATLAS_A6
+set_location_assignment PIN_127 -to ATLAS_A3
+set_location_assignment PIN_240 -to PHY_TX_CLOCK
+set_location_assignment PIN_118 -to ATLAS_A4
+set_location_assignment PIN_34 -to MODE2
+set_location_assignment PIN_152 -to PHY_CLK125
+set_location_assignment PIN_151 -to IN0
+set_location_assignment PIN_150 -to IN1
+set_location_assignment PIN_149 -to IN2
+set_location_assignment PIN_209 -to CLK_25MHZ
+set_location_assignment PIN_210 -to PHY_RX_CLOCK
+set_location_assignment PIN_212 -to PHY_INT_N
+set_location_assignment PIN_106 -to ATLAS_A8
+set_location_assignment PIN_43 -to ATLAS_C24
+set_location_assignment PIN_218 -to PHY_TX_EN
+set_location_assignment PIN_226 -to PHY_TX[0]
+set_location_assignment PIN_224 -to PHY_TX[1]
+set_location_assignment PIN_221 -to PHY_TX[2]
+set_location_assignment PIN_219 -to PHY_TX[3]
+set_location_assignment PIN_197 -to PHY_RX[0]
+set_location_assignment PIN_200 -to PHY_RX[1]
+set_location_assignment PIN_201 -to PHY_RX[2]
+set_location_assignment PIN_202 -to PHY_RX[3]
+set_location_assignment PIN_239 -to PHY_DV
+set_location_assignment PIN_236 -to SCK
+set_location_assignment PIN_232 -to SI
+set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -entity OzyII -section_id Top
+set_global_assignment -name ALLOW_POWER_UP_DONT_CARE OFF
+set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -section_id Top
+set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
+set_global_assignment -name LL_ROOT_REGION ON -section_id "Root Region"
+set_global_assignment -name LL_MEMBER_STATE LOCKED -section_id "Root Region"
+set_global_assignment -name VERILOG_INPUT_VERSION SYSTEMVERILOG_2005
+set_global_assignment -name VERILOG_SHOW_LMF_MAPPING_MESSAGES OFF
+set_location_assignment PIN_92 -to CONFIG
+set_global_assignment -name STRATIX_DEVICE_IO_STANDARD "2.5 V"
+set_location_assignment PIN_186 -to NODE_ADDR_CS
+set_location_assignment PIN_231 -to NCONFIG
+set_global_assignment -name USE_CONFIGURATION_DEVICE ON
+set_global_assignment -name FORCE_CONFIGURATION_VCCIO ON
+set_global_assignment -name GENERATE_RBF_FILE ON
+set_global_assignment -name ON_CHIP_BITSTREAM_DECOMPRESSION ON
+set_global_assignment -name FMAX_REQUIREMENT "25 MHz"
+set_global_assignment -name FMAX_REQUIREMENT "25 MHz" -section_id CLK_25MHZ
+set_instance_assignment -name CLOCK_SETTINGS CLK_25MHZ -to CLK_25MHZ
+set_global_assignment -name BASED_ON_CLOCK_SETTINGS CLK_25MHZ -section_id PHY_CLK125
+set_global_assignment -name DIVIDE_BASE_CLOCK_PERIOD_BY 5 -section_id PHY_CLK125
+set_instance_assignment -name CLOCK_SETTINGS PHY_CLK125 -to PHY_CLK125
+set_global_assignment -name BASED_ON_CLOCK_SETTINGS CLK_25MHZ -section_id PHY_MDIO_clk
+set_global_assignment -name MULTIPLY_BASE_CLOCK_PERIOD_BY 10 -section_id PHY_MDIO_clk
+set_instance_assignment -name CLOCK_SETTINGS PHY_MDIO_clk -to PHY_MDIO_clk
+set_global_assignment -name SEARCH_PATH common/ -tag from_archive
+set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -section_id Top
+set_global_assignment -name RESERVE_ALL_UNUSED_PINS_WEAK_PULLUP "AS INPUT TRI-STATED"
+set_location_assignment PIN_128 -to ATLAS_C2
+set_location_assignment PIN_134 -to USEROUT0
+set_location_assignment PIN_135 -to USEROUT1
+set_location_assignment PIN_137 -to USEROUT2
+set_location_assignment PIN_173 -to USEROUT3
+set_global_assignment -name MISC_FILE Metis.dpf
+set_global_assignment -name VERILOG_FILE sp_rcv_ctrl.v
+set_global_assignment -name VERILOG_FILE ASMI_interface.v
+set_global_assignment -name VERILOG_FILE ASMI.v
+set_global_assignment -name VERILOG_FILE I2C_Master.v
+set_global_assignment -name VERILOG_FILE common/cdc_mcp.v
+set_global_assignment -name VERILOG_FILE common/cdc_sync.v
+set_global_assignment -name VERILOG_FILE common/clk_div.v
+set_global_assignment -name VERILOG_FILE common/clk_lrclk_gen.v
+set_global_assignment -name VERILOG_FILE common/I2S_rcv.v
+set_global_assignment -name VERILOG_FILE common/I2S_xmit.v
+set_global_assignment -name VERILOG_FILE common/NWire_rcv.v
+set_global_assignment -name VERILOG_FILE common/NWire_xmit.v
+set_global_assignment -name VERILOG_FILE common/OneWire_rcv.v
+set_global_assignment -name VERILOG_FILE common/OneWire_xmit.v
+set_global_assignment -name VERILOG_FILE common/pulsegen.v
+set_global_assignment -name VERILOG_FILE CRC32.v
+set_global_assignment -name VERILOG_FILE debounce.v
+set_global_assignment -name VERILOG_FILE DHCP.v
+set_global_assignment -name VERILOG_FILE EEPROM.v
+set_global_assignment -name VERILOG_FILE FIFO.v
+set_global_assignment -name VERILOG_FILE Led_control.v
+set_global_assignment -name VERILOG_FILE Led_flash.v
+set_global_assignment -name VERILOG_FILE MDIO.v
+set_global_assignment -name VERILOG_FILE Metis.v
+set_global_assignment -name VERILOG_FILE PHY_IN.v
+set_global_assignment -name VERILOG_FILE PHY_Rx_fifo.v
+set_global_assignment -name VERILOG_FILE PHY_Tx.v
+set_global_assignment -name VERILOG_FILE PHY_Tx_fifo.v
+set_global_assignment -name VERILOG_FILE PLL_clocks.v
+set_global_assignment -name VERILOG_FILE Rx_MAC.v
+set_global_assignment -name VERILOG_FILE Tx_fifo.v
+set_global_assignment -name VERILOG_FILE Tx_fifo_ctrl.v
+set_global_assignment -name VERILOG_FILE Tx_MAC.v
+set_global_assignment -name QIP_FILE EPCS_fifo.qip
+set_global_assignment -name QIP_FILE SP_fifo.qip
+set_global_assignment -name QIP_FILE PHY_fifo.qip
+set_global_assignment -name POWER_PRESET_COOLING_SOLUTION "23 MM HEAT SINK WITH 200 LFPM AIRFLOW"
+set_global_assignment -name POWER_BOARD_THERMAL_MODEL "NONE (CONSERVATIVE)"
+set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top

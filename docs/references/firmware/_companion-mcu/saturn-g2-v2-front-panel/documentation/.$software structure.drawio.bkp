@@ -1,0 +1,68 @@
+<mxfile host="Electron" modified="2023-12-18T18:39:20.045Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/22.1.2 Chrome/114.0.5735.289 Electron/25.9.4 Safari/537.36" etag="A7TVustDDANVNQXRgoR_" version="22.1.2" type="device">
+  <diagram name="Page-1" id="9JL6lNnUchiAzvnilS1d">
+    <mxGraphModel dx="973" dy="555" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="400" pageHeight="400" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="e4DuWDmEf0esiSAy_Sqz-1" value="I/O devices&lt;br&gt;encoder, PB, LED" style="whiteSpace=wrap;html=1;aspect=fixed;" vertex="1" parent="1">
+          <mxGeometry x="20" y="190" width="80" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="e4DuWDmEf0esiSAy_Sqz-2" value="Debounce, decode" style="whiteSpace=wrap;html=1;aspect=fixed;" vertex="1" parent="1">
+          <mxGeometry x="140" y="190" width="80" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="e4DuWDmEf0esiSAy_Sqz-3" value="event queue" style="shape=datastore;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="300" y="280" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="e4DuWDmEf0esiSAy_Sqz-5" value="Raspberry Pi Interface" style="whiteSpace=wrap;html=1;aspect=fixed;" vertex="1" parent="1">
+          <mxGeometry x="280" y="120" width="120" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="e4DuWDmEf0esiSAy_Sqz-6" value="Interrupt" style="endArrow=classic;html=1;rounded=0;exitX=0.75;exitY=0;exitDx=0;exitDy=0;" edge="1" parent="1" source="e4DuWDmEf0esiSAy_Sqz-5">
+          <mxGeometry x="0.1429" width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="210" y="140" as="sourcePoint" />
+            <mxPoint x="370" y="50" as="targetPoint" />
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e4DuWDmEf0esiSAy_Sqz-7" value="I2C" style="endArrow=classic;startArrow=classic;html=1;rounded=0;" edge="1" parent="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="310" y="120" as="sourcePoint" />
+            <mxPoint x="310" y="50" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e4DuWDmEf0esiSAy_Sqz-8" value="" style="endArrow=classic;html=1;rounded=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="e4DuWDmEf0esiSAy_Sqz-1" target="e4DuWDmEf0esiSAy_Sqz-2">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="210" y="140" as="sourcePoint" />
+            <mxPoint x="260" y="90" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e4DuWDmEf0esiSAy_Sqz-9" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=-0.042;entryY=0.56;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1" source="e4DuWDmEf0esiSAy_Sqz-2" target="e4DuWDmEf0esiSAy_Sqz-3">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="210" y="140" as="sourcePoint" />
+            <mxPoint x="260" y="90" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="180" y="314" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e4DuWDmEf0esiSAy_Sqz-10" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.415;entryY=1.014;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1" source="e4DuWDmEf0esiSAy_Sqz-3" target="e4DuWDmEf0esiSAy_Sqz-5">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="210" y="140" as="sourcePoint" />
+            <mxPoint x="260" y="90" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e4DuWDmEf0esiSAy_Sqz-11" value="LED settings" style="endArrow=classic;html=1;rounded=0;exitX=-0.013;exitY=0.177;exitDx=0;exitDy=0;exitPerimeter=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="e4DuWDmEf0esiSAy_Sqz-5" target="e4DuWDmEf0esiSAy_Sqz-1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="210" y="140" as="sourcePoint" />
+            <mxPoint x="60" y="140" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="60" y="141" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e4DuWDmEf0esiSAy_Sqz-12" value="Raspberry Pi" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="280" y="10" width="120" height="40" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

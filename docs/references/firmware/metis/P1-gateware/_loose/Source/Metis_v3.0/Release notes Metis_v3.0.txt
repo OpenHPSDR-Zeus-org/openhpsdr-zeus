@@ -1,0 +1,89 @@
+Release notes for Metis_v3.0:
+
+
+Change Log:
+	2011 March 02 - added microphone or line in selection
+		   04 - add support for multiple Mercury receivers/boards - Joe K5SO
+		   12 - added DHCP server address to DHCPREQUEST.
+		   28 - Modify code such that multiple Metis boards can be used. Allow Discovery from different PC to that sending
+			Start/Stop. Save PC IP address etc independantly for Discovery and other commands.
+	     Apr    2 - Reset sequence number when not running rather then when Discovery received.  
+		    3 - Add wide band spectrum and on/off enable
+	     May   13 - Added independant serial number for wide bandscope data.
+	     July  29 - Added FWD and REV power from Penny(Lane)
+	     Sep   12 - Added support for manual selection of Alex relays. Released as V1.5.
+		      - Added PennyLane/Hermes Drive level to existing C&C data rather than an additional nWire. Removed C18 connection	
+					 
+			**** Built using Quartus V9.1 sp2 ****
+
+	 2012 Oct   3 - changes by Joe K5SO 
+		      - Added line in gain (line_boost) control for Penny(Lane)
+		      - Fixed bug in C&C byte stream selection/assignments of frequencies for multiple receivers
+		      - Added independent manual control of HPF/LPF relays for Alex 2
+		      - Added user output connections for pins 1-4 on the DB-9 connector on Metis, mapped to 
+			bits C3[3:0] when C0[7:1] = 0001_010 as follows: 
+				USEROUT0: DB9 pin 1 = C3[0] open drain output, FPGA pin 134
+				USEROUT1: DB9 pin 2 = C3[1] open drain output, FPGA pin 135
+				USEROUT2: DB9 pin 3 = C3[2] 3.3V TTL output, FPGA pin 137
+				USEROUT3: DB9 pin 4 = C3[3] 3.3V TTL output, FPGA pin 173
+			- Released as version number v1.9 
+
+						 
+	   2012 Oct 21  - changes by Joe K5SO
+			- added default power up clock select for 122.88 MHz clock to be Penelope
+			- Released as version number v2.0
+			**** Bulit using Quartus II V11.1 sp2 ****
+
+	   2012 Oct 26	- changes by Joe K5SO
+			- fixed bug in Rx freq assignments that resulted in improper freq assignments 
+			  when certain hardware configurations/PC options are selected
+			- Released as version number v2.1
+						
+	    2012 Dec  3 - Compiler configuration changes to eliminate hangs on certain FPGAs
+		     21 - Added IP setting and reading in normal mode plus directed ARP.
+		     29 - Added PHY FIFO and new method to convert nibbles to byte.
+		     30 - Added ability to read and set IP address without needing to be in bootloader mode.
+			- Released as v2.3
+
+	     2013 Jan 8  - fixed ethernet ARP request response bug
+			 - Released as v2.4
+
+		     26 - changed IP set to use UDP rather than raw Ethernet frames. Once IP is set board will reset to load new address.
+		 Feb 15 - Increased ARP and ping time outs read for faster sampling rates.
+			- Released as v2.5
+
+		     24 - Changed ARP sequencer to prevent hang with some PCs
+			- Released as v2.5a
+
+		  May 3 - changes by Joe K5SO: replaced i2c comm module with new i2c interface and master modules 
+			to pass firmware version numbers, Penny output power, FWD, REV, and ADC overload status 
+			signals via the i2c bus (Atlas A20/A21)instead of via NWire comm lines. Re-configured 
+			Atlas A3, A4, A5, A8, A9, and A10 to receive Rx1 I data on A10, Rx1 Q data on A5, Rx2 I data on A9, 
+			Rx2 Q data on A4, Rx3 I data on A8, and Rx3 Q data on A3, in order to support 384ksps Rx sampling rates
+			for up to three receivers on a single Mercury or three Mercury boards.  
+			- Changed version number to v2.6.
+
+		     27 - Increased wideband FIFO to 16k words, released as V2.6a
+
+		 Jun  5 - Added mic boost, released as V2.6b.
+
+	   2014  Mar 14 - Added wideband data on/off
+			- Fully constrained the firmware design, closed timing
+			- Released as V2.7.
+
+		 Mar 15 - Opened IO timing delays to max/min: 1/-1 nSec, for both input delays and output delays
+			- Closed timing
+			- Changed version number to v2.8
+
+		 May 10 - Added FPGA CW generation and Iambic Keyer
+			- Changed version number to V2.9
+		 May 11 - Constrained firmware design, closed timing. 
+		 May 16 - Added FPGA CW support for Penelope. 
+			- Closed timing.
+	          Jun 6  - Added PC control of "Mercury Rx attenuation when Tx is active" via C&C bit C3[4] when C0=0001_010x
+			"0" = disabled, "1" = enabled; if enabled the Mercury 20 dB attenuator is used for Rx when in Tx mode
+
+	    2015 Jan 26 - Removed scalling on CW profile so RF out is same in Tune and CW modes. Removed scalling on sidetone profile.
+					   - Released as V3.0
+							
+			**** Built using Quartus II V13.0  ****

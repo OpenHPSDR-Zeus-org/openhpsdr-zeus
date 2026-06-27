@@ -1,0 +1,181 @@
+Hermes Protocol 2 release notes:
+
+2015 Aug  8 	- Start porting from Angelia, 2 Receivers.
+		- set PHY Rx_clock delay to 60. 	Works!
+		- test ICMP, changed Rx on posedge, works initally but fails after starting KK.
+	9	- flash LED10 if icmp_rx_enable active.  Only active when icmp data valid.
+		- Alex data not been seen.  
+		- Saved as today's date.
+		- Move Alex data flag to correct location.  .a_data_rdy(Alex_ready)
+	10 	- Added CW Break-in control.  Inhibit FPGA_PTT and RF generation if break_in not active.
+		- Saved as today's date.
+	12 	- Closed timing except minimum pulse width.
+		- Saved as today's date.
+	Sep  4 	- Imported changes from Angelia code.
+		- Saved as today's date.
+		- include High_Priority_CC from Angelia code. 
+		- Prevent Quartus merging PLLs so that VCXO phase locks to 10MHz correctly. Set Auto Merge PLLs off. 
+		- Corrected clock source for Alex data.
+	      5 - Added Alex code from Angelia.
+		- saved as today's date.
+		- redo timing
+		- saved as today's date.	
+	      7 - Released to VK0S to test new programmer code.
+	     12 - Updated from Angelia code i.e. 10MHz PLL locked to C&C data, 
+			Set protocol version to 1.6.  24,980 LEs.
+		- Saved as today's date.
+	     13 - Redo timing. No Rxs
+		- NR = 1.
+	     16 - Padded sdr_send.v so that Discovery, erase and program replies are the same length.
+	     19 - Using receiver3.v and NR = 3, 89% full. Works but can't set individual sample rates
+		- Redo timing. NR = 3 not reliable.
+		- NR = 2, receiver2.v  
+		- need to redo timing.
+		- CURRENT CODE uses 2 Rx with receiver2.v 
+	     26 - Working on erase code to see why it sometimes does not respond 
+		- (EPCS_state) now on posedge of clock.
+		- connect ASMI busy and (erase | erase_done) to DEBUG_LEDs  - seems to be more reliable.
+		- ASMI_interface was using negedge - change to posedge - erase done is faster?
+	     27	- Connect busy from ASMI_interface to .erase_ACK input on sdr_receive.v.  Since 
+			in different clock domains erase signal will remain active until ASMI_interface starts erasing EEPROM. 
+		- Erase now works every time.
+		- Saved as today's date.
+	     30 - Added Mux for Rx0 and Rx1 for PureSignal use. 
+		- Saved as today's date.
+	Oct  16 - Moved ASMI_interface back to negedge	as per Angelia 
+		- Saved as today's date.
+	Dec  10 - Start porting latest code from 10E and Angelia 
+		- Fix PTT latch issue.
+		- Fix Discovery length 60 not 72 bytes.
+		- Protocol version = 2.3
+		- Fix Discovery to IP address
+		- Fix Rx gain
+		- Move Open Collector Outputs
+		- Only send Exciter, FWD & REV power when Tx active.
+		- DAC feedback when ADC = 1.
+		- OK - saved as today's date
+	     11 - Added HW timeout
+		- OK - saved as today's date.
+	     14 - Added 16 bit DAC support from Angelia 
+		- OK - saved as today's date and released for testing.
+	     16 - Added send Discovery to network mask address. 
+		- OK - saved as today's date and released for testing. 
+	     19 - Set Tune and CW levels equal.  New profile.mif table, added 'raised cosine profile.xls' to files 
+		  Attenuate sidetone level due to new profile, see line 906
+		  Use Angelia CicInterpM5.v to remove DC component from Tx output.
+	 	- OK - saved as today's date and released for testing.
+	     20 - Fixed mic and wideband - swapped bytes
+		- Saved as today's date and released.
+2016     Jan 17 - Added Tx_IQ_fifo almost_full, almost_empty.
+		- Clear TR relay and Open Collectors if run not active.
+		- Saved as today's date and released.
+	     27 - Feedback from Scotty, WA2DFI
+		- Assigned DEBUG_LED1 to pin 9 - was missing its assignment.
+		- Set PHY_TX_CLOCK to Max current to increase speed.
+		- Removed reference to Mercury in Hermes.qsf file. 
+		- Fixed mixed blocking and non blocking errors vis:
+			Rx_fifo_ctrl0.v line 89 (test)
+			receiver3.v lines 74 - 79 (rate0)
+			sdr_send.v lines 135, 139, 143 
+			profile.v line 102
+			receiver2.v lines 70 - 75  (rate0)
+			Hermes.v line 278 (instead of using the C construct, it should read 
+			 "sec_count <= sec_count + 28'd1;"	Valid in SystemVerilog?
+		- Added I05 amplifier tune input. 
+	     28 - Added IO4 input for Tx inhibit and user analogue input 1 for external PA protection.
+		- Modify hardware time out to sec_count >= 28'd250...
+		- Saved as today's date and released for testing.
+	     29 - More feedback from Scotty. WA2DFI
+		- Removed use of x++ (since is blocking) at line 295 and in sdr_send.v lines 172, 182, 192 and 202 
+		- Removed error messages relating to Data[1]/ASDO, FLASH_nCE/nCSO, DCLK and Data[0] pins by setting them to "Use as regular I/O".
+		- Inhibit RF output if IO4 is low. 
+		- Fixed sequence number error in srd_send.v,  bits [31:24] of sequence numbers not being sent. 
+		- Saved as today's date and released for testing. 
+	Feb   7 - Start of 100T version. 
+		- J13 low sets PHY in 100T mode.
+		- Set MODE2 = 0 for 100T. 
+		- set speed = 0 for 100T.
+		- Edit rgmii_recv and rgmii_send to force 100T operation.
+		- phy_cfg will select 100T since allow_1Gbit is low.
+		- redo timing - works but Tx spurs +/- 25kHz when Puresignal not enabled.
+		- set to Kjell and John for testing.
+		- working on timing....
+	     13 - Timeing OK but still Tx spurs - saved as today's date.
+		- change DAC clock edge - better
+		- Try DAC clock at 15 degrees, 30, 90, 60, 45, 80, 85, 120, 9, 
+	     20 - DAC clock set to posedge and 
+	Apr  28 - DAC clock on negedge, PHY_TX[*] changed in Hermes.sdc	
+	Sep   5 - Added hardware timer enable
+	     16 - Changed to short packets for mic and Rx audio
+		- FPGA code to V10.1, protocol to V3.0
+		- Still have sidebands at +/- 48kHz
+		- try DAC test code from Minerva.
+	     17	- Fixed, was using rx_clock to clock DAC current which @ 100T is too slow, now use PHY_CLK125
+		- Saved as today's date and release for testing.
+	     24 - Modified WB data so only sent if no DDC data ready - see sdr_send.v
+		- saved as today's date and release for testing.
+	     25 - Warren reports PS signal /2. Add missing constraint for PHY_TX_CLOCK
+		- saved as today's date and release for testing.
+	     28 - Fixed missing Mux data for PS. Added latest timer_reset code from Hermes Gigabit.
+		- saved as today's date and release for testing.
+	Oct   1 - Test version for PureSignal, numerious changes.
+		- saved as today's date and release for testing.
+	      2 - Added new PS code. Added Mux bit toggle (Mux_clear.v) for ALL Rx FIFOs and changes to Rx_fifo_ctrl0.v
+			to ensure both RF and DAC feedback DDCs have data available when PureSignal selected.
+		- Changed HW timeout to run at 100T clock rate. 
+		- saved as today's date and release for testing.
+2017      Mar 2 - Merged changes from Angelia V10.9. i.e. dhcp.v, network.v, ip_recv.v, icmp.v, icmp_fifo.v to fix DHCP issues. 
+		- Add assign IF_rst = network_state since just one bit now. 
+		- added an additional bit to the following FIFOs usedw port so that they don't appear empty when actually full: 
+			EPCS_fifo (increased used word sizes to [10:0]EPCS_Rx_used, [10:0]EPCS_wrused) NOTE: need to increase register in ASMI_interface.v
+			Rx_fifo (increased used word sizes to [11:0] Rx_used[0:NR-1])
+			Tx1_IQ_fifo (increased used word size to [12:0]write_used)
+		- PS works but only if both receiver sample rates are set the same. Possible Thetis issue?
+	     3	- Saved as today's date and released for testing.
+
+	Apr 26	- replaced Alex SPI module, SPI.v, with version from Angelia_Protocol_2_v11.6 to send Alex data word twice each time 
+			the data word changes
+		- changed CC_data declaration to [7:0] CC_data[0:55]
+		- removed user_analog declaration and replaced with 
+			wire [15:0] user_analog1 = {4'b0, AIN4};
+			wire [15:0] user_analog2 = {4'b0, AIN3};
+		- implemented peak detection for AIN1 and AIN2 as follows:
+		-created userADC_clk, 30.72MHz clock for Hermes_ADC.v which provides a 7.68MHz clock to 
+			the ADC78H90 chip, increasing its previous sampling rate x10
+		-replaced Hermes_ADC.v with version from Orion_MkII_v1.6 firmware
+		-replaced CC_encoder.v with version from Orion_MkII_NP_v1.2 firmware
+		- replaced Ethernet/sdr_send.v with version from Orion_MkII_NP_v1.2
+		-added pk_detect_reset and pk_detect_ack to Hermes.v
+		- added user_analog1 and user_analog2 (deleted user_analog) to Hermes.v
+		- added debounce_PTT to FPGA_PTT assignment to fix external PTT IN feature
+		- added generated_clock constraint for userADC_clk (30.72 MHz) to Hermes.sdc
+		- changed FW version number to v10.3
+		- removed all max/min delay constraints from Hermes.sdc
+		- retimed/compiled iteratively until timing closed					
+					
+	Apr 27	- forced "Allow 1GB" (1000T) feature, i.e.,. set MODE2 = 1'b1
+		- replaced Rx_fifo_ctrl0.v, Mux_clear.v, and added cdc_mcp #(8) SyncRx_inst with versions from Angelia_Protocol_2_v11.6
+		- regenerated Rx_fifo and Tx1_IQ megafunctions adding an extra bit in the "word used" parameter
+		- increased sizes by 1 bit for these declarations: 
+			wire [11:0] Rx_used[0:NR-1];
+			wire [12:0] write_used;							
+		- added fifo_clear and convert_state declarations to Hermes.v
+		- changed PHY Rx clock skew setting to values[6] <= 16'h90FF in phy_cfg.v
+		- changed version number to v10.4
+		- removed all max/min delay constraints from Hermes.sdc
+		- retimed/compiled iteratively until timing closed					
+
+2018    Dec 7 - (N1GP) Merged in Angelia changes worked on with Phil to help improve Pure Signal
+                 - Changed FW version number to v10.5 
+
+2019    Mar 30 - (N1GP) Worked with Chris/W2PA and Doug/W5WC on an issue with FPGA_PTT
+                   coming in late and cutting off the beginning of the CW_char.
+                   Or'd FPGA_PTT with Alex_data[27] assigned to runsafe_Alex_data,
+                   QSK much improved.
+                 - Added latching of data in initial states of SPI, TLV320_SPI, and Attenuator
+                 - Added _122_90 to the ADC timing
+                 - Changed FW version number to v10.6 
+
+2019    Apr 14 - (N1GP) Fixed an issue with Mic Boost (and others) in TLV320_SPI
+                         - Changed FW version number to v10.7
+

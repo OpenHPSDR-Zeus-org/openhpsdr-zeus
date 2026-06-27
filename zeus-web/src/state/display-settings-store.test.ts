@@ -45,6 +45,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  DEFAULT_TX_AUTO_RANGE,
   DEFAULT_TX_DISPLAY_AVG_TAU_MS,
   DEFAULT_TX_DISPLAY_CAL_OFFSET_DB,
   DEFAULT_TX_DISPLAY_FFT_SIZE,
@@ -261,12 +262,16 @@ describe('TX display analyzer params', () => {
   it('resets all params to defaults', () => {
     const s = useDisplaySettingsStore.getState();
     s.setTxDisplayParams({ calOffsetDb: -15, fftSize: 8192, window: 5, avgTauMs: 400 });
+    s.setTxAutoRange(true);
     s.resetTxDisplayParams();
     expect(useDisplaySettingsStore.getState()).toMatchObject({
       txDisplayCalOffsetDb: DEFAULT_TX_DISPLAY_CAL_OFFSET_DB,
       txDisplayFftSize: DEFAULT_TX_DISPLAY_FFT_SIZE,
       txDisplayWindow: DEFAULT_TX_DISPLAY_WINDOW,
       txDisplayAvgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS,
+      // Reset also restores the auto-range master enable to its default (off, so
+      // the TX windows follow the manual slider).
+      txAutoRange: DEFAULT_TX_AUTO_RANGE,
     });
   });
 });
@@ -318,6 +323,10 @@ describe('TX auto-range', () => {
     // Panadapter and waterfall windows track together.
     expect(r.wfTxDbMax).toBeCloseTo(r.txDbMax, 0);
     expect(r.wfTxDbMin).toBeCloseTo(r.txDbMin, 0);
+  });
+
+  it('defaults to off so the TX display follows the manual slider, not an auto fit', () => {
+    expect(DEFAULT_TX_AUTO_RANGE).toBe(false);
   });
 
   it('is a no-op while turned off', () => {

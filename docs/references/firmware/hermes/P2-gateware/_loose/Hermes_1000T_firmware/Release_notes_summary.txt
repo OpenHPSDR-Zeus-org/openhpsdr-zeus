@@ -1,0 +1,64 @@
+INTRODUCTION
+ 
+This release of the Protocol 2 (P2) firmware represents a significant improvement over 
+the versions that had been posted some time ago to the repository. Most notably, these 
+versions should run in a stable fashion on the vast majority, if not all, ANAN series radios.
+ 
+REQUIREMENTS
+ 
+P2 operation REQUIRES a Gigabit Ethernet connection to the radio hardware. As with 
+Protocol 1 firmware, the radio hardware will only run at a single Ethernet speed, 
+and with P2 that is the Gigabit rate.
+ 
+P2 operation REQUIRES use of P2 compatible client software. At this time the following 
+clients are known to be P2 compatible:
+ 
+- Thetis, which is the nominal replacement for PowerSDR mRX PS. It includes most but 
+	not all of the features of PowerSDR, and a few features that are new. PowerSDR 
+	users will be immediately comfortable and productive with Thetis. Thetis also 
+	includes many "under the hood" improvements that should, ultimately, provide 
+	more reliable data processing (e.g. fewer audio glitches).
+ 
+- SDR Console, currently in beta and available via Simon Brown's SDR Console online community.
+ 
+- piHPSDR, for the piHPSDR controller hardware.
+ 
+- linHPSDR, for those who prefer Linux.
+ 
+INSTALLATION
+ 
+Migration from Protocol 1 to Protocol 2 can be done using HPSDR Programmer or HPSDR 
+Bootloader in the normal fashion. However, once Protocol 2 resides in the hardware, 
+successive firmware loads will require the use of either a new P2 compatible programmer 
+application or HPSDR Bootloader. Very detailed instructions are available here: 
+
+https://apache-labs.com/community/viewtopic.php?f=18&t=2333
+ 
+
+KNOWN BUGS & LIMITATIONS
+ 
+This is BETA firmware, with all that BETA status entails. There will certainly be a number 
+of problems and issues that crop up. In order to better track these, it is recommended that 
+firmware discussions be concentrated here:
+ 
+https://apache-labs.com/community/viewforum.php?f=32
+ 
+
+And client (Thetis et al) discussions be concentrated here:
+ 
+https://apache-labs.com/community/viewforum.php?f=5
+ 
+Of course you are also welcome to use the legacy HPSDR, Yahoo email reflectors or other 
+online resources as you prefer.
+ 
+It should be noted that there is a potential concern for Angelia and Hermes based radios 
+(100D, 100B, 100, 10, 10E). With the Media Access Controller (MAC) logic on the FPGA now 
+running at Gigabit speeds this causes the power consumption requirements of the FPGA to 
+increase. On these SDR cards, overheating of the "F3" positive temperature coefficient 
+(PTC) device which protects the 3.3V supply has been reported, with resulting erratic 
+operation due to current limitations. It is not yet clear how significant this problem 
+may be. The development team has not, as of yet, looked into a possible firmware based 
+solution for this problem (e.g. creating 100BASE-T versions of the Protocol 2 FPGA images). 
+You may need to consider a hardware modification to fully support Protocol 2 Gigabit 
+operation.
+ 

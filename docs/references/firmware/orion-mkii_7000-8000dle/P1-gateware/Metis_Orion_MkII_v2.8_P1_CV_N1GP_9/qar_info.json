@@ -1,0 +1,7 @@
+{
+	"common_dir" : "/home/mh/Desktop/SDR/HPSDR/LATEST/ORION_MKIII_CV/Orion_MkII_v2.7_K5SO_5-4/",
+	"acds_version" : "Version 20.1.1",
+	"platform" : "linux",
+	"os" : "Debian GNU/Linux",
+	"qpf" : "Orion.qpf"
+}

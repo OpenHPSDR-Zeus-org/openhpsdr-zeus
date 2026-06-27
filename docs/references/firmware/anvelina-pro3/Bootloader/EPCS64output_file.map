@@ -1,0 +1,15 @@
+BLOCK		START ADDRESS		END ADDRESS
+
+Page_1		0x00000000		0x000F67C5
+
+
+Configuration device: EPCS64
+Configuration mode: Active Serial
+Quad-Serial configuration device dummy clock cycle: 8
+
+
+Notes:
+
+- Data checksum for this conversion is 0x7109C432
+
+- All the addresses in this file are byte addresses

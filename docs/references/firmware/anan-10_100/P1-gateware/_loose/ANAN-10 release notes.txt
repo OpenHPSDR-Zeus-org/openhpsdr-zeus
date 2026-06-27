@@ -1,0 +1,6 @@
+20 Mar 2017	- modified SPI.v to send Alex data word twice each time the data word changes
+		- changed version number to v3.2
+		- removed all max_delay and min_delay constraints from Hermes.sdc
+		- re-timed/re-compiled iteratively until timing closed
+21 Apr 2017     - Modified LPF_select.v to use 12/10m LPF when on 15m for use with ANAN-10 and 100.
+		- Released as Hermes_3.2b
