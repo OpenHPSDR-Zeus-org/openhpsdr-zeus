@@ -28,9 +28,30 @@ export interface Ft8TxControlProps {
   runner: Ft8TxRunnerView;
   myCall: string;
   myGrid: string;
+  /** Operator's configured CQ macro text (e.g. "CQ" or "CQ POTA"). */
+  cqMessage?: string;
+  /** Operator's configured CQ-DX macro text (e.g. "CQ DX"). */
+  cqDxMessage?: string;
+  /** Operator's reusable 13-char free-text macro. */
+  freeTextMacro?: string;
 }
 
-export function Ft8TxControl({ runner, myCall, myGrid }: Ft8TxControlProps) {
+/** Extract the CQ directive from a configured CQ macro: "CQ" → null,
+ *  "CQ DX" → "DX", "CQ POTA" → "POTA". Drives both the staged message and the
+ *  sequencer's calling-state outgoing so the configured CQ survives a restage. */
+function cqDirectiveOf(msg: string | undefined): string | null {
+  const d = (msg ?? '').trim().replace(/^CQ\b\s*/i, '').trim();
+  return d.length > 0 ? d : null;
+}
+
+export function Ft8TxControl({
+  runner,
+  myCall,
+  myGrid,
+  cqMessage,
+  cqDxMessage,
+  freeTextMacro,
+}: Ft8TxControlProps) {
   const status = useFt8TxStore((s) => s.status);
   const [custom, setCustom] = useState('');
   // Server-authoritative TUN state + the action that keeps MOX/TUN mutually
@@ -139,9 +160,11 @@ export function Ft8TxControl({ runner, myCall, myGrid }: Ft8TxControlProps) {
           type="button"
           className="ft8-tx__macro"
           disabled={!canCall}
+          title={cqMessage && cqMessage.trim() !== 'CQ' ? `Call ${cqMessage}` : 'Call CQ'}
           onClick={() => {
-            runner.startCq();
-            runner.stageMacro(genCq(myCall, myGrid || null));
+            const dir = cqDirectiveOf(cqMessage);
+            runner.startCq({ cqDirective: dir });
+            runner.stageMacro(genCq(myCall, myGrid || null, dir));
           }}
         >
           CQ
@@ -150,9 +173,11 @@ export function Ft8TxControl({ runner, myCall, myGrid }: Ft8TxControlProps) {
           type="button"
           className="ft8-tx__macro"
           disabled={!canCall}
+          title={cqDxMessage ? `Call ${cqDxMessage}` : 'Call CQ DX'}
           onClick={() => {
-            runner.startCq();
-            runner.stageMacro(genCq(myCall, myGrid || null, 'DX'));
+            const dir = cqDirectiveOf(cqDxMessage ?? 'CQ DX');
+            runner.startCq({ cqDirective: dir });
+            runner.stageMacro(genCq(myCall, myGrid || null, dir));
           }}
         >
           CQ DX
@@ -190,6 +215,17 @@ export function Ft8TxControl({ runner, myCall, myGrid }: Ft8TxControlProps) {
         >
           CALL 1ST
         </button>
+        {freeTextMacro && freeTextMacro.trim() && (
+          <button
+            type="button"
+            className="ft8-tx__macro"
+            disabled={!canCall}
+            title={`Stage free-text macro: ${freeTextMacro.trim()}`}
+            onClick={() => runner.stageMacro(freeTextMacro.trim().toUpperCase())}
+          >
+            MSG
+          </button>
+        )}
       </div>
 
       {/* Free-form message stage. */}

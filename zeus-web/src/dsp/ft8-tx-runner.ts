@@ -22,9 +22,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useFt8Store, type Ft8Row } from '../state/ft8-store';
-import { Ft8TxController } from './ft8-tx-controller';
+import { Ft8TxController, type Ft8TxBehavior } from './ft8-tx-controller';
 import { parseFt8Message } from './ft8-message';
-import type { DigitalQsoMode, QsoState, Slot } from './ft8-sequencer';
+import type { DigitalQsoMode, NewQsoOpts, QsoState, Slot } from './ft8-sequencer';
 
 /** Slot length (ms) for a digital mode. FT8 = 15 s, FT4 = 7.5 s. */
 export function slotMsFor(mode: DigitalQsoMode): number {
@@ -112,7 +112,7 @@ export interface Ft8TxRunnerView {
   setHoldTxFreq: (hold: boolean) => void;
   setTxFreq: (hz: number) => void;
   setCallFirst: (on: boolean) => void;
-  startCq: () => void;
+  startCq: (opts?: Partial<NewQsoOpts>) => void;
   answerCq: (decodeText: string, senderSlot: Slot) => boolean;
   callStation: (decodeText: string, senderSlot: Slot) => boolean;
   stageMacro: (message: string) => void;
@@ -129,6 +129,24 @@ export interface UseFt8TxRunnerOpts {
   /** Current band — a change while armed force-disarms (never TX on a new band). */
   band?: string;
   onLogQso?: (state: QsoState) => void;
+  /** Persisted defaults seeded into the controller (FT8 Settings page →
+   *  Ft8Settings). These set the operator's starting slot / offset / hold /
+   *  call-first; they never arm and never override an in-flight QSO. Applied at
+   *  construction and re-applied once `seedReady` flips true while the controller
+   *  is still idle (covers the controller being built before the settings store
+   *  finished its async module-load hydrate). */
+  seed?: {
+    audioHz?: number;
+    slot?: Slot;
+    holdTxFreq?: boolean;
+    callFirst?: boolean;
+  };
+  /** True once the FT8 Settings store has hydrated from the server, so the seed
+   *  reflects the operator's saved defaults rather than the in-code fallbacks. */
+  seedReady?: boolean;
+  /** Live behaviour preferences (auto-sequence / disable-after-73 / no-reply
+   *  limit / ack token). Applied live whenever they change. */
+  behavior?: Ft8TxBehavior;
 }
 
 /**
@@ -183,18 +201,56 @@ export function beaconDisarm(): void {
  * per slot. Returns a reactive view + bound actions for the TX-control cluster.
  */
 export function useFt8TxRunner(opts: UseFt8TxRunnerOpts): Ft8TxRunnerView {
-  const { myCall, myGrid, mode, active, band, onLogQso } = opts;
+  const { myCall, myGrid, mode, active, band, onLogQso, seed, seedReady, behavior } = opts;
 
   // One controller for the lifetime of the workspace. Identity (call/grid) and
   // mode are pushed in via setters so an in-flight QSO survives a re-render.
   const ctrlRef = useRef<Ft8TxController | null>(null);
   if (ctrlRef.current === null) {
-    ctrlRef.current = new Ft8TxController({ myCall, myGrid4: myGrid, mode, onLogQso });
+    ctrlRef.current = new Ft8TxController({
+      myCall,
+      myGrid4: myGrid,
+      mode,
+      onLogQso,
+      audioHz: seed?.audioHz,
+      ...behavior,
+    });
+    // Seed persisted defaults exactly once. Order matters: set the offset (via
+    // the constructor above) BEFORE engaging HOLD, since setTxFreq is ignored
+    // while hold is on. None of these arm — arming is explicit only.
+    if (seed?.slot) ctrlRef.current.setTxSlot(seed.slot);
+    if (seed?.callFirst) ctrlRef.current.setCallFirst(true);
+    if (seed?.holdTxFreq) ctrlRef.current.setHoldTxFreq(true);
   }
   const ctrl = ctrlRef.current;
 
   const [view, setView] = useState(() => snapshot(ctrl));
   const sync = () => setView(snapshot(ctrl));
+
+  // Live behaviour prefs (auto-sequence / disable-after-73 / no-reply / ack):
+  // re-apply whenever any change, so a Settings edit takes effect mid-session.
+  useEffect(() => {
+    if (behavior) ctrl.applyBehavior(behavior);
+    sync();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    behavior?.autoSequence,
+    behavior?.disableTxAfter73,
+    behavior?.noReplyLimit,
+    behavior?.txAck,
+  ]);
+
+  // Seed-race recovery: if the controller was built before the settings store
+  // hydrated, re-apply the persisted seed once it's ready (no-op unless idle, so
+  // an in-flight QSO is never disturbed). Runs once per ready transition.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (!seedReady || seededRef.current) return;
+    seededRef.current = true;
+    if (seed) ctrl.applySeed(seed);
+    sync();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedReady]);
 
   // Keep identity + mode current without resetting the live QSO.
   useEffect(() => {
@@ -279,8 +335,8 @@ export function useFt8TxRunner(opts: UseFt8TxRunnerOpts): Ft8TxRunnerView {
       ctrl.setCallFirst(on);
       sync();
     },
-    startCq: () => {
-      ctrl.startCq();
+    startCq: (opts) => {
+      ctrl.startCq(opts);
       sync();
     },
     answerCq: (text, senderSlot) => {

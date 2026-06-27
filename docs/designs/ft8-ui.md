@@ -192,3 +192,39 @@ UI is a later phase. Backend decode engine, `Zeus.Dsp.Ft8`, `Ft8Service`, and
 Contracts land first; the workspace is built once live decodes exist to render.
 Structure the React components theme-agnostic so the palette decision can be
 applied at the end without rework.
+
+## SETTINGS view — BUILT (TX-ready, DO-NOT-MERGE bench draft)
+
+The `DECODE | SETTINGS` view switch in the workspace header is now live
+(`Ft8SettingsView.tsx`), modelled on the curated WSJT-X + JTDX KEEP set with
+everything a native SDR already owns SCRAPPED (rig/CAT/PTT selection, sound-card
+in/out, split, the frequencies table, power/attenuator dials — Zeus owns all of
+those). Five sections: **Station/Operator · TX & Auto-sequence · Macros · Decode
+· Reporting & Logging**. Reporting (PSK Reporter / WSPRnet / WSJT-X UDP) is
+SURFACED as read-only status chips with a deep-link to the Network tab — not
+duplicated.
+
+### Identity-store decision (THE TX unblock)
+
+FT8 TX was gated on the operator callsign (`canCall`), and identity lived only in
+the desktop webview's localStorage — which is scoped to a loopback port the OS
+reassigns each launch, so the call was silently lost on every restart and TX
+never ungated.
+
+Fix: operator identity is now **server-authoritative and shared**. A single
+`OperatorIdentityStore` (LiteDB) backs `GET/POST /api/operator` and is the
+override base every resolver reads first (FT8/FT4 TX, PSK Reporter, WSPRnet,
+FreeDV Reporter), with the QRZ home station as the fallback. The frontend
+`operator-store.ts` is now backed by that endpoint (no localStorage
+system-of-record); the workspace TX/gating uses the **resolved** value (override
+else QRZ home) so a QRZ-home operator transmits without retyping. The Call/Grid
+edit fields moved OUT of the 44px clipping header into §Station; a compact
+read-only call chip remains in the header. An empty-call banner makes the TX gate
+reason visible (never a silent dead ENABLE button) and links to Settings.
+
+FT8/FT4 behaviour prefs (auto-seq, decode depth Fast/Normal/Deep → `/api/ft8`
+`passes`, editable macros, logging) persist via `Ft8SettingsStore` /
+`/api/ft8/settings`. Defaults mirror current behaviour exactly — nothing an
+operator feels changes until they touch a control, and TX still requires an
+explicit arm. **DO-NOT-MERGE until G2 bench confirms ungate → arm → auto-seq →
+log.**

@@ -844,6 +844,16 @@ public static class ZeusHost
         // Persists the operator's FreeDV Reporter "report mode" opt-in (default
         // OFF). Reporting only broadcasts the operator's callsign/grid/TX activity
         // to the public map after an explicit opt-in — see FreeDvReporterService.
+        // Shared operator identity (callsign + Maidenhead grid). One store, read
+        // first by every operator resolver (spotting / FreeDV Reporter / FT8-FT4
+        // TX) via OperatorIdentityResolver, with the QRZ home station as the
+        // fallback. Replaces the per-store identity duplication and the frontend's
+        // port-scoped localStorage that lost the call on every desktop restart.
+        builder.Services.AddSingleton<OperatorIdentityStore>();
+        // Persisted FT8/FT4 workspace behaviour preferences (auto-seq, decode
+        // depth, macros, logging). Behaviour/UI knobs only — none transmit.
+        builder.Services.AddSingleton<Ft8SettingsStore>();
+
         builder.Services.AddSingleton<FreeDvReporterSettingsStore>();
         builder.Services.AddSingleton<FreeDvReporterService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<FreeDvReporterService>());

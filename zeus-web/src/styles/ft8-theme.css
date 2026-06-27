@@ -27,6 +27,7 @@
   /* Text. */
   --hud-text:      #c8e4ef;
   --hud-text-dim:  #6f8a98;
+  --hud-ink:       #06121a;  /* dark foreground on filled cyan/amber chips */
 
   /* Decode-row classes (color-coded message table). */
   --hud-cq:        #45e08a;  /* CQ calls — green */
@@ -182,7 +183,7 @@
   font: inherit;
   letter-spacing: 0.06em;
 }
-.ft8-ws-tab.is-active { background: var(--hud-cyan); color: #06121a; font-weight: 700; }
+.ft8-ws-tab.is-active { background: var(--hud-cyan); color: var(--hud-ink); font-weight: 700; }
 .ft8-ws-id { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--hud-text-dim); }
 .ft8-ws-id input {
   background: var(--hud-panel);
@@ -212,6 +213,191 @@
 }
 .ft8-ws-close:hover { filter: brightness(1.12); }
 
+/* Read-only identity chip in the header (editing lives on the Settings page). */
+.ft8-ws-call {
+  background: var(--hud-panel);
+  border: 1px solid var(--hud-cyan-line);
+  color: var(--hud-cyan);
+  border-radius: 3px;
+  padding: 2px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.ft8-ws-call:hover { background: var(--hud-cyan-soft); }
+.ft8-ws-call.is-empty {
+  color: var(--hud-me);
+  border-color: var(--hud-me);
+}
+
+/* Empty-call prompt banner — spans all body columns. */
+.ft8-ws-banner {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px;
+  background: var(--hud-cyan-soft);
+  border: 1px solid var(--hud-me);
+  border-radius: 4px;
+  color: var(--hud-text);
+  font-size: 12px;
+}
+.ft8-ws-banner__text strong { color: var(--hud-me); }
+.ft8-ws-banner__cta {
+  margin-left: auto;
+  background: var(--hud-me);
+  border: 1px solid var(--hud-me);
+  color: var(--hud-ink);
+  border-radius: 3px;
+  padding: 4px 14px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.ft8-ws-banner__cta:hover { filter: brightness(1.1); }
+
+/* ---- Settings view ---- */
+.ft8-ws-body--settings { display: block; overflow: auto; padding: 8px; }
+.ft8-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+.ft8-set-section { flex: 0 0 auto; }
+.ft8-set-body { padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 2px; }
+
+.ft8-set-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--hud-line);
+}
+.ft8-set-row:last-child { border-bottom: none; }
+.ft8-set-row__text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.ft8-set-row__label { font-size: 13px; color: var(--hud-text); }
+.ft8-set-row__hint { font-size: 10px; color: var(--hud-text-dim); line-height: 1.3; }
+.ft8-set-row__resolved { font-size: 10px; color: var(--hud-text-dim); }
+.ft8-set-row__resolved strong { color: var(--hud-cyan); }
+
+/* Toggle switch. */
+.ft8-set-switch {
+  flex: 0 0 auto;
+  min-width: 52px;
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-text-dim);
+  border-radius: 3px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.ft8-set-switch.is-on { background: var(--hud-cyan); color: var(--hud-ink); border-color: var(--hud-cyan); }
+.ft8-set-switch:disabled { cursor: default; opacity: 0.4; }
+
+/* "Coming soon" rows: persisted but not yet wired — dimmed, with a small badge. */
+.ft8-set-row.is-disabled { opacity: 0.55; }
+.ft8-set-soon {
+  margin-left: 6px;
+  padding: 0 5px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--hud-text-dim);
+  border: 1px solid var(--hud-line);
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+/* Segmented control. */
+.ft8-set-seg { display: flex; gap: 4px; flex: 0 0 auto; }
+.ft8-set-seg__btn {
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-text);
+  border-radius: 3px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.ft8-set-seg__btn:hover { border-color: var(--hud-cyan-line); }
+.ft8-set-seg__btn.is-on { background: var(--hud-cyan); color: var(--hud-ink); border-color: var(--hud-cyan); font-weight: 700; }
+
+/* Inputs. */
+.ft8-set-input {
+  background: var(--hud-panel);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-cyan);
+  border-radius: 3px;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+.ft8-set-input:focus { outline: none; border-color: var(--hud-cyan-line); }
+.ft8-set-input--num { width: 6em; text-align: right; }
+.ft8-set-input:disabled { opacity: 0.5; }
+.ft8-set-num { display: inline-flex; align-items: center; gap: 5px; }
+.ft8-set-num__suffix { font-size: 10px; color: var(--hud-text-dim); }
+.ft8-set-readonly-value { font-size: 12px; color: var(--hud-text-dim); font-variant-numeric: tabular-nums; }
+
+.ft8-set-note { font-size: 10px; color: var(--hud-text-dim); line-height: 1.4; font-style: italic; margin: 6px 0 0; }
+.ft8-set-divider { height: 1px; background: var(--hud-cyan-line); margin: 8px 0; opacity: 0.5; }
+
+/* Advanced disclosure. */
+.ft8-set-advanced { margin-top: 6px; }
+.ft8-set-advanced > summary {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--hud-text-dim);
+  cursor: pointer;
+  padding: 6px 0;
+}
+
+/* Reporting chips. */
+.ft8-set-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 0 8px; }
+.ft8-set-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--hud-text-dim);
+  border: 1px solid var(--hud-line);
+  border-radius: 12px;
+  padding: 2px 10px;
+}
+.ft8-set-chip__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--hud-text-dim);
+}
+.ft8-set-chip.is-on { color: var(--hud-cq); border-color: var(--hud-cq); }
+.ft8-set-chip.is-on .ft8-set-chip__dot { background: var(--hud-cq); }
+
+.ft8-set-link {
+  align-self: flex-start;
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-cyan-line);
+  color: var(--hud-cyan);
+  border-radius: 3px;
+  padding: 5px 14px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.ft8-set-link:hover { background: var(--hud-cyan-soft); }
+
 /* Band selector. */
 .ft8-band-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 6px 8px 8px; }
 .ft8-band-btn {
@@ -225,7 +411,7 @@
   font-size: 11px;
 }
 .ft8-band-btn:hover { border-color: var(--hud-cyan-line); }
-.ft8-band-btn.is-active { background: var(--hud-cyan); color: #06121a; font-weight: 700; }
+.ft8-band-btn.is-active { background: var(--hud-cyan); color: var(--hud-ink); font-weight: 700; }
 
 /* ---- TX control cluster ---- */
 .ft8-tx { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
@@ -242,7 +428,7 @@
   color: var(--hud-text-dim);
   background: var(--hud-inset);
 }
-.ft8-tx__lamp.is-armed { color: #06121a; background: var(--hud-me); border-color: var(--hud-me); font-weight: 700; }
+.ft8-tx__lamp.is-armed { color: var(--hud-ink); background: var(--hud-me); border-color: var(--hud-me); font-weight: 700; }
 .ft8-tx__lamp.is-tx { color: #1a0604; background: var(--tx); border-color: var(--tx); font-weight: 700; }
 .ft8-tx__wdt { font-size: 10px; color: var(--hud-text-dim); font-variant-numeric: tabular-nums; }
 
@@ -259,7 +445,7 @@
   font-weight: 700;
   letter-spacing: 0.06em;
 }
-.ft8-tx__enable.is-on { background: var(--hud-me); color: #06121a; border-color: var(--hud-me); }
+.ft8-tx__enable.is-on { background: var(--hud-me); color: var(--hud-ink); border-color: var(--hud-me); }
 .ft8-tx__enable:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* Generic toggle / segmented / macro buttons. */
@@ -282,7 +468,7 @@
 .ft8-tx__tune:hover { border-color: var(--hud-cyan-line); }
 .ft8-tx__toggle.is-on,
 .ft8-tx__seg-btn.is-on,
-.ft8-tx__macro.is-on { background: var(--hud-cyan); color: #06121a; border-color: var(--hud-cyan); font-weight: 700; }
+.ft8-tx__macro.is-on { background: var(--hud-cyan); color: var(--hud-ink); border-color: var(--hud-cyan); font-weight: 700; }
 .ft8-tx__macro:disabled,
 .ft8-tx__toggle:disabled { opacity: 0.4; cursor: not-allowed; }
 
@@ -319,7 +505,7 @@
 .ft8-tx__custom input { flex: 1; width: auto; text-align: left; text-transform: uppercase; }
 
 .ft8-tx__tune { flex: 1; }
-.ft8-tx__tune.is-on { background: var(--power); color: #06121a; border-color: var(--power); font-weight: 700; }
+.ft8-tx__tune.is-on { background: var(--power); color: var(--hud-ink); border-color: var(--power); font-weight: 700; }
 .ft8-tx__halt {
   flex: 1;
   border-color: var(--tx);

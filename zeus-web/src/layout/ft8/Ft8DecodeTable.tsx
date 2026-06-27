@@ -59,13 +59,40 @@ export interface Ft8DecodeTableProps {
   workedCalls?: ReadonlySet<string>;
   workedGrids?: ReadonlySet<string>;
   onRowClick?: (row: Ft8Row) => void;
+  /** FT8 Settings → Decode filters (client-side predicates over the live rows).
+   *  `showOnlyCq` keeps only CQ rows plus anything directed at my call (so the
+   *  operator never misses a station answering them); `hideWorkedBefore` drops
+   *  rows whose sender is already in the logbook. */
+  showOnlyCq?: boolean;
+  hideWorkedBefore?: boolean;
 }
 
-export function Ft8DecodeTable({ myCall, workedCalls, workedGrids, onRowClick }: Ft8DecodeTableProps) {
-  const rows = useFt8Store((s) => s.rows);
+export function Ft8DecodeTable({
+  myCall,
+  workedCalls,
+  workedGrids,
+  onRowClick,
+  showOnlyCq,
+  hideWorkedBefore,
+}: Ft8DecodeTableProps) {
+  const allRows = useFt8Store((s) => s.rows);
+
+  const rows =
+    showOnlyCq || hideWorkedBefore
+      ? allRows.filter((r) => {
+          const cls = classifyDecode(r, myCall, workedCalls, workedGrids);
+          if (showOnlyCq && cls !== 'cq' && cls !== 'me') return false;
+          if (hideWorkedBefore && cls === 'worked') return false;
+          return true;
+        })
+      : allRows;
 
   if (rows.length === 0) {
-    return <div className="ft8-decode-empty">Waiting for decodes…</div>;
+    return (
+      <div className="ft8-decode-empty">
+        {allRows.length === 0 ? 'Waiting for decodes…' : 'No decodes match the active filter'}
+      </div>
+    );
   }
 
   return (

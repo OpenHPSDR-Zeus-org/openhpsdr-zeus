@@ -27,7 +27,9 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
 export function Ft8Stats() {
   const entries = useLoggerStore((s) => s.entries);
   const totalCount = useLoggerStore((s) => s.totalCount);
-  const myGrid = useOperatorStore((s) => s.grid);
+  // Resolved grid (override else QRZ home) so best-DX distance still computes for
+  // a QRZ-home operator who never typed a grid override.
+  const myGrid = useOperatorStore((s) => s.resolvedGrid);
 
   const stats = useMemo(() => computeFt8Stats(entries, myGrid || null), [entries, myGrid]);
 

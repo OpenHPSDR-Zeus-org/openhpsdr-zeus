@@ -27,6 +27,7 @@ public sealed class SpottingManagementService
 {
     private readonly ILogger<SpottingManagementService> _log;
     private readonly SpottingSettingsStore _store;
+    private readonly OperatorIdentityStore _identity;
     private readonly QrzService _qrz;
     private readonly object _sync = new();
     private SpottingRuntimeConfig _config;
@@ -34,10 +35,12 @@ public sealed class SpottingManagementService
     public SpottingManagementService(
         ILogger<SpottingManagementService> log,
         SpottingSettingsStore store,
+        OperatorIdentityStore identity,
         QrzService qrz)
     {
         _log = log;
         _store = store;
+        _identity = identity;
         _qrz = qrz;
         // Default OFF when nothing is persisted — new network egress is opt-in.
         _config = _store.Get() ?? new SpottingRuntimeConfig();
@@ -88,27 +91,16 @@ public sealed class SpottingManagementService
     }
 
     /// <summary>
-    /// Operator callsign/grid: the persisted override first, QRZ home station as a
-    /// fallback for blank fields. Returns ("","") when neither source has them.
-    /// Same precedence as FreeDvReporterService.ResolveOperator.
+    /// Operator callsign/grid. Precedence per field: the shared OperatorIdentity
+    /// override first, then this service's own persisted config (legacy/secondary,
+    /// kept additively), then the QRZ home station. Returns ("","") when no source
+    /// has them. Shared with FreeDvReporterService and /api/operator via
+    /// OperatorIdentityResolver.
     /// </summary>
     public (string Call, string Grid) ResolveOperator()
     {
         var c = GetConfig();
-        var call = c.Callsign;
-        var grid = c.Grid;
-        if (string.IsNullOrWhiteSpace(call) || string.IsNullOrWhiteSpace(grid))
-        {
-            var home = _qrz.GetStatus().Home;
-            if (home is not null)
-            {
-                if (string.IsNullOrWhiteSpace(call) && !string.IsNullOrWhiteSpace(home.Callsign))
-                    call = NormalizeCall(home.Callsign);
-                if (string.IsNullOrWhiteSpace(grid) && !string.IsNullOrWhiteSpace(home.Grid))
-                    grid = NormalizeGrid(home.Grid!);
-            }
-        }
-        return (call ?? "", grid ?? "");
+        return OperatorIdentityResolver.Resolve(_identity, _qrz, c.Callsign, c.Grid);
     }
 
     private static string NormalizeCall(string? call) =>

@@ -26,13 +26,30 @@ import {
   startCq as seqStartCq,
   slotOf,
   step,
+  type AckToken,
   type DigitalQsoMode,
   type NewQsoOpts,
   type QsoState,
   type Slot,
 } from './ft8-sequencer';
 
-export interface Ft8TxControllerOpts {
+/** Behaviour preferences from the FT8 Settings page that change how the runner
+ *  drives the sequencer. All live-applicable (no controller rebuild needed). */
+export interface Ft8TxBehavior {
+  /** Master auto-sequence. When off, the runner keeps the operator's selected
+   *  message going while armed but never advances the QSO, auto-answers, logs,
+   *  or auto-disarms — the operator drives every step by hand. */
+  autoSequence?: boolean;
+  /** Auto-disarm once a QSO completes (73 sent). When off, the keyer stays armed
+   *  and idle after a completed QSO instead of disarming. */
+  disableTxAfter73?: boolean;
+  /** Caller no-reply give-up limit (0 = never). Maps to QsoState.noReplyLimit. */
+  noReplyLimit?: number;
+  /** Final ack token: RR73 (default) or RRR. */
+  txAck?: AckToken;
+}
+
+export interface Ft8TxControllerOpts extends Ft8TxBehavior {
   myCall: string;
   myGrid4?: string | null;
   mode?: DigitalQsoMode;
@@ -52,14 +69,29 @@ export class Ft8TxController {
   /** CALL 1ST: when armed and idle, auto-answer the first CQ heard. Off by
    *  default — auto-answer is an explicit operator opt-in. */
   private callFirst = false;
+  /** Master auto-sequence. When false the runner drives a manual keyer (no
+   *  state-machine progression, no auto-log, no auto-disarm). */
+  private autoSequence = true;
+  /** Auto-disarm after a completed QSO (73). When false the keyer stays armed. */
+  private disableTxAfter73 = true;
+  /** Caller no-reply give-up limit (0 = never). */
+  private noReplyLimit = 0;
+  /** Final ack token (RR73 / RRR). */
+  private txAck: AckToken = 'RR73';
   private readonly doFetch: typeof fetch;
   private readonly onLogQso?: (state: QsoState) => void;
 
   constructor(opts: Ft8TxControllerOpts) {
+    this.autoSequence = opts.autoSequence ?? true;
+    this.disableTxAfter73 = opts.disableTxAfter73 ?? true;
+    this.noReplyLimit = Math.max(0, opts.noReplyLimit ?? 0);
+    this.txAck = opts.txAck ?? 'RR73';
     this.state = seqStartCq({
       myCall: opts.myCall,
       myGrid4: opts.myGrid4 ?? null,
       mode: opts.mode ?? 'FT8',
+      txAck: this.txAck,
+      noReplyLimit: this.noReplyLimit,
     });
     this.audioHz = opts.audioHz ?? 1500;
     this.doFetch = opts.fetchFn ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
@@ -94,6 +126,17 @@ export class Ft8TxController {
    * and disarms/halts as the machine dictates. Pure decision in, POSTs out.
    */
   onWindow(decoded: string[], measuredSnrOfDx?: number, senderSlot?: Slot): void {
+    // MANUAL MODE (auto-sequence off): keep the operator's currently-selected
+    // message going while armed, but never advance the QSO, auto-answer, log, or
+    // disarm on our own — every step is an explicit operator action.
+    if (!this.autoSequence) {
+      if (this.state.enableTx) {
+        const msg = currentOutgoing(this.state);
+        if (msg != null) void this.postStage(msg);
+      }
+      return;
+    }
+
     // CALL 1ST: while armed and idle (calling CQ, no DX latched yet), pounce on
     // the first decoded CQ. Requires the just-ended slot's parity so we answer
     // in the opposite slot. Explicit opt-in — never auto-engages.
@@ -128,9 +171,18 @@ export class Ft8TxController {
       this.onLogQso?.(this.state);
     }
     if (res.halt) {
+      // Halts (operator abort / no-reply limit) ALWAYS disarm, regardless of the
+      // disable-after-73 preference.
       void this.postHalt();
     } else if (res.disarmTx) {
-      void this.postArm(false);
+      // A completion disarm (no halt). Honour "Disable TX after 73": when the
+      // operator turned it off, keep the keyer armed and idle instead of
+      // dropping it, so they can immediately work the next station.
+      if (this.disableTxAfter73) {
+        void this.postArm(false);
+      } else {
+        this.state = { ...this.state, enableTx: true };
+      }
     }
   }
 
@@ -149,6 +201,40 @@ export class Ft8TxController {
   /** CALL 1ST toggle: auto-answer the first CQ while armed and idle. */
   setCallFirst(on: boolean): void {
     this.callFirst = on;
+  }
+
+  /** Apply the live FT8 Settings behaviour preferences. Safe to call any time —
+   *  noReplyLimit / txAck also update the in-flight QSO state so a mid-session
+   *  edit takes effect on the next decision, not only on the next new QSO. */
+  applyBehavior(b: Ft8TxBehavior): void {
+    if (b.autoSequence !== undefined) this.autoSequence = b.autoSequence;
+    if (b.disableTxAfter73 !== undefined) this.disableTxAfter73 = b.disableTxAfter73;
+    if (b.noReplyLimit !== undefined) {
+      this.noReplyLimit = Math.max(0, b.noReplyLimit);
+      this.state = { ...this.state, noReplyLimit: this.noReplyLimit };
+    }
+    if (b.txAck !== undefined) {
+      this.txAck = b.txAck;
+      this.state = { ...this.state, txAck: this.txAck };
+    }
+  }
+
+  /** Apply the persisted seed (slot / offset / hold / call-first) — used to
+   *  recover when the controller was constructed before the FT8 Settings store
+   *  finished hydrating. Only applied while idle (calling, no DX, disarmed) so it
+   *  can never disturb an in-flight QSO. */
+  applySeed(seed: { audioHz?: number; slot?: Slot; holdTxFreq?: boolean; callFirst?: boolean }): void {
+    const idle =
+      this.state.progress === 'calling' && !this.state.dxCall && !this.state.enableTx;
+    if (!idle) return;
+    // Offset BEFORE hold (setTxFreq is ignored while hold is engaged); set hold
+    // directly here since it isn't gated.
+    if (seed.audioHz !== undefined && Number.isFinite(seed.audioHz)) {
+      this.audioHz = Math.min(FT8_MAX_TX_OFFSET_HZ, Math.max(FT8_MIN_OFFSET_HZ, seed.audioHz));
+    }
+    if (seed.slot) this.state = { ...this.state, txSlot: seed.slot };
+    if (seed.holdTxFreq !== undefined) this.state = { ...this.state, holdTxFreq: seed.holdTxFreq };
+    if (seed.callFirst !== undefined) this.callFirst = seed.callFirst;
   }
 
   /** Latch the live QSO as logged (the manual LOG QSO path). Once set, the
@@ -223,12 +309,14 @@ export class Ft8TxController {
     if (msg != null) void this.postStage(msg);
   }
 
-  /** Start calling CQ (CALL 1ST). */
+  /** Start calling CQ. `opts.cqDirective` sets the CQ directive (CQ vs CQ DX). */
   startCq(opts?: Partial<NewQsoOpts>): void {
     this.state = seqStartCq({
       myCall: this.state.myCall,
       myGrid4: this.state.myGrid4,
       mode: this.state.mode,
+      txAck: this.txAck,
+      noReplyLimit: this.noReplyLimit,
       ...opts,
     });
   }
@@ -241,7 +329,13 @@ export class Ft8TxController {
     const parsed = parseFt8Message(decodeText, this.state.myCall);
     if (!parsed.deCall) return false;
     const next = seqAnswerCq(
-      { myCall: this.state.myCall, myGrid4: this.state.myGrid4, mode: this.state.mode },
+      {
+        myCall: this.state.myCall,
+        myGrid4: this.state.myGrid4,
+        mode: this.state.mode,
+        txAck: this.txAck,
+        noReplyLimit: this.noReplyLimit,
+      },
       { ...parsed, kind: 'cq' },
       senderSlot,
     );
@@ -258,6 +352,8 @@ export class Ft8TxController {
         myCall: this.state.myCall,
         myGrid4: this.state.myGrid4,
         mode: this.state.mode,
+        txAck: this.txAck,
+        noReplyLimit: this.noReplyLimit,
       },
       msg,
       cqSenderSlot,
