@@ -12,48 +12,42 @@
 // spectral-zoom controls talk to the server. Lives in the footer beside the PA
 // temperature chip so workspace-level status reads together.
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { Minus, Plus } from 'lucide-react';
 import {
-  setWorkspaceZoom,
   WORKSPACE_ZOOM_DEFAULT,
   WORKSPACE_ZOOM_MAX,
   WORKSPACE_ZOOM_MIN,
   WORKSPACE_ZOOM_STEP,
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { useWorkspaceZoom } from '../util/use-workspace-zoom';
 
 export function WorkspaceZoomControls() {
   const pct = useConnectionStore((s) => s.workspaceZoomPct);
-  const setWorkspaceZoomPct = useConnectionStore((s) => s.setWorkspaceZoomPct);
-  const abortRef = useRef<AbortController | null>(null);
-  useEffect(() => () => abortRef.current?.abort(), []);
+  const { apply, stepBy } = useWorkspaceZoom();
 
-  const apply = useCallback(
-    (next: number) => {
-      const clamped = Math.min(
-        WORKSPACE_ZOOM_MAX,
-        Math.max(WORKSPACE_ZOOM_MIN, Math.round(next)),
-      );
-      if (clamped === useConnectionStore.getState().workspaceZoomPct) return;
-      setWorkspaceZoomPct(clamped); // optimistic — grid rescales immediately
-      abortRef.current?.abort();
-      const ctrl = new AbortController();
-      abortRef.current = ctrl;
-      setWorkspaceZoom(clamped, ctrl.signal)
-        .then((s) => {
-          if (!ctrl.signal.aborted) useConnectionStore.getState().applyState(s);
-        })
-        .catch(() => {
-          // Network/abort error: keep the optimistic value; the 1 Hz state
-          // poll reconciles to server truth on the next tick.
-        });
-    },
-    [setWorkspaceZoomPct],
-  );
+  // Scroll-wheel over the dedicated zoom widget adjusts it directly (no Ctrl
+  // needed when the pointer is already on the control). Attached natively
+  // because React routes onWheel through a passive root listener, so
+  // preventDefault there is a no-op — and preventDefault is what stops the
+  // page/browser zoom that a Ctrl+wheel would otherwise trigger here.
+  const groupRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = groupRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY === 0) return;
+      e.preventDefault();
+      stepBy(e.deltaY < 0 ? 1 : -1);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [stepBy]);
 
   return (
     <div
+      ref={groupRef}
       className="workspace-zoom-controls hide-mobile"
       role="group"
       aria-label="Workspace zoom"
