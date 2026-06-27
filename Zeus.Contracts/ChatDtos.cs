@@ -100,6 +100,8 @@ public sealed record ChatMessage(
 /// A connected operator in the relay roster. <paramref name="FreqHz"/> is the
 /// operator's VFO frequency in Hz; <paramref name="Status"/> is "rx"|"tx"|
 /// "away"; <paramref name="Since"/> is epoch milliseconds the operator joined.
+/// <paramref name="Admin"/> is true when the operator is a relay moderator, so
+/// clients can paint their callsign distinctly (gold).
 /// </summary>
 public sealed record ChatOperator(
     string Callsign,
@@ -107,7 +109,8 @@ public sealed record ChatOperator(
     long? FreqHz,
     string? Mode,
     string? Status,
-    long Since);
+    long Since,
+    bool Admin = false);
 
 /// <summary>
 /// Snapshot of the local chat node's state, surfaced via
@@ -122,7 +125,8 @@ public sealed record ChatStatusDto(
     string RelayUrl,
     string? Error,
     bool IsAdmin = false,
-    bool FreqPublic = true);
+    bool FreqPublic = true,
+    bool SeeAllFreq = false);
 
 /// <summary>
 /// A chat channel visible to the operator: the public lobby, an admin-created
@@ -184,6 +188,11 @@ public sealed record ChatRoomRequest(string Room);
 
 /// <summary>Toggle whether this operator's frequency may be shared (eye toggle).</summary>
 public sealed record ChatFreqVisibilityRequest(bool Public);
+
+/// <summary>Admin: toggle the "see all frequencies" override — while on, every
+/// connected operator's frequency is revealed to this admin regardless of
+/// friendship or the owner's eye toggle.</summary>
+public sealed record ChatSeeAllRequest(bool On);
 
 /// <summary>Admin: clear a room's history. <paramref name="Room"/> defaults to the public lobby.</summary>
 public sealed record ChatClearRequest(string? Room = null);

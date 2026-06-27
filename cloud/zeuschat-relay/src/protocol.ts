@@ -38,6 +38,9 @@ export interface Operator {
   status?: PresenceStatus;
   /** Epoch ms the operator connected. */
   since: number;
+  /** True when this operator is a relay moderator. Lets clients paint admin
+   *  callsigns distinctly (gold). Omitted (falsy) for ordinary operators. */
+  admin?: boolean;
 }
 
 /** A chat channel the operator can see: the public lobby, a group, or a DM. */
@@ -131,6 +134,10 @@ export type ClientToRelay =
   | { t: 'admin_broadcast'; text: string }
   // Ask the relay for the current ban list (relay replies with a `bans` frame).
   | { t: 'admin_list_bans' }
+  // Toggle the admin "see all frequencies" override for THIS connection: while
+  // on, the operator's roster carries every connected operator's frequency,
+  // regardless of friendship or the owner's eye toggle. Ignored unless admin.
+  | { t: 'admin_see_all'; on: boolean }
   // Keepalive. The relay auto-responds with {t:"pong"} without waking (see
   // setWebSocketAutoResponse in chat-room.ts) — send this EXACT string:
   // '{"t":"ping"}'.

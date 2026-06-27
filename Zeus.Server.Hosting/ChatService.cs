@@ -77,6 +77,11 @@ public sealed class ChatService : BackgroundService
     // Whether the operator is a relay moderator (from the welcome frame).
     private volatile bool _isAdmin;
 
+    // Admin "see all frequencies" override (session-scoped, default OFF). When
+    // armed by an admin it is re-asserted to the relay after each (re)connect so
+    // a network blip doesn't silently drop it. Meaningless for non-admins.
+    private volatile bool _seeAllFreq;
+
     // Live connection state, set on the worker loop and read by the API.
     private volatile bool _connected;
     private volatile string? _lastError;
@@ -136,7 +141,8 @@ public sealed class ChatService : BackgroundService
         RelayUrl: _relayUrl,
         Error: _lastError,
         IsAdmin: _isAdmin,
-        FreqPublic: _store.GetFreqPublic());
+        FreqPublic: _store.GetFreqPublic(),
+        SeeAllFreq: _seeAllFreq);
 
     /// <summary>Persists the opt-in and wakes the worker to connect/disconnect.</summary>
     public ChatStatusDto SetEnabled(bool enabled)
@@ -340,6 +346,40 @@ public sealed class ChatService : BackgroundService
                 status = CurrentStatus(),
                 freqPublic = isPublic,
             }, ct);
+        }
+    }
+
+    /// <summary>
+    /// Admin: arms/disarms the "see all frequencies" override. Persists the
+    /// session-scoped flag, reflects it in status, and — if connected — tells the
+    /// relay so the next roster carries (or strips) everyone's freq. The relay
+    /// ignores the toggle unless it has flagged this connection as an admin, so a
+    /// non-admin calling this is a harmless no-op on the relay side.
+    /// </summary>
+    public async Task SetSeeAllFreqAsync(bool on, CancellationToken ct)
+    {
+        _seeAllFreq = on;
+        PushStatus();
+        var socket = _socket;
+        if (socket is not null && socket.State == WebSocketState.Open && _connected)
+            await SendFrameAsync(socket, new { t = "admin_see_all", on }, ct);
+    }
+
+    /// <summary>Re-sends the current see-all override to the relay after a
+    /// reconnect. Best-effort: swallows send failures (the loop will reconnect
+    /// and try again) so it can be safely fire-and-forgotten from the receive
+    /// loop.</summary>
+    private async Task ReassertSeeAllAsync()
+    {
+        try
+        {
+            var socket = _socket;
+            if (socket is not null && socket.State == WebSocketState.Open && _connected)
+                await SendFrameAsync(socket, new { t = "admin_see_all", on = _seeAllFreq }, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "chat: failed to re-assert see-all override");
         }
     }
 
@@ -571,6 +611,12 @@ public sealed class ChatService : BackgroundService
                         && adminEl.ValueKind == JsonValueKind.True;
                     UpdateRoster(root, "roster");
                     PushStatus();
+                    // Re-assert a sticky "see all" override on (re)connect so a
+                    // blip doesn't silently drop it. Only meaningful for admins;
+                    // the relay ignores it otherwise. Fire-and-forget — we're on
+                    // the receive loop and must not block it.
+                    if (_isAdmin && _seeAllFreq)
+                        _ = ReassertSeeAllAsync();
                     break;
                 case "roster":
                     UpdateRoster(root, "roster");
@@ -705,7 +751,8 @@ public sealed class ChatService : BackgroundService
                 FreqHz: ReadLong(op, "freq"),
                 Mode: ReadString(op, "mode"),
                 Status: ReadString(op, "status"),
-                Since: ReadLong(op, "since") ?? 0));
+                Since: ReadLong(op, "since") ?? 0,
+                Admin: op.TryGetProperty("admin", out var adminEl) && adminEl.ValueKind == JsonValueKind.True));
         }
         return list;
     }

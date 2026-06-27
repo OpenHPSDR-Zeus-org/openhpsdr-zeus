@@ -27,6 +27,8 @@ export type ChatOperator = {
   status: ChatOperatorStatus | null;
   /** Epoch ms — when this operator joined / was last seen. */
   since: number;
+  /** True when this operator is a relay moderator (callsign painted gold). */
+  admin: boolean;
 };
 
 /**
@@ -75,6 +77,8 @@ export type ChatStatus = {
   isAdmin: boolean;
   /** Whether this operator's frequency is shared at all (eye toggle). */
   freqPublic: boolean;
+  /** Admin only: whether the "see all frequencies" override is armed. */
+  seeAllFreq: boolean;
 };
 
 export type ChatRoomKind = 'public' | 'group' | 'dm';
@@ -117,6 +121,7 @@ export function normalizeStatus(raw: unknown): ChatStatus {
     error: toStr(r.error),
     isAdmin: Boolean(r.isAdmin),
     freqPublic: r.freqPublic !== false, // default visible
+    seeAllFreq: Boolean(r.seeAllFreq),
   };
 }
 
@@ -140,6 +145,7 @@ export function normalizeOperator(raw: unknown): ChatOperator {
     mode: toStr(r.mode),
     status: toStatus(r.status),
     since: toNum(r.since) ?? 0,
+    admin: Boolean(r.admin),
   };
 }
 
@@ -384,3 +390,7 @@ export const chatBroadcast = (text: string, signal?: AbortSignal) =>
 /** Admin: request the current ban list (relay replies with a `bans` push frame). */
 export const chatListBans = (signal?: AbortSignal) =>
   postOk('/api/chat/admin/bans', {}, signal);
+/** Admin: arm/disarm the "see all frequencies" override (reveals every
+ *  operator's freq to this admin regardless of friendship / eye toggle). */
+export const chatSetSeeAll = (on: boolean, signal?: AbortSignal) =>
+  postOk('/api/chat/admin/see-all', { on }, signal);
