@@ -560,6 +560,11 @@ public static class ZeusHost
         // QRZ.com XML client. HttpClient default timeout is 100 s — cap at 10 s so a
         // hung login surfaces quickly in the UI.
         builder.Services.AddHttpClient("Qrz", c => c.Timeout = TimeSpan.FromSeconds(10));
+        // Per-QSO HTTP cloud-log uploaders (Wavelog/Cloudlog + Club Log realtime).
+        // SEND-ONLY, default OFF. Tight timeouts so a slow/blocked endpoint never
+        // delays the operator's log confirmation.
+        builder.Services.AddHttpClient("Wavelog", c => c.Timeout = TimeSpan.FromSeconds(10));
+        builder.Services.AddHttpClient("ClubLog", c => c.Timeout = TimeSpan.FromSeconds(10));
         // Localhost proxy to the HamClock sidecar's propagation engine. The first
         // P.533-14 prediction for a cold path can take ~20 s upstream; allow for it.
         builder.Services.AddHttpClient("Propagation", c => c.Timeout = TimeSpan.FromSeconds(25));
@@ -820,6 +825,11 @@ public static class ZeusHost
         // only so its sidecar Node process is killed on Zeus shutdown.
         builder.Services.AddSingleton<HamClockService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<HamClockService>());
+        // HamClock DX-push config (Logging v2). Outbound "set the worked station
+        // on the map" — SEND-ONLY HTTP GET, DISABLED by default. The push itself
+        // lives on HamClockService.PushDxAsync; this owns the live config.
+        builder.Services.AddSingleton<HamClockPushConfigStore>();
+        builder.Services.AddSingleton<HamClockPushManagementService>();
         // Point-to-point propagation (proxies the HamClock sidecar's P.533-14 API).
         builder.Services.AddSingleton<PropagationService>();
         // Comprehensive solar / space-weather (proxies the sidecar's N0NBH feed).
@@ -919,6 +929,23 @@ public static class ZeusHost
         // so the default path emits nothing. SEND-ONLY via the broadcaster.
         builder.Services.AddSingleton<Wsjtx.WsjtxLiveEmitter>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<Wsjtx.WsjtxLiveEmitter>());
+
+        // Logging v2 — N1MM-format UDP broadcaster (Class B). Sends the N1MM
+        // "contactinfo" datagram (a DIFFERENT wire format from the WSJT-X type-12
+        // path above) on a configurable port (default 2333) for HRD Logbook "QSO
+        // Forwarding" and DXKeeper via the N1MM→DXKeeper Gateway. SEND-ONLY, no
+        // listener, DISABLED by default; fired from the /api/log/entry fan-out.
+        builder.Services.AddSingleton<Wsjtx.N1mmConfigStore>();
+        builder.Services.AddSingleton<Wsjtx.N1mmBroadcaster>();
+
+        // Logging v2 — HTTP cloud-log uploaders (Class C): per-QSO realtime ADIF
+        // POST to Wavelog/Cloudlog and Club Log. NEW network egress, both DISABLED
+        // by default and additionally no-op until credentials are stored. SEND-ONLY
+        // (HttpClient POST out only). Fired from the /api/log/entry fan-out.
+        builder.Services.AddSingleton<CloudLog.CloudLogConfigStore>();
+        builder.Services.AddSingleton<CloudLog.WavelogClient>();
+        builder.Services.AddSingleton<CloudLog.ClubLogClient>();
+        builder.Services.AddSingleton<CloudLog.CloudLogService>();
 
         // Digital-mode spotting uploaders — FT8/FT4 decodes to PSK Reporter and
         // WSPR spots to WSPRnet. NEW network egress; both DISABLED by default and

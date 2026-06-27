@@ -3275,19 +3275,27 @@ public static class ZeusEndpoints
             return Results.Ok(response);
         });
 
-        app.MapPost("/api/log/entry", async (CreateLogEntryRequest req, LogService logService, WsjtxUdpBroadcaster wsjtx, HttpContext ctx) =>
+        app.MapPost("/api/log/entry", async (
+            CreateLogEntryRequest req,
+            LogService logService,
+            WsjtxUdpBroadcaster wsjtx,
+            Wsjtx.N1mmBroadcaster n1mm,
+            CloudLog.CloudLogService cloudLog,
+            HttpContext ctx) =>
         {
             if (string.IsNullOrWhiteSpace(req.Callsign))
                 return Results.BadRequest(new { error = "callsign required" });
             var entry = await logService.CreateLogEntryAsync(req, ctx.RequestAborted);
-            // Push the just-logged QSO to a third-party logger if the operator has
-            // opted in (WSJT-X type-12 LoggedADIF). No-op when disabled; this is the
-            // only logging path that broadcasts (ADIF bulk import never does).
-            // Fire-and-forget so a slow/blocked send (e.g. a free-text Host whose
-            // DNS is dead) can never delay the operator's log confirmation. The
-            // broadcaster swallows all send failures internally; use a detached
-            // token so the post-response request abort doesn't cancel it.
-            _ = wsjtx.BroadcastLoggedQsoAsync(entry, CancellationToken.None);
+            // Push the just-logged QSO to every opted-in external logger. Each
+            // target is OFF by default and no-ops when disabled; this is the only
+            // logging path that egresses (ADIF bulk import never does).
+            // Fire-and-forget so a slow/blocked target (e.g. a free-text Host whose
+            // DNS is dead) can never delay the operator's log confirmation. Each
+            // client swallows its own failures internally; use a detached token so
+            // the post-response request abort doesn't cancel them.
+            _ = wsjtx.BroadcastLoggedQsoAsync(entry, CancellationToken.None);   // Class A: WSJT-X type-12 UDP
+            _ = n1mm.BroadcastLoggedQsoAsync(entry, CancellationToken.None);    // Class B: N1MM contactinfo UDP
+            _ = cloudLog.PublishAsync(entry, CancellationToken.None);           // Class C: Wavelog/Cloudlog + Club Log HTTP
             return Results.Ok(entry);
         });
 
@@ -3350,6 +3358,60 @@ public static class ZeusEndpoints
                 SuccessCount: successCount,
                 FailedCount: failedCount,
                 Results: results));
+        });
+
+        // -- Logging v2: HTTP cloud-log uploaders (Wavelog/Cloudlog + Club Log) --
+        // Per-QSO realtime ADIF push. Egress OFF by default; fired automatically
+        // from /api/log/entry. These endpoints manage config/secrets and a manual
+        // batch re-publish. Secrets are write-only — status reports presence only.
+        app.MapGet("/api/log/cloud/config", async (CloudLog.CloudLogService cloud, HttpContext ctx) =>
+            Results.Ok(await cloud.GetStatusAsync(ctx.RequestAborted)));
+
+        app.MapPost("/api/log/cloud/config", (CloudLog.CloudLogConfig req, CloudLog.CloudLogService cloud) =>
+        {
+            log.LogInformation(
+                "api.log.cloud.config wavelog={Wl} clublog={Cl}",
+                req.Wavelog.Enabled, req.ClubLog.Enabled);
+            return Results.Ok(cloud.SetConfig(req));
+        });
+
+        app.MapPost("/api/log/cloud/credentials", async (
+            CloudLog.CloudLogCredentialsRequest req, CloudLog.CloudLogService cloud, HttpContext ctx) =>
+        {
+            // Each non-null field is applied; an empty string clears that secret.
+            if (req.WavelogApiKey is not null)
+                await cloud.SetWavelogApiKeyAsync(req.WavelogApiKey, ctx.RequestAborted);
+            if (req.ClubLogPassword is not null || req.ClubLogApiKey is not null)
+                await cloud.SetClubLogCredentialsAsync(req.ClubLogPassword, req.ClubLogApiKey, ctx.RequestAborted);
+            return Results.Ok(await cloud.GetStatusAsync(ctx.RequestAborted));
+        });
+
+        app.MapPost("/api/log/publish/cloud", async (
+            QrzPublishRequest req, CloudLog.CloudLogService cloud, LogService logService, HttpContext ctx) =>
+        {
+            if (req.LogEntryIds == null || !req.LogEntryIds.Any())
+                return Results.BadRequest(new { error = "no log entry IDs provided" });
+            var entries = await logService.GetLogEntriesByIdsAsync(req.LogEntryIds, ctx.RequestAborted);
+            var results = new List<CloudLog.CloudLogResult>();
+            foreach (var entry in entries)
+                results.AddRange(await cloud.PublishOnceAsync(entry, ctx.RequestAborted));
+            return Results.Ok(new
+            {
+                total = results.Count,
+                successCount = results.Count(r => r.Success),
+                failedCount = results.Count(r => !r.Success),
+                results,
+            });
+        });
+
+        // -- Logging v2: N1MM-format UDP broadcaster (HRD / DXKeeper gateway) -----
+        app.MapGet("/api/n1mm/config", (Wsjtx.N1mmBroadcaster n1mm) => Results.Ok(n1mm.GetConfig()));
+
+        app.MapPost("/api/n1mm/config", (Wsjtx.N1mmConfig req, Wsjtx.N1mmBroadcaster n1mm) =>
+        {
+            log.LogInformation(
+                "api.n1mm.config enabled={En} host={Host} port={Port}", req.Enabled, req.Host, req.Port);
+            return Results.Ok(n1mm.SetConfig(req));
         });
 
         app.MapGet("/api/rotator/status", (RotctldService rot) => rot.GetStatus());
@@ -3592,6 +3654,32 @@ public static class ZeusEndpoints
         {
             hc.Stop();
             return Results.Ok(hc.Snapshot());
+        });
+
+        // HamClock DX-push config + push (Logging v2). Outbound "set the worked
+        // station on the map". Egress OFF by default; server-side forward avoids
+        // browser CORS / HTTPS-mixed-content blocking the classic-HamClock host.
+        app.MapGet("/api/hamclock/push-config", (HamClockPushManagementService push) =>
+            Results.Ok(push.GetConfig()));
+
+        app.MapPost("/api/hamclock/push-config", (HamClockPushConfig req, HamClockPushManagementService push) =>
+        {
+            log.LogInformation(
+                "api.hamclock.push-config enabled={En} trigger={Tr} target={Tg} host={Host} port={Port}",
+                req.Enabled, req.Trigger, req.Target, req.ExternalHost, req.ExternalPort);
+            return Results.Ok(push.SetConfig(req));
+        });
+
+        app.MapPost("/api/hamclock/dx", async (
+            HamClockDxRequest req, HamClockPushManagementService push, HamClockService hc) =>
+        {
+            var cfg = push.GetConfig();
+            if (!cfg.Enabled)
+                return Results.Ok(new { pushed = false, skipped = "disabled" });
+            // Fire the GET inline but tightly time-bounded inside PushDxAsync; it
+            // never throws and returns false on any skip/failure.
+            bool pushed = await hc.PushDxAsync(req.Grid, cfg.Target, cfg.ExternalHost, cfg.ExternalPort);
+            return Results.Ok(new { pushed });
         });
 
         return app;

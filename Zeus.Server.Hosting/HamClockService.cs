@@ -200,6 +200,104 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
         }
     }
 
+    // -- DX push (outbound "set the worked station on the map") ----------
+
+    // Short-timeout client for the DX-push GET — distinct from the 10-minute
+    // download client. A push must never stall the FT8 UI, so we cap it tight and
+    // swallow every failure.
+    private static readonly HttpClient PushHttp = new() { Timeout = TimeSpan.FromSeconds(4) };
+
+    /// <summary>
+    /// Push a worked station's grid to HamClock's map as the new DX location.
+    /// SEND-ONLY: issues a single HTTP GET to the classic-HamClock REST surface
+    /// (<c>set_newdx?grid=...</c>) and never reads anything back; it cannot key TX.
+    /// Never throws — returns false on any skip/failure.
+    /// </summary>
+    /// <param name="grid">4- or 6-char Maidenhead locator. Required: classic
+    /// HamClock's set_newdx sets the DX by grid (or lat/long); there is no
+    /// set-DX-by-callsign, so a null/invalid grid is a no-op.</param>
+    /// <param name="target">"external" (a classic HamClock at host:port) or
+    /// "bundled" (the OpenHamClock sidecar — NOT supported today; no-op).</param>
+    public async Task<bool> PushDxAsync(
+        string? grid, string target, string externalHost, int externalPort, CancellationToken ct = default)
+    {
+        if (!TryNormalizeGrid(grid, out var locator))
+        {
+            _log.LogDebug("hamclock.dx skipped: no valid grid ({Grid})", grid);
+            return false;
+        }
+
+        // The bundled accius/openhamclock sidecar has no set-DX endpoint yet, so a
+        // real push only works against an external classic HamClock. Gate the
+        // bundled path as a logged no-op until an upstream OpenHamClock PR lands.
+        if (string.Equals(target, "bundled", StringComparison.OrdinalIgnoreCase))
+        {
+            _log.LogInformation(
+                "hamclock.dx: bundled OpenHamClock has no set-DX endpoint; push not supported " +
+                "(use an external classic HamClock, or await an upstream OpenHamClock PR). grid={Grid}",
+                locator);
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(externalHost))
+        {
+            _log.LogDebug("hamclock.dx skipped: external host not configured");
+            return false;
+        }
+
+        var url = BuildSetDxUrl(externalHost, externalPort, locator);
+        try
+        {
+            using var resp = await PushHttp.GetAsync(url, ct).ConfigureAwait(false);
+            if (resp.IsSuccessStatusCode)
+            {
+                _log.LogInformation("hamclock.dx pushed grid={Grid} -> {Url}", locator, url);
+                return true;
+            }
+            _log.LogWarning("hamclock.dx push HTTP {Code} -> {Url}", (int)resp.StatusCode, url);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "hamclock.dx push failed -> {Url}", url);
+            return false;
+        }
+    }
+
+    /// <summary>Build the classic-HamClock set-DX REST URL. The grid is passed as
+    /// a named <c>grid=</c> query parameter per the HamClock API
+    /// (tardate/ESPHamClock doc/api.md, verified June 2026) — NOT a bare arg.</summary>
+    internal static string BuildSetDxUrl(string host, int port, string grid)
+        => $"http://{host.Trim()}:{port}/set_newdx?grid={Uri.EscapeDataString(grid)}";
+
+    /// <summary>Validate + normalize a Maidenhead locator to 4 or 6 chars
+    /// (field pair A-R, square 0-9, optional subsquare a-x). Returns false for
+    /// null/empty/malformed grids.</summary>
+    internal static bool TryNormalizeGrid(string? grid, out string normalized)
+    {
+        normalized = "";
+        if (string.IsNullOrWhiteSpace(grid)) return false;
+        var g = grid.Trim();
+        if (g.Length != 4 && g.Length != 6) return false;
+
+        // Canonical Maidenhead casing: field upper, subsquare lower.
+        char f1 = char.ToUpperInvariant(g[0]), f2 = char.ToUpperInvariant(g[1]);
+        char s1 = g[2], s2 = g[3];
+        if (f1 is < 'A' or > 'R' || f2 is < 'A' or > 'R') return false;   // field A-R
+        if (s1 is < '0' or > '9' || s2 is < '0' or > '9') return false;   // square 0-9
+
+        if (g.Length == 4)
+        {
+            normalized = $"{f1}{f2}{s1}{s2}";
+            return true;
+        }
+
+        char u1 = char.ToLowerInvariant(g[4]), u2 = char.ToLowerInvariant(g[5]);
+        if (u1 is < 'a' or > 'x' || u2 is < 'a' or > 'x') return false;   // subsquare a-x
+        normalized = $"{f1}{f2}{s1}{s2}{u1}{u2}";
+        return true;
+    }
+
     public HamClockStatus Snapshot()
     {
         // Probe Node outside _gate (it may spawn `node --version`) and cache it.

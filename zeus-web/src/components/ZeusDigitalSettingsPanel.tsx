@@ -36,7 +36,10 @@ import { useSpottingStore } from '../state/spotting-store';
 import { useWsjtxStore } from '../state/wsjtx-store';
 import { useQrzStore } from '../state/qrz-store';
 import { useLayoutStore } from '../state/layout-store';
+import { useN1mmStore } from '../state/n1mm-store';
+import { useCloudLogStore } from '../state/cloud-log-store';
 import type { WsjtxConfig } from '../api/wsjtx';
+import type { N1mmConfig } from '../api/n1mm';
 import {
   DIGITAL_MODES,
   WF_PALETTES,
@@ -451,6 +454,16 @@ export function ZeusDigitalSettingsPanel({
 
           <div className="ft8-set-divider" />
 
+          {/* Additive N1MM-format UDP logger (HRD Logbook / DXKeeper gateway). */}
+          <N1mmLoggingGroup />
+
+          <div className="ft8-set-divider" />
+
+          {/* Additive per-QSO HTTP cloud loggers (Wavelog/Cloudlog + Club Log). */}
+          <CloudLoggingGroup />
+
+          <div className="ft8-set-divider" />
+
           {/* QRZ cloud logbook — credential lives on the QRZ tab. */}
           <div className="ft8-set-chips">
             <Chip label="QRZ Logbook (cloud)" on={qrzHasApiKey} />
@@ -652,6 +665,311 @@ export function ExternalLoggingGroup() {
               ? status?.transport === 'multicast'
                 ? `Sending to multicast ${status?.multicastGroup}:${status?.port}`
                 : `Sending to ${status?.host}:${status?.port}`
+              : 'Disabled — no QSO data leaves this machine.'}
+          </span>
+        </span>
+        <button type="button" className="ft8-set-link" disabled={saving} onClick={() => void onSave()}>
+          {saving ? 'SAVING…' : 'SAVE'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// N1MM-format UDP logging — the "N1MM Logger+ Broadcasts" contactinfo datagram
+// (a DIFFERENT wire format from the WSJT-X type-12 ADIF datagram above). HRD
+// Logbook's QSO-Forwarding and DXKeeper-via-Gateway listen for THIS, on its own
+// configurable port (default 2333). Server-backed (useN1mmStore), SEND-ONLY,
+// egress OFF until the operator opts in and SAVES.
+// ---------------------------------------------------------------------------
+
+function N1mmLoggingGroup() {
+  const config = useN1mmStore((s) => s.config);
+  const saveConfig = useN1mmStore((s) => s.saveConfig);
+  const refreshConfig = useN1mmStore((s) => s.refreshConfig);
+
+  const [form, setForm] = useState<N1mmConfig>(config);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void refreshConfig();
+  }, [refreshConfig]);
+  useEffect(() => {
+    setForm(config);
+  }, [config]);
+
+  const patch = (p: Partial<N1mmConfig>) => setForm((f) => ({ ...f, ...p }));
+
+  async function onSave() {
+    setSaving(true);
+    try {
+      const port = Number.isFinite(form.port) && form.port > 0 && form.port < 65536 ? form.port : 2333;
+      await saveConfig({ ...form, port, host: form.host.trim() || '127.0.0.1' });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div aria-label="N1MM-format logging (HRD / DXKeeper)">
+      <ToggleRow
+        label="Also send to an HRD / N1MM-format logger"
+        hint="Mirror each logged QSO out as the N1MM contactinfo UDP datagram. HRD Logbook & DXKeeper-via-Gateway speak this. Additive — Zeus keeps the internal copy."
+        checked={form.enabled}
+        onChange={(v) => patch({ enabled: v })}
+      />
+
+      {form.enabled && (
+        <>
+          <TextRow
+            label="Host"
+            hint="127.0.0.1 for a logger on this machine; otherwise the logger's LAN IP."
+            value={form.host}
+            placeholder="127.0.0.1"
+            onChange={(v) => patch({ host: v })}
+          />
+          <NumberRow
+            label="Port"
+            hint="N1MM-broadcast default is 2333 — match your logger's UDP input."
+            value={form.port}
+            min={1}
+            max={65535}
+            onChange={(v) => patch({ port: v })}
+          />
+        </>
+      )}
+
+      <div className="ft8-set-row ft8-set-row--readonly">
+        <span className="ft8-set-row__text">
+          <span className="ft8-set-row__label">
+            <span
+              className="ft8-set-chip__dot"
+              style={{ background: config.enabled ? 'var(--hud-cq)' : 'var(--hud-text-dim)' }}
+            />{' '}
+            N1MM-format logger
+          </span>
+          <span className="ft8-set-row__hint">
+            {config.enabled
+              ? `Sending to ${config.host}:${config.port}`
+              : 'Disabled — no QSO data leaves this machine.'}
+          </span>
+        </span>
+        <button type="button" className="ft8-set-link" disabled={saving} onClick={() => void onSave()}>
+          {saving ? 'SAVING…' : 'SAVE'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// HTTP cloud loggers — per-QSO realtime ADIF push to Wavelog/Cloudlog and Club
+// Log. Server-backed (useCloudLogStore), SEND-ONLY, egress OFF by default.
+// SECRETS ARE WRITE-ONLY: the API key / application password are typed into a
+// password field and POSTed to a separate credentials endpoint; they never come
+// back down, so the form only shows a "key saved" indicator from the status.
+// ---------------------------------------------------------------------------
+
+// Minimal masked input for write-only secrets (the shared TextRow does not mask).
+function SecretRow(props: {
+  label: string;
+  hint?: string;
+  value: string;
+  placeholder?: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="ft8-set-row">
+      <span className="ft8-set-row__text">
+        <span className="ft8-set-row__label">{props.label}</span>
+        {props.hint && <span className="ft8-set-row__hint">{props.hint}</span>}
+      </span>
+      <input
+        className="ft8-set-input"
+        type="password"
+        autoComplete="off"
+        value={props.value}
+        placeholder={props.placeholder}
+        spellCheck={false}
+        aria-label={props.label}
+        onChange={(e) => props.onChange(e.target.value)}
+      />
+    </div>
+  );
+}
+
+function CloudLoggingGroup() {
+  const status = useCloudLogStore((s) => s.status);
+  const refreshStatus = useCloudLogStore((s) => s.refreshStatus);
+  const saveConfig = useCloudLogStore((s) => s.saveConfig);
+  const saveCredentials = useCloudLogStore((s) => s.saveCredentials);
+
+  // Non-secret form state, seeded from the server status. Secrets stay in their
+  // own local state and are cleared after a save (never echoed back).
+  const [wlEnabled, setWlEnabled] = useState(false);
+  const [wlBaseUrl, setWlBaseUrl] = useState('');
+  const [wlProfile, setWlProfile] = useState('');
+  const [wlKey, setWlKey] = useState('');
+
+  const [clEnabled, setClEnabled] = useState(false);
+  const [clEmail, setClEmail] = useState('');
+  const [clCall, setClCall] = useState('');
+  const [clPassword, setClPassword] = useState('');
+  const [clApiKey, setClApiKey] = useState('');
+
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void refreshStatus();
+  }, [refreshStatus]);
+  useEffect(() => {
+    setWlEnabled(status.wavelog.enabled);
+    setWlBaseUrl(status.wavelog.baseUrl);
+    setWlProfile(status.wavelog.stationProfileId);
+    setClEnabled(status.clubLog.enabled);
+    setClEmail(status.clubLog.email);
+    setClCall(status.clubLog.callsign);
+  }, [status]);
+
+  async function onSave() {
+    setSaving(true);
+    try {
+      await saveConfig({
+        wavelog: {
+          enabled: wlEnabled,
+          baseUrl: wlBaseUrl.trim(),
+          stationProfileId: wlProfile.trim(),
+        },
+        clubLog: {
+          enabled: clEnabled,
+          email: clEmail.trim(),
+          callsign: clCall.trim().toUpperCase(),
+        },
+      });
+      // Only push secrets the operator actually typed this session.
+      const creds: { wavelogApiKey?: string; clubLogPassword?: string; clubLogApiKey?: string } = {};
+      if (wlKey) creds.wavelogApiKey = wlKey;
+      if (clPassword) creds.clubLogPassword = clPassword;
+      if (clApiKey) creds.clubLogApiKey = clApiKey;
+      if (Object.keys(creds).length > 0) await saveCredentials(creds);
+      setWlKey('');
+      setClPassword('');
+      setClApiKey('');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div aria-label="Cloud logging (Wavelog / Club Log)">
+      {/* Wavelog / Cloudlog */}
+      <ToggleRow
+        label="Also push to Wavelog / Cloudlog"
+        hint="Upload each logged QSO to a Wavelog or Cloudlog instance over HTTPS. Additive — Zeus keeps the internal copy."
+        checked={wlEnabled}
+        onChange={setWlEnabled}
+      />
+      {wlEnabled && (
+        <>
+          <TextRow
+            label="Base URL"
+            hint="Your instance root, e.g. https://log.example.com (Zeus adds /api/qso)."
+            value={wlBaseUrl}
+            placeholder="https://log.example.com"
+            onChange={setWlBaseUrl}
+          />
+          <TextRow
+            label="Station profile id"
+            hint="The Wavelog station-location / profile id this log feeds."
+            value={wlProfile}
+            placeholder="1"
+            onChange={setWlProfile}
+          />
+          <SecretRow
+            label="API key"
+            hint={
+              status.wavelog.hasApiKey
+                ? 'A key is saved — type a new one to replace it.'
+                : 'Wavelog account → API keys. Stored on the server, never shown again.'
+            }
+            value={wlKey}
+            placeholder={status.wavelog.hasApiKey ? '•••••• (saved)' : 'paste API key'}
+            onChange={setWlKey}
+          />
+        </>
+      )}
+
+      <div className="ft8-set-divider" />
+
+      {/* Club Log */}
+      <ToggleRow
+        label="Also push to Club Log"
+        hint="Upload each logged QSO to Club Log's realtime API over HTTPS. Additive — Zeus keeps the internal copy."
+        checked={clEnabled}
+        onChange={setClEnabled}
+      />
+      {clEnabled && (
+        <>
+          <TextRow
+            label="Email"
+            hint="The email of your Club Log account."
+            value={clEmail}
+            placeholder="you@example.com"
+            onChange={setClEmail}
+          />
+          <TextRow
+            label="Callsign"
+            hint="The logging callsign for this Club Log account."
+            value={clCall}
+            placeholder="MYCALL"
+            upper
+            onChange={setClCall}
+          />
+          <SecretRow
+            label="Password"
+            hint={
+              status.clubLog.hasPassword
+                ? 'A password is saved — type a new one to replace it.'
+                : 'Your Club Log account password. Stored on the server, never shown again.'
+            }
+            value={clPassword}
+            placeholder={status.clubLog.hasPassword ? '•••••• (saved)' : 'account password'}
+            onChange={setClPassword}
+          />
+          <SecretRow
+            label="API key"
+            hint={
+              status.clubLog.hasApiKey
+                ? 'A key is saved — type a new one to replace it.'
+                : 'Club Log application API key (clublog.org/api.php).'
+            }
+            value={clApiKey}
+            placeholder={status.clubLog.hasApiKey ? '•••••• (saved)' : 'application API key'}
+            onChange={setClApiKey}
+          />
+        </>
+      )}
+
+      <div className="ft8-set-row ft8-set-row--readonly">
+        <span className="ft8-set-row__text">
+          <span className="ft8-set-row__label">
+            <span
+              className="ft8-set-chip__dot"
+              style={{
+                background:
+                  status.wavelog.enabled || status.clubLog.enabled
+                    ? 'var(--hud-cq)'
+                    : 'var(--hud-text-dim)',
+              }}
+            />{' '}
+            Cloud loggers
+          </span>
+          <span className="ft8-set-row__hint">
+            {status.wavelog.enabled || status.clubLog.enabled
+              ? `Active: ${[status.wavelog.enabled ? 'Wavelog' : null, status.clubLog.enabled ? 'Club Log' : null]
+                  .filter(Boolean)
+                  .join(' + ')}`
               : 'Disabled — no QSO data leaves this machine.'}
           </span>
         </span>

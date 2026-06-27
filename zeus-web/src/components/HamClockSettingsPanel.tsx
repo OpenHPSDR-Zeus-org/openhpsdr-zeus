@@ -9,8 +9,13 @@
 // not the Zeus installer). Node 18+ must be present; the panel surfaces a
 // clear prereq warning when it isn't.
 
-import { useEffect, useRef } from 'react';
-import { HAMCLOCK_LAYOUT_NAME, useHamClockStore } from '../state/hamclock-store';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import {
+  HAMCLOCK_LAYOUT_NAME,
+  HAMCLOCK_PUSH_DEFAULT_PORT,
+  useHamClockStore,
+  type HamClockPushConfig,
+} from '../state/hamclock-store';
 import { useLayoutStore } from '../state/layout-store';
 
 export function HamClockSettingsPanel() {
@@ -194,6 +199,9 @@ export function HamClockSettingsPanel() {
             : 'Enable the workspace to add a HamClock tab to the left layout bar.'}
       </div>
 
+      {/* Push DX to HamClock — outbound, SEND-ONLY, OFF by default. */}
+      <PushDxSection />
+
       {/* Install / run log */}
       {status.log.length > 0 && (
         <div>
@@ -223,6 +231,148 @@ export function HamClockSettingsPanel() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// Outbound "push the worked station onto the HamClock map" config. SEND-ONLY:
+// the backend issues a single HTTP GET to the HamClock REST API (set_newdx?grid=)
+// when a QSO partner is clicked or goes active in the FT8 pop-out. Egress is OFF
+// by default; the server-side forward avoids browser CORS / HTTPS mixed-content.
+// The bundled OpenHamClock sidecar has no set-DX endpoint yet, so that target is
+// surfaced as unsupported (an upstream PR is needed).
+function PushDxSection() {
+  const pushConfig = useHamClockStore((s) => s.pushConfig);
+  const loadPushConfig = useHamClockStore((s) => s.loadPushConfig);
+  const savePushConfig = useHamClockStore((s) => s.savePushConfig);
+
+  const [form, setForm] = useState<HamClockPushConfig>(pushConfig);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void loadPushConfig();
+  }, [loadPushConfig]);
+  useEffect(() => {
+    setForm(pushConfig);
+  }, [pushConfig]);
+
+  const patch = (p: Partial<HamClockPushConfig>) => setForm((f) => ({ ...f, ...p }));
+
+  async function onSave() {
+    setSaving(true);
+    try {
+      const port =
+        Number.isFinite(form.externalPort) && form.externalPort > 0 && form.externalPort < 65536
+          ? form.externalPort
+          : HAMCLOCK_PUSH_DEFAULT_PORT;
+      await savePushConfig({ ...form, externalPort: port, externalHost: form.externalHost.trim() });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const labelStyle: CSSProperties = { color: 'var(--fg-2)', fontSize: 12, minWidth: 92 };
+  const inputStyle: CSSProperties = {
+    flex: 1,
+    background: 'var(--bg-1, #0e1014)',
+    border: '1px solid var(--line-1, var(--line))',
+    borderRadius: 'var(--r-sm, 4px)',
+    color: 'var(--fg-0)',
+    fontSize: 12,
+    padding: '5px 8px',
+  };
+  const rowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 };
+
+  return (
+    <div style={{ marginTop: 4, marginBottom: 20, paddingTop: 16, borderTop: '1px solid var(--line-1, var(--line))' }}>
+      <div style={{
+        fontSize: 11, letterSpacing: 0.8, textTransform: 'uppercase',
+        color: 'var(--fg-2)', marginBottom: 10, fontWeight: 700,
+      }}>
+        Push DX to HamClock
+      </div>
+      <p style={{ margin: '0 0 12px 0', lineHeight: 1.6, color: 'var(--fg-3)', fontSize: 12 }}>
+        When you work or click a station in the digital pop-out, place it on the HamClock map by its
+        grid. Send-only — nothing controls your radio. Off by default.
+      </p>
+
+      <label style={{ ...rowStyle, cursor: 'pointer' }}>
+        <span style={labelStyle}>Enable</span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={form.enabled}
+          aria-label="Push DX to HamClock"
+          className={`btn sm${form.enabled ? ' active' : ''}`}
+          onClick={() => patch({ enabled: !form.enabled })}
+        >
+          {form.enabled ? 'ON' : 'OFF'}
+        </button>
+      </label>
+
+      {form.enabled && (
+        <>
+          <div style={rowStyle}>
+            <span style={labelStyle}>Trigger</span>
+            <select
+              aria-label="Push trigger"
+              style={inputStyle}
+              value={form.trigger}
+              onChange={(e) => patch({ trigger: e.target.value as HamClockPushConfig['trigger'] })}
+            >
+              <option value="on-click">On click (when I click a station)</option>
+              <option value="on-active-QSO">On active QSO (the station I'm working)</option>
+            </select>
+          </div>
+
+          <div style={rowStyle}>
+            <span style={labelStyle}>Target</span>
+            <select
+              aria-label="Push target"
+              style={inputStyle}
+              value={form.target}
+              onChange={(e) => patch({ target: e.target.value as HamClockPushConfig['target'] })}
+            >
+              <option value="external">External HamClock (host : port)</option>
+              <option value="bundled" disabled>
+                Bundled OpenHamClock (set-DX not supported yet)
+              </option>
+            </select>
+          </div>
+
+          {form.target === 'external' && (
+            <>
+              <div style={rowStyle}>
+                <span style={labelStyle}>Host</span>
+                <input
+                  aria-label="HamClock host"
+                  style={inputStyle}
+                  value={form.externalHost}
+                  placeholder="192.168.1.50"
+                  spellCheck={false}
+                  onChange={(e) => patch({ externalHost: e.target.value })}
+                />
+              </div>
+              <div style={rowStyle}>
+                <span style={labelStyle}>Port</span>
+                <input
+                  aria-label="HamClock port"
+                  type="number"
+                  min={1}
+                  max={65535}
+                  style={inputStyle}
+                  value={form.externalPort}
+                  onChange={(e) => patch({ externalPort: Number(e.target.value) })}
+                />
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      <button type="button" className="btn sm" disabled={saving} onClick={() => void onSave()}>
+        {saving ? 'SAVING…' : 'SAVE'}
+      </button>
     </div>
   );
 }

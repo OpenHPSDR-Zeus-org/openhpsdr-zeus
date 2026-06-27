@@ -105,15 +105,37 @@ vi.mock('../api/wsjtx', () => ({
   postWsjtxConfig: vi.fn(async (c: Record<string, unknown>) => ({ ...c })),
 }));
 
+vi.mock('../api/n1mm', () => ({
+  N1MM_DEFAULT_PORT: 2333,
+  getN1mmConfig: vi.fn(async () => ({ enabled: false, host: '127.0.0.1', port: 2333 })),
+  postN1mmConfig: vi.fn(async (c: Record<string, unknown>) => ({ ...c })),
+}));
+
+vi.mock('../api/cloud-log', () => {
+  const EMPTY = {
+    wavelog: { enabled: false, baseUrl: '', stationProfileId: '', hasApiKey: false },
+    clubLog: { enabled: false, email: '', callsign: '', hasPassword: false, hasApiKey: false },
+  };
+  return {
+    getCloudLogStatus: vi.fn(async () => EMPTY),
+    postCloudLogConfig: vi.fn(async () => EMPTY),
+    postCloudLogCredentials: vi.fn(async () => EMPTY),
+  };
+});
+
 import { ZeusDigitalSettingsPanel } from './ZeusDigitalSettingsPanel';
 import { useFt8Store } from '../state/ft8-store';
 import { useFt8SettingsStore } from '../state/ft8-settings-store';
 import { useLayoutStore } from '../state/layout-store';
 import { useWsjtxStore } from '../state/wsjtx-store';
+import { useN1mmStore } from '../state/n1mm-store';
+import { useCloudLogStore } from '../state/cloud-log-store';
 import type { WsjtxConfig } from '../api/wsjtx';
 import * as operatorApi from '../api/operator';
 import * as ft8SettingsApi from '../api/ft8-settings';
 import * as wsjtxApi from '../api/wsjtx';
+import * as n1mmApi from '../api/n1mm';
+import * as cloudLogApi from '../api/cloud-log';
 
 const WSJTX_BASE_CONFIG: WsjtxConfig = {
   enabled: false,
@@ -177,6 +199,14 @@ describe('ZeusDigitalSettingsPanel', () => {
     // Reset the (singleton) WSJT-X store to a known disabled baseline so the
     // external-logging form starts clean in every test.
     useWsjtxStore.setState({ config: { ...WSJTX_BASE_CONFIG }, status: { ...WSJTX_BASE_CONFIG } });
+    // Reset the singleton N1MM + cloud-log stores to a clean disabled baseline.
+    useN1mmStore.setState({ config: { enabled: false, host: '127.0.0.1', port: 2333 } });
+    useCloudLogStore.setState({
+      status: {
+        wavelog: { enabled: false, baseUrl: '', stationProfileId: '', hasApiKey: false },
+        clubLog: { enabled: false, email: '', callsign: '', hasPassword: false, hasApiKey: false },
+      },
+    });
   });
 
   it('renders the GLOBAL Station identity fields and the mode selector', () => {
@@ -336,6 +366,65 @@ describe('ZeusDigitalSettingsPanel', () => {
         multicastGroup: '224.0.0.73',
         sendLiveDecodes: true,
       }),
+    );
+    unmount();
+  });
+
+  it('N1MM-format logging is additive + default off; opting in reveals host/port and SAVE persists', async () => {
+    const { container, unmount } = render(createElement(ZeusDigitalSettingsPanel));
+    expect(container.textContent).toContain('Also send to an HRD / N1MM-format logger');
+    // Default off — host/port hidden until opted in.
+    expect(
+      container.querySelector('button[aria-label="Also send to an HRD / N1MM-format logger"]')
+        ?.getAttribute('aria-checked'),
+    ).toBe('false');
+    clickSwitch(container, 'Also send to an HRD / N1MM-format logger');
+    // The N1MM SAVE persists the enabled config (default port 2333) to the backend.
+    const group = container.querySelector(
+      'div[aria-label="N1MM-format logging (HRD / DXKeeper)"]',
+    ) as HTMLElement;
+    expect(group).toBeTruthy();
+    clickByText(group, 'SAVE');
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(n1mmApi.postN1mmConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: true, port: 2333 }),
+    );
+    unmount();
+  });
+
+  it('Wavelog cloud logging is additive + default off; opting in + SAVE persists config and the write-only API key', async () => {
+    const { container, unmount } = render(createElement(ZeusDigitalSettingsPanel));
+    expect(container.textContent).toContain('Also push to Wavelog / Cloudlog');
+    expect(container.textContent).toContain('Also push to Club Log');
+    // Wavelog fields hidden until opted in.
+    expect(container.textContent).not.toContain('Base URL');
+    clickSwitch(container, 'Also push to Wavelog / Cloudlog');
+    expect(container.textContent).toContain('Base URL');
+
+    const group = container.querySelector(
+      'div[aria-label="Cloud logging (Wavelog / Club Log)"]',
+    ) as HTMLElement;
+    const baseUrl = group.querySelector(
+      'input.ft8-set-input:not([type="password"]):not([type="number"])',
+    ) as HTMLInputElement;
+    setInputValue(baseUrl, 'https://log.example.com');
+    const apiKey = group.querySelector('input[type="password"]') as HTMLInputElement;
+    setInputValue(apiKey, 'SECRETKEY');
+
+    clickByText(group, 'SAVE');
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(cloudLogApi.postCloudLogConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wavelog: expect.objectContaining({ enabled: true, baseUrl: 'https://log.example.com' }),
+      }),
+    );
+    // The secret goes up the write-only credentials endpoint, not the config one.
+    expect(cloudLogApi.postCloudLogCredentials).toHaveBeenCalledWith(
+      expect.objectContaining({ wavelogApiKey: 'SECRETKEY' }),
     );
     unmount();
   });

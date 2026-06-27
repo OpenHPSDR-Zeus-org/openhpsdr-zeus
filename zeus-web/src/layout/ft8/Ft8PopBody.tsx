@@ -25,6 +25,7 @@ import { qsoStateToLogEntry } from '../../dsp/ft8-qso-log';
 import { parseFt8Message } from '../../dsp/ft8-message';
 import { useLoggerStore } from '../../state/logger-store';
 import { useLayoutStore } from '../../state/layout-store';
+import { useHamClockStore } from '../../state/hamclock-store';
 import { useWorkspace } from '../WorkspaceContext';
 import { Ft8DecodeTable } from './Ft8DecodeTable';
 import { Ft8TxControl } from './Ft8TxControl';
@@ -83,6 +84,14 @@ export function Ft8PopBody() {
 
   // Click a station / live QSO partner → the operator's EXISTING QRZ panel.
   const { runQrzLookup } = useWorkspace();
+
+  // HamClock DX push — place the worked station on the HamClock map by grid.
+  // Server-backed config (egress OFF by default); the frontend gates on the
+  // configured trigger (on-click vs on-active-QSO) and the server gates again on
+  // `enabled`. A grid is mandatory — classic HamClock sets DX by grid, not call.
+  const pushConfig = useHamClockStore((s) => s.pushConfig);
+  const loadPushConfig = useHamClockStore((s) => s.loadPushConfig);
+  const pushDx = useHamClockStore((s) => s.pushDx);
 
   // Worked-before / new-grid sets for decode-table highlighting, memoized from
   // the logbook. NOTE: useLoggerStore.loadEntries caps at 100 entries (#1015).
@@ -153,11 +162,13 @@ export function Ft8PopBody() {
     }
   };
 
-  // Hydrate the logbook + operator identity once when the pop-out opens.
+  // Hydrate the logbook + operator identity + HamClock push config once when the
+  // pop-out opens.
   useEffect(() => {
     void useLoggerStore.getState().loadEntries();
     void hydrateOperator();
-  }, [hydrateOperator]);
+    void loadPushConfig();
+  }, [hydrateOperator, loadPushConfig]);
 
   // REUSE WIRING: when the live QSO partner changes (we answered a station, or a
   // station answered our CQ), populate the operator's existing QRZ panel.
@@ -170,6 +181,27 @@ export function Ft8PopBody() {
     }
     if (!dxCall) lastQrzCall.current = null;
   }, [dxCall, runQrzLookup]);
+
+  // HamClock "on-active-QSO" trigger: push the partner's grid to the map once it
+  // is known. Keyed on dxGrid4 (NOT dxCall) because the grid lags the call — we
+  // learn the call when we answer/are answered, the grid arrives a sequence step
+  // later. Fires once per distinct grid; the on-click path is handled separately.
+  const dxGrid4 = tx.qso.dxGrid4;
+  const lastPushGrid = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      pushConfig.enabled &&
+      pushConfig.trigger === 'on-active-QSO' &&
+      dxGrid4 &&
+      dxGrid4 !== lastPushGrid.current
+    ) {
+      lastPushGrid.current = dxGrid4;
+      void pushDx(dxGrid4, tx.qso.dxCall);
+    }
+    if (!dxGrid4) lastPushGrid.current = null;
+    // tx.qso.dxCall is read at fire-time only; excluded from deps on purpose.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dxGrid4, pushConfig.enabled, pushConfig.trigger, pushDx]);
 
   // Band-follow while engaged: if the operator changes the MAIN band (BandButtons
   // retune the VFO out of this digital sub-band), re-QSY to the new band's
@@ -193,8 +225,13 @@ export function Ft8PopBody() {
     const secs = new Date(row.slotStartUnixMs).getUTCSeconds();
     const senderSlot = slotOf(secs, protocol);
     tx.callStation(row.text, senderSlot);
-    const sender = parseFt8Message(row.text).deCall;
-    if (sender) runQrzLookup(sender);
+    const parsed = parseFt8Message(row.text);
+    if (parsed.deCall) runQrzLookup(parsed.deCall);
+    // HamClock "on-click" trigger: push the clicked station's grid to the map.
+    // No grid in this decode (e.g. a bare CQ) → nothing to place; skip silently.
+    if (pushConfig.enabled && pushConfig.trigger === 'on-click' && parsed.grid) {
+      void pushDx(parsed.grid, parsed.deCall);
+    }
   };
 
   const bandsForProtocol = useMemo(
