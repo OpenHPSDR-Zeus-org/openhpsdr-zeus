@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Wire contract for the local IPC channel between the in-process Zeus
+       backend (Zeus.Server.Hosting) and the out-of-process support sidecar
+       (Zeus.SupportAgent). Deliberately tiny and dependency-free so BOTH the
+       backend and a standalone sidecar can reference it without dragging in
+       ASP.NET, LiteDB, or the radio stack. Same-machine, same-user transport
+       only (named pipe / loopback) — this is NOT the server<->web wire format
+       (that is Zeus.Contracts). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

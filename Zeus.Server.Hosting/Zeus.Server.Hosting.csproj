@@ -34,6 +34,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Zeus.Contracts\Zeus.Contracts.csproj" />
+    <ProjectReference Include="..\Zeus.Support.Contracts\Zeus.Support.Contracts.csproj" />
     <ProjectReference Include="..\Zeus.Plugins.Host\Zeus.Plugins.Host.csproj" />
     <ProjectReference Include="..\Zeus.Protocol1\Zeus.Protocol1.csproj" />
     <ProjectReference Include="..\Zeus.Protocol2\Zeus.Protocol2.csproj" />
