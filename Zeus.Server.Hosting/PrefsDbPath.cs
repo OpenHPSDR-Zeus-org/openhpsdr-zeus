@@ -64,6 +64,23 @@ public static class PrefsDbPath
         return Path.Combine(dir, "zeus-logbook.db");
     }
 
+    // Directory for the rolling on-disk runtime log (DiagnosticLogFileSink). Lives
+    // under DataDir/logs so it can be tailed by the out-of-process support sidecar
+    // after a backend crash. Follows the same ZEUS_PREFS_PATH override as the
+    // logbook so dev `/run fresh`, CI, and tests write their logs into the
+    // throwaway data dir instead of the operator's real %LOCALAPPDATA%/Zeus.
+    public static string LogDir()
+    {
+        var env = Environment.GetEnvironmentVariable("ZEUS_PREFS_PATH");
+        var dir = string.IsNullOrEmpty(env)
+            ? DataDir
+            : (Path.GetDirectoryName(Path.GetFullPath(env)) ?? DataDir);
+        return Path.Combine(dir, "logs");
+    }
+
+    // Full path of the active rolling runtime log file.
+    public static string AppLogPath() => Path.Combine(LogDir(), "zeus-app.log");
+
     // Relative path (under DataDir) of the active profile. Reads the pointer
     // file; falls back to the legacy zeus-prefs.db when the pointer is absent,
     // unreadable, or names a file that no longer exists.
