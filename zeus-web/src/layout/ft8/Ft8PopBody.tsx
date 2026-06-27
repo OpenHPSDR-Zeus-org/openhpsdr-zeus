@@ -24,10 +24,11 @@ import { useFt8TxRunner } from '../../dsp/ft8-tx-runner';
 import { qsoStateToLogEntry } from '../../dsp/ft8-qso-log';
 import { parseFt8Message } from '../../dsp/ft8-message';
 import { useLoggerStore } from '../../state/logger-store';
+import { useLayoutStore } from '../../state/layout-store';
 import { useWorkspace } from '../WorkspaceContext';
 import { Ft8DecodeTable } from './Ft8DecodeTable';
 import { Ft8TxControl } from './Ft8TxControl';
-import { Ft8SettingsView } from './Ft8SettingsView';
+import { Ft8MessageEditor } from './Ft8MessageEditor';
 import { Ft8DecodeLegend } from './Ft8DecodeLegend';
 
 /** "Prompt before logging" gate. window.confirm is unavailable in headless/test
@@ -55,8 +56,15 @@ export function Ft8PopBody() {
   // Live keyer status (0x3A) + our own TX echoes for the decode-flow interleave.
   const txEchoes = useFt8TxStore((s) => s.txEcho);
 
-  // DECODE (the live operating view) vs SETTINGS (behind the gear).
-  const [view, setView] = useState<'decode' | 'settings'>('decode');
+  // DECODE (the live operating view) vs MACROS (the compact message editor behind
+  // the ✎ button). Full settings live in the main menu's Zeus Digital section.
+  const [view, setView] = useState<'decode' | 'macros'>('decode');
+
+  // The gear / SET-CALL / empty-call paths open the main Settings menu's Zeus
+  // Digital section (operator identity + per-mode config). Message editing stays
+  // in this pop-out via the MACROS view.
+  const setSettingsView = useLayoutStore((s) => s.setSettingsView);
+  const openDigitalSettings = () => setSettingsView(true, 'zeus-digital');
 
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   // Operator identity is server-authoritative — TX/gate on the RESOLVED value
@@ -65,10 +73,10 @@ export function Ft8PopBody() {
   const myGrid = useOperatorStore((s) => s.resolvedGrid);
   const hydrateOperator = useOperatorStore((s) => s.hydrate);
 
-  // Persisted FT8 prefs — seed the TX controller defaults + drive the decode
-  // filters and the auto-log gate.
-  const settings = useFt8SettingsStore((s) => s.settings);
-  const settingsHydrated = useFt8SettingsStore((s) => s.hydrated);
+  // Persisted PER-MODE prefs (keyed by the active protocol) — seed the TX
+  // controller defaults + drive the decode filters and the auto-log gate.
+  const settings = useFt8SettingsStore((s) => s.byMode[protocol]);
+  const settingsHydrated = useFt8SettingsStore((s) => s.hydrated[protocol]);
 
   const addLogEntry = useLoggerStore((s) => s.addLogEntry);
   const entries = useLoggerStore((s) => s.entries);
@@ -114,7 +122,7 @@ export function Ft8PopBody() {
       txAck: settings.rr73InsteadOfRrr ? 'RR73' : 'RRR',
     },
     onLogQso: (state) => {
-      const s = useFt8SettingsStore.getState().settings;
+      const s = useFt8SettingsStore.getState().byMode[useFt8Store.getState().protocol];
       if (!s.autoLog) return;
       if (s.promptBeforeLog && !confirmLog(state.dxCall)) return;
       const dialHz = useConnectionStore.getState().vfoHz ?? 0;
@@ -179,7 +187,7 @@ export function Ft8PopBody() {
   // can't generate Tx messages, so jump to Settings to set the call.
   const onRowClick = (row: Ft8Row) => {
     if (!myCall) {
-      setView('settings');
+      openDigitalSettings();
       return;
     }
     const secs = new Date(row.slotStartUnixMs).getUTCSeconds();
@@ -194,7 +202,7 @@ export function Ft8PopBody() {
     [protocol],
   );
 
-  if (view === 'settings') {
+  if (view === 'macros') {
     return (
       <div className="dw-body dw-body--settings">
         <div className="dw-subhead">
@@ -206,10 +214,10 @@ export function Ft8PopBody() {
           >
             ← DECODE
           </button>
-          <span className="dw-subhead__title">{protocol} SETTINGS</span>
+          <span className="dw-subhead__title">{protocol} MESSAGES</span>
         </div>
         <div className="dw-settings-scroll">
-          <Ft8SettingsView />
+          <Ft8MessageEditor mode={protocol} />
         </div>
       </div>
     );
@@ -236,17 +244,26 @@ export function Ft8PopBody() {
         <button
           type="button"
           className={`ft8-ws-call${myCall ? '' : ' is-empty'}`}
-          onClick={() => setView('settings')}
-          title="Edit your callsign / grid in Settings"
+          onClick={openDigitalSettings}
+          title="Edit your callsign / grid in Settings → Zeus Digital"
         >
           {myCall ? `${myCall}${myGrid ? ` · ${myGrid}` : ''}` : 'SET CALL'}
         </button>
         <button
           type="button"
           className="dw-gear"
-          onClick={() => setView('settings')}
-          title="FT8 settings (decode depth, macros, logging)"
-          aria-label="FT8 settings"
+          onClick={() => setView('macros')}
+          title="Edit CQ / free-text macros"
+          aria-label="Edit messages"
+        >
+          ✎
+        </button>
+        <button
+          type="button"
+          className="dw-gear"
+          onClick={openDigitalSettings}
+          title="Zeus Digital settings (decode depth, waterfall, logging)"
+          aria-label="Zeus Digital settings"
         >
           ⚙
         </button>
@@ -257,7 +274,7 @@ export function Ft8PopBody() {
         <div className="dw-banner" role="alert">
           <strong>Set your callsign to transmit.</strong> TX, macros and click-to-call stay
           disabled until your station call is set.
-          <button type="button" className="dw-banner__cta" onClick={() => setView('settings')}>
+          <button type="button" className="dw-banner__cta" onClick={openDigitalSettings}>
             Settings →
           </button>
         </div>
