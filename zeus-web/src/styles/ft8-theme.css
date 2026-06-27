@@ -1,16 +1,22 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  *
- * FT8 workspace dark-HUD theme — KB2UKA-approved (Option A) token LAYER scoped
- * to .ft8-workspace, extending the global tokens in tokens.css. Defined as its
- * own variable set so the look can later be promoted app-wide by re-pointing
- * root tokens, without rewriting components (see docs/designs/ft8-ui.md).
+ * FT8/FT4/WSPR pop-out dark-HUD theme — KB2UKA-approved (Option A) token LAYER
+ * scoped to .digital-window, extending the global tokens in tokens.css. Defined
+ * as its own variable set so the look can later be promoted app-wide by
+ * re-pointing root tokens, without rewriting components (see docs/designs/ft8-ui.md).
  *
- * Components consume ONLY these --hud-* variables, never raw hex. The amber
- * panadapter trace (#FFA028) stays signal-visualisation-only and is not
- * repurposed here.
+ * The FT8/FT4/WSPR UI is now a floating DigitalWindow pop-out (FreeDV-style),
+ * NOT a full-screen workspace — the operator keeps their normal Zeus console
+ * underneath. This stylesheet carries only the pop-out chrome (.dw-*) plus the
+ * RE-HOUSED component styles (decode table, TX control cluster, settings, band
+ * row, colour legend).
+ *
+ * Components consume ONLY these --hud-* variables (and global tokens), never raw
+ * hex. The amber panadapter trace (#FFA028) stays signal-visualisation-only and
+ * is not repurposed here.
  */
 
-.ft8-workspace {
+.digital-window {
   /* Surfaces — near-black navy with a faint cyan cast. */
   --hud-bg:        #05080d;
   --hud-panel:     #0a0f17;
@@ -37,10 +43,183 @@
   --hud-new:       #38d6f0;  /* new DXCC/grid — cyan */
 
   color: var(--hud-text);
-  background: var(--hud-bg);
 }
 
-/* Decode table */
+/* ---- Pop-out chrome (DigitalWindow) ---- */
+.dw-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 12px;
+  background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
+  border-bottom: 1px solid var(--hud-cyan-line);
+  cursor: grab;
+  user-select: none;
+  flex: 0 0 auto;
+}
+.dw-header__title {
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--hud-cyan);
+  text-shadow: 0 0 8px var(--hud-cyan-soft);
+  font-size: 13px;
+}
+.dw-header__close {
+  margin-left: auto;
+  padding: 2px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--hud-cyan-line);
+  background: var(--hud-panel-2);
+  color: var(--hud-text);
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+}
+.dw-header__close:hover { background: var(--hud-cyan-soft); }
+
+.dw-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--hud-bg);
+  overflow: hidden;
+}
+
+.dw-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  font-family: var(--font-narrow, 'Archivo Narrow', sans-serif);
+}
+.dw-body--settings { overflow: hidden; }
+.dw-settings-scroll { flex: 1; min-height: 0; overflow: auto; }
+
+.dw-subhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.dw-subhead__title {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--hud-text-dim);
+}
+.dw-gear {
+  margin-left: auto;
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-cyan-line);
+  color: var(--hud-cyan);
+  border-radius: 3px;
+  padding: 2px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.2;
+}
+.dw-gear:hover { background: var(--hud-cyan-soft); }
+
+.dw-bands { padding: 0; }
+
+.dw-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--hud-cyan-soft);
+  border: 1px solid var(--hud-me);
+  border-radius: 4px;
+  color: var(--hud-text);
+  font-size: 11px;
+}
+.dw-banner strong { color: var(--hud-me); }
+.dw-banner__cta {
+  margin-left: auto;
+  background: var(--hud-me);
+  border: 1px solid var(--hud-me);
+  color: var(--hud-ink);
+  border-radius: 3px;
+  padding: 3px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.dw-banner__cta:hover { filter: brightness(1.1); }
+
+.dw-section {
+  background: var(--hud-panel);
+  border: 1px solid var(--hud-line);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 0 0 auto;
+}
+.dw-section--grow { flex: 1 1 auto; }
+.dw-section__body { padding: 8px; overflow: auto; min-height: 0; }
+.dw-section--grow .dw-section__body { flex: 1; }
+.dw-section__body--flush { padding: 0; }
+
+.dw-logbtn { margin-left: auto; }
+
+/* ---- Decode colour legend (key) ---- */
+.dw-legend {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 2px 2px 0;
+  font-size: 10px;
+  color: var(--hud-text-dim);
+  letter-spacing: 0.04em;
+}
+.dw-legend__item { display: inline-flex; align-items: center; gap: 5px; }
+.dw-legend__sw {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  border: 1px solid var(--hud-line);
+}
+.dw-legend__sw--cq     { background: var(--hud-cq); }
+.dw-legend__sw--me     { background: var(--hud-me); }
+.dw-legend__sw--new    { background: var(--hud-new); }
+.dw-legend__sw--worked { background: var(--hud-worked); }
+.dw-legend__sw--tx     { background: var(--tx); }
+
+/* Panel framing (reused by Ft8SettingsView's .ft8-set-section blocks). */
+.ft8-region {
+  background: var(--hud-panel);
+  border: 1px solid var(--hud-line);
+  border-radius: 4px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Section head label (reused by the pop-out sections). */
+.ft8-region__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--hud-text-dim);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--hud-line);
+  flex: 0 0 auto;
+}
+
+/* ---- Decode table ---- */
 .ft8-decode-table {
   font-family: var(--font-mono, 'Archivo Narrow', monospace);
   font-size: 12px;
@@ -72,106 +251,33 @@
 .ft8-row--worked { color: var(--hud-worked); }
 .ft8-row--new    { color: var(--hud-new); }
 
+/* Our own transmissions, echoed into the decode flow (WSJT-X yellow Tx line).
+   Reads unmistakably as YOUR TX, not a received decode: --tx accent + badge. */
+.ft8-row--tx {
+  color: var(--tx);
+  background: color-mix(in srgb, var(--tx) 12%, transparent);
+}
+.ft8-row--tx td.num { color: var(--tx); }
+.ft8-row__tx-badge {
+  display: inline-block;
+  padding: 0 5px;
+  margin-right: 4px;
+  border-radius: 2px;
+  background: var(--tx);
+  color: #1a0604;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  vertical-align: middle;
+}
+
 .ft8-decode-empty {
   padding: 16px;
   text-align: center;
   color: var(--hud-text-dim);
 }
 
-/* ---- Workspace shell (fixed full-screen overlay, no moveable panels) ---- */
-.ft8-workspace {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: grid;
-  grid-template-rows: 44px 1fr 26px;
-  grid-template-columns: 1fr;
-  font-family: var(--font-narrow, 'Archivo Narrow', sans-serif);
-  overflow: hidden;
-}
-.ft8-ws-header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  /* Right padding reserves space for the absolutely-positioned Exit button so
-     header content never slides under it. The header row is a fixed 44px grid
-     row with overflow:hidden, so it must NOT wrap. */
-  padding: 0 104px 0 14px;
-  background: var(--hud-panel-2);
-  border-bottom: 1px solid var(--hud-cyan-line);
-  overflow: hidden;
-}
-.ft8-ws-title {
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  color: var(--hud-cyan);
-  text-shadow: 0 0 8px var(--hud-cyan-soft);
-}
-.ft8-ws-clock { font-variant-numeric: tabular-nums; color: var(--hud-text-dim); }
-.ft8-ws-close {
-  background: transparent;
-  border: 1px solid var(--hud-cyan-line);
-  color: var(--hud-text);
-  border-radius: 3px;
-  padding: 2px 10px;
-  cursor: pointer;
-}
-.ft8-ws-close:hover { background: var(--hud-cyan-soft); }
-
-.ft8-ws-body {
-  display: grid;
-  grid-template-columns: 280px 1fr 320px;
-  gap: 8px;
-  padding: 8px;
-  min-height: 0;
-}
-.ft8-ws-col { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-.ft8-ws-col--center { overflow: hidden; }
-
-.ft8-region {
-  background: var(--hud-panel);
-  border: 1px solid var(--hud-line);
-  border-radius: 4px;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-.ft8-region__head {
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--hud-text-dim);
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--hud-line);
-}
-.ft8-region__body { padding: 8px; overflow: auto; min-height: 0; }
-.ft8-region--grow { flex: 1; }
-.ft8-region--decodes .ft8-region__body { padding: 0; }
-
-.ft8-vfo { font-variant-numeric: tabular-nums; font-size: 26px; color: var(--hud-cyan); padding: 6px 8px; }
-.ft8-vfo small { font-size: 11px; color: var(--hud-text-dim); }
-
-.ft8-placeholder {
-  color: var(--hud-text-dim);
-  font-size: 11px;
-  font-style: italic;
-  padding: 10px;
-}
-
-.ft8-ws-status {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  padding: 0 12px;
-  font-size: 11px;
-  color: var(--hud-text-dim);
-  background: var(--hud-panel-2);
-  border-top: 1px solid var(--hud-line);
-}
-.ft8-ws-status .ok { color: var(--hud-cq); }
-.ft8-ws-status .warn { color: var(--hud-me); }
-
-/* Header: protocol tabs + operator identity. */
+/* ---- Header tabs + identity (reused in the pop-out sub-header) ---- */
 .ft8-ws-tabs { display: flex; gap: 2px; }
 .ft8-ws-tab {
   background: transparent;
@@ -184,6 +290,7 @@
   letter-spacing: 0.06em;
 }
 .ft8-ws-tab.is-active { background: var(--hud-cyan); color: var(--hud-ink); font-weight: 700; }
+
 .ft8-ws-id { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--hud-text-dim); }
 .ft8-ws-id input {
   background: var(--hud-panel);
@@ -194,26 +301,8 @@
   font: inherit;
   text-transform: uppercase;
 }
-/* Visible, filled Exit button — pinned to the workspace's top-right corner
-   (absolute, out of the fixed-height header flow) so header crowding can never
-   clip it. The workspace is position:fixed, so this anchors to its corner. */
-.ft8-ws-close {
-  position: absolute;
-  top: 7px;
-  right: 12px;
-  z-index: 60;
-  background: var(--hud-me);
-  border: 1px solid var(--hud-me);
-  color: #1a0604;
-  border-radius: 3px;
-  padding: 4px 16px;
-  cursor: pointer;
-  font: inherit;
-  font-weight: 700;
-}
-.ft8-ws-close:hover { filter: brightness(1.12); }
 
-/* Read-only identity chip in the header (editing lives on the Settings page). */
+/* Read-only identity chip (editing lives on the Settings page). */
 .ft8-ws-call {
   background: var(--hud-panel);
   border: 1px solid var(--hud-cyan-line);
@@ -227,41 +316,42 @@
   white-space: nowrap;
 }
 .ft8-ws-call:hover { background: var(--hud-cyan-soft); }
-.ft8-ws-call.is-empty {
-  color: var(--hud-me);
-  border-color: var(--hud-me);
-}
+.ft8-ws-call.is-empty { color: var(--hud-me); border-color: var(--hud-me); }
 
-/* Empty-call prompt banner — spans all body columns. */
-.ft8-ws-banner {
-  grid-column: 1 / -1;
+/* TX control cluster: live keyer message line (--tx accent). */
+.ft8-tx__live {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 8px 12px;
-  background: var(--hud-cyan-soft);
-  border: 1px solid var(--hud-me);
-  border-radius: 4px;
-  color: var(--hud-text);
-  font-size: 12px;
-}
-.ft8-ws-banner__text strong { color: var(--hud-me); }
-.ft8-ws-banner__cta {
-  margin-left: auto;
-  background: var(--hud-me);
-  border: 1px solid var(--hud-me);
-  color: var(--hud-ink);
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--tx);
   border-radius: 3px;
-  padding: 4px 14px;
-  cursor: pointer;
-  font: inherit;
-  font-weight: 700;
-  white-space: nowrap;
+  background: color-mix(in srgb, var(--tx) 12%, transparent);
 }
-.ft8-ws-banner__cta:hover { filter: brightness(1.1); }
+.ft8-tx__live.is-tx { animation: ft8-tx-pulse 1.2s ease-in-out infinite; }
+@keyframes ft8-tx-pulse {
+  0%, 100% { background: color-mix(in srgb, var(--tx) 12%, transparent); }
+  50%      { background: color-mix(in srgb, var(--tx) 26%, transparent); }
+}
+.ft8-tx__live-tag {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: var(--tx);
+  color: #1a0604;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.ft8-tx__live-msg {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--tx);
+  font-size: 13px;
+}
+.ft8-tx__live-slot { margin-left: auto; font-size: 10px; color: var(--hud-text-dim); }
 
 /* ---- Settings view ---- */
-.ft8-ws-body--settings { display: block; overflow: auto; padding: 8px; }
 .ft8-settings {
   display: flex;
   flex-direction: column;
@@ -398,8 +488,8 @@
 }
 .ft8-set-link:hover { background: var(--hud-cyan-soft); }
 
-/* Band selector. */
-.ft8-band-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 6px 8px 8px; }
+/* ---- Band selector ---- */
+.ft8-band-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
 .ft8-band-btn {
   background: var(--hud-panel-2);
   border: 1px solid var(--hud-line);
@@ -512,88 +602,10 @@
   color: var(--tx);
   font-weight: 700;
 }
-
-/* ---- Receive · waterfall ---- */
-.ft8-receive { overflow: hidden; }
-/* The spectrum stack: short panadapter strip over the growing waterfall, with
-   the click-capture overlay laid on top (position:relative is its containing
-   block). */
-.ft8-receive__stack {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--hud-inset);
-}
-.ft8-receive__pan { flex: 0 0 34%; min-height: 0; position: relative; }
-.ft8-receive__wf { flex: 1; min-height: 0; position: relative; }
-
-/* Transparent capture layer — sits above the canvases so a click resolves to an
-   FT8 audio offset instead of moving the dial. */
-.ft8-wf-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 30;
-  cursor: crosshair;
-}
-/* Markers span the full height; left is set inline as a percent. */
-.ft8-wf-decode-tick,
-.ft8-wf-rx-cursor,
-.ft8-wf-tx-marker {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  pointer-events: none;
-  transform: translateX(-50%);
-}
-.ft8-wf-decode-tick { width: 2px; opacity: 0.75; }
-.ft8-wf-rx-cursor {
-  width: 2px;
-  background: var(--hud-cyan);
-  box-shadow: 0 0 6px var(--hud-cyan-soft);
-}
-.ft8-wf-tx-marker {
-  width: 2px;
-  background: var(--tx);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--tx) 40%, transparent);
-}
-
-/* WF SPEED / ZOOM / OFFSET control strip. */
-.ft8-wf-controls {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding: 5px 8px;
-  border-top: 1px solid var(--hud-line);
-  background: var(--hud-panel-2);
-}
-.ft8-wf-offset { display: inline-flex; align-items: center; gap: 4px; }
-.ft8-wf-offset__label {
-  font-size: 9px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--hud-text-dim);
-  font-weight: 600;
-}
-.ft8-wf-offset__btn {
-  background: var(--hud-panel);
-  border: 1px solid var(--hud-line);
-  color: var(--hud-text);
-  border-radius: 3px;
-  padding: 2px 6px;
-  cursor: pointer;
-  font: inherit;
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-}
-.ft8-wf-offset__btn:hover:not(:disabled) { border-color: var(--hud-cyan-line); }
-.ft8-wf-offset__btn:disabled { opacity: 0.5; cursor: default; }
+.ft8-tx__halt:hover { background: var(--tx); color: #1a0604; }
 
 /* ---- TX power (TX CONTROL cluster) ---- */
-.ft8-power { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 8px; }
+.ft8-power { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 2px; }
 .ft8-power__row { display: flex; align-items: center; gap: 8px; }
 .ft8-power__label {
   font-size: 9px;
@@ -604,25 +616,10 @@
   width: 64px;
   flex: 0 0 auto;
 }
-/* The reused DriveSlider/TunePowerSlider fill the remaining row width. The
-   .ft8-power block now lives inside the TX CONTROL cluster (Ft8TxControl); TUNE
-   is the cluster's own .ft8-tx__tune button, so there is no .ft8-power__tune. */
+/* The reused DriveSlider/TunePowerSlider fill the remaining row width. */
 .ft8-power__row .knob-group { flex: 1; min-width: 0; }
-.ft8-tx__halt:hover { background: var(--tx); color: #1a0604; }
 
-/* ---- Activity log (center column) ---- */
-.ft8-region--log { flex: 0 0 auto; max-height: 42%; }
-.ft8-region--log .ft8-region__body { padding: 0; display: flex; flex-direction: column; min-height: 0; }
-.ft8-log { display: flex; flex-direction: column; min-height: 0; flex: 1; }
-.ft8-log__bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
-  border-bottom: 1px solid var(--hud-line);
-  background: var(--hud-panel-2);
-}
-.ft8-log__count { font-size: 10px; color: var(--hud-text-dim); font-variant-numeric: tabular-nums; }
+/* ---- Manual LOG-QSO button (reused from the old activity log) ---- */
 .ft8-log__btn {
   background: var(--hud-panel);
   border: 1px solid var(--hud-line);
@@ -636,63 +633,3 @@
 }
 .ft8-log__btn:not(:disabled):hover { border-color: var(--hud-cyan-line); }
 .ft8-log__btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.ft8-log__empty { padding: 14px; text-align: center; color: var(--hud-text-dim); font-size: 11px; font-style: italic; }
-.ft8-log__scroll { overflow: auto; min-height: 0; flex: 1; }
-
-.ft8-log-table {
-  font-family: var(--font-mono, 'Archivo Narrow', monospace);
-  font-size: 11px;
-  width: 100%;
-  border-collapse: collapse;
-}
-.ft8-log-table th {
-  position: sticky;
-  top: 0;
-  text-align: left;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--hud-text-dim);
-  background: var(--hud-panel-2);
-  padding: 3px 8px;
-  border-bottom: 1px solid var(--hud-cyan-line);
-}
-.ft8-log-table td {
-  padding: 2px 8px;
-  border-bottom: 1px solid var(--hud-line);
-  white-space: nowrap;
-}
-.ft8-log-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
-.ft8-log-table td.call { color: var(--hud-cyan); font-weight: 600; }
-.ft8-log-table td.qsl { color: var(--hud-cq); text-align: center; }
-
-/* ---- Stats (right column) ---- */
-.ft8-stats { display: flex; flex-direction: column; gap: 8px; }
-.ft8-stats__grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
-.ft8-stat {
-  background: var(--hud-panel-2);
-  border: 1px solid var(--hud-line);
-  border-radius: 4px;
-  padding: 6px 8px;
-}
-.ft8-stat__value { font-size: 20px; font-variant-numeric: tabular-nums; color: var(--hud-cyan); line-height: 1.1; }
-.ft8-stat__label {
-  font-size: 9px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--hud-text-dim);
-  margin-top: 2px;
-}
-.ft8-stats__bestdx {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 8px;
-  background: var(--hud-panel-2);
-  border: 1px solid var(--hud-line);
-  border-radius: 4px;
-}
-.ft8-stats__bestdx-label { font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--hud-text-dim); }
-.ft8-stats__bestdx-value { font-size: 13px; color: var(--hud-cyan); font-variant-numeric: tabular-nums; }
-.ft8-stats__note { font-size: 9px; line-height: 1.4; color: var(--hud-text-dim); font-style: italic; }

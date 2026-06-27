@@ -82,4 +82,42 @@ describe('Ft8DecodeTable filters', () => {
     expect(container.textContent).toContain('No decodes match');
     unmount();
   });
+
+  it('interleaves our own TX echoes as distinct, non-clickable rows', () => {
+    const txEchoes = [
+      {
+        id: 'tx:1',
+        timeUtcMs: 10, // newer than the received rows (slotStartUnixMs 0)
+        message: 'CQ MYCALL FN30',
+        mode: 'FT8',
+        slot: 'even',
+        audioHz: 1200,
+      },
+    ];
+    const { container, unmount } = render(
+      createElement(Ft8DecodeTable, { myCall: 'MYCALL', txEchoes }),
+    );
+    // 4 received rows + 1 TX echo row.
+    expect(bodyRowCount(container)).toBe(5);
+    const txRow = container.querySelector('tbody tr.ft8-row--tx');
+    expect(txRow).not.toBeNull();
+    expect(txRow?.textContent).toContain('CQ MYCALL FN30');
+    expect(txRow?.querySelector('.ft8-row__tx-badge')?.textContent).toBe('TX');
+    // Newest-first: the TX echo (t=10) sorts above the received rows (t=0).
+    expect(container.querySelector('tbody tr')?.classList.contains('ft8-row--tx')).toBe(true);
+    unmount();
+  });
+
+  it('renders TX echoes even when no decodes have arrived', () => {
+    act(() => {
+      useFt8Store.setState({ rows: [] });
+    });
+    const txEchoes = [
+      { id: 'tx:1', timeUtcMs: 5, message: 'CQ MYCALL FN30', mode: 'FT8', slot: 'odd', audioHz: 800 },
+    ];
+    const { container, unmount } = render(createElement(Ft8DecodeTable, { txEchoes }));
+    expect(bodyRowCount(container)).toBe(1);
+    expect(container.textContent).not.toContain('Waiting for decodes');
+    unmount();
+  });
 });

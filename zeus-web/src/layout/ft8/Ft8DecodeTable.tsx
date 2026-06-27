@@ -6,6 +6,7 @@
 // move the audio cursor.
 
 import { useFt8Store, type Ft8Row } from '../../state/ft8-store';
+import type { Ft8TxEcho } from '../../state/ft8-tx-store';
 import { parseFt8Message } from '../../dsp/ft8-message';
 
 export type Ft8RowClass = 'cq' | 'me' | 'worked' | 'new' | 'normal';
@@ -65,7 +66,15 @@ export interface Ft8DecodeTableProps {
    *  rows whose sender is already in the logbook. */
   showOnlyCq?: boolean;
   hideWorkedBefore?: boolean;
+  /** Our own transmissions, echoed into the decode flow (WSJT-X yellow Tx line).
+   *  Rendered as distinct, non-clickable TX rows interleaved by timestamp. */
+  txEchoes?: readonly Ft8TxEcho[];
 }
+
+/** A unified, time-sorted render item: a received decode or one of our TX echoes. */
+type FlowItem =
+  | { kind: 'rx'; t: number; row: Ft8Row; cls: Ft8RowClass }
+  | { kind: 'tx'; t: number; echo: Ft8TxEcho };
 
 export function Ft8DecodeTable({
   myCall,
@@ -74,6 +83,7 @@ export function Ft8DecodeTable({
   onRowClick,
   showOnlyCq,
   hideWorkedBefore,
+  txEchoes,
 }: Ft8DecodeTableProps) {
   const allRows = useFt8Store((s) => s.rows);
 
@@ -87,7 +97,19 @@ export function Ft8DecodeTable({
         })
       : allRows;
 
-  if (rows.length === 0) {
+  // Merge received rows + our TX echoes into one newest-first flow. TX rows are
+  // never filtered out — the operator always sees what they sent.
+  const items: FlowItem[] = [
+    ...rows.map<FlowItem>((r) => ({
+      kind: 'rx',
+      t: r.slotStartUnixMs,
+      row: r,
+      cls: classifyDecode(r, myCall, workedCalls, workedGrids),
+    })),
+    ...(txEchoes ?? []).map<FlowItem>((e) => ({ kind: 'tx', t: e.timeUtcMs, echo: e })),
+  ].sort((a, b) => b.t - a.t);
+
+  if (items.length === 0) {
     return (
       <div className="ft8-decode-empty">
         {allRows.length === 0 ? 'Waiting for decodes…' : 'No decodes match the active filter'}
@@ -107,12 +129,26 @@ export function Ft8DecodeTable({
         </tr>
       </thead>
       <tbody>
-        {rows.map((r) => {
-          const cls = classifyDecode(r, myCall, workedCalls, workedGrids);
+        {items.map((item) => {
+          if (item.kind === 'tx') {
+            const e = item.echo;
+            return (
+              <tr key={e.id} className="ft8-row--tx" title="Your transmission">
+                <td>{fmtUtc(e.timeUtcMs)}</td>
+                <td className="num">Tx</td>
+                <td className="num">—</td>
+                <td className="num">{e.audioHz.toFixed(0)}</td>
+                <td>
+                  <span className="ft8-row__tx-badge">TX</span> {e.message}
+                </td>
+              </tr>
+            );
+          }
+          const r = item.row;
           return (
             <tr
               key={r.id}
-              className={CLASS_CSS[cls]}
+              className={CLASS_CSS[item.cls]}
               onClick={onRowClick ? () => onRowClick(r) : undefined}
               style={onRowClick ? { cursor: 'pointer' } : undefined}
             >

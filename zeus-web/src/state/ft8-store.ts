@@ -10,11 +10,9 @@
 
 import { create } from 'zustand';
 import { nearestDigitalBand } from '../dsp/digital-segments';
-import { FT8_MAX_OFFSET_HZ, FT8_MIN_OFFSET_HZ } from '../dsp/ft8-passband';
 import {
   configureRadioForDigital,
-  qsyToDigitalBand,
-  restoreRadio,
+  restoreRadioWhenIdle,
   snapshotRadio,
   type RadioModeSnapshot,
 } from './digital-mode';
@@ -65,17 +63,20 @@ interface Ft8State {
   band: string;
   /** RX config captured at entry so exit restores the radio. */
   priorRadio: RadioModeSnapshot | null;
-  /** RX focus cursor — the audio offset (Hz) the waterfall click last set. FT8
-   *  decodes the whole passband, so this is purely a UI cursor: where a reply
-   *  defaults and which decode the operator is eyeing. Shared by the waterfall
-   *  RX-cursor marker (and, later, decode-row highlighting). */
-  rxFocusHz: number;
 
   /** Open the FT8 workspace: configure the radio (DIGU + wide filter + QSY to
-   *  the band dial) and start decoding. */
-  openWorkspace: (opts?: { receiver?: number; protocol?: Ft8ProtocolName }) => void;
-  /** Close the workspace, stop decoding, and restore the prior radio config. */
-  closeWorkspace: () => void;
+   *  the band dial) and start decoding. `prior` carries a pre-digital snapshot
+   *  from another digital mode being switched away from, so exit restores the
+   *  operator's TRUE pre-digital config rather than the other mode's DIGU dial. */
+  openWorkspace: (opts?: {
+    receiver?: number;
+    protocol?: Ft8ProtocolName;
+    prior?: RadioModeSnapshot;
+  }) => void;
+  /** Close the workspace, stop decoding, and restore the prior radio config.
+   *  `restore: false` skips the radio restore (used when switching directly to
+   *  another digital mode, which reconfigures the radio itself). */
+  closeWorkspace: (opts?: { restore?: boolean }) => void;
   /** Switch FT8↔FT4 in-place (re-QSY + re-enable) without leaving the workspace. */
   switchProtocol: (protocol: Ft8ProtocolName) => void;
   /** QSY to a band's dial for the active protocol (workspace band buttons). */
@@ -90,8 +91,6 @@ interface Ft8State {
   disable: () => Promise<void>;
   /** Clear the decode table. */
   clear: () => void;
-  /** Move the RX focus cursor to an audio offset (clamped to the passband). */
-  setRxFocusHz: (hz: number) => void;
   /** Set the decode depth (passes 1..4). Applies live: if the decoder is
    *  currently enabled it re-enables on the same receiver/protocol to push the
    *  new pass count to the backend; otherwise it just updates the value used by
@@ -110,27 +109,32 @@ export const useFt8Store = create<Ft8State>((set, get) => ({
   error: null,
   band: '20m',
   priorRadio: null,
-  rxFocusHz: 1500,
 
   openWorkspace: (opts) => {
     const protocol = opts?.protocol ?? get().protocol;
     // Snapshot the radio once per entry so re-entry (protocol switch without
-    // closing) doesn't overwrite the original config with the DIGU state.
-    const prior = get().priorRadio ?? snapshotRadio();
+    // closing) doesn't overwrite the original config with the DIGU state. A
+    // `prior` passed in from a mode switch is the operator's TRUE pre-digital
+    // config and takes precedence over re-snapshotting the (already-DIGU) radio.
+    const prior = opts?.prior ?? get().priorRadio ?? snapshotRadio();
     const band = nearestDigitalBand(useConnectionStore.getState().vfoHz).name;
     set({ open: true, protocol, band, priorRadio: prior });
     void (async () => {
       await configureRadioForDigital(protocol, band);
-      await get().enable({ ...opts, protocol });
+      await get().enable({ receiver: opts?.receiver, protocol });
     })();
   },
 
-  closeWorkspace: () => {
+  closeWorkspace: (opts) => {
+    const restore = opts?.restore !== false;
     const prior = get().priorRadio;
     set({ open: false, priorRadio: null });
     void (async () => {
       await get().disable();
-      await restoreRadio(prior);
+      // Defer the restore until the radio is idle so disengaging mid-TX doesn't
+      // strand it in DIGU. Skipped entirely when switching to another digital
+      // mode (that mode reconfigures the radio itself).
+      if (restore) restoreRadioWhenIdle(prior);
     })();
   },
 
@@ -146,7 +150,10 @@ export const useFt8Store = create<Ft8State>((set, get) => ({
 
   qsyBand: (bandName) => {
     set({ band: bandName });
-    void qsyToDigitalBand(get().protocol, bandName);
+    // Reuse the full digital-config path (DIGU + flat filter + QSY + framing),
+    // not a VFO-only move: a cross-band QSY trips the server's per-band mode
+    // recall, so we must re-assert DIGU/filter AFTER the QSY or decode breaks.
+    void configureRadioForDigital(get().protocol, bandName);
   },
 
   ingest: (batch) =>
@@ -219,9 +226,6 @@ export const useFt8Store = create<Ft8State>((set, get) => ({
   },
 
   clear: () => set({ rows: [] }),
-
-  setRxFocusHz: (hz) =>
-    set({ rxFocusHz: Math.min(FT8_MAX_OFFSET_HZ, Math.max(FT8_MIN_OFFSET_HZ, hz)) }),
 
   setPasses: (passes) => {
     const p = Math.min(4, Math.max(1, Math.round(passes)));

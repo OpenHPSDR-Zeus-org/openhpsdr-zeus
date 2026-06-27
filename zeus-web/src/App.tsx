@@ -47,10 +47,8 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import { ChevronLeft, ChevronRight, Download, Upload } from 'lucide-react';
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
-import { Ft8WorkspaceMount } from './layout/ft8/Ft8Workspace';
-import { WsprWorkspaceMount } from './layout/ft8/WsprWorkspace';
-import { useFt8Store } from './state/ft8-store';
-import { useWsprStore } from './state/wspr-store';
+import { DigitalWindow } from './components/DigitalWindow';
+import { enterDigital, toggleDigital } from './state/enter-digital';
 import { WorkspaceErrorBoundary } from './layout/WorkspaceErrorBoundary';
 import { AppErrorBoundary } from './layout/AppErrorBoundary';
 import {
@@ -177,16 +175,10 @@ export default function App() {
   const preampOn = useConnectionStore((s) => s.preampOn);
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
-  // A digital workspace (FT8/FT4 or WSPR) is a fully-opaque full-screen overlay
-  // that mounts its OWN spectrum surfaces. While it is open, unmount the main
-  // console's FlexWorkspace so its (now-occluded) panadapter/waterfall WebGL
-  // contexts are released instead of drawing behind the overlay and competing
-  // for the browser's limited WebGL-context budget (which can evict and force a
-  // context-loss/restore on the main panadapter). Open/close is an explicit,
-  // infrequent operator action, so the remount cost is irrelevant.
-  const ft8WorkspaceOpen = useFt8Store((s) => s.open);
-  const wsprWorkspaceOpen = useWsprStore((s) => s.open);
-  const digitalWorkspaceOpen = ft8WorkspaceOpen || wsprWorkspaceOpen;
+  // FT8/FT4/WSPR now render as a floating, on-top DigitalWindow pop-out over the
+  // operator's normal console (mounted below, next to FreeDvWindow) — the main
+  // FlexWorkspace stays mounted, so the panadapter/waterfall/VFO/QRZ/logbook
+  // remain live underneath rather than being unmounted by a full-screen overlay.
   const endpoint = useConnectionStore((s) => s.endpoint);
   const connected = status === 'Connected';
   // Brand sub label reflects what discovery actually saw on the wire
@@ -444,8 +436,8 @@ export default function App() {
         // Clear the hash after handling it
         window.history.replaceState(null, '', window.location.pathname + window.location.search);
       } else if (hash === 'ft8' || hash === 'ft4') {
-        // Engage the native FT8/FT4 workspace overlay.
-        useFt8Store.getState().openWorkspace({ protocol: hash === 'ft4' ? 'FT4' : 'FT8' });
+        // Engage the native FT8/FT4 mode (closes any other digital mode first).
+        enterDigital(hash === 'ft4' ? 'FT4' : 'FT8');
         window.history.replaceState(null, '', window.location.pathname + window.location.search);
       }
     };
@@ -718,9 +710,9 @@ export default function App() {
         csInputRef.current?.select();
       } else if (e.altKey && (e.key === '8' || e.code === 'Digit8') && !typing) {
         e.preventDefault();
-        const ft8 = useFt8Store.getState();
-        if (ft8.open) ft8.closeWorkspace();
-        else ft8.openWorkspace({ protocol: 'FT8' });
+        // Toggle FT8 (mutually exclusive with FT4/WSPR; restores the radio on
+        // un-toggle) — same contract as the mode-picker buttons.
+        toggleDigital('FT8');
       }
     };
     window.addEventListener('keydown', h);
@@ -954,6 +946,7 @@ export default function App() {
         </div>
         {disconnectedOverlay}
         <FreeDvWindow />
+        <DigitalWindow />
       </div>
       </SpectrumWheelActionsContext.Provider>
       </WorkspaceContext.Provider>
@@ -994,12 +987,6 @@ export default function App() {
     <DspSceneDiagnosticsPublisher />
     <AudioPlaybackDiagnosticsPublisher />
     <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
-      {/* FT8/FT4 native workspace — a fixed full-screen overlay shown when the
-          operator engages FT8 mode (open it via #ft8). Self-contained: renders
-          null when closed, so this is purely additive to the main console. */}
-      <Ft8WorkspaceMount />
-      <WsprWorkspaceMount />
-
       {/* Left layout bar — issue #241. Spans the full app height; lists named
           layouts for the active radio with switch/add/delete/reset actions. */}
       <LeftLayoutBar />
@@ -1132,7 +1119,7 @@ export default function App() {
               />
             </Suspense>
           </AppErrorBoundary>
-        ) : digitalWorkspaceOpen ? null : (
+        ) : (
           <WorkspaceErrorBoundary
             key={activeLayoutId}
             onReset={resetActiveWorkspaceLayout}
@@ -1155,6 +1142,11 @@ export default function App() {
           unconditionally; renders null when closed, so the store's isOpen flag
           is the single source of truth. */}
       <FreeDvWindow />
+
+      {/* FT8/FT4/WSPR floating pop-out — opens off ft8-store/wspr-store `open`
+          (engaging the mode), always on top, draggable, not resizable. Renders
+          null when no digital mode is engaged. */}
+      <DigitalWindow />
 
       {/* Transport — MOX/TUN + audio + mic + macro buttons on the left,
           PA/PRE chips, then the per-radio status (radio IP, rotator, QRZ)

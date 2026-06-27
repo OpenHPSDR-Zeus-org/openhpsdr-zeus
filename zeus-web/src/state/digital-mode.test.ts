@@ -1,16 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// digital-mode orchestration tests. The shared configureRadioForDigital /
-// qsyToDigitalBand drive BOTH FT8/FT4 and WSPR. FT8 frames the waterfall onto
-// its audio passband (CTUN / LO / zoom); WSPR renders no passband overlay and
-// must NOT inherit that framing. These assert the protocol gate so opening or
-// QSYing the WSPR workspace never silently enables CTUN or zooms the display.
+// digital-mode orchestration tests. The shared configureRadioForDigital drives
+// BOTH FT8/FT4 and WSPR, for entry AND band-change QSY (the stores route band
+// buttons through it). FT8 frames the waterfall onto its audio passband (CTUN /
+// LO / zoom); WSPR renders no passband overlay and must NOT inherit that
+// framing. These assert the protocol gate so opening or QSYing the WSPR
+// workspace never silently enables CTUN or zooms the display. The QSY tests also
+// pin the ordering invariant: setVfo before setMode('DIGU') so the server's
+// cross-band per-band mode recall can't clobber DIGU.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { setCtun, setMode, setRadioLo, setVfo, setZoom } from '../api/client';
 import { useConnectionStore } from './connection-store';
 import { useTxStore } from './tx-store';
-import { configureRadioForDigital, qsyToDigitalBand } from './digital-mode';
+import { configureRadioForDigital } from './digital-mode';
 
 vi.mock('../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/client')>();
@@ -58,17 +61,32 @@ describe('digital-mode framing gate', () => {
   });
 
   it('WSPR QSY does NOT reframe the passband', async () => {
-    await qsyToDigitalBand('WSPR', '40m');
+    await configureRadioForDigital('WSPR', '40m');
     expect(setVfo).toHaveBeenCalled();
+    expect(setMode).toHaveBeenCalledWith('DIGU');
     expect(setCtun).not.toHaveBeenCalled();
     expect(setZoom).not.toHaveBeenCalled();
     expect(setRadioLo).not.toHaveBeenCalled();
   });
 
   it('FT8 QSY reframes the passband', async () => {
-    await qsyToDigitalBand('FT8', '40m');
+    await configureRadioForDigital('FT8', '40m');
     expect(setVfo).toHaveBeenCalled();
     expect(setCtun).toHaveBeenCalled();
     expect(setZoom).toHaveBeenCalled();
+  });
+
+  it('cross-band QSY moves the VFO BEFORE asserting DIGU (recall-proof order)', async () => {
+    const order: string[] = [];
+    (setVfo as unknown as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push('vfo');
+      return {} as never;
+    });
+    (setMode as unknown as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push('mode');
+      return {} as never;
+    });
+    await configureRadioForDigital('FT8', '40m');
+    expect(order).toEqual(['vfo', 'mode']);
   });
 });

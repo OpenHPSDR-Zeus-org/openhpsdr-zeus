@@ -21,12 +21,50 @@ export interface Ft8TxStatus {
   nativeAvailable: boolean;
 }
 
+/** One echoed transmission of OUR own station — derived from a rising
+ *  transmitting edge so the operator sees their outgoing sequence interleaved
+ *  with received decodes (the WSJT-X "yellow Tx line"). Purely a UI record. */
+export interface Ft8TxEcho {
+  id: string;
+  /** Wall-clock ms when the transmission started (for timestamping/sorting). */
+  timeUtcMs: number;
+  message: string;
+  mode: string;
+  slot: string;
+  audioHz: number;
+}
+
+/** Keep the TX echo list bounded — one entry per transmission. */
+const MAX_TX_ECHO = 50;
+
 interface Ft8TxState {
   status: Ft8TxStatus | null;
+  /** Newest-first rolling list of our own transmissions (rising-edge derived). */
+  txEcho: Ft8TxEcho[];
   ingest: (status: Ft8TxStatus) => void;
+  /** Clear the TX echo list (e.g. when leaving the workspace). */
+  clearTxEcho: () => void;
 }
+
+let txEchoSeq = 0;
 
 export const useFt8TxStore = create<Ft8TxState>((set) => ({
   status: null,
-  ingest: (status) => set({ status }),
+  txEcho: [],
+  ingest: (status) =>
+    set((s) => {
+      // Rising transmitting edge with a message → record our own TX line.
+      const startedTx = status.transmitting && !s.status?.transmitting && !!status.message;
+      if (!startedTx) return { status };
+      const echo: Ft8TxEcho = {
+        id: `tx:${Date.now()}:${txEchoSeq++}`,
+        timeUtcMs: Date.now(),
+        message: status.message as string,
+        mode: status.mode,
+        slot: status.slot,
+        audioHz: status.audioHz,
+      };
+      return { status, txEcho: [echo, ...s.txEcho].slice(0, MAX_TX_ECHO) };
+    }),
+  clearTxEcho: () => set({ txEcho: [] }),
 }));
