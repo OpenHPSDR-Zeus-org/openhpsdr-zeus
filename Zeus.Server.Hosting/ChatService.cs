@@ -221,24 +221,30 @@ public sealed class ChatService : BackgroundService
     }
 
     /// <summary>
-    /// Validates an outgoing attachment: image kind, image/* MIME, non-empty
-    /// data URL within <see cref="ChatAttachment.MaxDataUrlLength"/>. Returns the
-    /// attachment unchanged (passthrough) or null when none was supplied. Throws
+    /// Validates an outgoing attachment: image or audio kind with a matching
+    /// MIME family + data-URL scheme, non-empty data URL within
+    /// <see cref="ChatAttachment.MaxDataUrlLength"/>. Returns the attachment
+    /// unchanged (passthrough) or null when none was supplied. Throws
     /// <see cref="ArgumentException"/> (mapped to 400 by the endpoint) on a bad
     /// or oversized attachment so a buggy/hostile client can't push payloads the
-    /// relay would store. The web client downscales to fit before sending; this
-    /// is the backend guardrail, not the primary size control.
+    /// relay would store. The web client downscales photos / records voice at a
+    /// low bitrate to fit before sending; this is the backend guardrail, not the
+    /// primary size control.
     /// </summary>
     private static ChatAttachment? ValidateAttachment(ChatAttachment? attachment)
     {
         if (attachment is null) return null;
-        if (!string.Equals(attachment.Kind, "image", StringComparison.Ordinal))
+        var isImage = string.Equals(attachment.Kind, "image", StringComparison.Ordinal);
+        var isAudio = string.Equals(attachment.Kind, "audio", StringComparison.Ordinal);
+        if (!isImage && !isAudio)
             throw new ArgumentException("unsupported attachment kind", nameof(attachment));
+        var mimePrefix = isAudio ? "audio/" : "image/";
+        var dataPrefix = isAudio ? "data:audio/" : "data:image/";
         if (string.IsNullOrEmpty(attachment.Mime) ||
-            !attachment.Mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("attachment must be an image", nameof(attachment));
+            !attachment.Mime.StartsWith(mimePrefix, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException($"attachment must be {(isAudio ? "audio" : "an image")}", nameof(attachment));
         if (string.IsNullOrEmpty(attachment.DataUrl) ||
-            !attachment.DataUrl.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
+            !attachment.DataUrl.StartsWith(dataPrefix, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("attachment data is empty or malformed", nameof(attachment));
         if (attachment.DataUrl.Length > ChatAttachment.MaxDataUrlLength)
             throw new ArgumentException("attachment is too large", nameof(attachment));
@@ -651,9 +657,11 @@ public sealed class ChatService : BackgroundService
 
     /// <summary>
     /// Parses an optional <c>attachment</c> object out of a relay message frame.
-    /// Returns null when absent, malformed, not an image, or oversized — a bad
-    /// attachment degrades to a plain message rather than dropping it. Internal
-    /// for unit tests.
+    /// Returns null when absent, malformed, an unsupported media type, or
+    /// oversized — a bad attachment degrades to a plain message rather than
+    /// dropping it. Accepts image and audio (voice snippet) kinds, deriving the
+    /// <c>kind</c> from the MIME/scheme family so a mislabelled payload can't slip
+    /// through. Internal for unit tests.
     /// </summary>
     internal static ChatAttachment? ParseAttachment(JsonElement root)
     {
@@ -662,10 +670,14 @@ public sealed class ChatService : BackgroundService
         var dataUrl = ReadString(a, "dataUrl");
         var mime = ReadString(a, "mime");
         if (string.IsNullOrEmpty(dataUrl) || string.IsNullOrEmpty(mime)) return null;
-        if (!dataUrl.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase)) return null;
+        var isImage = mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase) &&
+            dataUrl.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase);
+        var isAudio = mime.StartsWith("audio/", StringComparison.OrdinalIgnoreCase) &&
+            dataUrl.StartsWith("data:audio/", StringComparison.OrdinalIgnoreCase);
+        if (!isImage && !isAudio) return null;
         if (dataUrl.Length > ChatAttachment.MaxDataUrlLength) return null;
         return new ChatAttachment(
-            Kind: ReadString(a, "kind") ?? "image",
+            Kind: isAudio ? "audio" : "image",
             Mime: mime,
             DataUrl: dataUrl,
             Name: ReadString(a, "name"),

@@ -149,12 +149,31 @@ public class ChatServiceTests : IDisposable
     }
 
     [Fact]
+    public void ParseMessage_ReadsAudioAttachment()
+    {
+        using var doc = JsonDocument.Parse(
+            """{"t":"msg","from":"N9WAR","text":"","room":"lobby","attachment":{"kind":"audio","mime":"audio/webm","dataUrl":"data:audio/webm;base64,GkXfAA==","name":"voice-message.webm","size":2048}}""");
+        var msg = ChatService.ParseMessage(doc.RootElement);
+
+        Assert.NotNull(msg.Attachment);
+        Assert.Equal("audio", msg.Attachment!.Kind);
+        Assert.Equal("audio/webm", msg.Attachment.Mime);
+        Assert.StartsWith("data:audio/webm;base64,", msg.Attachment.DataUrl);
+        Assert.Equal("voice-message.webm", msg.Attachment.Name);
+    }
+
+    [Fact]
     public void ParseAttachment_DropsNonImageOrOversize()
     {
-        // Non-image data URL → dropped (message degrades to text-only).
+        // Non-image / non-audio data URL → dropped (message degrades to text-only).
         using var bad = JsonDocument.Parse(
             """{"t":"msg","from":"N9WAR","text":"x","attachment":{"kind":"image","mime":"application/pdf","dataUrl":"data:application/pdf;base64,AAAA"}}""");
         Assert.Null(ChatService.ParseMessage(bad.RootElement).Attachment);
+
+        // Mismatched family (audio MIME but image data scheme) → dropped.
+        using var mismatch = JsonDocument.Parse(
+            """{"t":"msg","from":"N9WAR","text":"x","attachment":{"kind":"audio","mime":"audio/webm","dataUrl":"data:image/png;base64,AAAA"}}""");
+        Assert.Null(ChatService.ParseMessage(mismatch.RootElement).Attachment);
 
         // Oversized data URL → dropped.
         var huge = new string('A', ChatAttachment.MaxDataUrlLength + 1);

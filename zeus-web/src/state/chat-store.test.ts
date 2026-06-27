@@ -117,6 +117,39 @@ describe('chat-store ingest (0x35 live frames)', () => {
     expect(msgs.find((m) => m.id === 'img2')?.attachment).toBeNull();
   });
 
+  it('preserves a valid voice attachment and drops a mismatched one', () => {
+    const ing = useChatStore.getState().ingest;
+    const dataUrl = 'data:audio/webm;base64,GkXfAA==';
+    ing({
+      kind: 'message',
+      message: {
+        id: 'aud1',
+        ts: 300,
+        from: 'N9WAR',
+        text: '',
+        room: PUBLIC_ROOM,
+        attachment: { kind: 'audio', mime: 'audio/webm', dataUrl, name: 'voice-message.webm', size: 2048 },
+      },
+    });
+    // An audio MIME paired with an image data scheme must not survive.
+    ing({
+      kind: 'message',
+      message: {
+        id: 'aud2',
+        ts: 400,
+        from: 'N9WAR',
+        text: 'nope',
+        room: PUBLIC_ROOM,
+        attachment: { kind: 'audio', mime: 'audio/webm', dataUrl: 'data:image/png;base64,AAAA' },
+      },
+    });
+    const msgs = lobby();
+    const aud1 = msgs.find((m) => m.id === 'aud1')?.attachment;
+    expect(aud1?.dataUrl).toBe(dataUrl);
+    expect(aud1?.kind).toBe('audio');
+    expect(msgs.find((m) => m.id === 'aud2')?.attachment).toBeNull();
+  });
+
   it('routes messages to the correct room and counts unread for inactive rooms', () => {
     const ing = useChatStore.getState().ingest;
     ing({ kind: 'message', message: msg('g1', 100, 'hi', 'W1ABC', 'g123') });

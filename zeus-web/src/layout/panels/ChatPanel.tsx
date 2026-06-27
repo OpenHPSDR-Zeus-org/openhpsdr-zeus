@@ -32,6 +32,8 @@ import {
   ChatImageError,
   CHAT_IMAGE_ACCEPT,
 } from '../../util/chat-image';
+import { useVoiceRecorder, fmtDuration, MAX_VOICE_MS } from '../../util/chat-audio';
+import { isAudioAttachment } from '../../api/chat';
 import { useQrzStore } from '../../state/qrz-store';
 import { useProfileOverlayStore } from '../../state/profile-overlay-store';
 import { useDisplaySettingsStore } from '../../state/display-settings-store';
@@ -507,6 +509,28 @@ function RequestRow({
   );
 }
 
+/** Small microphone glyph for the voice-record button (inherits text color). */
+function MicIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ display: 'block' }}
+    >
+      <rect x="9" y="2" width="6" height="11" rx="3" />
+      <path d="M5 10v1a7 7 0 0 0 14 0v-1" />
+      <line x1="12" y1="18" x2="12" y2="22" />
+    </svg>
+  );
+}
+
 /** Small paperclip glyph for the attach button (inherits text color). */
 function PaperclipIcon() {
   return (
@@ -540,6 +564,7 @@ function MessageRow({
 }) {
   const att = msg.attachment;
   const hasText = msg.text.trim().length > 0;
+  const audio = isAudioAttachment(att);
   // Constrain the thumbnail to the message's native aspect when known so the
   // bubble doesn't jump as the image decodes.
   const ratio = att && att.width && att.height ? att.width / att.height : undefined;
@@ -572,7 +597,33 @@ function MessageRow({
           maxWidth: '85%',
         }}
       >
-        {att ? (
+        {att && audio ? (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '6px 10px',
+              borderRadius: 'var(--r-lg)',
+              border: own ? '1px solid var(--accent-line)' : '1px solid var(--line)',
+              background: own ? 'var(--accent-soft)' : 'var(--bg-2)',
+              maxWidth: '100%',
+            }}
+          >
+            <span
+              aria-hidden
+              style={{ display: 'flex', alignItems: 'center', color: own ? 'var(--accent-bright)' : 'var(--fg-2)', flexShrink: 0 }}
+            >
+              <MicIcon />
+            </span>
+            <audio
+              src={att.dataUrl}
+              controls
+              preload="metadata"
+              style={{ height: 32, maxWidth: 220 }}
+            />
+          </div>
+        ) : att ? (
           <button
             type="button"
             onClick={() => onExpandImage(att)}
@@ -1830,6 +1881,17 @@ export function ChatPanel() {
     }
   }, []);
 
+  // Voice snippet capture — a finished recording stages exactly like a photo
+  // (pendingAttachment), so the operator can add a caption then Send.
+  const onVoiceComplete = useCallback((att: ChatAttachment) => {
+    setAttachError(null);
+    setPendingAttachment(att);
+    inputRef.current?.focus();
+  }, []);
+  const voice = useVoiceRecorder(onVoiceComplete);
+  // Surface either the photo-attach error or the recorder error in one slot.
+  const composerError = attachError ?? voice.error;
+
   // Status pill
   const statusPill = (() => {
     if (!enabled) return { color: 'var(--fg-3)', bg: 'var(--bg-2)', label: 'Disabled' };
@@ -2429,7 +2491,7 @@ export function ChatPanel() {
               }}
             />
 
-            {/* Pending photo preview + attach error. */}
+            {/* Pending attachment preview (photo or voice snippet) + error. */}
             {pendingAttachment ? (
               <div
                 style={{
@@ -2442,116 +2504,219 @@ export function ChatPanel() {
                   border: '1px solid var(--line)',
                 }}
               >
-                <img
-                  src={pendingAttachment.dataUrl}
-                  alt={pendingAttachment.name ?? 'Attached photo'}
-                  style={{
-                    width: 40,
-                    height: 40,
-                    objectFit: 'cover',
-                    borderRadius: 'var(--r-sm)',
-                    flexShrink: 0,
-                  }}
-                />
-                <span
-                  className="mono"
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    fontSize: 10.5,
-                    color: 'var(--fg-2)',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {pendingAttachment.name ?? 'photo.jpg'}
-                  {pendingAttachment.size
-                    ? ` · ${Math.max(1, Math.round(pendingAttachment.size / 1024))} KB`
-                    : ''}
-                </span>
+                {isAudioAttachment(pendingAttachment) ? (
+                  <>
+                    <span
+                      aria-hidden
+                      style={{ display: 'flex', alignItems: 'center', color: 'var(--accent-bright)', flexShrink: 0, paddingLeft: 2 }}
+                    >
+                      <MicIcon />
+                    </span>
+                    <audio
+                      src={pendingAttachment.dataUrl}
+                      controls
+                      preload="metadata"
+                      style={{ flex: 1, minWidth: 0, height: 32 }}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <img
+                      src={pendingAttachment.dataUrl}
+                      alt={pendingAttachment.name ?? 'Attached photo'}
+                      style={{
+                        width: 40,
+                        height: 40,
+                        objectFit: 'cover',
+                        borderRadius: 'var(--r-sm)',
+                        flexShrink: 0,
+                      }}
+                    />
+                    <span
+                      className="mono"
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        fontSize: 10.5,
+                        color: 'var(--fg-2)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {pendingAttachment.name ?? 'photo.jpg'}
+                      {pendingAttachment.size
+                        ? ` · ${Math.max(1, Math.round(pendingAttachment.size / 1024))} KB`
+                        : ''}
+                    </span>
+                  </>
+                )}
                 <button
                   type="button"
                   className="btn sm"
                   onClick={() => setPendingAttachment(null)}
-                  title="Remove photo"
+                  title={isAudioAttachment(pendingAttachment) ? 'Remove voice message' : 'Remove photo'}
+                  style={{ flexShrink: 0 }}
                 >
                   ✕
                 </button>
               </div>
             ) : null}
-            {attachError ? (
+            {composerError ? (
               <div className="mono" style={{ fontSize: 10, color: 'var(--tx)', paddingLeft: 2 }}>
-                {attachError}
+                {composerError}
               </div>
             ) : null}
 
-            <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-              {/* Paperclip — attach a photo. */}
-              <button
-                type="button"
-                className="btn sm"
-                disabled={!connected || attaching || lockedActive}
-                onClick={() => fileInputRef.current?.click()}
-                title={connected ? (lockedActive ? 'Not a member of this group' : 'Attach a photo') : 'Not connected'}
-                aria-label="Attach a photo"
-                style={{ flexShrink: 0, padding: '5px 8px' }}
-              >
-                {attaching ? '…' : <PaperclipIcon />}
-              </button>
-              <textarea
-                ref={inputRef}
-                className="mono"
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    void doSend();
-                  }
-                }}
-                onPaste={(e) => {
-                  // Paste an image straight from the clipboard, like texting.
-                  const item = Array.from(e.clipboardData.items).find((it) =>
-                    it.type.startsWith('image/'),
-                  );
-                  if (item) {
-                    e.preventDefault();
-                    void attachFile(item.getAsFile());
-                  }
-                }}
-                placeholder={composerPlaceholder}
-                disabled={!connected || lockedActive}
-                rows={1}
-                maxLength={MAX_MESSAGE_CHARS + 64}
+            {voice.recording ? (
+              /* Recording strip — replaces the input while capturing a voice
+                 snippet. Auto-stops at MAX_VOICE_MS; Stop stages it for sending. */
+              <div
                 style={{
-                  flex: 1,
-                  resize: 'none',
-                  overflowY: 'auto',
-                  maxHeight: 90,
-                  minHeight: 28,
-                  padding: '5px 8px',
-                  boxSizing: 'border-box',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '6px 8px',
                   borderRadius: 'var(--r-sm)',
-                  border: composerBorder,
-                  background: connected ? '#0c0c10' : 'var(--bg-1)',
-                  color: '#d8d8dc',
-                  fontSize: 12,
-                  lineHeight: 1.4,
-                  outline: 'none',
-                  transition: `border-color var(--dur-fast) var(--ease-out)`,
+                  border: '1px solid var(--tx)',
+                  background: 'var(--tx-soft)',
                 }}
-              />
-              <button
-                type="button"
-                className={`btn sm${canSend ? ' active' : ''}`}
-                disabled={!canSend}
-                onClick={() => void doSend()}
-                title={connected ? 'Send (Enter)' : 'Not connected'}
               >
-                Send
-              </button>
-            </div>
+                <span
+                  aria-hidden
+                  style={{
+                    width: 9,
+                    height: 9,
+                    borderRadius: '50%',
+                    background: 'var(--tx)',
+                    boxShadow: '0 0 6px var(--tx)',
+                    flexShrink: 0,
+                  }}
+                />
+                <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--tx)', flexShrink: 0 }}>
+                  Recording
+                </span>
+                <span className="mono" style={{ fontSize: 11.5, color: 'var(--fg-1)', flexShrink: 0 }}>
+                  {fmtDuration(voice.elapsedMs)} / {fmtDuration(MAX_VOICE_MS)}
+                </span>
+                <div style={{ flex: 1 }} />
+                <button
+                  type="button"
+                  className="btn sm"
+                  onClick={voice.cancel}
+                  title="Discard recording"
+                  style={{ flexShrink: 0 }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn sm active"
+                  onClick={voice.stop}
+                  title="Stop and attach the recording"
+                  style={{ flexShrink: 0 }}
+                >
+                  Stop
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                {/* Left action stack: mic on top, paperclip below. */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0 }}>
+                  {voice.supported && (
+                    <button
+                      type="button"
+                      className="btn sm"
+                      disabled={!connected || lockedActive || attaching || voice.preparing || pendingAttachment !== null}
+                      onClick={() => {
+                        setAttachError(null);
+                        voice.clearError();
+                        voice.start();
+                      }}
+                      title={
+                        !connected
+                          ? 'Not connected'
+                          : lockedActive
+                          ? 'Not a member of this group'
+                          : pendingAttachment !== null
+                          ? 'Remove the attachment first'
+                          : 'Record a voice message (max 60s)'
+                      }
+                      aria-label="Record a voice message"
+                      style={{ flexShrink: 0, padding: '5px 8px', color: 'var(--tx)' }}
+                    >
+                      {voice.preparing ? '…' : <MicIcon />}
+                    </button>
+                  )}
+                  {/* Paperclip — attach a photo. */}
+                  <button
+                    type="button"
+                    className="btn sm"
+                    disabled={!connected || attaching || lockedActive}
+                    onClick={() => fileInputRef.current?.click()}
+                    title={connected ? (lockedActive ? 'Not a member of this group' : 'Attach a photo') : 'Not connected'}
+                    aria-label="Attach a photo"
+                    style={{ flexShrink: 0, padding: '5px 8px' }}
+                  >
+                    {attaching ? '…' : <PaperclipIcon />}
+                  </button>
+                </div>
+                <textarea
+                  ref={inputRef}
+                  className="mono"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      void doSend();
+                    }
+                  }}
+                  onPaste={(e) => {
+                    // Paste an image straight from the clipboard, like texting.
+                    const item = Array.from(e.clipboardData.items).find((it) =>
+                      it.type.startsWith('image/'),
+                    );
+                    if (item) {
+                      e.preventDefault();
+                      void attachFile(item.getAsFile());
+                    }
+                  }}
+                  placeholder={composerPlaceholder}
+                  disabled={!connected || lockedActive}
+                  rows={1}
+                  maxLength={MAX_MESSAGE_CHARS + 64}
+                  style={{
+                    flex: 1,
+                    resize: 'none',
+                    overflowY: 'auto',
+                    maxHeight: 90,
+                    minHeight: 28,
+                    padding: '5px 8px',
+                    boxSizing: 'border-box',
+                    borderRadius: 'var(--r-sm)',
+                    border: composerBorder,
+                    background: connected ? '#0c0c10' : 'var(--bg-1)',
+                    color: '#d8d8dc',
+                    fontSize: 12,
+                    lineHeight: 1.4,
+                    outline: 'none',
+                    transition: `border-color var(--dur-fast) var(--ease-out)`,
+                  }}
+                />
+                {/* Send — vertically centered on the right edge. */}
+                <button
+                  type="button"
+                  className={`btn sm${canSend ? ' active' : ''}`}
+                  disabled={!canSend}
+                  onClick={() => void doSend()}
+                  title={connected ? 'Send (Enter)' : 'Not connected'}
+                  style={{ flexShrink: 0, alignSelf: 'center' }}
+                >
+                  Send
+                </button>
+              </div>
+            )}
             {/* Character counter when near limit */}
             {draft.length > MAX_MESSAGE_CHARS * 0.8 && (
               <div

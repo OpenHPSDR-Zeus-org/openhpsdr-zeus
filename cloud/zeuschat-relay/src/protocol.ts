@@ -55,15 +55,16 @@ export interface RoomInfo {
  * An inline media attachment carried with a message. Photos are sent "like a
  * text message": the bytes ride inside the message as a base64 data URL rather
  * than via out-of-band blob storage. The Zeus web client downscales/compresses
- * so `dataUrl` stays under MAX_ATTACHMENT_DATAURL_LEN — the whole message is
- * stored in a single Durable-Object value (128 KiB cap), so it must fit with
- * headroom. `kind` is "image" for now; unknown kinds are ignored by clients.
+ * photos and records voice at a low Opus bitrate so `dataUrl` stays under
+ * MAX_ATTACHMENT_DATAURL_LEN — the whole message is stored in a single
+ * Durable-Object value (128 KiB cap), so it must fit with headroom. `kind` is
+ * "image" or "audio"; unknown kinds are ignored by clients.
  */
 export interface Attachment {
   kind: string;
-  /** MIME type, e.g. "image/jpeg". Must start with "image/". */
+  /** MIME type, e.g. "image/jpeg" or "audio/webm". Must match the kind family. */
   mime: string;
-  /** Base64 data URL, e.g. "data:image/jpeg;base64,…". */
+  /** Base64 data URL, e.g. "data:image/jpeg;base64,…" or "data:audio/webm;base64,…". */
   dataUrl: string;
   /** Original filename, if known. */
   name?: string;

@@ -53,15 +53,16 @@ namespace Zeus.Contracts;
 // names serialise camelCase on the wire (JsonSerializerDefaults.Web).
 
 /// <summary>
-/// An inline media attachment carried alongside a chat message. Photos are sent
-/// "like a text message": the bytes ride inside the message as a base64 data URL
-/// (<paramref name="DataUrl"/>, e.g. <c>data:image/jpeg;base64,…</c>) rather than
-/// via out-of-band blob storage. The web client downscales/compresses before
-/// sending so the encoded size stays within <see cref="MaxDataUrlLength"/> — the
-/// relay persists the whole message in a single Durable-Object value (128 KiB
-/// cap), so the attachment must comfortably fit under that with room to spare.
-/// <paramref name="Kind"/> is "image" for now (the only supported kind);
-/// unknown kinds are ignored by clients so future kinds stay compatible.
+/// An inline media attachment carried alongside a chat message. Photos and voice
+/// snippets are sent "like a text message": the bytes ride inside the message as
+/// a base64 data URL (<paramref name="DataUrl"/>, e.g. <c>data:image/jpeg;base64,…</c>
+/// or <c>data:audio/webm;base64,…</c>) rather than via out-of-band blob storage.
+/// The web client downscales/compresses photos and records voice at a low Opus
+/// bitrate before sending so the encoded size stays within
+/// <see cref="MaxDataUrlLength"/> — the relay persists the whole message in a
+/// single Durable-Object value (128 KiB cap), so the attachment must comfortably
+/// fit under that with room to spare. <paramref name="Kind"/> is "image" or
+/// "audio"; unknown kinds are ignored by clients so future kinds stay compatible.
 /// </summary>
 public sealed record ChatAttachment(
     string Kind,

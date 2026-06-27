@@ -770,16 +770,19 @@ export class ChatRoom extends DurableObject<Env> {
  * undefined when absent/malformed/oversized/not-an-image — in which case the
  * message still delivers as text. Defensive: a backend or hostile client could
  * send anything, and the result is persisted + broadcast to the whole room, so
- * enforce the image-only + size invariants here regardless of the C# guard.
+ * enforce the image|audio + size invariants here regardless of the C# guard. The
+ * `kind` is derived from the MIME/scheme family so a mislabelled payload can't
+ * slip through.
  */
 function sanitizeAttachment(a: MsgAttachment | undefined): MsgAttachment | undefined {
   if (!a || typeof a !== 'object') return undefined;
   const mime = typeof a.mime === 'string' ? a.mime : '';
   const dataUrl = typeof a.dataUrl === 'string' ? a.dataUrl : '';
-  if (!mime.startsWith('image/')) return undefined;
-  if (!dataUrl.startsWith('data:image/')) return undefined;
+  const isImage = mime.startsWith('image/') && dataUrl.startsWith('data:image/');
+  const isAudio = mime.startsWith('audio/') && dataUrl.startsWith('data:audio/');
+  if (!isImage && !isAudio) return undefined;
   if (dataUrl.length > MAX_ATTACHMENT_DATAURL_LEN) return undefined;
-  const clean: MsgAttachment = { kind: 'image', mime, dataUrl };
+  const clean: MsgAttachment = { kind: isAudio ? 'audio' : 'image', mime, dataUrl };
   if (typeof a.name === 'string' && a.name) clean.name = a.name.slice(0, 200);
   if (typeof a.width === 'number' && Number.isFinite(a.width)) clean.width = a.width;
   if (typeof a.height === 'number' && Number.isFinite(a.height)) clean.height = a.height;
