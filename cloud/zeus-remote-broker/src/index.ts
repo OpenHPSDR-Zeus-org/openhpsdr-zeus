@@ -1,9 +1,11 @@
 import type { Env } from './types';
 import { verifyQrzSessionCached } from './qrz';
 import { mintIceServers } from './turn';
+import { handleAdmin } from './admin-api';
 
 export { SignalRoom } from './signal-room';
 export { RateLimiter } from './rate-limiter';
+export { PresenceRoom } from './presence';
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -23,6 +25,22 @@ export default {
       const callsign = decodeURIComponent(go[1]).toUpperCase();
       const origin = env.WEB_APP_ORIGIN ?? 'https://openhpsdrzeus.com';
       return Response.redirect(`${origin}/?remote=${encodeURIComponent(callsign)}`, 302);
+    }
+
+    // Credential-based admin API (login, token mint/revoke, admin CRUD,
+    // presence). Self-contained: handles its own CORS, Bearer auth, and the
+    // idempotent bootstrap/migration on first call. See admin-api.ts.
+    //
+    // Per-IP rate-limited (mirrors /turn and /signal): the unauthenticated
+    // /admin/login surface must not be an unthrottled online password-guess /
+    // PBKDF2 CPU-exhaustion vector. OPTIONS preflights pass through so the
+    // dashboard's CORS check is never throttled. handleLogin adds a second,
+    // per-callsign throttle.
+    if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
+      if (request.method !== 'OPTIONS' && (await rateLimited(env, clientIp(request)))) {
+        return new Response('rate limited', { status: 429, headers: corsHeaders(env) });
+      }
+      return handleAdmin(request, env, ctx);
     }
 
     // Mint short-lived TURN credentials (clients call this before connecting).

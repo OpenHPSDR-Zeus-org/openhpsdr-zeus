@@ -25,9 +25,19 @@ export interface Env {
   QRZ_VERIFY?: string;
 
   /**
-   * Comma-separated callsigns with moderator powers (create/delete private
-   * rooms, add/remove members, ban/unban). Defaults to "N9WAR,KB2UKA" when
-   * unset. Case-insensitive.
+   * Shared credential-based admin store (D1 `zeus-admin`, same database the
+   * broker owns). ChatRoom repopulates its in-memory admin set from
+   * `SELECT callsign FROM admins WHERE disabled = 0` on a ~60s TTL, so dashboard
+   * add/disable propagates without a redeploy. Optional in local dev — when
+   * absent (or the query throws / returns empty) the ADMINS seed below is used.
+   */
+  ADMIN_DB?: D1Database;
+
+  /**
+   * Fallback seed for moderator callsigns (create/delete private rooms,
+   * add/remove members, ban/unban). Defaults to "N9WAR,KB2UKA" when unset.
+   * Case-insensitive. Used only when ADMIN_DB is unbound, empty, or unreachable;
+   * once the D1 store is populated it is the source of truth.
    */
   ADMINS?: string;
 }

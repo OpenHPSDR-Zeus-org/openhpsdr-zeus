@@ -37,6 +37,20 @@ class_name = "SignalRoom"
 name = "RATE_DO"
 class_name = "RateLimiter"
 
+# Support-availability presence (single global object; ~90s heartbeat expiry).
+[[durable_objects.bindings]]
+name = "PRESENCE"
+class_name = "PresenceRoom"
+
+# Credential-based admin store, shared with the chat relay. Create it once and
+# copy the printed id into BOTH wrangler.toml files (broker + zeuschat-relay):
+#   wrangler d1 create zeus-admin
+#   wrangler d1 migrations apply zeus-admin   # applies migrations/0001_admin.sql
+[[d1_databases]]
+binding = "ADMIN_DB"
+database_name = "zeus-admin"
+database_id = "REPLACE_WITH_d1_create_OUTPUT"
+
 # SQLite-backed DO namespaces (free-plan compatible).
 [[migrations]]
 tag = "v1"
@@ -46,8 +60,19 @@ new_sqlite_classes = ["SignalRoom"]
 tag = "v2"
 new_sqlite_classes = ["RateLimiter"]
 
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["PresenceRoom"]
+
 # TURN credentials are minted from Cloudflare Realtime. Provide the key out of
 # band so it stays out of source control:
 #   wrangler secret put TURN_KEY_ID
 #   wrangler secret put TURN_API_TOKEN
 # If unset, /turn returns 503 and clients fall back to STUN-only (direct P2P).
+
+# Bootstrap admin: seeded the first time the `admins` table is empty. Set BOTH
+# out of band so they stay out of source control:
+#   wrangler secret put ADMIN_BOOTSTRAP_CALLSIGN
+#   wrangler secret put ADMIN_BOOTSTRAP_PASSWORD
+# Optional — if unset, no bootstrap admin is created (legacy env.ADMINS, if set,
+# still migrates to password-less rows).
