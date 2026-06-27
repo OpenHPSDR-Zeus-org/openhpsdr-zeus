@@ -210,18 +210,24 @@ function CallsignButton({
   onOpen,
   prominent,
   own,
+  admin,
 }: {
   callsign: string;
   onOpen: (callsign: string) => void;
   prominent?: boolean;
   own?: boolean;
+  /** Relay moderator — callsign is painted gold (takes priority over `own`). */
+  admin?: boolean;
 }) {
+  // Admins are gold network-wide; otherwise your own callsign reads in the
+  // accent blue, and everyone else in the default foreground.
+  const color = admin ? 'var(--power)' : own ? 'var(--accent-bright)' : 'var(--fg-0)';
   return (
     <button
       type="button"
       className="mono"
       onClick={() => onOpen(callsign)}
-      title={`Open ${callsign} on QRZ`}
+      title={admin ? `Open ${callsign} on QRZ · ZeusChat moderator` : `Open ${callsign} on QRZ`}
       style={{
         background: 'none',
         border: 'none',
@@ -231,7 +237,7 @@ function CallsignButton({
         fontWeight: prominent ? 700 : 600,
         fontSize: prominent ? 12.5 : 12,
         letterSpacing: '0.04em',
-        color: own ? 'var(--accent-bright)' : 'var(--fg-0)',
+        color,
         textAlign: 'left',
       }}
       onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
@@ -318,7 +324,7 @@ function RosterRow({
     >
       <StatusDot status={op.status} />
       <div style={{ minWidth: 0, flex: 1 }}>
-        <CallsignButton callsign={op.callsign} onOpen={onOpen} prominent />
+        <CallsignButton callsign={op.callsign} onOpen={onOpen} prominent admin={op.admin} />
         {/* Frequency / mode — only present for friends sharing their freq
             (the relay strips freqHz for everyone else). */}
         {freq !== '—' && (
@@ -530,11 +536,14 @@ function PaperclipIcon() {
 function MessageRow({
   msg,
   own,
+  fromAdmin,
   onOpen,
   onExpandImage,
 }: {
   msg: ChatMessage;
   own: boolean;
+  /** Sender is a relay moderator — paint their callsign gold. */
+  fromAdmin: boolean;
   onOpen: (callsign: string) => void;
   onExpandImage: (att: ChatAttachment) => void;
 }) {
@@ -554,7 +563,7 @@ function MessageRow({
       }}
     >
       <div style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
-        <CallsignButton callsign={msg.from} onOpen={onOpen} own={own} />
+        <CallsignButton callsign={msg.from} onOpen={onOpen} own={own} admin={fromAdmin} />
         <span
           className="mono"
           title={fmtClock(msg.ts)}
@@ -1301,6 +1310,103 @@ function AdminAction({
 }
 
 /**
+ * A toggle row in the admin console: icon + title + one-line description and a
+ * pill switch on the right. Mirrors AdminAction's layout but drives an on/off
+ * state rather than a one-shot action.
+ */
+function AdminToggle({
+  icon,
+  title,
+  description,
+  on,
+  onToggle,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  on: boolean;
+  onToggle: (next: boolean) => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const accent = 'var(--power)';
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '7px 9px',
+        borderRadius: 'var(--r-sm)',
+        background: 'var(--bg-2)',
+        border: '1px solid var(--line)',
+        boxShadow: on || hovered ? ADMIN_GOLD_RING : 'none',
+        transition: 'box-shadow var(--dur-fast) var(--ease-out)',
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 26,
+          height: 26,
+          flexShrink: 0,
+          borderRadius: 'var(--r-sm)',
+          background: 'var(--power-soft)',
+          color: accent,
+        }}
+      >
+        {icon}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--fg-0)', letterSpacing: '0.02em' }}>
+          {title}
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--fg-3)', lineHeight: 1.35, marginTop: 1 }}>
+          {description}
+        </div>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={title}
+        onClick={() => onToggle(!on)}
+        style={{
+          flexShrink: 0,
+          position: 'relative',
+          width: 34,
+          height: 18,
+          borderRadius: 9,
+          border: '1px solid var(--line-strong)',
+          background: on ? 'var(--power)' : 'var(--bg-3)',
+          cursor: 'pointer',
+          padding: 0,
+          transition: 'background var(--dur-fast) var(--ease-out)',
+        }}
+      >
+        <span
+          aria-hidden
+          style={{
+            position: 'absolute',
+            top: 1,
+            left: on ? 17 : 1,
+            width: 14,
+            height: 14,
+            borderRadius: '50%',
+            background: on ? '#1a1205' : 'var(--fg-2)',
+            transition: 'left var(--dur-fast) var(--ease-out)',
+          }}
+        />
+      </button>
+    </div>
+  );
+}
+
+/**
  * The unban surface: a live list of every currently-banned callsign (relay-
  * authoritative, persisted across relay restarts). Each row lifts that ban; the
  * relay echoes the updated list back so the dialog updates in place and stays
@@ -1404,6 +1510,8 @@ function AdminConsole() {
   const listBans = useChatStore((s) => s.listBans);
   const bannedUsers = useChatStore((s) => s.bannedUsers);
   const ownCall = useChatStore((s) => s.callsign);
+  const seeAllFreq = useChatStore((s) => s.seeAllFreq);
+  const setSeeAll = useChatStore((s) => s.setSeeAll);
 
   // Refresh the ban list whenever the console is opened, so the count + list are
   // current without waiting for the next ban/unban push.
@@ -1479,6 +1587,13 @@ function AdminConsole() {
             . These actions affect <strong style={{ color: 'var(--fg-1)' }}>every connected operator</strong>.
           </div>
 
+          <AdminToggle
+            icon={<EyeIcon open />}
+            title="See all frequencies"
+            description="Reveal every operator's frequency on your roster and panadapter — regardless of friendship or their eye toggle. Visible to you only."
+            on={seeAllFreq}
+            onToggle={(next) => void setSeeAll(next)}
+          />
           <AdminAction
             icon={<MegaphoneIcon />}
             title="Global message"
@@ -1706,6 +1821,12 @@ export function ChatPanel() {
   const friendSet = useMemo(() => new Set(acceptedFriends.map((c) => c.toUpperCase())), [acceptedFriends]);
   const outgoingSet = useMemo(() => new Set(outgoingRequests.map((c) => c.toUpperCase())), [outgoingRequests]);
   const incomingSet = useMemo(() => new Set(incomingRequests.map((c) => c.toUpperCase())), [incomingRequests]);
+  // Callsigns the relay flagged as moderators — drives the gold callsign paint
+  // for message authors (roster rows read op.admin directly).
+  const adminCalls = useMemo(
+    () => new Set(roster.filter((op) => op.admin).map((op) => op.callsign.toUpperCase())),
+    [roster],
+  );
 
   const friendsOnline = useMemo(
     () => sortedRoster.filter((op) => friendSet.has(op.callsign.toUpperCase())),
@@ -2398,6 +2519,7 @@ export function ChatPanel() {
                     key={m.id || `${m.from}-${m.ts}`}
                     msg={m}
                     own={own}
+                    fromAdmin={adminCalls.has(m.from.toUpperCase())}
                     onOpen={openProfile}
                     onExpandImage={setLightbox}
                   />

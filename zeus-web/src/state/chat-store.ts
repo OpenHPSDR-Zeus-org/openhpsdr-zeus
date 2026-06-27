@@ -48,6 +48,7 @@ import {
   chatClearRoom,
   chatBroadcast,
   chatListBans,
+  chatSetSeeAll,
   normalizeStatus,
   normalizeOperator,
   normalizeMessage,
@@ -109,6 +110,8 @@ export type ChatStoreState = {
   relayError: string | null;
   isAdmin: boolean;
   freqPublic: boolean;
+  /** Admin only: whether the "see all frequencies" override is armed. */
+  seeAllFreq: boolean;
   roster: ChatOperator[];
 
   // Channels + per-room message threads + which tab is active.
@@ -148,6 +151,8 @@ export type ChatStoreState = {
   closeDm: (room: string) => void;
   requestRoomHistory: (room: string) => Promise<void>;
   setFreqVisibility: (isPublic: boolean) => Promise<void>;
+  /** Admin: arm/disarm the "see all frequencies" override. */
+  setSeeAll: (on: boolean) => Promise<void>;
   requestFriend: (callsign: string) => Promise<void>;
   acceptFriend: (callsign: string) => Promise<void>;
   denyFriend: (callsign: string) => Promise<void>;
@@ -176,6 +181,7 @@ function applyStatus(s: ChatStatus): Partial<ChatStoreState> {
     relayError: s.error,
     isAdmin: s.isAdmin,
     freqPublic: s.freqPublic,
+    seeAllFreq: s.seeAllFreq,
   };
 }
 
@@ -216,6 +222,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
   relayError: null,
   isAdmin: false,
   freqPublic: true,
+  seeAllFreq: false,
   roster: [],
   rooms: [{ id: PUBLIC_ROOM, name: 'Public', kind: 'public', members: [] }],
   activeRoom: PUBLIC_ROOM,
@@ -355,6 +362,16 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
     set({ freqPublic: isPublic }); // optimistic; status frame confirms
     try {
       await chatSetFreqVisibility(isPublic);
+    } catch (err) {
+      set({ relayError: errMsg(err) });
+      void get().refreshStatus();
+    }
+  },
+
+  setSeeAll: async (on) => {
+    set({ seeAllFreq: on }); // optimistic; status frame confirms
+    try {
+      await chatSetSeeAll(on);
     } catch (err) {
       set({ relayError: errMsg(err) });
       void get().refreshStatus();
