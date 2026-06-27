@@ -8,20 +8,24 @@
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
 
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using Zeus.Support.Contracts;
 using Zeus.SupportAgent;
 
-// The Zeus support sidecar. Phase 1 scope is LOCAL ONLY: supervise the backend
-// PID, and on an unexpected death capture the tail of the on-disk logs into a
-// crash record. No broker / remote exposure yet — that arrives in later phases,
-// at which point this process (which survives the backend) will own the broker
-// connection.
+// The Zeus support sidecar. It supervises the backend PID and, on an unexpected
+// death, captures the tail of the on-disk logs into a crash record (the in-memory
+// log ring dies with the in-process backend). Because it OUTLIVES the backend it
+// also owns the broker connection for remote diagnostics:
 //
-// Lifecycle: wait for the supervised backend to exit, classify it via the
-// clean-exit marker the backend writes at a deliberate shutdown, capture a crash
-// record if it died unexpectedly, then exit. The sidecar must NEVER add its own
-// crash to the operator's machine, so every step is best-effort.
+//   * Presence (Phase 3c): while the operator's L1 "remote diagnostics available"
+//     switch is on, it registers + heartbeats to the broker so a maintainer sees
+//     them online. It learns the live switch state over IPC from the backend.
+//   * Crash auto-share (Phase 3c): if the operator pre-authorised auto-share, a
+//     captured crash record is uploaded to the broker AFTER the backend dies.
+//
+// Everything remote is strictly opt-in and best-effort: the sidecar must NEVER add
+// its own crash to the operator's machine, so every step is guarded.
 
 if (!SidecarOptions.TryParse(args, out var opts, out var error) || opts is null)
 {
@@ -29,18 +33,68 @@ if (!SidecarOptions.TryParse(args, out var opts, out var error) || opts is null)
     return 2;
 }
 
-Breadcrumb(opts, $"start: supervising pid={opts.SupervisePid} session={opts.SessionToken ?? "-"}");
+Breadcrumb(opts, $"start: supervising pid={opts.SupervisePid} session={opts.SessionToken ?? "-"} " +
+                 $"remoteDiag={opts.RemoteDiagnosticsEnabled} autoShare={opts.AutoShareOnCrash}");
 
 using var cts = new CancellationTokenSource();
 using var sigint = SafeSignal(PosixSignal.SIGINT, cts);
 using var sigterm = SafeSignal(PosixSignal.SIGTERM, cts);
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
+// --- Remote presence wiring -------------------------------------------------
+// Build the broker client from the launch identity (callsign + QRZ session env)
+// and the broker URL. Null when any piece is missing → remote stays inert and the
+// sidecar behaves exactly as the Phase-1 local-only crash capturer.
+var endpoints = BrokerEndpoints.FromBrokerUrl(opts.BrokerUrl);
+var qrzSession = Environment.GetEnvironmentVariable(HttpSupportBrokerClient.QrzSessionEnvVar) ?? "";
+using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+
+HttpSupportBrokerClient? broker = null;
+if (endpoints is not null && !string.IsNullOrWhiteSpace(opts.OperatorCallsign) && !string.IsNullOrWhiteSpace(qrzSession))
+{
+    broker = new HttpSupportBrokerClient(http, endpoints, opts.OperatorCallsign!, qrzSession);
+}
+
+// Live posture, seeded from launch args and updated by the backend over IPC. The
+// crash path reads autoShare at the end, so keep the latest value here.
+var autoShareEnabled = opts.AutoShareOnCrash;
+
+PresenceClient? presence = null;
+Task presenceTask = Task.CompletedTask;
+Task ipcTask = Task.CompletedTask;
+
+if (broker is not null)
+{
+    // Presence is gated on remote diagnostics being on AND a callsign being set;
+    // the IPC listener flips availability live.
+    presence = new PresenceClient(
+        broker,
+        initiallyAvailable: opts.RemoteDiagnosticsEnabled,
+        log: msg => Breadcrumb(opts, msg));
+    presenceTask = presence.RunAsync(cts.Token);
+
+    var listener = new SupportIpcListener(
+        opts.SessionToken,
+        onState: state =>
+        {
+            autoShareEnabled = state.AutoShareOnCrash;
+            // Available only when the master switch is on AND a callsign is present.
+            var available = state.RemoteDiagnosticsEnabled && !string.IsNullOrWhiteSpace(state.QrzCallsign);
+            presence!.SetAvailable(available);
+            Breadcrumb(opts, $"ipc: state remoteDiag={state.RemoteDiagnosticsEnabled} " +
+                             $"autoShare={state.AutoShareOnCrash} callsign={(string.IsNullOrWhiteSpace(state.QrzCallsign) ? "-" : "set")}");
+        },
+        log: msg => Breadcrumb(opts, msg));
+    ipcTask = listener.RunAsync(cts.Token);
+}
+
+// --- Supervise the backend --------------------------------------------------
 var result = await ProcessSupervisor.WaitForExitAsync(opts.SupervisePid, cts.Token).ConfigureAwait(false);
 
 if (result.Cancelled)
 {
     Breadcrumb(opts, "stop: cancelled while supervising; backend still alive");
+    await ShutdownRemoteAsync(cts, presenceTask, ipcTask).ConfigureAwait(false);
     return 0;
 }
 
@@ -51,6 +105,7 @@ if (File.Exists(markerPath))
 {
     TryDelete(markerPath);
     Breadcrumb(opts, $"clean exit: pid={opts.SupervisePid} exitCode={Fmt(result.ExitCode)}");
+    await ShutdownRemoteAsync(cts, presenceTask, ipcTask).ConfigureAwait(false);
     return 0;
 }
 
@@ -62,9 +117,46 @@ Breadcrumb(opts,
     written is null
         ? $"crash detected: pid={opts.SupervisePid} exitCode={Fmt(result.ExitCode)} (record write FAILED)"
         : $"crash detected: pid={opts.SupervisePid} exitCode={Fmt(result.ExitCode)} -> {Path.GetFileName(written)}");
+
+// Crash auto-share: strictly gated on the operator's opt-in (default OFF). With
+// the flag off this never reads the record back or touches the broker.
+try
+{
+    string? recordJson = written is not null ? TryReadAllText(written) : null;
+    var outcome = await CrashAutoShare.TryShareAsync(autoShareEnabled, recordJson, broker, CancellationToken.None)
+        .ConfigureAwait(false);
+    Breadcrumb(opts, $"crash auto-share: {outcome}");
+}
+catch (Exception ex)
+{
+    Breadcrumb(opts, $"crash auto-share: error ({ex.GetType().Name})");
+}
+
+await ShutdownRemoteAsync(cts, presenceTask, ipcTask).ConfigureAwait(false);
 return 0;
 
 static string Fmt(int? code) => code?.ToString() ?? "<unknown>";
+
+// Cancel the presence/IPC loops and let them finish their best-effort drop. Bounded
+// so a stuck network call can't hang sidecar exit.
+static async Task ShutdownRemoteAsync(CancellationTokenSource cts, Task presenceTask, Task ipcTask)
+{
+    try { cts.Cancel(); } catch { /* already disposed */ }
+    try
+    {
+        await Task.WhenAny(Task.WhenAll(presenceTask, ipcTask), Task.Delay(TimeSpan.FromSeconds(5)))
+            .ConfigureAwait(false);
+    }
+    catch
+    {
+        // Shutdown is best-effort.
+    }
+}
+
+static string? TryReadAllText(string path)
+{
+    try { return File.ReadAllText(path); } catch { return null; }
+}
 
 // Register a POSIX signal handler without throwing on a platform/runtime that
 // doesn't support it (the sidecar still works; it just relies on Ctrl+C / exit).

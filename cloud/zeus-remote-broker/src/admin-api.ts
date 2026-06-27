@@ -37,7 +37,7 @@ import {
 } from './admin-db';
 
 /** Resolved identity of an authenticated caller. */
-interface AuthCtx {
+export interface AuthCtx {
   callsign: string;
   tokenId: string;
   label: string;
@@ -308,7 +308,15 @@ async function handleDisableAdmin(
  * Resolve a `Authorization: Bearer zsa_…` header to an admin identity, or null.
  * Rejects (as null) on: missing/malformed token, unknown/revoked token, expired
  * session token, or disabled admin. Bumps last_used_at on success.
+ *
+ * Exported as {@link verifyAdminToken} so sibling routes (e.g. /admin/crashes,
+ * which lives outside this module's path-dispatch) can gate on the SAME
+ * credential-based admin auth without re-implementing the token-hash/expiry/
+ * disabled-admin checks. Callers that do their own bootstrap-independent routing
+ * should call {@link ensureAdminBootstrap} once first.
  */
+export { authenticate as verifyAdminToken, ensureBootstrap as ensureAdminBootstrap };
+
 async function authenticate(request: Request, env: Env): Promise<AuthCtx | null> {
   const header = request.headers.get('Authorization') ?? '';
   const m = /^Bearer\s+(.+)$/i.exec(header.trim());

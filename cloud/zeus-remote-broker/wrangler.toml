@@ -42,6 +42,12 @@ class_name = "RateLimiter"
 name = "PRESENCE"
 class_name = "PresenceRoom"
 
+# Crash auto-share store (single global object; last ~20 records per callsign).
+# Written by /crash (operator, QRZ-gated), read by /admin/crashes (admin Bearer).
+[[durable_objects.bindings]]
+name = "CRASH_STORE"
+class_name = "CrashStore"
+
 # Credential-based admin store, shared with the chat relay. Create it once and
 # copy the printed id into BOTH wrangler.toml files (broker + zeuschat-relay):
 #   wrangler d1 create zeus-admin
@@ -63,6 +69,10 @@ new_sqlite_classes = ["RateLimiter"]
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["PresenceRoom"]
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["CrashStore"]
 
 # TURN credentials are minted from Cloudflare Realtime. Provide the key out of
 # band so it stays out of source control:
