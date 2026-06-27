@@ -18,6 +18,7 @@
 // true, so a disarmed controller never POSTs /tx.
 
 import { parseFt8Message } from './ft8-message';
+import { FT8_MAX_TX_OFFSET_HZ, FT8_MIN_OFFSET_HZ } from './ft8-passband';
 import {
   answerCq as seqAnswerCq,
   currentOutgoing,
@@ -170,9 +171,12 @@ export class Ft8TxController {
     void this.postHalt();
   }
 
-  /** TX EVEN / ODD. */
+  /** TX EVEN / ODD. While armed, re-stage the current message immediately so the
+   *  slot flip reaches the keyer this slot instead of waiting for the next
+   *  per-window restage. */
   setTxSlot(slot: Slot): void {
     this.state = { ...this.state, txSlot: slot };
+    this.restageIfArmed();
   }
 
   /** FT8 ↔ FT4 (slot timing differs; sequencer text is identical). */
@@ -195,10 +199,28 @@ export class Ft8TxController {
     this.state = { ...this.state, holdTxFreq: hold };
   }
 
-  /** Waterfall click → TX offset. Ignored while HOLD TX FREQ is engaged. */
+  /** Waterfall click / OFFSET input → TX offset. Ignored while HOLD TX FREQ is
+   *  engaged. Clamped to the TX-offset range (the single source of truth shared
+   *  with the waterfall click and the OFFSET input) so click, type, and the
+   *  value POSTed to the keyer always agree. While armed, re-stage immediately so
+   *  the new offset reaches the keyer this slot. */
   setTxFreq(hz: number): void {
     if (this.state.holdTxFreq) return;
-    this.audioHz = hz;
+    const clamped = Number.isFinite(hz)
+      ? Math.min(FT8_MAX_TX_OFFSET_HZ, Math.max(FT8_MIN_OFFSET_HZ, hz))
+      : FT8_MIN_OFFSET_HZ;
+    this.audioHz = clamped;
+    this.restageIfArmed();
+  }
+
+  /** Re-POST the currently-staged message when armed, so an operator adjustment
+   *  (offset / slot) propagates within the same slot instead of waiting for the
+   *  next per-window restage. No-op when disarmed (a disarmed controller never
+   *  POSTs /tx). */
+  private restageIfArmed(): void {
+    if (!this.state.enableTx) return;
+    const msg = currentOutgoing(this.state);
+    if (msg != null) void this.postStage(msg);
   }
 
   /** Start calling CQ (CALL 1ST). */

@@ -127,6 +127,10 @@ public sealed class PskReporterReporter : BackgroundService
     {
         try
         {
+            // Gate on the enable flag BEFORE touching the radio so the
+            // disabled-default path never pays for a Snapshot() (StateDto alloc +
+            // _sync lock) on the decode thread. HandleDecodes re-checks the flag.
+            if (!_spotting.GetConfig().PskReporterEnabled) return;
             HandleDecodes(batch, _radio?.Snapshot().VfoHz ?? 0);
         }
         catch (Exception ex)
