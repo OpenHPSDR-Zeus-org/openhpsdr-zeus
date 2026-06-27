@@ -45,6 +45,7 @@
 
 import { useCallback } from 'react';
 import { type RxMode } from '../api/client';
+import { enterDigital } from '../state/enter-digital';
 import { useConnectionStore } from '../state/connection-store';
 import {
   gangedReceiverAction,
@@ -116,6 +117,22 @@ export function ModeBandwidth() {
               title={`${m.label} — drag onto a toolbar favorite slot to pin`}
             >
               {m.label}
+            </button>
+          ))}
+          {/* Digital modes are Zeus-level modes (like FreeDV), not WDSP demods —
+              they open the dedicated FT8/FT4/WSPR workspace and auto-configure
+              the radio (DIGU + FT8 bandwidth + band dial). Rendered inline with
+              the mode buttons so they're always visible next to DIGU/DIGL. */}
+          {(['FT8', 'FT4', 'WSPR'] as const).map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => enterDigital(p)}
+              className="btn sm"
+              style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+              title={`Enter ${p} — opens the digital workspace and configures the radio`}
+            >
+              {p}
             </button>
           ))}
         </div>

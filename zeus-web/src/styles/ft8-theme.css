@@ -1,0 +1,259 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * FT8 workspace dark-HUD theme — KB2UKA-approved (Option A) token LAYER scoped
+ * to .ft8-workspace, extending the global tokens in tokens.css. Defined as its
+ * own variable set so the look can later be promoted app-wide by re-pointing
+ * root tokens, without rewriting components (see docs/designs/ft8-ui.md).
+ *
+ * Components consume ONLY these --hud-* variables, never raw hex. The amber
+ * panadapter trace (#FFA028) stays signal-visualisation-only and is not
+ * repurposed here.
+ */
+
+.ft8-workspace {
+  /* Surfaces — near-black navy with a faint cyan cast. */
+  --hud-bg:        #05080d;
+  --hud-panel:     #0a0f17;
+  --hud-panel-2:   #0e141d;
+  --hud-inset:     #04070b;
+  --hud-grid:      rgba(64, 160, 200, 0.08);
+
+  /* Glow + lines — the cyan/teal HUD signature. */
+  --hud-cyan:      #38d6f0;
+  --hud-cyan-soft: rgba(56, 214, 240, 0.14);
+  --hud-cyan-line: rgba(56, 214, 240, 0.45);
+  --hud-line:      rgba(120, 160, 190, 0.16);
+
+  /* Text. */
+  --hud-text:      #c8e4ef;
+  --hud-text-dim:  #6f8a98;
+
+  /* Decode-row classes (color-coded message table). */
+  --hud-cq:        #45e08a;  /* CQ calls — green */
+  --hud-me:        #ffd23a;  /* directed at my call — amber-gold */
+  --hud-worked:    #6f8a98;  /* worked-before — muted */
+  --hud-eu:        #d06bff;  /* EU continent tint (band-map parity) */
+  --hud-new:       #38d6f0;  /* new DXCC/grid — cyan */
+
+  color: var(--hud-text);
+  background: var(--hud-bg);
+}
+
+/* Decode table */
+.ft8-decode-table {
+  font-family: var(--font-mono, 'Archivo Narrow', monospace);
+  font-size: 12px;
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--hud-panel);
+}
+.ft8-decode-table th {
+  position: sticky;
+  top: 0;
+  text-align: left;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--hud-text-dim);
+  background: var(--hud-panel-2);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--hud-cyan-line);
+}
+.ft8-decode-table td {
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--hud-line);
+  white-space: nowrap;
+}
+.ft8-decode-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.ft8-row--cq     { color: var(--hud-cq); }
+.ft8-row--me     { color: var(--hud-me); background: var(--hud-cyan-soft); }
+.ft8-row--worked { color: var(--hud-worked); }
+.ft8-row--new    { color: var(--hud-new); }
+
+.ft8-decode-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--hud-text-dim);
+}
+
+/* ---- Workspace shell (fixed full-screen overlay, no moveable panels) ---- */
+.ft8-workspace {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  grid-template-rows: 44px 1fr 26px;
+  grid-template-columns: 1fr;
+  font-family: var(--font-narrow, 'Archivo Narrow', sans-serif);
+  overflow: hidden;
+}
+.ft8-ws-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  /* Right padding reserves space for the absolutely-positioned Exit button so
+     header content never slides under it. The header row is a fixed 44px grid
+     row with overflow:hidden, so it must NOT wrap. */
+  padding: 0 104px 0 14px;
+  background: var(--hud-panel-2);
+  border-bottom: 1px solid var(--hud-cyan-line);
+  overflow: hidden;
+}
+.ft8-ws-title {
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--hud-cyan);
+  text-shadow: 0 0 8px var(--hud-cyan-soft);
+}
+.ft8-ws-clock { font-variant-numeric: tabular-nums; color: var(--hud-text-dim); }
+.ft8-ws-close {
+  background: transparent;
+  border: 1px solid var(--hud-cyan-line);
+  color: var(--hud-text);
+  border-radius: 3px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.ft8-ws-close:hover { background: var(--hud-cyan-soft); }
+
+.ft8-ws-body {
+  display: grid;
+  grid-template-columns: 280px 1fr 320px;
+  gap: 8px;
+  padding: 8px;
+  min-height: 0;
+}
+.ft8-ws-col { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.ft8-ws-col--center { overflow: hidden; }
+
+.ft8-region {
+  background: var(--hud-panel);
+  border: 1px solid var(--hud-line);
+  border-radius: 4px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ft8-region__head {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--hud-text-dim);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--hud-line);
+}
+.ft8-region__body { padding: 8px; overflow: auto; min-height: 0; }
+.ft8-region--grow { flex: 1; }
+.ft8-region--decodes .ft8-region__body { padding: 0; }
+
+.ft8-vfo { font-variant-numeric: tabular-nums; font-size: 26px; color: var(--hud-cyan); padding: 6px 8px; }
+.ft8-vfo small { font-size: 11px; color: var(--hud-text-dim); }
+
+.ft8-placeholder {
+  color: var(--hud-text-dim);
+  font-size: 11px;
+  font-style: italic;
+  padding: 10px;
+}
+
+.ft8-ws-status {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 12px;
+  font-size: 11px;
+  color: var(--hud-text-dim);
+  background: var(--hud-panel-2);
+  border-top: 1px solid var(--hud-line);
+}
+.ft8-ws-status .ok { color: var(--hud-cq); }
+.ft8-ws-status .warn { color: var(--hud-me); }
+
+/* Header: protocol tabs + operator identity. */
+.ft8-ws-tabs { display: flex; gap: 2px; }
+.ft8-ws-tab {
+  background: transparent;
+  border: 1px solid var(--hud-cyan-line);
+  color: var(--hud-text-dim);
+  border-radius: 3px;
+  padding: 2px 12px;
+  cursor: pointer;
+  font: inherit;
+  letter-spacing: 0.06em;
+}
+.ft8-ws-tab.is-active { background: var(--hud-cyan); color: #06121a; font-weight: 700; }
+.ft8-ws-id { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--hud-text-dim); }
+.ft8-ws-id input {
+  background: var(--hud-panel);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-cyan);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font: inherit;
+  text-transform: uppercase;
+}
+/* Visible, filled Exit button — pinned to the workspace's top-right corner
+   (absolute, out of the fixed-height header flow) so header crowding can never
+   clip it. The workspace is position:fixed, so this anchors to its corner. */
+.ft8-ws-close {
+  position: absolute;
+  top: 7px;
+  right: 12px;
+  z-index: 60;
+  background: var(--hud-me);
+  border: 1px solid var(--hud-me);
+  color: #1a0604;
+  border-radius: 3px;
+  padding: 4px 16px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+.ft8-ws-close:hover { filter: brightness(1.12); }
+
+/* Band selector. */
+.ft8-band-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 6px 8px 8px; }
+.ft8-band-btn {
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-text);
+  border-radius: 3px;
+  padding: 4px 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.ft8-band-btn:hover { border-color: var(--hud-cyan-line); }
+.ft8-band-btn.is-active { background: var(--hud-cyan); color: #06121a; font-weight: 700; }
+
+/* QSO / TX-control panel. */
+.ft8-qso { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.ft8-qso--empty { color: var(--hud-text-dim); font-style: italic; }
+.ft8-qso__dx { color: var(--hud-text); }
+.ft8-qso__dx strong { color: var(--hud-cyan); }
+.ft8-qso__ladder { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.ft8-qso__ladder li { display: flex; gap: 8px; align-items: baseline; }
+.ft8-qso__slot { color: var(--hud-text-dim); font-size: 10px; width: 26px; flex: none; }
+.ft8-qso__msg { font-variant-numeric: tabular-nums; color: var(--hud-text); }
+.ft8-qso__bench {
+  color: var(--hud-power, #ffc93a);
+  background: rgba(255, 201, 58, 0.08);
+  border: 1px solid rgba(255, 201, 58, 0.3);
+  border-radius: 3px;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.ft8-qso__actions { display: flex; gap: 6px; }
+.ft8-qso__btn {
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-text);
+  border-radius: 3px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+.ft8-qso__btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.ft8-qso__btn:not(:disabled):hover { border-color: var(--hud-cyan-line); }

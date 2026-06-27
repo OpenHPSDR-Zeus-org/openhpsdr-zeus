@@ -80,6 +80,71 @@ public static class ZeusEndpoints
         app.MapGet("/api/capabilities",
             (HttpContext ctx, CapabilitiesService caps) => Results.Ok(caps.Snapshot(ctx)));
 
+        // FT8/FT4 native decode control. The FT8 workspace POSTs enable on
+        // entering the mode and disable on leaving; decodes arrive out-of-band as
+        // 0x38 Ft8Decode WS frames. nativeAvailable is false on a platform whose
+        // zeus_ft8 binary wasn't shipped (the workspace then shows "unavailable").
+        app.MapGet("/api/ft8",
+            (Ft8Service ft8) => Results.Ok(new
+            {
+                nativeAvailable = ft8.NativeAvailable,
+                enabled = ft8.IsEnabled,
+                receiver = ft8.ActiveReceiver,
+                protocol = ft8.ActiveProtocol == Zeus.Dsp.Ft8.Ft8Protocol.Ft4 ? "FT4" : "FT8",
+                passes = ft8.DecodePasses,
+            }));
+
+        app.MapPost("/api/ft8/enable",
+            (Zeus.Contracts.Ft8EnableRequest body, Ft8Service ft8) =>
+            {
+                var proto = string.Equals(body.Protocol, "FT4", StringComparison.OrdinalIgnoreCase)
+                    ? Zeus.Dsp.Ft8.Ft8Protocol.Ft4 : Zeus.Dsp.Ft8.Ft8Protocol.Ft8;
+                if (body.Passes is int p) ft8.DecodePasses = Math.Clamp(p, 1, 4);
+                bool ok = ft8.Enable(body.Receiver ?? 0, proto);
+                log.LogInformation("api.ft8.enable rx={Rx} proto={Proto} ok={Ok}",
+                    body.Receiver ?? 0, proto, ok);
+                return ok
+                    ? Results.Ok(new { enabled = true, nativeAvailable = true })
+                    : Results.Ok(new { enabled = false, nativeAvailable = ft8.NativeAvailable });
+            });
+
+        app.MapPost("/api/ft8/disable", (Ft8Service ft8) =>
+        {
+            ft8.Disable();
+            log.LogInformation("api.ft8.disable");
+            return Results.Ok(new { enabled = false });
+        });
+
+        // WSPR native spotting control. nativeAvailable is false where the
+        // zeus_wspr decoder isn't shipped (e.g. Windows encode-only build today).
+        app.MapGet("/api/wspr",
+            (WsprService wspr) => Results.Ok(new
+            {
+                nativeAvailable = wspr.NativeAvailable,
+                enabled = wspr.IsEnabled,
+                receiver = wspr.ActiveReceiver,
+                dialFreqMhz = wspr.DialFreqMhz,
+            }));
+
+        app.MapPost("/api/wspr/enable",
+            (Zeus.Contracts.WsprEnableRequest body, WsprService wspr) =>
+            {
+                double dial = body.DialFreqMhz ?? 14.0956; // 20 m default
+                bool ok = wspr.Enable(body.Receiver ?? 0, dial);
+                log.LogInformation("api.wspr.enable rx={Rx} dial={Dial:F4} ok={Ok}",
+                    body.Receiver ?? 0, dial, ok);
+                return ok
+                    ? Results.Ok(new { enabled = true, nativeAvailable = true })
+                    : Results.Ok(new { enabled = false, nativeAvailable = wspr.NativeAvailable });
+            });
+
+        app.MapPost("/api/wspr/disable", (WsprService wspr) =>
+        {
+            wspr.Disable();
+            log.LogInformation("api.wspr.disable");
+            return Results.Ok(new { enabled = false });
+        });
+
         // Activation spots — merged POTA + SOTA feed, polled server-side by
         // ActivationSpotsService. The Spots panel polls this and offers
         // click-to-tune. Returns whatever's currently cached (empty list until

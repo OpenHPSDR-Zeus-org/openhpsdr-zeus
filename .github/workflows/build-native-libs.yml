@@ -196,6 +196,29 @@ jobs:
           $rid = "win-${{ matrix.arch }}"
           Copy-Item "native/build-miniaudio/Release/miniaudio.dll" "Zeus.Dsp/runtimes/$rid/native/miniaudio.dll"
 
+      # ---------- zeus_ft8 (native FT8/FT4 decode core) -------------------
+      # Pure C99, no external deps (bundles its own KISS FFT), MSVC-clean for
+      # both x64 and arm64 — same shape as miniaudio. Tests off for the lib-only
+      # CI build (the corpus self-test runs under CTest, not here).
+      # ClangCL toolset: ft8_lib's vendored decode.c/monitor.c use C99 VLAs that
+      # MSVC cl.exe rejects but clang accepts — same fix Zeus uses for libspecbleach.
+      - name: Configure zeus_ft8 (CMake)
+        run: |
+          $archFlag = if ("${{ matrix.arch }}" -eq "arm64") { "ARM64" } else { "x64" }
+          cmake -S native/ft8 -B native/build-ft8 `
+            -G "Visual Studio 17 2022" `
+            -A $archFlag `
+            -T ClangCL `
+            -DZEUS_FT8_TESTS=OFF
+
+      - name: Build zeus_ft8
+        run: cmake --build native/build-ft8 --config Release --parallel
+
+      - name: Stage zeus_ft8 DLL
+        run: |
+          $rid = "win-${{ matrix.arch }}"
+          Copy-Item "native/build-ft8/Release/zeus_ft8.dll" "Zeus.Dsp/runtimes/$rid/native/zeus_ft8.dll"
+
       # ---------- codec2 (FreeDV digital voice modem) ---------------------
       #
       # Fetched from drowe67/codec2 (pinned tag, see native/codec2/CMakeLists.txt)
@@ -463,6 +486,57 @@ jobs:
           cp "$so" Zeus.Dsp/runtimes/linux-arm64/native/libcodec2.so
           file Zeus.Dsp/runtimes/linux-arm64/native/libcodec2.so
 
+      # ---------- zeus_ft8 (native FT8/FT4 decode core) -------------------
+      # Pure C99, no external deps. x64 native; arm64 via the same aarch64
+      # cross toolchain used for wdsp/miniaudio above.
+      - name: Build & stage zeus_ft8 (x64)
+        if: matrix.arch == 'x64'
+        run: |
+          set -eux
+          cmake -S native/ft8 -B native/build-ft8 -DCMAKE_BUILD_TYPE=Release -DZEUS_FT8_TESTS=OFF
+          cmake --build native/build-ft8 --config Release --parallel
+          cp native/build-ft8/libzeus_ft8.so Zeus.Dsp/runtimes/linux-x64/native/libzeus_ft8.so
+          ldd Zeus.Dsp/runtimes/linux-x64/native/libzeus_ft8.so
+
+      - name: Build & stage zeus_ft8 (arm64)
+        if: matrix.arch == 'arm64'
+        run: |
+          set -eux
+          cmake -S native/ft8 -B native/build-ft8 \
+            -DCMAKE_BUILD_TYPE=Release -DZEUS_FT8_TESTS=OFF \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc
+          cmake --build native/build-ft8 --config Release --parallel
+          cp native/build-ft8/libzeus_ft8.so Zeus.Dsp/runtimes/linux-arm64/native/libzeus_ft8.so
+          file Zeus.Dsp/runtimes/linux-arm64/native/libzeus_ft8.so
+
+      # ---------- zeus_wspr (native WSPR encode + decode core) ------------
+      # POSIX (decode uses mkdtemp/pthreads); bundles pffft, no FFTW. x64
+      # native; arm64 via the aarch64 cross toolchain. Windows is encode-only
+      # and not yet wired (needs a getopt/mkdtemp port).
+      - name: Build & stage zeus_wspr (x64)
+        if: matrix.arch == 'x64'
+        run: |
+          set -eux
+          cmake -S native/wspr -B native/build-wspr -DCMAKE_BUILD_TYPE=Release -DZEUS_WSPR_TESTS=OFF
+          cmake --build native/build-wspr --config Release --parallel
+          cp native/build-wspr/libzeus_wspr.so Zeus.Dsp/runtimes/linux-x64/native/libzeus_wspr.so
+          nm -D Zeus.Dsp/runtimes/linux-x64/native/libzeus_wspr.so | grep -c zeus_wspr
+
+      - name: Build & stage zeus_wspr (arm64)
+        if: matrix.arch == 'arm64'
+        run: |
+          set -eux
+          cmake -S native/wspr -B native/build-wspr \
+            -DCMAKE_BUILD_TYPE=Release -DZEUS_WSPR_TESTS=OFF \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc
+          cmake --build native/build-wspr --config Release --parallel
+          cp native/build-wspr/libzeus_wspr.so Zeus.Dsp/runtimes/linux-arm64/native/libzeus_wspr.so
+          file Zeus.Dsp/runtimes/linux-arm64/native/libzeus_wspr.so
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -568,6 +642,20 @@ jobs:
           test -n "$dylib"
           cp "$dylib" Zeus.Dsp/runtimes/osx-arm64/native/libcodec2.dylib
           otool -L Zeus.Dsp/runtimes/osx-arm64/native/libcodec2.dylib
+
+      # ---------- zeus_ft8 (native FT8/FT4 decode core) -------------------
+      # Pure C99, no external deps (bundles KISS FFT), so no install_name_tool
+      # path rewriting needed — unlike libwdsp/FFTW. Just build + copy + verify
+      # the zeus_ft8_* exports are present.
+      - name: Build & stage zeus_ft8
+        run: |
+          set -eux
+          cmake -S native/ft8 -B native/build-ft8 -DCMAKE_BUILD_TYPE=Release -DZEUS_FT8_TESTS=OFF
+          cmake --build native/build-ft8 --config Release --parallel
+          cp native/build-ft8/libzeus_ft8.dylib Zeus.Dsp/runtimes/osx-arm64/native/libzeus_ft8.dylib
+          exports=$(nm -gU Zeus.Dsp/runtimes/osx-arm64/native/libzeus_ft8.dylib | grep -c zeus_ft8 || true)
+          echo "zeus_ft8 exports: $exports"
+          test "$exports" -ge 6
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
