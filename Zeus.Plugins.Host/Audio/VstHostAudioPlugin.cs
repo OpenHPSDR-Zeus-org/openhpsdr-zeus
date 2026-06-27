@@ -20,6 +20,7 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
     private readonly string _slot;
     private readonly ILogger? _log;
     private nint _handle;
+    private int _latencySamples;
 
     public VstHostAudioPlugin(
         IVstBridgeNative bridge,
@@ -53,6 +54,13 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
 
     public string DisplayName { get; }
     public AudioPluginRequirements Requirements { get; }
+
+    /// <summary>
+    /// The plugin's reported processing latency in samples at its loaded
+    /// geometry (0 if zero-latency, not natively loaded, or the bridge does
+    /// not report it). Captured once at load.
+    /// </summary>
+    public int ReportedLatencySamples => _latencySamples;
 
     /// <summary>
     /// Load gate for in-process native plugin hosting (VST3 + Audio Unit). Both
@@ -144,10 +152,15 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
         }
 
         var blockSize = Math.Max(1, host.CurrentBlockSize);
+        // Load at the host's ACTUAL processing rate, not the manifest's
+        // declared rate — the plugin must run at the stream rate it will be
+        // fed, or its time-based DSP (filters, modulation) is detuned. Falls
+        // back to the manifest rate only if the host reports nothing usable.
+        var sampleRate = host.CurrentSampleRate > 0 ? host.CurrentSampleRate : Requirements.SampleRate;
         var status = _bridge.LoadVst3(
             loadIdentity,
             Requirements.Channels,
-            Requirements.SampleRate,
+            sampleRate,
             blockSize,
             out _handle);
 
@@ -155,10 +168,15 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
             throw new PluginLoadException(
                 $"{(_isAudioUnit ? "Audio Unit" : "VST3")} load failed for {loadIdentity} (status={status})");
 
+        // Capture the plugin's reported processing latency (ABI v3). 0 for
+        // zero-latency effects; the host sums these to report total insert
+        // latency. Defaulted bridges (test fakes) return 0.
+        _latencySamples = _bridge.GetLatencySamples(_handle);
+
         _log?.LogInformation(
-            "{Kind} host loaded {Id} (channels={Channels} sr={SampleRate} block={Block})",
+            "{Kind} host loaded {Id} (channels={Channels} sr={SampleRate} block={Block} latency={Latency}smp)",
             _isAudioUnit ? "AU" : "VST", loadIdentity,
-            Requirements.Channels, Requirements.SampleRate, blockSize);
+            Requirements.Channels, sampleRate, blockSize, _latencySamples);
         return Task.CompletedTask;
     }
 
