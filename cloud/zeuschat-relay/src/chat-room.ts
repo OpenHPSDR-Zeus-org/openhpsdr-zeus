@@ -412,9 +412,27 @@ export class ChatRoom extends DurableObject<Env> {
 
   private roomsFor(callsign: string): RoomInfo[] {
     const out: RoomInfo[] = [{ id: PUBLIC_ROOM, name: 'Public', kind: 'public', members: [] }];
+    // Groups are discoverable by EVERYONE — they always appear in the tab list,
+    // regardless of membership. Joining (reading history / posting) is still gated
+    // by canAccess(), so a non-member sees the group exists but cannot enter until
+    // an admin adds them. Each group carries its member list so the client can
+    // render a locked state and tell whether the viewer is a member.
+    const groups: RoomInfo[] = [];
+    for (const meta of this.rooms.values()) {
+      if (meta.kind !== 'group') continue;
+      groups.push({
+        id: meta.id,
+        name: meta.name,
+        kind: 'group',
+        members: [...(this.members.get(meta.id) ?? [])].sort(),
+      });
+    }
+    groups.sort((a, b) => a.name.localeCompare(b.name));
+    out.push(...groups);
+    // DMs stay private to their two parties — only the viewer's own DMs are sent.
     for (const roomId of this.userRooms.get(callsign) ?? []) {
       const meta = this.rooms.get(roomId);
-      if (!meta) continue;
+      if (!meta || meta.kind !== 'dm') continue;
       out.push({
         id: meta.id,
         name: meta.name,
@@ -430,6 +448,19 @@ export class ChatRoom extends DurableObject<Env> {
     for (const ws of this.ctx.getWebSockets()) {
       const att = ws.deserializeAttachment() as Attachment | null;
       if (att?.callsign === callsign) this.send(ws, { t: 'rooms', rooms });
+    }
+  }
+
+  /**
+   * Re-push the room list to every connected operator. Groups are global, so a
+   * create / delete / membership change must reach everyone — not just the
+   * affected member. (The old per-member pushRooms left the admin's own member
+   * roster stale after an add/remove, which made "add member" look like a no-op.)
+   */
+  private broadcastRooms(): void {
+    for (const ws of this.ctx.getWebSockets()) {
+      const att = ws.deserializeAttachment() as Attachment | null;
+      if (att?.callsign) this.send(ws, { t: 'rooms', rooms: this.roomsFor(att.callsign) });
     }
   }
 
@@ -469,7 +500,9 @@ export class ChatRoom extends DurableObject<Env> {
     addTo(this.userRooms, callsign, room);
     await this.ctx.storage.put(`rm:${room}:${callsign}`, Date.now());
     await this.ctx.storage.put(`um:${callsign}:${room}`, Date.now());
-    this.pushRooms(callsign);
+    // Everyone sees groups, so re-push to all: the new member unlocks the room
+    // and existing members + the admin see the updated roster immediately.
+    this.broadcastRooms();
   }
 
   private async removeMember(room: string, callsign: string): Promise<void> {
@@ -480,7 +513,9 @@ export class ChatRoom extends DurableObject<Env> {
     removeFrom(this.userRooms, callsign, room);
     await this.ctx.storage.delete(`rm:${room}:${callsign}`);
     await this.ctx.storage.delete(`um:${callsign}:${room}`);
-    this.pushRooms(callsign); // tab disappears for them
+    // Re-push to all: the removed member relocks the group, others see the
+    // roster shrink.
+    this.broadcastRooms();
   }
 
   private async deleteRoom(admin: string, room: string): Promise<void> {
@@ -497,7 +532,9 @@ export class ChatRoom extends DurableObject<Env> {
     await this.ctx.storage.delete(`room:${room}`);
     const msgKeys = [...(await this.ctx.storage.list({ prefix: `m:${room}:` })).keys()];
     if (msgKeys.length) await this.ctx.storage.delete(msgKeys);
-    for (const call of exMembers) this.pushRooms(call);
+    // Groups are visible to everyone, so the deleted tab must disappear for all,
+    // not just the ex-members.
+    this.broadcastRooms();
   }
 
   // --- admin: clear history / global announcement ----------------------------
