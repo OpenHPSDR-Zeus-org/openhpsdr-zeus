@@ -275,6 +275,47 @@ public class AudioChainTests
         Assert.Equal<float>(capture.LastInput, output.ToArray());
     }
 
+    [Fact]
+    public void Telemetry_Tracks_Blocks_ProcessingTime_And_NonFiniteRepairs()
+    {
+        var chain = new AudioChain();
+        chain.SetSlot(0, new DirtyOutputPlugin()); // emits 3 non-finite samples per block
+
+        // Idle: everything zero until the first processed block.
+        var idle = chain.Telemetry;
+        Assert.Equal(0, idle.BlocksProcessed);
+        Assert.Equal(0, idle.NonFiniteRepairs);
+        Assert.Equal(0.0, idle.LastProcMicros);
+
+        Span<float> input = stackalloc float[6];
+        Span<float> output = stackalloc float[6];
+        chain.Process(input, output, Ctx(frames: 6));
+        chain.Process(input, output, Ctx(frames: 6));
+
+        var t = chain.Telemetry;
+        Assert.Equal(2, t.BlocksProcessed);
+        Assert.Equal(6, t.NonFiniteRepairs);          // 3 repaired per block × 2 blocks
+        Assert.True(t.MaxProcMicros >= t.LastProcMicros);
+        Assert.True(t.LastProcMicros >= 0.0);
+    }
+
+    [Fact]
+    public void Telemetry_MasterBypassed_DoesNotCountBlocks()
+    {
+        // Bypass short-circuits before the timing/counting section, so an
+        // inert chain never inflates the realtime telemetry.
+        var chain = new AudioChain { MasterBypassed = true };
+        chain.SetSlot(0, new DirtyOutputPlugin());
+
+        Span<float> input = stackalloc float[6];
+        Span<float> output = stackalloc float[6];
+        chain.Process(input, output, Ctx(frames: 6));
+
+        var t = chain.Telemetry;
+        Assert.Equal(0, t.BlocksProcessed);
+        Assert.Equal(0, t.NonFiniteRepairs);
+    }
+
     private sealed class AddPlugin : IAudioPlugin
     {
         private readonly float _bias;

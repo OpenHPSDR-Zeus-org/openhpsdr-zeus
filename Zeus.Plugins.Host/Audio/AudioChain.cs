@@ -40,6 +40,15 @@ public sealed class AudioChain : IAsyncDisposable
     private volatile float _inPeak;
     private volatile float _outPeak;
 
+    // Realtime perf + quality telemetry for the diagnostics surface. Written
+    // only on the audio thread (single writer) and published via Volatile so a
+    // 64-bit read on the control thread can't tear; no locks, no Interlocked
+    // contention on the hot path. All read 0 until the chain runs a block.
+    private long _procTicksLast;    // last processed block's chain duration (Stopwatch ticks)
+    private long _procTicksMax;     // peak block duration since start
+    private long _blocksProcessed;  // blocks that actually ran the chain (not bypassed)
+    private long _nonFiniteRepairs; // total NaN/Inf samples a plugin emitted and the chain zeroed
+
     public AudioChain(int maxFrames = 4096, int maxChannels = 2)
     {
         _scratch = new float[maxFrames * maxChannels];
@@ -69,6 +78,27 @@ public sealed class AudioChain : IAsyncDisposable
     /// </summary>
     public (float In, float Out) Meters => (_inPeak, _outPeak);
 
+    /// <summary>
+    /// Lock-free realtime telemetry for the diagnostics surface: how long the
+    /// chain took to process the most-recent and peak block (microseconds), how
+    /// many blocks have run, and how many non-finite (NaN/Inf) samples plugins
+    /// emitted and the chain repaired. All zero until the first processed block.
+    /// </summary>
+    public readonly record struct ChainTelemetry(
+        double LastProcMicros,
+        double MaxProcMicros,
+        long BlocksProcessed,
+        long NonFiniteRepairs);
+
+    public ChainTelemetry Telemetry => new(
+        TicksToMicros(Volatile.Read(ref _procTicksLast)),
+        TicksToMicros(Volatile.Read(ref _procTicksMax)),
+        Volatile.Read(ref _blocksProcessed),
+        Volatile.Read(ref _nonFiniteRepairs));
+
+    private static double TicksToMicros(long ticks) =>
+        ticks * (1_000_000.0 / System.Diagnostics.Stopwatch.Frequency);
+
     private static float BlockPeak(ReadOnlySpan<float> block)
     {
         float peak = 0f;
@@ -82,13 +112,18 @@ public sealed class AudioChain : IAsyncDisposable
         return peak;
     }
 
-    private static void RepairNonFiniteSamples(Span<float> block)
+    private static int RepairNonFiniteSamples(Span<float> block)
     {
+        int repaired = 0;
         for (int i = 0; i < block.Length; i++)
         {
             if (!float.IsFinite(block[i]))
+            {
                 block[i] = 0f;
+                repaired++;
+            }
         }
+        return repaired;
     }
 
     public IAudioPlugin? GetSlot(int index)
@@ -204,6 +239,9 @@ public sealed class AudioChain : IAsyncDisposable
             return;
         }
 
+        // Time the actual chain processing for the realtime DSP-load metric.
+        long startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+
         // Seed the chain by copying input into output; subsequent stages
         // ping-pong between `output` and `scratch`.
         input.CopyTo(output);
@@ -212,6 +250,7 @@ public sealed class AudioChain : IAsyncDisposable
         // one without tuple-swapping Span<float> (which is a ref struct
         // and disallowed in tuples).
         bool currentIsOutput = true;
+        int nonFinite = 0;
 
         for (int i = 0; i < MaxSlots; i++)
         {
@@ -223,13 +262,13 @@ public sealed class AudioChain : IAsyncDisposable
             {
                 var next = scratch[..needed];
                 plugin.Process(output[..needed], next, ctx);
-                RepairNonFiniteSamples(next);
+                nonFinite += RepairNonFiniteSamples(next);
             }
             else
             {
                 var next = output[..needed];
                 plugin.Process(scratch[..needed], next, ctx);
-                RepairNonFiniteSamples(next);
+                nonFinite += RepairNonFiniteSamples(next);
             }
 
             currentIsOutput = !currentIsOutput;
@@ -243,6 +282,14 @@ public sealed class AudioChain : IAsyncDisposable
         // Output meter tap (after the last active slot).
         _inPeak = inPk;
         _outPeak = BlockPeak(output[..needed]);
+
+        // Publish realtime telemetry (single writer; lock-free, no alloc).
+        long elapsed = System.Diagnostics.Stopwatch.GetTimestamp() - startTicks;
+        Volatile.Write(ref _procTicksLast, elapsed);
+        if (elapsed > Volatile.Read(ref _procTicksMax)) Volatile.Write(ref _procTicksMax, elapsed);
+        Volatile.Write(ref _blocksProcessed, Volatile.Read(ref _blocksProcessed) + 1);
+        if (nonFinite > 0)
+            Volatile.Write(ref _nonFiniteRepairs, Volatile.Read(ref _nonFiniteRepairs) + nonFinite);
     }
 
     private static void ValidateIndex(int index)

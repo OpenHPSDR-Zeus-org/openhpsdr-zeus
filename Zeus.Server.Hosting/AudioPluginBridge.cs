@@ -273,6 +273,74 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     public bool IsRxMasterBypassed => _rxChain.MasterBypassed;
 
     /// <summary>
+    /// Real-time diagnostics snapshot of the Audio Suite for the diagnostics v2
+    /// surface: active route, out-of-process engine health, and per-chain
+    /// (TX / RX) insert latency, per-block DSP load, and fidelity counters.
+    /// Off the realtime path — reads lock-free chain telemetry and enumerates
+    /// the plugin maps under the control-thread lock. Never call from audio.
+    /// </summary>
+    public AudioSuiteDiagnostics GetAudioSuiteDiagnostics()
+    {
+        const double sampleRate = 48000.0; // Audio Suite chains run at the host rate
+        bool engineActive = _vstEngine is { IsActive: true };
+
+        AudioChainDiagnostics BuildChain(AudioChain chain, int hostBlock)
+        {
+            // Enumerate the actual realtime slots (≤ MaxSlots) in chain order —
+            // NOT the registered/scanned plugin set, which holds the whole
+            // library. Latency is summed only over non-bypassed slots, matching
+            // what Process actually runs.
+            var plugins = new List<ChainPluginInfo>(AudioChain.MaxSlots);
+            int vstCount = 0, sumLatency = 0;
+            for (int slot = 0; slot < chain.SlotCount; slot++)
+            {
+                var plugin = chain.GetSlot(slot);
+                if (plugin is null) continue;
+                bool bypassed = chain.IsSlotBypassed(slot);
+                int latency = 0;
+                bool isVst = plugin is VstHostAudioPlugin;
+                if (plugin is VstHostAudioPlugin vst)
+                {
+                    latency = vst.ReportedLatencySamples;
+                    vstCount++;
+                    if (!bypassed) sumLatency += latency;
+                }
+                plugins.Add(new ChainPluginInfo(
+                    slot, plugin.DisplayName, isVst, bypassed, latency, latency / sampleRate * 1000.0));
+            }
+
+            var t = chain.Telemetry;
+            var (inPk, outPk) = chain.Meters;
+            double periodMicros = hostBlock / sampleRate * 1_000_000.0;
+            return new AudioChainDiagnostics(
+                ActivePlugins: plugins.Count,
+                VstPlugins: vstCount,
+                SumLatencySamples: sumLatency,
+                SumLatencyMs: sumLatency / sampleRate * 1000.0,
+                InPeakDbfs: ToDbfs(inPk),
+                OutPeakDbfs: ToDbfs(outPk),
+                LastBlockProcMicros: t.LastProcMicros,
+                MaxBlockProcMicros: t.MaxProcMicros,
+                BlockPeriodMicros: periodMicros,
+                DspLoadPercent: periodMicros > 0 ? t.LastProcMicros / periodMicros * 100.0 : 0.0,
+                PeakDspLoadPercent: periodMicros > 0 ? t.MaxProcMicros / periodMicros * 100.0 : 0.0,
+                BlocksProcessed: t.BlocksProcessed,
+                NonFiniteRepairs: t.NonFiniteRepairs,
+                Plugins: plugins);
+        }
+
+        return new AudioSuiteDiagnostics(
+            ProcessingMode: engineActive ? "vst-out-of-process" : "native-in-process",
+            OutOfProcessEngineActive: engineActive,
+            OutOfProcessDegradedBlocks: _vstEngine?.DegradedBlocks ?? 0,
+            Tx: BuildChain(_chain, TxAudioHostBlockSize),
+            Rx: BuildChain(_rxChain, RxAudioHostBlockSize));
+    }
+
+    private static double ToDbfs(float linearPeak) =>
+        linearPeak <= 1e-6f ? -120.0 : 20.0 * Math.Log10(linearPeak);
+
+    /// <summary>
     /// Chain-level signal meters (linear peak) for the Audio Suite IN /
     /// OUT bars: the level entering the TX insert chain and the level
     /// leaving it. Both read 0 until the chain processes audio — which
