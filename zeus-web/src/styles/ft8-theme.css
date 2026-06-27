@@ -423,3 +423,90 @@
    is the cluster's own .ft8-tx__tune button, so there is no .ft8-power__tune. */
 .ft8-power__row .knob-group { flex: 1; min-width: 0; }
 .ft8-tx__halt:hover { background: var(--tx); color: #1a0604; }
+
+/* ---- Activity log (center column) ---- */
+.ft8-region--log { flex: 0 0 auto; max-height: 42%; }
+.ft8-region--log .ft8-region__body { padding: 0; display: flex; flex-direction: column; min-height: 0; }
+.ft8-log { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.ft8-log__bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--hud-line);
+  background: var(--hud-panel-2);
+}
+.ft8-log__count { font-size: 10px; color: var(--hud-text-dim); font-variant-numeric: tabular-nums; }
+.ft8-log__btn {
+  background: var(--hud-panel);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-text);
+  border-radius: 3px;
+  padding: 3px 9px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.ft8-log__btn:not(:disabled):hover { border-color: var(--hud-cyan-line); }
+.ft8-log__btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.ft8-log__empty { padding: 14px; text-align: center; color: var(--hud-text-dim); font-size: 11px; font-style: italic; }
+.ft8-log__scroll { overflow: auto; min-height: 0; flex: 1; }
+
+.ft8-log-table {
+  font-family: var(--font-mono, 'Archivo Narrow', monospace);
+  font-size: 11px;
+  width: 100%;
+  border-collapse: collapse;
+}
+.ft8-log-table th {
+  position: sticky;
+  top: 0;
+  text-align: left;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--hud-text-dim);
+  background: var(--hud-panel-2);
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--hud-cyan-line);
+}
+.ft8-log-table td {
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--hud-line);
+  white-space: nowrap;
+}
+.ft8-log-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.ft8-log-table td.call { color: var(--hud-cyan); font-weight: 600; }
+.ft8-log-table td.qsl { color: var(--hud-cq); text-align: center; }
+
+/* ---- Stats (right column) ---- */
+.ft8-stats { display: flex; flex-direction: column; gap: 8px; }
+.ft8-stats__grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.ft8-stat {
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-line);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+.ft8-stat__value { font-size: 20px; font-variant-numeric: tabular-nums; color: var(--hud-cyan); line-height: 1.1; }
+.ft8-stat__label {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--hud-text-dim);
+  margin-top: 2px;
+}
+.ft8-stats__bestdx {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-line);
+  border-radius: 4px;
+}
+.ft8-stats__bestdx-label { font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--hud-text-dim); }
+.ft8-stats__bestdx-value { font-size: 13px; color: var(--hud-cyan); font-variant-numeric: tabular-nums; }
+.ft8-stats__note { font-size: 9px; line-height: 1.4; color: var(--hud-text-dim); font-style: italic; }

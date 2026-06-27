@@ -71,6 +71,54 @@ public sealed class AdifImportTests
     }
 
     [Fact]
+    public void Export_Ft4_Emits_Mfsk_Mode_With_Ft4_Submode()
+    {
+        // FT4 is an MFSK SUBMODE in ADIF, not a MODE enum value. Strict parsers
+        // (LoTW / Club Log / QRZ) reject MODE=FT4, so a native FT4 QSO must export
+        // as MODE=MFSK + SUBMODE=FT4.
+        var doc = new LogEntryDocument
+        {
+            Id = Guid.NewGuid().ToString(),
+            QsoDateTimeUtc = new DateTime(2026, 6, 26, 12, 0, 0, DateTimeKind.Utc),
+            Callsign = "K1ABC",
+            Band = "20M",
+            Mode = "FT4",
+            RstSent = "-12",
+            RstRcvd = "-07",
+        };
+
+        var sb = new StringBuilder();
+        LogService.AppendAdifRecord(sb, doc);
+        var exported = sb.ToString();
+
+        Assert.Contains("<MODE:4>MFSK", exported);
+        Assert.Contains("<SUBMODE:3>FT4", exported);
+        Assert.DoesNotContain("<MODE:3>FT4", exported);
+    }
+
+    [Fact]
+    public void Export_Ft8_Keeps_Ft8_Mode_With_No_Submode()
+    {
+        var doc = new LogEntryDocument
+        {
+            Id = Guid.NewGuid().ToString(),
+            QsoDateTimeUtc = new DateTime(2026, 6, 26, 12, 0, 0, DateTimeKind.Utc),
+            Callsign = "K1ABC",
+            Band = "20M",
+            Mode = "FT8",
+            RstSent = "-12",
+            RstRcvd = "-07",
+        };
+
+        var sb = new StringBuilder();
+        LogService.AppendAdifRecord(sb, doc);
+        var exported = sb.ToString();
+
+        Assert.Contains("<MODE:3>FT8", exported);
+        Assert.DoesNotContain("<SUBMODE:", exported);
+    }
+
+    [Fact]
     public void Mapping_RejectsRecordsMissingMinimumQsoFields()
     {
         var record = new AdifRecord(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)

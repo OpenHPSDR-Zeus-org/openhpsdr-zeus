@@ -15,6 +15,7 @@ using Zeus.Protocol1.Discovery;
 using Zeus.Protocol2;
 using Zeus.Server.Diagnostics;
 using Zeus.Server.Tci;
+using Zeus.Server.Wsjtx;
 
 namespace Zeus.Server;
 
@@ -3234,11 +3235,19 @@ public static class ZeusEndpoints
             return Results.Ok(response);
         });
 
-        app.MapPost("/api/log/entry", async (CreateLogEntryRequest req, LogService logService, HttpContext ctx) =>
+        app.MapPost("/api/log/entry", async (CreateLogEntryRequest req, LogService logService, WsjtxUdpBroadcaster wsjtx, HttpContext ctx) =>
         {
             if (string.IsNullOrWhiteSpace(req.Callsign))
                 return Results.BadRequest(new { error = "callsign required" });
             var entry = await logService.CreateLogEntryAsync(req, ctx.RequestAborted);
+            // Push the just-logged QSO to a third-party logger if the operator has
+            // opted in (WSJT-X type-12 LoggedADIF). No-op when disabled; this is the
+            // only logging path that broadcasts (ADIF bulk import never does).
+            // Fire-and-forget so a slow/blocked send (e.g. a free-text Host whose
+            // DNS is dead) can never delay the operator's log confirmation. The
+            // broadcaster swallows all send failures internally; use a detached
+            // token so the post-response request abort doesn't cancel it.
+            _ = wsjtx.BroadcastLoggedQsoAsync(entry, CancellationToken.None);
             return Results.Ok(entry);
         });
 
@@ -3390,6 +3399,18 @@ public static class ZeusEndpoints
                 return Results.BadRequest(new { error = "bindAddress and port required" });
             var result = cat.TestPort(req.BindAddress.Trim(), req.Port);
             return Results.Ok(result);
+        });
+
+        // WSJT-X logged-QSO UDP broadcaster (outbound QSO-record push to
+        // JTAlert / Log4OM / GridTracker / N1MM). Default OFF / loopback; config
+        // applies live (no restart — there is no listener, only a UDP sender).
+        app.MapGet("/api/wsjtx/status", (WsjtxManagementService wsjtx) => wsjtx.GetStatus());
+
+        app.MapPost("/api/wsjtx/config", (WsjtxRuntimeConfig req, WsjtxManagementService wsjtx, HttpContext ctx) =>
+        {
+            log.LogInformation("api.wsjtx.config enabled={En} host={Host} port={Port}", req.Enabled, req.Host, req.Port);
+            var status = wsjtx.SetConfig(req);
+            return Results.Ok(status);
         });
 
         app.Map("/ws", async (HttpContext ctx, StreamingHub hub) =>
