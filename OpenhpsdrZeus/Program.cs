@@ -660,8 +660,26 @@ public partial class Program
         // native window was still alive. We deliberately do NOT save here — the
         // window is torn down and its size getters are unsafe to read.
         Console.WriteLine("Window closed; stopping backend.");
-        app.StopAsync().GetAwaiter().GetResult();
+        StopAndDisposeHost(app);
         return 0;
+    }
+
+    // Desktop/status-window paths drive the host lifecycle by hand (Photino owns
+    // the main thread, so we can't use app.Run()). They historically called only
+    // StopAsync and returned — which stops hosted services but never disposes the
+    // DI container, so no IAsyncDisposable singleton's DisposeAsync ran. That left
+    // in-process macOS Audio Units in the active TX/RX chain undisposed: the
+    // plugin's JUCE Timer thread survived into CLR teardown and faulted with a
+    // SIGSEGV in juce::MessageQueue::post on the freed MessageManager mutex — the
+    // "crash dialog on window close" symptom. Disposing the host runs
+    // AudioPluginBridge.DisposeAsync (AudioChain teardown → AudioComponentInstanceDispose)
+    // and RxVstEngineService.DisposeAsync (out-of-process VST engine kill, which
+    // also stops it orphaning the engine process). The web/service path doesn't
+    // need this because app.RunAsync() disposes the host in its finally block.
+    private static void StopAndDisposeHost(WebApplication app)
+    {
+        app.StopAsync().GetAwaiter().GetResult();
+        ((IAsyncDisposable)app).DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 
     // Photino occasionally opens the frame off the visible desktop on
@@ -1194,7 +1212,7 @@ public partial class Program
         window.WaitForClose();
 
         Console.WriteLine("Status window closed; stopping backend.");
-        app.StopAsync().GetAwaiter().GetResult();
+        StopAndDisposeHost(app);
         return 0;
     }
 }
