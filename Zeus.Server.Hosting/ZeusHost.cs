@@ -469,6 +469,20 @@ public static class ZeusHost
         builder.Services.AddSingleton<FreeDvNativeInstaller>();
         builder.Services.AddSingleton<TxService>();
         builder.Services.AddSingleton<TxAudioIngest>();
+        // Ft8TxService / WsprTxService — the ARMED FT8/FT4 + WSPR auto-sequence
+        // keyers (TX half; the RX decode/spot services above are untouched). They
+        // own the UTC slot clock, key MOX via TxService (MoxSource.Ft8) and stream
+        // synthesized tone audio through TxAudioIngest. They NEVER auto-arm (armed
+        // defaults false, operator-only) and a backend watchdog auto-disarms an
+        // unattended arm. No PureSignal / drive / power state is touched. A shared
+        // DigitalTxArbiter enforces that only ONE of FT8/FT4/WSPR is armed at a
+        // time (they share MoxSource.Ft8), so neither can drop MOX out from under
+        // the other or double-feed TXA.
+        builder.Services.AddSingleton<DigitalTxArbiter>();
+        builder.Services.AddSingleton<Ft8TxService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Ft8TxService>());
+        builder.Services.AddSingleton<WsprTxService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<WsprTxService>());
         // Resolve at startup so the MicPcmReceived subscription attaches before the
         // first client connects (lazy resolution would leave early frames unhandled).
         builder.Services.AddHostedService<TxAudioIngestStartup>();

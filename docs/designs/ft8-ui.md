@@ -141,6 +141,51 @@ visuals before that global flip. The **FT8-scoped** theme is approved now.
 The layout/IA above is unaffected; build components theme-agnostic and apply
 the HUD token layer as the skin.
 
+## Layout refinement — KB2UKA 2026-06-26 (build to THIS)
+
+KB2UKA re-confirmed `ft8-target-mockup.png` as **the** target layout ("I like
+this layout a little better than ours"). Build the workspace to match it, with
+these hard adaptations:
+
+### Hard rules
+- **NO closable panels.** The mockup draws an `×` on every panel header —
+  **ignore those.** Zeus has zero close/collapse/move/resize affordances in this
+  workspace. Every panel is **fixed in its slot**, always visible. Do not render
+  a close button anywhere. (Reinforces "no moveable panels" above.)
+- **Controls map to OUR feature set, not WSJT-X's.** The mockup is a visual
+  reference; its labels are illustrative. Concretely:
+  - **MODE** tiles = `FT8 · FT4 · WSPR` (NOT JT65/JT9 — Zeus does not implement
+    those). WSPR swaps the QSO-oriented panels for spot-oriented ones (see WSPR
+    note above).
+  - **DECODE** tiles = Zeus's actual decode depths (`NORMAL · DEEP · MULTI`
+    maps to our single-pass / multi-pass / deep multi-pass `time_osr` ladder).
+  - **Power / TX controls** mirror Zeus's existing rig controls (Drive %, Tune
+    power, MOX/TUNE) — same backing endpoints/state as the main app, NOT new
+    parallel power logic. See "TX control + power" below.
+  - **Meters** (SWR / ALC / COMP) reuse Zeus's existing meter sources; only show
+    meters the connected board actually provides (board-capability gated).
+  - Chrome text in the mock (`CAT: IC-7300`, `WSJT-X v2.6.1`) is mockup-only —
+    Zeus shows its own connected-radio / version info.
+
+### Waterfall ("RECEIVE" panel) — KB2UKA 2026-06-26
+- **Beautiful, and reuse our existing waterfall.** Borrowing the current Zeus
+  panadapter/waterfall WebGL panel and injecting it into the workspace is the
+  approved approach — do not write a second waterfall renderer from scratch.
+- **Click-a-slice to tune.** Operator clicks a slice/column in the waterfall to
+  set their RX/TX audio frequency (the in-passband offset, 0–2.5 kHz), with a
+  visible RX cursor and TX marker as in the mock. Honor `HOLD TX FREQ`.
+- Controls: **WF SPEED · WF ZOOM · WF OFFSET** as shown.
+
+### TX control + power — KB2UKA 2026-06-26
+- **TX CONTROL** cluster: `TX ENABLE` arm (explicit, never auto-arms),
+  `HOLD TX FREQ`, `TX EVEN/ODD` slot selector, **TX POWER** slider, **TUNE**
+  button.
+- **Power controls live in the workspace and mimic what we already have** so the
+  operator adjusts drive/tune power without leaving the workspace. Wire them to
+  the **same** drive/tune endpoints and state the main rig uses — do not fork a
+  second power model. (Safety: FT8 is 100 % duty; do not change power defaults,
+  and do not auto-key.)
+
 ## Build sequencing
 
 UI is a later phase. Backend decode engine, `Zeus.Dsp.Ft8`, `Ft8Service`, and

@@ -262,4 +262,13 @@ public enum MsgType : byte
     // into its spot table. UI ignores unknown types so older builds tolerate it.
     // Payload: [type:1][UTF-8 JSON WsprSpotBatchDto]. See WsprSpotFrame.cs.
     WsprSpot = 0x39,
+
+    // Server → client (FT8/FT4/WSPR TX keyer status). Broadcast by Ft8TxService /
+    // WsprTxService on every armed/staged/transmitting edge so the UI reflects
+    // what the backend ACTUALLY keyed (authoritative), not just what the operator
+    // staged. Same low-rate JSON-envelope shape as Ft8Decode (0x38). One frame
+    // covers both the FT8/FT4 keyer (Slot = "even"/"odd") and the WSPR beacon
+    // (Slot = ""). UI ignores unknown types so older builds tolerate it.
+    // Payload: [type:1][UTF-8 JSON Ft8TxStatusDto]. See Ft8TxStatusFrame.cs.
+    Ft8TxStatus = 0x3A,
 }

@@ -227,33 +227,103 @@
 .ft8-band-btn:hover { border-color: var(--hud-cyan-line); }
 .ft8-band-btn.is-active { background: var(--hud-cyan); color: #06121a; font-weight: 700; }
 
-/* QSO / TX-control panel. */
-.ft8-qso { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
-.ft8-qso--empty { color: var(--hud-text-dim); font-style: italic; }
-.ft8-qso__dx { color: var(--hud-text); }
-.ft8-qso__dx strong { color: var(--hud-cyan); }
-.ft8-qso__ladder { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
-.ft8-qso__ladder li { display: flex; gap: 8px; align-items: baseline; }
-.ft8-qso__slot { color: var(--hud-text-dim); font-size: 10px; width: 26px; flex: none; }
-.ft8-qso__msg { font-variant-numeric: tabular-nums; color: var(--hud-text); }
-.ft8-qso__bench {
-  color: var(--hud-power, #ffc93a);
-  background: rgba(255, 201, 58, 0.08);
-  border: 1px solid rgba(255, 201, 58, 0.3);
+/* ---- TX control cluster ---- */
+.ft8-tx { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.ft8-tx__row { display: flex; gap: 6px; align-items: center; }
+
+/* Arm / transmit lamps — dim by default, lit by backend status. */
+.ft8-tx__lamps { display: flex; gap: 6px; align-items: center; }
+.ft8-tx__lamp {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
   border-radius: 3px;
-  padding: 6px 8px;
-  font-size: 11px;
-  line-height: 1.35;
+  border: 1px solid var(--hud-line);
+  color: var(--hud-text-dim);
+  background: var(--hud-inset);
 }
-.ft8-qso__actions { display: flex; gap: 6px; }
-.ft8-qso__btn {
+.ft8-tx__lamp.is-armed { color: #06121a; background: var(--hud-me); border-color: var(--hud-me); font-weight: 700; }
+.ft8-tx__lamp.is-tx { color: #1a0604; background: var(--tx); border-color: var(--tx); font-weight: 700; }
+.ft8-tx__wdt { font-size: 10px; color: var(--hud-text-dim); font-variant-numeric: tabular-nums; }
+
+/* ENABLE-TX master. */
+.ft8-tx__enable {
+  flex: 1;
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-cyan-line);
+  color: var(--hud-cyan);
+  border-radius: 3px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.ft8-tx__enable.is-on { background: var(--hud-me); color: #06121a; border-color: var(--hud-me); }
+.ft8-tx__enable:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Generic toggle / segmented / macro buttons. */
+.ft8-tx__toggle,
+.ft8-tx__seg-btn,
+.ft8-tx__macro,
+.ft8-tx__tune,
+.ft8-tx__halt {
   background: var(--hud-panel-2);
   border: 1px solid var(--hud-line);
   color: var(--hud-text);
   border-radius: 3px;
-  padding: 4px 12px;
+  padding: 4px 10px;
   cursor: pointer;
   font: inherit;
+  font-size: 11px;
 }
-.ft8-qso__btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.ft8-qso__btn:not(:disabled):hover { border-color: var(--hud-cyan-line); }
+.ft8-tx__toggle:not(:disabled):hover,
+.ft8-tx__macro:not(:disabled):hover,
+.ft8-tx__tune:hover { border-color: var(--hud-cyan-line); }
+.ft8-tx__toggle.is-on,
+.ft8-tx__seg-btn.is-on,
+.ft8-tx__macro.is-on { background: var(--hud-cyan); color: #06121a; border-color: var(--hud-cyan); font-weight: 700; }
+.ft8-tx__macro:disabled,
+.ft8-tx__toggle:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.ft8-tx__seg { display: flex; align-items: center; gap: 4px; }
+.ft8-tx__seg-label { font-size: 10px; color: var(--hud-text-dim); }
+.ft8-tx__seg-btn { padding: 4px 8px; }
+
+.ft8-tx__offset,
+.ft8-tx__field { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--hud-text-dim); }
+.ft8-tx__field { justify-content: space-between; }
+.ft8-tx__offset input,
+.ft8-tx__field input,
+.ft8-tx__custom input {
+  background: var(--hud-panel);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-cyan);
+  border-radius: 3px;
+  padding: 3px 6px;
+  font: inherit;
+  width: 5.5em;
+  text-align: right;
+}
+.ft8-tx__offset input:disabled { opacity: 0.5; }
+
+.ft8-tx__next { display: flex; align-items: baseline; gap: 8px; }
+.ft8-tx__next-label { font-size: 10px; color: var(--hud-text-dim); }
+.ft8-tx__next-msg { font-variant-numeric: tabular-nums; color: var(--hud-cyan); font-size: 13px; }
+.ft8-tx__dx { font-size: 11px; color: var(--hud-text); }
+.ft8-tx__dx strong { color: var(--hud-cyan); }
+
+.ft8-tx__macros { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+
+.ft8-tx__custom { display: flex; gap: 6px; }
+.ft8-tx__custom input { flex: 1; width: auto; text-align: left; text-transform: uppercase; }
+
+.ft8-tx__tune { flex: 1; }
+.ft8-tx__tune.is-on { background: var(--power); color: #06121a; border-color: var(--power); font-weight: 700; }
+.ft8-tx__halt {
+  flex: 1;
+  border-color: var(--tx);
+  color: var(--tx);
+  font-weight: 700;
+}
+.ft8-tx__halt:hover { background: var(--tx); color: #1a0604; }
