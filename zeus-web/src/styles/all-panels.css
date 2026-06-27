@@ -634,6 +634,81 @@
   color: var(--tx);
 }
 
+/* Star button shows its pinned state by adopting the accent colour. */
+.url-embed-btn.url-embed-btn--active {
+  color: var(--accent);
+}
+
+/* LAN Browser bookmark bar — a thin strip of pinned device pages between the
+ * address-bar header and the iframe body. Horizontally scrollable so a long
+ * list never pushes the body out. */
+.lan-bookmark-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  background: var(--panel-bot, rgba(0, 0, 0, 0.2));
+  border-top: 1px solid var(--line);
+}
+.lan-bookmark {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  max-width: 160px;
+  height: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs, 2px);
+  background: var(--bg-1, rgba(255, 255, 255, 0.04));
+  color: var(--fg-2);
+  transition: border-color var(--dur-fast), color var(--dur-fast);
+}
+.lan-bookmark:hover {
+  color: var(--fg-0);
+  border-color: var(--accent);
+}
+.lan-bookmark--active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.lan-bookmark-go {
+  max-width: 138px;
+  padding: 0 4px 0 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.lan-bookmark-del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+.lan-bookmark-del:hover {
+  color: var(--tx);
+}
+.lan-bookmark-go:focus-visible,
+.lan-bookmark-del:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .workspace-tile--unavailable {
   border-style: dashed;
 }
