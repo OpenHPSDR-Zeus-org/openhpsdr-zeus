@@ -15,6 +15,7 @@
 // in issue #241 — layout switching now lives entirely in the LeftLayoutBar.
 
 import { BackgroundSettingsPanel } from './BackgroundSettingsPanel';
+import { PanadapterOverlaySettingsPanel } from './PanadapterOverlaySettingsPanel';
 import { SpectrumScaleSettingsPanel } from './SpectrumScaleSettingsPanel';
 import { ThemeSettingsPanel } from './ThemeSettingsPanel';
 import { TraceColorPanel } from './TraceColorPanel';
@@ -25,6 +26,7 @@ export function DisplayPanel() {
       <ThemeSettingsPanel />
       <BackgroundSettingsPanel />
       <TraceColorPanel />
+      <PanadapterOverlaySettingsPanel />
       <SpectrumScaleSettingsPanel />
     </div>
   );

@@ -33,11 +33,9 @@ import {
   CHAT_IMAGE_ACCEPT,
 } from '../../util/chat-image';
 import { useQrzStore } from '../../state/qrz-store';
+import { useProfileOverlayStore } from '../../state/profile-overlay-store';
+import { useDisplaySettingsStore } from '../../state/display-settings-store';
 import { ConfirmDialog } from '../ConfirmDialog';
-import { QrzCard } from '../../components/design/QrzCard';
-import { qrzStationToContact } from '../../components/design/qrz-contact';
-import type { Contact } from '../../components/design/data';
-import type { QrzStation } from '../../api/qrz';
 
 const MAX_MESSAGE_CHARS = 2000;
 
@@ -695,103 +693,6 @@ function ImageLightbox({ att, onClose }: { att: ChatAttachment; onClose: () => v
   );
 }
 
-function ProfileOverlay({
-  callsign,
-  onClose,
-}: {
-  callsign: string;
-  onClose: () => void;
-}) {
-  const lookupCached = useQrzStore((s) => s.lookupCached);
-  const qrzConnected = useQrzStore((s) => s.connected);
-  const qrzHome = useQrzStore((s) => s.home);
-  const [station, setStation] = useState<QrzStation | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let live = true;
-    setLoading(true);
-    setError(null);
-    void lookupCached(callsign)
-      .then((s) => {
-        if (!live) return;
-        if (s) setStation(s);
-        else setError(qrzConnected ? 'No QRZ record' : 'Log into QRZ to view profiles');
-      })
-      .finally(() => {
-        if (live) setLoading(false);
-      });
-    return () => {
-      live = false;
-    };
-  }, [callsign, lookupCached, qrzConnected]);
-
-  const contact: Contact | null = useMemo(
-    () => qrzStationToContact(station, qrzHome),
-    [station, qrzHome],
-  );
-
-  return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'absolute',
-        inset: 0,
-        background: 'rgba(0,0,0,0.55)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 30,
-        padding: 16,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: 'var(--panel-top)',
-          border: '1px solid var(--panel-border)',
-          borderRadius: 'var(--r-lg)',
-          boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
-          width: 340,
-          maxWidth: '100%',
-          maxHeight: '90%',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '6px 10px',
-            borderBottom: '1px solid var(--panel-border)',
-          }}
-        >
-          <span
-            className="mono"
-            style={{ fontWeight: 700, letterSpacing: '0.06em', color: 'var(--fg-0)' }}
-          >
-            {callsign}
-          </span>
-          <button type="button" className="btn sm" onClick={onClose} title="Close">
-            ✕
-          </button>
-        </div>
-        <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
-          <QrzCard
-            contact={contact}
-            enriching={loading}
-            lookupError={!loading && !contact ? (error ?? 'No QRZ record') : null}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Eye icon — inline SVG for freq visibility toggle
 // ---------------------------------------------------------------------------
@@ -824,6 +725,37 @@ function EyeIcon({ open }: { open: boolean }) {
       <ellipse cx="8" cy="8" rx="6" ry="3.5" stroke="currentColor" strokeWidth="1.4" />
       <circle cx="8" cy="8" r="1.8" fill="currentColor" />
       <line x1="2" y1="14" x2="14" y2="2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// Panadapter chat-roster overlay toggle — a spectrum baseline with an operator
+// marker pin, echoing how the overlay paints callsigns on the panadapter. The
+// `open` (slashed) variant marks the overlay hidden, mirroring the EyeIcon.
+function RosterOverlayIcon({ on }: { on: boolean }) {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 16 16"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      {/* spectrum baseline */}
+      <path
+        d="M1.5 12.5 L4 12.5 L5.5 9 L7 12.5 L11 12.5"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {/* operator marker pin + dot */}
+      <line x1="11.5" y1="12.5" x2="11.5" y2="4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <circle cx="11.5" cy="3.5" r="1.6" fill="currentColor" />
+      {!on && (
+        <line x1="2" y1="14" x2="14" y2="2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      )}
     </svg>
   );
 }
@@ -1661,9 +1593,10 @@ export function ChatPanel() {
   const ban = useChatStore((s) => s.ban);
 
   const qrzConnected = useQrzStore((s) => s.connected);
+  const showRosterOverlay = useDisplaySettingsStore((s) => s.showChatRosterOverlay);
+  const setShowRosterOverlay = useDisplaySettingsStore((s) => s.setShowChatRosterOverlay);
 
   const [draft, setDraft] = useState('');
-  const [profileCall, setProfileCall] = useState<string | null>(null);
   // Pending inline photo: compressed and ready to send, shown as a preview chip
   // above the composer until the operator sends or removes it.
   const [pendingAttachment, setPendingAttachment] = useState<ChatAttachment | null>(null);
@@ -1757,9 +1690,7 @@ export function ChatPanel() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [activeMessages.length, activeRoom]);
 
-  const openProfile = useCallback((callsign: string) => {
-    setProfileCall(callsign.trim().toUpperCase());
-  }, []);
+  const openProfile = useProfileOverlayStore((s) => s.open);
 
   // Sorted roster
   const sortedRoster = useMemo(() => {
@@ -2001,6 +1932,39 @@ export function ChatPanel() {
         ) : null}
 
         <div style={{ flex: 1 }} />
+
+        {/* Panadapter chat-roster overlay toggle — show/hide operators on the
+            panadapter, mirroring the frequency-visibility eye next to it. */}
+        {enabled && (
+          <button
+            type="button"
+            onClick={() => setShowRosterOverlay(!showRosterOverlay)}
+            aria-label={
+              showRosterOverlay
+                ? 'Operators are shown on the panadapter — click to hide'
+                : 'Operators are hidden from the panadapter — click to show'
+            }
+            aria-pressed={showRosterOverlay}
+            title={
+              showRosterOverlay
+                ? 'Showing operators on the panadapter'
+                : 'Operators hidden from the panadapter'
+            }
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: '2px 4px',
+              cursor: 'pointer',
+              color: showRosterOverlay ? 'var(--accent-bright)' : 'var(--fg-3)',
+              display: 'flex',
+              alignItems: 'center',
+              borderRadius: 'var(--r-sm)',
+              transition: 'color var(--dur-fast) var(--ease-out)',
+            }}
+          >
+            <RosterOverlayIcon on={showRosterOverlay} />
+          </button>
+        )}
 
         {/* Freq visibility eye toggle */}
         {enabled && connected && (
@@ -2605,10 +2569,9 @@ export function ChatPanel() {
         </div>
       </div>
 
-      {/* ── QRZ profile overlay ── */}
-      {profileCall ? (
-        <ProfileOverlay callsign={profileCall} onClose={() => setProfileCall(null)} />
-      ) : null}
+      {/* QRZ profile overlay is mounted once at the app root (ProfileOverlayHost)
+          and opened via profile-overlay-store, so it's shared with the
+          panadapter chat-roster overlay. */}
 
       {/* ── Full-size photo viewer ── */}
       {lightbox ? <ImageLightbox att={lightbox} onClose={() => setLightbox(null)} /> : null}
