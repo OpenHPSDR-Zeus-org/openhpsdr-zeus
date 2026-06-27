@@ -229,7 +229,17 @@ public class ProcessSupervisorTests
 
         Assert.False(result.Cancelled);
         Assert.True(result.ProcessFound);
-        Assert.Equal(7, result.ExitCode);
+
+        // The supervisor attaches by PID via Process.GetProcessById — it is NOT the
+        // process that started the child. On Windows the exit code is still readable
+        // through the open process handle; on Unix only the real parent can reap a
+        // child's status (waitpid), so ExitCode is unavailable and the production
+        // crash record records null. This mirrors the live sidecar, which always
+        // attaches to a backend PID it never started.
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            Assert.Equal(7, result.ExitCode);
+        else
+            Assert.Null(result.ExitCode);
     }
 
     [Fact]
