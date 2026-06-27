@@ -401,12 +401,16 @@ export default function App() {
   // rather than a docked workspace tile, so engaging FreeDV never rearranges the
   // operator's console. Fires only on the false→true edge into FreeDV on either
   // VFO (tracked via a ref) so closing the window while still in FreeDV doesn't
-  // immediately reopen it.
+  // immediately reopen it. The true→false edge (leaving FreeDV on both VFOs)
+  // closes the popup automatically — the modem controls have nothing to act on
+  // once the mode is gone, so leaving the window up reads as stale.
   const wasInFreeDv = useRef(false);
   useEffect(() => {
     const inFreeDv = mode === 'FREEDV' || modeB === 'FREEDV';
     if (inFreeDv && !wasInFreeDv.current) {
       useFreeDvWindowStore.getState().open();
+    } else if (!inFreeDv && wasInFreeDv.current) {
+      useFreeDvWindowStore.getState().close();
     }
     wasInFreeDv.current = inFreeDv;
   }, [mode, modeB]);
