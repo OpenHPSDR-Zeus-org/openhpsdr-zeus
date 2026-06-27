@@ -3352,6 +3352,37 @@ public static class ZeusEndpoints
             return Results.Ok(new { quitting = true });
         });
 
+        // ---- Reset & Uninstall Zeus (About panel) ----------------------------
+        // Preview the exact paths the wipe will remove (+ warnings) and mint a
+        // one-shot confirm token. removeBinary asks for a full uninstall (app
+        // binary too); BinaryRemovalSupported reports whether that's achievable
+        // on this install (false → data-only fallback).
+        app.MapGet("/api/app/uninstall/preview",
+            (bool? removeBinary, Zeus.Server.Uninstall.UninstallService svc) =>
+                Results.Ok(svc.Preview(removeBinary ?? false)));
+
+        // One-click backup: prefs DB + all profiles + logbook + ADIF, streamed as
+        // a single zip the operator saves to ~/Downloads (which the wipe never
+        // touches) BEFORE uninstalling.
+        app.MapGet("/api/app/backup",
+            async (Zeus.Server.Uninstall.UninstallService svc, HttpContext ctx) =>
+            {
+                var (bytes, fileName) = await svc.BuildBackupAsync(ctx.RequestAborted);
+                return Results.File(bytes, "application/zip", fileName);
+            });
+
+        // Execute. Requires the one-shot token from the preview. Builds + validates
+        // the manifest fresh (fail-closed); on success launches the detached wipe
+        // and exits.
+        app.MapPost("/api/app/uninstall",
+            (UninstallRequest req, Zeus.Server.Uninstall.UninstallService svc) =>
+            {
+                var result = svc.Execute(req.Token, req.RemoveBinary);
+                if (!result.Started)
+                    return Results.BadRequest(new { error = result.Error, abortReasons = result.AbortReasons });
+                return Results.Ok(new { uninstalling = true });
+            }).DisableAntiforgery();
+
         app.MapGet("/api/qrz/status", (QrzService qrz) => qrz.GetStatus());
 
         app.MapPost("/api/qrz/login", async (QrzLoginRequest req, QrzService qrz, HttpContext ctx) =>

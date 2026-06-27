@@ -21,6 +21,7 @@
 // Both are GPL-2.0-or-later.
 
 import { useEffect, useState } from 'react';
+import { UninstallDialog } from './UninstallDialog';
 
 // Release date for the version this build ships against. Bump whenever
 // VersionPrefix in Directory.Build.props bumps. ISO 8601 so toLocaleDateString
@@ -51,6 +52,7 @@ type VersionInfo = {
 export function AboutPanel() {
   const [versionInfo, setVersionInfo] = useState<VersionInfo>({ version: 'Loading...' });
   const [checking, setChecking] = useState(false);
+  const [showUninstall, setShowUninstall] = useState(false);
 
   useEffect(() => {
     // Fetch current version on mount
@@ -236,6 +238,29 @@ export function AboutPanel() {
           for source code and documentation.
         </p>
       </div>
+
+      {/* Danger zone — full reset / uninstall. Visual placement & copy are a
+          red-light item for Brian's/Doug's sign-off; the logic is server-owned
+          and safety-audited. */}
+      <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--tx)' }}>
+        <div style={{ color: 'var(--tx)', fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 8 }}>
+          Danger Zone
+        </div>
+        <p style={{ margin: '0 0 10px', lineHeight: 1.5, color: 'var(--fg-2)', fontSize: 12 }}>
+          Completely remove Zeus and wipe all of its data for a fresh install. You'll be asked
+          to confirm, and you can back up your settings and logbook first.
+        </p>
+        <button
+          type="button"
+          className="btn sm"
+          onClick={() => setShowUninstall(true)}
+          style={{ borderColor: 'var(--tx)', color: 'var(--tx)' }}
+        >
+          RESET &amp; UNINSTALL ZEUS…
+        </button>
+      </div>
+
+      {showUninstall && <UninstallDialog onClose={() => setShowUninstall(false)} />}
     </div>
   );
 }

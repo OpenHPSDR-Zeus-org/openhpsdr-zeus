@@ -647,6 +647,9 @@ public static class ZeusHost
         // the active DB applies on the next launch, so the endpoint relaunches.
         builder.Services.AddSingleton<AppRestartService>();
 
+        // Full "Reset & Uninstall Zeus" flow (About panel).
+        builder.Services.AddSingleton<Zeus.Server.Uninstall.UninstallService>();
+
         // Self-diagnostic "Report a problem" feature: read-only probes, the
         // symptom→recipe registry, the known-issue rules (seeded from docs/rca +
         // docs/lessons), and the report builder. All strictly read-only — the

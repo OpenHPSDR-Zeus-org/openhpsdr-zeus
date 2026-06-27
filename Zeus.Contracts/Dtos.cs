@@ -1827,6 +1827,10 @@ public sealed record BandMemoryDto(string Band, long Hz, RxMode Mode);
 
 public sealed record BandMemorySetRequest(long Hz, RxMode Mode);
 
+// "Reset & Uninstall Zeus" confirm. Token is the one-shot nonce from the
+// uninstall preview; RemoveBinary requests a full uninstall (app binary too).
+public sealed record UninstallRequest(string? Token, bool RemoveBinary);
+
 // UI layout: opaque workspace JSON persisted server-side so the operator's
 // panel arrangement survives page reloads and reinstalls. The JSON is stored
 // as a string to avoid strongly-typing the workspace tree on the wire — the
