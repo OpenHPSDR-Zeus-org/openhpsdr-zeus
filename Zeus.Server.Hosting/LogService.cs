@@ -52,6 +52,7 @@ namespace Zeus.Server;
 
 public sealed class LogService : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<LogEntryDocument> _logs;
     private readonly ILogger<LogService> _log;
@@ -69,7 +70,8 @@ public sealed class LogService : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _logs = _db.GetCollection<LogEntryDocument>("logs");
         _logs.EnsureIndex(x => x.Id, unique: true);
         _logs.EnsureIndex(x => x.QsoDateTimeUtc);
@@ -264,7 +266,7 @@ public sealed class LogService : IDisposable
 
     public void Dispose()
     {
-        _db?.Dispose();
+        _dbLease.Dispose();
     }
 
     private static LogEntry DocumentToEntry(LogEntryDocument doc) => new(

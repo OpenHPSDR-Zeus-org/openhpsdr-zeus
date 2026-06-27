@@ -16,6 +16,7 @@ public sealed class CfcPresetStore : IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<CfcPresetEntry> _presets;
     private readonly ILogger<CfcPresetStore> _log;
@@ -29,7 +30,8 @@ public sealed class CfcPresetStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _presets = _db.GetCollection<CfcPresetEntry>("cfc_presets");
         _presets.EnsureIndex(x => x.NormalizedName, unique: true);
 
@@ -99,7 +101,7 @@ public sealed class CfcPresetStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
     internal static string CleanName(string name)
     {

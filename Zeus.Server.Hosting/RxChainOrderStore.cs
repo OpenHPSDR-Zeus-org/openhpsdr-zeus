@@ -10,6 +10,7 @@ namespace Zeus.Server;
 /// </summary>
 public sealed class RxChainOrderStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<RxChainOrderEntry> _state;
     private readonly ILogger<RxChainOrderStore> _log;
@@ -23,7 +24,8 @@ public sealed class RxChainOrderStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _state = _db.GetCollection<RxChainOrderEntry>("rx_audio_chain_order");
 
         _log.LogInformation("RxChainOrderStore initialized at {Path}", dbPath);
@@ -72,7 +74,7 @@ public sealed class RxChainOrderStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class RxChainOrderEntry

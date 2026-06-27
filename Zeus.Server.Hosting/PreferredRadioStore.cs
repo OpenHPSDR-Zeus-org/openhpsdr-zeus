@@ -40,6 +40,7 @@ namespace Zeus.Server;
 // no output power, or hardware damage. Only use if you understand your hardware.
 public sealed class PreferredRadioStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<PreferredRadioEntry> _entries;
     private readonly ILogger<PreferredRadioStore> _log;
@@ -55,7 +56,8 @@ public sealed class PreferredRadioStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _entries = _db.GetCollection<PreferredRadioEntry>("preferred_radio");
 
         _log.LogInformation("PreferredRadioStore initialized at {Path}", dbPath);
@@ -385,7 +387,7 @@ public sealed class PreferredRadioStore : IDisposable
         Changed?.Invoke();
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
 }
 

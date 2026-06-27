@@ -18,6 +18,7 @@ public sealed class BandPrefsStore : IDisposable
     private const string DefaultRegionId = "IARU_R1";
     private const string PrefsKey = "default";
 
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<BandPrefsEntry> _coll;
 
@@ -28,7 +29,8 @@ public sealed class BandPrefsStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _coll = _db.GetCollection<BandPrefsEntry>("band_plan_prefs");
         _coll.EnsureIndex(x => x.Key, unique: true);
     }
@@ -69,7 +71,7 @@ public sealed class BandPrefsStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
 }
 

@@ -68,6 +68,7 @@ public sealed class DisplaySettingsStore : IDisposable
         v.HasValue && !double.IsNaN(v.Value) && !double.IsInfinity(v.Value)
         && v.Value >= 0.0 && v.Value <= TxAvgTauMaxMs;
 
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<DisplaySettingsEntry> _docs;
     private readonly ILogger<DisplaySettingsStore> _log;
@@ -83,7 +84,8 @@ public sealed class DisplaySettingsStore : IDisposable
             Directory.CreateDirectory(dir);
         }
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _docs = _db.GetCollection<DisplaySettingsEntry>("display_settings");
 
         _log.LogInformation("DisplaySettingsStore initialized at {Path}", dbPath);
@@ -212,7 +214,7 @@ public sealed class DisplaySettingsStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
     private static string NormalizeMode(string? raw) =>
         raw switch

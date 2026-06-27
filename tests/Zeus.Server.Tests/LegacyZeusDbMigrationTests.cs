@@ -138,10 +138,17 @@ public sealed class LegacyZeusDbMigrationTests : IDisposable
 
         LegacyZeusDbMigration.RunIfNeeded(_dir, _configPath, _logbookPath, NullLogger.Instance);
 
-        using var verify = new CredentialStore(NullLogger<CredentialStore>.Instance, _configPath);
-        var c = await verify.GetAsync("svc0");
-        Assert.NotNull(c);
-        Assert.Equal("keep-me", c!.Username);
+        using (var verify = new CredentialStore(NullLogger<CredentialStore>.Instance, _configPath))
+        {
+            var c = await verify.GetAsync("svc0");
+            Assert.NotNull(c);
+            Assert.Equal("keep-me", c!.Username);
+        }
+
+        // Dispose the store (releasing its shared lease and flushing the
+        // direct-mode engine's exclusive file lock) BEFORE the Count() verifier
+        // opens its own connection. Windows will not allow a second open while
+        // the store's engine still holds the file; Linux/macOS tolerate it.
         Assert.Equal(1, Count(_configPath, "credentials"));
     }
 }
