@@ -1,0 +1,7 @@
+{
+	"common_dir" : "/home/mh/Desktop/SDR/HPSDR/LATEST/Hermes_C10/EPCQ32A/EPCQ_17/",
+	"acds_version" : "Version 20.1.1",
+	"platform" : "linux",
+	"os" : "Debian GNU/Linux",
+	"qpf" : "Bootloader.qpf"
+}

@@ -1,0 +1,22 @@
+	component ASMI_CV is
+		port (
+			addr           : in  std_logic_vector(23 downto 0) := (others => 'X'); -- addr
+			bulk_erase     : in  std_logic                     := 'X';             -- bulk_erase
+			busy           : out std_logic;                                        -- busy
+			clkin          : in  std_logic                     := 'X';             -- clk
+			data_valid     : out std_logic;                                        -- data_valid
+			datain         : in  std_logic_vector(7 downto 0)  := (others => 'X'); -- datain
+			dataout        : out std_logic_vector(7 downto 0);                     -- dataout
+			fast_read      : in  std_logic                     := 'X';             -- fast_read
+			illegal_erase  : out std_logic;                                        -- illegal_erase
+			illegal_write  : out std_logic;                                        -- illegal_write
+			rden           : in  std_logic                     := 'X';             -- rden
+			reset          : in  std_logic                     := 'X';             -- reset
+			sector_erase   : in  std_logic                     := 'X';             -- sector_erase
+			sector_protect : in  std_logic                     := 'X';             -- sector_protect
+			shift_bytes    : in  std_logic                     := 'X';             -- shift_bytes
+			wren           : in  std_logic                     := 'X';             -- wren
+			write          : in  std_logic                     := 'X'              -- write
+		);
+	end component ASMI_CV;
+

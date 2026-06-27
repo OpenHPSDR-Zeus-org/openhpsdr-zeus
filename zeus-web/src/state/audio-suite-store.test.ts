@@ -99,21 +99,22 @@ describe('audio-suite-store profile selection', () => {
     useAudioSuiteStore.getState().setWindowPosition('rx', 211, 222);
 
     const stored = JSON.parse(localStorage.getItem('zeus-audio-suite') ?? '{}');
-    expect(stored.state.txOpen).toBe(false);
-    expect(stored.state.rxOpen).toBe(true);
     expect(stored.state.suiteRoute).toBe('rx');
     expect(stored.state.txX).toBe(111);
     expect(stored.state.rxX).toBe(211);
 
+    // Window placement persists, but neither suite reopens on rehydrate —
+    // the suites only open on an explicit operator click after startup.
     await rehydrateAudioSuiteFromStorage();
     expect(useAudioSuiteStore.getState().suiteRoute).toBe('rx');
+    expect(useAudioSuiteStore.getState().isOpen).toBe(false);
     expect(useAudioSuiteStore.getState().txOpen).toBe(false);
-    expect(useAudioSuiteStore.getState().rxOpen).toBe(true);
+    expect(useAudioSuiteStore.getState().rxOpen).toBe(false);
     expect(useAudioSuiteStore.getState().txX).toBe(111);
     expect(useAudioSuiteStore.getState().rxX).toBe(211);
   });
 
-  it('migrates a legacy open RX suite into the RX window', async () => {
+  it('migrates legacy window placement but starts both suites closed', async () => {
     localStorage.setItem(
       'zeus-audio-suite',
       JSON.stringify({
@@ -131,7 +132,10 @@ describe('audio-suite-store profile selection', () => {
 
     await rehydrateAudioSuiteFromStorage();
 
-    expect(useAudioSuiteStore.getState().rxOpen).toBe(true);
+    // A suite left open in legacy storage must NOT auto-open on startup; only
+    // its persisted placement carries over.
+    expect(useAudioSuiteStore.getState().isOpen).toBe(false);
+    expect(useAudioSuiteStore.getState().rxOpen).toBe(false);
     expect(useAudioSuiteStore.getState().txOpen).toBe(false);
     expect(useAudioSuiteStore.getState().rxX).toBe(321);
     expect(useAudioSuiteStore.getState().rxY).toBe(123);

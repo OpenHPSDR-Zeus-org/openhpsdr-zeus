@@ -1,0 +1,233 @@
+Release notes for Orion
+
+Change log: 
+	27 Dec 2013	- ported Hermes design to Angelia hardware...K5SO
+			- increased number of receivers to 7
+			- added support for dual ADCs
+			- added support for independent attenuator control for inputs to ADC1 & ADC2
+
+    	8 Jan 2014	- Moved design to EP4CGX150DF31C7
+                  	- Added support for Mic Signal, Bias, PTT switching (Joe, K5SO's code)
+			- Added support for Automatic 10Mhz Clock switching (Joe, K5SO's code)
+			- Added support for ADC3 and attenuator (Joe, K5SO's code)
+			- Set version number to v1.0
+
+	 9 Jan 2014    	- Changed APR & Ping requests clock to Tx_Clock; vesion number changed to v1.1
+
+	 27 Jan 2014	- Changed FPGA image code location in the EEPROM to the 2MB position instead of 1MB to 
+			 accommodate the larger size of the Orion bootloader code
+			- Changed version number to v1.2
+
+	 7 Feb 2014	- fixed bug with erase size in the ASMI_interface module
+			- Changed version number to v1.3
+
+	 3 Mar 2014	- Constrained all clocks, IO ports, and IO paths via constraints in the Orion.sdc file, meets timing 100%
+			- Changed version number to v1.4
+
+	 4 Mar 2014	- Changed ADC assignements to allow for easier testing of the daughterboard:
+				RX1->ADC0
+				RX2->ADC1
+				RX3->ADC2
+				RX4->ADC0
+				RX5->ADC0...switched to Tx DAC on Tx
+				RX6->ADC0
+				RX7->ADC0
+				- Changed version number to v1.5
+
+	 4 Mar 2014	- Added bootloader mode option switching to pin 25 on J43 of the daughterboard header, OR'd with SW1
+			- Added ethernet switching 1000T/100T function to jumper J14 (no jumper = 1000T, jumper = 100T)...1000T ops not implemented yet
+			- Added option to assign ADCs to the receiver modules via the C&C byte stream as follows: 
+				when C0 = 0001_100x, 
+				C1[1:0] = assign ADCn to RX1: 00 = ADC0, 01 = ADC1, 10 = ADC2
+				C1[3:2] = assign ADCn to RX2: 00 = ADC0, 01 = ADC1, 10 = ADC2
+				C1[5:4] = assign ADCn to RX3: 00 = ADC0, 01 = ADC1, 10 = ADC2
+				C1[7:6] = assign ADCn to RX4: 00 = ADC0, 01 = ADC1, 10 = ADC2
+				C2[1:0] = assign ADCn to RX5: 00 = ADC0, 01 = ADC1, 10 = ADC2, except on Tx assign Tx DAC as input to RX5
+				C2[3:2] = assign ADCn to RX6: 00 = ADC0, 01 = ADC1, 10 = ADC2
+				C2[5:4] = assign ADCn to RX7: 00 = ADC0, 01 = ADC1, 10 = ADC2
+			- Changed version number to v1.6
+
+	  5 Mar 2014	- Changed the C0 C&C byte used for ADC selection, as follows: 
+				when C0 = 0001_110x, 
+				C1[1:0] = assign ADCn to RX1: 00 = ADC0, 01 = ADC1, 10 = ADC2
+				C1[3:2] = assign ADCn to RX2: 00 = ADC0, 01 = ADC1, 10 = ADC2
+				C1[5:4] = assign ADCn to RX3: 00 = ADC0, 01 = ADC1, 10 = ADC2
+				C1[7:6] = assign ADCn to RX4: 00 = ADC0, 01 = ADC1, 10 = ADC2
+				C2[1:0] = assign ADCn to RX5: 00 = ADC0, 01 = ADC1, 10 = ADC2, except on Tx assign Tx DAC as input to RX5
+				C2[3:2] = assign ADCn to RX6: 00 = ADC0, 01 = ADC1, 10 = ADC2
+				C2[5:4] = assign ADCn to RX7: 00 = ADC0, 01 = ADC1, 10 = ADC2
+			- Changed version number to v1.7
+
+	  12 Mar 2014  - Chanaged legacy references of "Angelia" to "Orion" in the Verilog variable names and in the Orion.sdc 
+				constraint file
+			- Created a new output_file.pof with new bootloader code (SW17 implemented) and Orion_v1.8
+			- Changed version number to v1.8
+
+	  13 Apr 2014	- Fixed bug with PureSignal implementation, timing
+			- Changed M3 value for proper rounding of frequency phase word value
+			- Changed version number to v1.9
+
+	  28 Apr 2014 	- Added FPGA CW code and implemented C1[6] when C0 = 0001_010x for Orion PTT disable (enable= 0, disable = 1)
+			- Changed version number to 2.0
+
+	  May 2014 	- gigabit test code - v2.1 - disregard
+			- gigabit test code - v2.2 - disregard
+
+	17 May 2014 	- Added Iambic keyer. Enable keying using I[1:0] mapped to dot:dash so that CWX can use the keyer. 
+			- Changed version number to v2.3
+
+	6 Jun 2014	- Added PC control of "atten_on_Tx" via C&C bits C3[4:0] when C0 = 0001_110x
+			- Changed version number to v2.4
+
+	14 Jun 2014 	- Added ADC overflow for ADC2 and ADC3 in TXFC module	
+			- Changed version number to v2.5
+
+	2 Jul 2014	- Modified timing constraints to improve overall stability of the firmware design
+			- Changed version number to v2.6
+
+	31 Aug 2014 	- Fixed PTT bug that prevented keying of an external amp via the "external PTT input" path and improper
+			 non-break-in CW PTT operation
+			- Change version number to v2.7
+
+	11 Nov 2014	- Moved C122_Alex_data into SPI_clk domain, fixes intermittent failure of Alex/ANAN-PA-filter relays to obey Alex commands, 
+			  including fixing no power output on ANAN-200D sometimes when PTT is keyed in SSB mode.  
+			- Changed version number to v2.8
+
+	14 Dec 2014 	- Fixed intermittent PTT to Alex/PA board problems by sending Alex/PA relay data three times
+			  via the SPI bus when the Alex data changes, ensuring positive relay control to all Alex/PA relays
+			- Changed version number to v2.9
+
+	16 Jan 2015 	- Changed back to sending Alex/ANAN PA data once each time Alex data is changed
+			- Added de-bounced PTT signal to FPGA_PTT generation code to fix intermittent Alex
+			  T/R relay operation
+			- Changed version number to v3.0
+
+	 6 Feb 2015 	- Ported Angelia_v4.7 to Orion as Orion_v3.1
+				-- including
+					- set Alex relays to off at power on
+					- merged clocking, CW generation and I2S audio from new protocol code
+					- temp disable Apollo interface
+					- clock TX DAC data at 90 degrees to ensure data is stable
+			- Changed version number to v3.1
+
+
+	    8 Feb 2015  - Fixed Orion_micPTT_disable bug
+			- Fixed Line-In bug
+	   13 Feb 2015  - Fixed ext 10MHz ref input bug
+			- Changed to clock TX DAC data at 30 degrees instead of 90 degrees phase shift
+			- Changed version number to v3.2
+
+	   14 Feb 2015 	- Removed clock phase delay on TX DAC data transfers entirely, using C122_clk instead. 
+		       	- Changed version number to v3.3
+
+	   27 Feb 2015	- Changed switch point for LPF filter to switch to 12/10m filter if selected freq
+		          is greater than 22000000Hz, to obtain rated 100W power out on 12m for ANAN-200D
+			- Increased the amount of EEPROM that is erased to 6MB from the previous 4MB
+			- Changed version number to v3.4
+
+	     3 Mar 2015 - Created a 90-degree phase shifted clock to clock data into the TX DAC, to ensure 
+			  TX DAC data is stable before clocking it into the TX DAC
+			- Increased the amount of EEPROM that gets erased upon a new firmware upload from
+			  4MB to 6MB in ASMI_interface.v
+			- Changed version number to v3.5
+
+	    25 Apr 2015 - Fixed Line-In bug in TLV320_SPI.v
+			- Changed version number to v3.6
+
+	    4  May 2015 - Added external CW keying capability to iambic.v module via digital input IO4 
+			  while iambic CW mode is selected (pin 9 on J16 Orion, pin 9 rear panel accy 
+			  jack on ANAN-200D) , key to ground, unkey is high via pull up resistor on Orion board,
+			  IO4 input is debounced 
+			- Changed version number to v3.7
+
+	   10 Jun 2015 - fixed bug with assignment of Rx2 phase word that caused random initial phase relationships
+			 between Rx1 and Rx2 when in diversity mode 
+		       - Changed version number to v3.8
+
+	   20 Jun 2015 - Fixed bug with predistortion PureSignal functionality
+		       - Changed version number to v3.9
+
+	    2 Oct 2015 - added support for 3-ADC beam steering function
+		       - changed default/power-up Orion_PTT_disable to be active until cleared by software
+		       - changed version number to 4.0
+
+	   25 Jan 2016 - Moved external CW keying input to user digital input #2, IO5, pin 16 of J16, to remove pin assignment 
+			 conflict with the Tx Inhibit feature in PowerSDR
+		       - Changed version number to v4.1
+
+	   26 Jan 2016 - fixed bug with TX INHIBIT feature that permitted undesired rf output to occur when internal FPGA CW 
+			 rf generation mode is active
+		       - Changed version number to v4.2
+
+	   28 Jan 2016 - Improved TX INHIBIT feature by shutting down TX DAC when IO4 TX INHIBIT is active
+		       - Changed version number to v4.3
+
+	   20 Sep 2016 - Modified the Alex SPI code to send the SPI data word twice each time the data word is changed
+						- Changed version number to v4.4
+
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+2017 Jan 29	- ported the Quartus II v13.1 Orion_v4.4 design to Quartus Prime Lite v16.0
+		- regenerated all megafunctions to v16.0 megafunctions instead
+		- removed C10_PLL
+		- changed C122_PLL/.c0 output to 10.000MHz
+		- changed 122.88 MHz module lock XOR feedback to operate at 10MHz vs 80KHz
+		- added C122_PLL_SHIFT to obtain a phase shifted 122.88MHz clock for DACD (TxDAC) generation
+		- replaced ASMI constraints in Angelia.sdc using the v16.0 AMSI path versions to constrain 
+		   the new I/O ports/paths
+		- set the PLL_IF outputs to:
+			PLL_IF/.c0 = 48 MHz
+			PLL_IF/.c1 = 12.288 MHz
+			PLL_IF/.c2 = 3.072 MHz 90 deg phase shift
+			PLL_IF/.c3 = 48 KHz
+		- set C122_SHIFT_PLL/.c0 = 122.88 MHz with 15 deg phase shift
+		- removed all max/min delay timing constraints in Angelia.sdc, compiled
+		- closed timing, re-compiled
+		- removed clean_PTT_in as an input to FPGA_PTT to prevent PTT timing problems with software
+		- changed Alex SPI.v to send ALex data once for each time the Alex data word changes
+		- changed version number to v4.5
+		- recompiled, closed timing
+	Mar 19	- modified SPI.v to send Alex data word twice each time the data word changes
+		- changed FW version number to v4.6
+		- removed all max_delay and min_delay constraints from Orion.sdc
+		- retimed/compiled iteratively until timing closed
+
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+	Apr 1	- ported the code to Quartus Prime Lite v16.1
+		- upgraded all megafunctions to v16.1 versions
+		- changed FW version number to v4.7
+		- removed all max_delay and min_delay constraints from Orion.sdc
+		- retimed/compiled iteratively until timing closed
+
+	Apr 3	- changed C122_SHIFT_PLL/.c0 phase shift to 11.25 degrees
+	Apr 15	- implemented peak detection for AIN1 and AIN2:
+			-added PLL_30MHz/.c0 to provide 30.72 MHz clock for Orion_ADC.v module
+			-replaced Orion_ADC.v with version from Orion_MkII_v1.6 firmware
+			-replaced Orion_Tx_fifo_ctrl.v with version from Orion_MkII_v1.6 firmware
+			-added pk_detect_reset and pk_detect_ack to Orion.v, Orion_ADC, and Orion_Tx_fifo_ctrl				
+		- added clean_PTT_in to FPGA_PTT to fix bug with external PTT in via pin13 on ANAN-200D accessory jack
+		- removed all max_delay and min_delay constraints from Orion.sdc
+		- retimed/compiled iteratively until timing closed
+				
+	Apr 18   - removed C122_SHIFT_PLL
+				- set ref clock for Tx DAC (DACD) data to negegde _122MHz				
+   	Apr 21	- changed ref clock for Tx DAC data (DACD) to negedge of C122_clk to 
+			fix PureSignal functionality on some machines
+		- changed FW version number to v4.9
+		- removed all max_delay and min_delay constraints from Orion.sdc
+		- retimed/compiled iteratively until timing closed
+
+	Jul 18	- fixed 6-rcvr & 7-rcvr operations by adding 6-rcvr and 7-rcvr options to numloops and pads in Orion_Tx_fifo_cntrl.v 
+		- changed version number to v5.0
+		- recompiled, retimed, closed timing. 
+				
+	Nov 29  - implemented PS_enabled C&C bit (C2[6] when C0=0010_010x) to allow Rx5 freq to be modified during Tx and Rx
+			when PureSignal is inactive
+		- changed FW version number to v5.1
+		- removed all set_max_delay constraints from Orion.sdc, recompiled, added new set_max_delay
+			constraints as needed to close timing
+		- compiled using Quartus Prime Lite v16.1
+
+	Dec 1   - simplified Rx5 freq switching to make PureSignal more robust wrt individual board timing differences
+		- changed FW version number to v5.2
+		- recompiled using Quarus Prime Lite v16.1

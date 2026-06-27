@@ -1,0 +1,10 @@
+2016  Feb   1 - Fixed Straight key mode.
+	      - Release as V1.2.	
+	   11 - Fixed Line-in not being selected
+	      - Release as V1.3
+2017  Apr   9 - Redo timing to remove glitch from TX RF output 
+	      - Added spi.v from Hermes to send Alex data twice at each data change
+	      - Release as V1.4
+      Apr   9 - changed FW version number to v1.5
+	      - removed all max_delay and min_delay constraints from Hermes.sdc
+	      - compiled, retimed repetitively until timing closed

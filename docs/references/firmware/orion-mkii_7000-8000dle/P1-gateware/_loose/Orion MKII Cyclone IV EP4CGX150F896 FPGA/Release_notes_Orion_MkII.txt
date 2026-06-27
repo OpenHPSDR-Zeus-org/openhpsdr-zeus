@@ -1,0 +1,142 @@
+
+Orion MkII release notes
+
+7 Dec 2016	- Constrained the new CTRL_TRSW output in Orion.sdc to close timing
+		- Changed version number from v9.9 to v1.0, to form the initial ANAN-8000DLE firmware release
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+2017 	 Jan 30	- port of Orion_MkII_v1.0 (Quartus II v13.1) to Quaruts Prime Lite v16.0
+		- regenerated all megafunctions using v16.0 megafunctions
+		- modified automatic-mode switch points in HPF_select.v and BPF2_select.v to:
+			...
+			if (frequency <  1500000) 	HPF <= 7'b0100000;   	// bypass
+			else if	(frequency <  2100000) 	HPF <= 7'b0010000;	// RX BPF1 160M	
+			else if (frequency <  5500000)	HPF <= 7'b0001000;	// RX BPF2 80M/60M
+			else if (frequency < 11000000)	HPF <= 7'b0000100;	// RX BPF3 40/30M
+			else if (frequency < 22000000)	HPF <= 7'b0000001;	// RX BPF4 20M/17M
+			else if (frequency < 35000000) 	HPF <= 7'b0000010; 	// RX BPF5 15/12M
+			else 				HPF <= 7'b1000000;	// LNA, active above 35MHz
+			...
+		- removed C10_PLL
+		- changed C122_PLL/.c0 output to 10.000MHz
+		- changed 122.88 MHz module lock XOR feedback to operate at 10MHz vs 80KHz
+		- added C122_PLL_SHIFT to obtain a phase shifted 122.88MHz clock for DACD (TxDAC) generation
+		- replaced ASMI constraints in Angelia.sdc using the v16.0 AMSI path versions to constrain 
+			the new I/O ports/paths
+		- set the PLL_IF outputs to:
+			PLL_IF/.c0 = 48 MHz
+			PLL_IF/.c1 = 12.288 MHz
+			PLL_IF/.c2 = 3.072 MHz 90 deg phase shift
+			PLL_IF/.c3 = 48 KHz
+		- set C122_SHIFT_PLL/.c0 = 122.88 MHz with 15 deg phase shift
+		- removed all max/min delay timing constraints in Angelia.sdc, compiled
+		- closed timing, re-compiled
+		- removed clean_PTT_in as an input to FPGA_PTT to prevent PTT timing problems with software
+		- changed Alex SPI.v to send ALex data once for each time the Alex data word changes
+		- changed version number to v1.1
+		- removed all max/min delay timing constraints in Angelia.sdc, compiled
+		- closed timing
+			
+	Feb 22	- port to Quartus Prime Lite v16.1
+		- upgraded all megafunctions to v16.1 megafunctions
+		- changed ADC0 attenuator assignment logic to fix PureSignal auto-attenuate bug
+		- removed ADC3 daughterboard references/outputs
+		- changed version number to v1.2
+		- retimed, compiled iteratively until timing closed
+
+	Mar 14	- fixed XVTR mode bug as follows:
+			- assigned TXRX_STATUS to FPGA_PTT and to bit 34 of the 48-bit Alex SPI data word
+			- assigned CTRL_TRSW to depend on both FPGA_PTT and C&C C2[1] bit (XVTR_Enable) when C0=0010_010x is set
+		- changed FW version number to v1.3
+		- removed all max/min delay constraints from Orion.sdc
+		- retimed/compiled iteratively until timing closed
+
+	Mar 17	- modified SPI.v to send the Alex SPI data word twice each time the data word changes
+		- changed FW version number to v1.4
+		- removed all max/min delay constraints from Orion.sdc
+		- retimed/compiled iteratively until timing closed
+
+	Mar 23	- changed user digital IO connections as follows:
+			IO5 = TX INHIBIT, pin 16 of J16, rear 8000DLE panel DIG IN 1
+			IO8 = External CW Key, pin 13 of J16, 8000DLE rear panel DIG IN 2
+		- changed iambic.v to set IO8 as ext CW key input
+		- added debounce to IO5 and IO8
+		- changed C122_SHIFT/.c0 phase angle to 11.25 degrees
+		- changed output_delay for DACD[*] paths to 1.2 nSec in Orion.sdc
+		- changed FW version number to v1.1
+		- removed all max/min delay constraints from Orion.sdc
+		- retimed/compiled iteratively until timing closed	
+
+	Apr 14	- added peak detection code for AIN1 (FWD_PWR) and AIN2 (REV_PWR):
+			increased clock speed for the Orion_ADC.v module x10 to provide more FWD_PWR, REV_PWR readings per unit time:
+			created PLL_30MHz/.c0 to generate a 30.72MHz clock for the Orion_ADC module, results in 7.68MHz SCLK for the ADC
+			added peak detect for AIN1 and AIN2 in Orion_ADC.v
+			added pk_detect_reset and pk_detect_ack to define peak detection interval based upon the C&C AIN1/2 byte update rate, 
+				changes to Orion_Tx_fifo_ctl.v, Orion_ADC.v, and Orion.v to accommodate the peak detect feature
+		- changed FW version to v1.6
+		- closed timing
+
+	Jul 18	- fixed 6-rcvr & 7-rcvr operations by adding 6-rcvr and 7-rcvr options to numloops and 
+			pads in Orion_Tx_fifo_cntrl.v 
+		- changed version number to v1.7
+		- recompiled, retimed, closed timing. 
+
+	Sep 11	- replaced tx_atten.mif and tx_dac.mif to fix drive level problem
+		- changed FW version to v1.8
+		- compiled using V16.1
+
+	Oct 23	- added C122_Rx_1_in to control bit 11 of the Alex control word to support 7000DLE
+		- set ADC2 attenuator (attenuator2) to max value of 31 (5'b1_1111) during transmit to support 7000DLE
+		- added C122_6m_auto_preamp and C122_6m_auto_preamp2 to disable 6m preamps when in tx mode when Alex 
+			settings are under automatic firmware control
+		- changed FW version number to v1.9
+		- re-timed and re-compiled using Quartus Prime Lite v16.1
+						
+	Nov 10   - added bias_ctrl to control pin 10 (BUFF_OUT) of J16  via U20 and FPGA pin AH30 (BUFF_OUF_FPGA) and
+			set it low to enable PA bias on the 7000DLE
+		- assigned FPGA pin AH30 to bias_ctrl
+		- changed FW version number to v2.0
+		- recompiled using Quartus Prime Lite v16.1
+	
+	Nov 17  - changed FW version number to v2.1
+		- removed all set_max_delay constraints from Orion.sdc, recompiled, added
+			new set_max_delay constraints as needed	to fix board-dependent issues on 7000DLE and 8000DLE					
+		- recompiled using Quartus Prime lite v16.1
+			
+	Nov 28  - replaced Orion_Tx_fifo_ctrl.v with file from v1.7 to fix Rx6/Rx7 bug
+		- modified Rx2 freq switching to implement common_Merc_freq option in C&C commands
+		- modified Rx5 freq switching to allow software adjustment of freq when PureSignal is inactive
+		- changed FW version to v2.2
+		- retimed, recompiled
+		
+2018   Mar 21   - recompiled using Quartus Prime Lite V17.0
+		- Moved HPF start point from 1.5MHz to 1.8MHz to cover more of MW band
+		- Fixed bug in iambic.v that corrupted speed change whilst character being sent.
+		- changed FW version to V2.3
+								
+	Apr 30  - updated macrofunctions to Quartus Prime Lite v17.1 versions
+		- modified C122_HPF switching by adding C122_HPF_PRESET and 
+		  	switching C122_LPF to BYPASS on TX for PureSignal support				  
+		- changed 6m LNA logic in HPF_select.v to make it active when rx frequency is greater than 21 MHz
+		- changed version number to v2.4
+		- retimed, recompiled using Quartus Prime Lite v17.1
+
+- - - switched to Quaruts Prime Lite v18.1 - - - - 
+
+2018		Apr 19   - (N1GP) Fixed a bug with SPI.v not sending twice correctly.
+2018		May 19   - (N1GP) Updated ASMI.v and Orion.v for ECPQ128A using J14 to distinguish from ECPS128
+2018		Dec 2    - (N1GP) Changed 6m LNA logic back to make it active when rx frequency is greater than 35 MHz as in v2.3
+						- NOTE: comments in bpf2_select.v and HPF_select.v said 27 MHz but was really 35 MHz
+						- changed firmware version to v2.5
+
+2019	           	May 3 - (K5SO) replaced Orion.v with N1GP version of Orion.v 
+		         - changed firmware version number to v2.6
+		          - retimed, recompiled
+
+		May 4	- (K5SO) replaced Orion.sdc timing constraint file with Orion.sdc from v2.3 and edited as follows:
+			- removed all Set_Max_Delay and Set_Min_Delay constraints in the Orion.sdc file
+			- removed previous ASMI I/O constraints and added constraints for the "unconstrained" ASMI I/O paths
+			- applied a false_path constraint to MODE2 paths
+			- changed firmware version number to v2.7
+			- re-timed design
+

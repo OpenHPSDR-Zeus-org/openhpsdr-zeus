@@ -1,0 +1,7 @@
+{
+	"common_dir" : "/home/mh/Desktop/SDR/HPSDR/LATEST/Hermes_C10/Hermes_Protocol_2_C10_v10.8.MULTI/",
+	"acds_version" : "Version 20.1.1",
+	"platform" : "linux",
+	"os" : "Debian GNU/Linux",
+	"qpf" : "Hermes.qpf"
+}

@@ -1,0 +1,12 @@
+2019    Mar  2 - (N1GP) Worked with Chris/W2PA and Doug/W5WC on an issue with FPGA_PTT
+                           coming in late and cutting off the beginning of the CW_char.
+                           Or'd FPGA_PTT with Alex_data[27] assigned to runsafe_Alex_data,
+                           added mixing of rx audio with sidetone during CW_PTT and break_in,
+                           QSK much improved.
+                         - Added latching of data in initial states of SPI, TLV320_SPI, and Attenuator.
+                         - Added a checksum in the send_more reply to a Host programmer to validate image transfer.
+
+2019    Mar 30 - (N1GP) Changed to 4 rx's as it's quicker to compile and make timing.
+                         - Upgraded to Quartus 18.1 
+                         - Changed FW version number to v1.7, skipped v1.6 to keep this release unified with the MkII.
+
