@@ -88,6 +88,14 @@ export const DEFAULT_TX_DISPLAY_CAL_OFFSET_DB = 0;
 export const DEFAULT_TX_DISPLAY_FFT_SIZE = 16384;
 export const DEFAULT_TX_DISPLAY_WINDOW = 2;
 export const DEFAULT_TX_DISPLAY_AVG_TAU_MS = 175;
+// TX display auto-range default. OFF — the TX panadapter/waterfall follow the
+// operator's manual dB-scale slider (the fixed/saved TX window), matching
+// Thetis's fixed manual TXWFAmpMin/Max thresholds. The per-frame auto-fit was
+// too sensitive: it tracked the live speech so tightly that peaks railed at
+// full-scale (the "flat-topping on TX" report) and the operator had no stable
+// level to configure. Auto-range stays available via the Spectrum Scale
+// settings checkbox for anyone who prefers the auto fit.
+export const DEFAULT_TX_AUTO_RANGE = false;
 export const TX_DISPLAY_CAL_OFFSET_ABS_DB = 60;
 export const TX_DISPLAY_AVG_TAU_MIN_MS = 0;
 export const TX_DISPLAY_AVG_TAU_MAX_MS = 2000;
@@ -559,13 +567,17 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   txDisplayFftSize: DEFAULT_TX_DISPLAY_FFT_SIZE,
   txDisplayWindow: DEFAULT_TX_DISPLAY_WINDOW,
   txDisplayAvgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS,
-  // Master enable for the TX display auto-fit. ON by default, but it only
-  // actually engages for voice MOX/PTT — see shouldTxAutoRange(). TUNE and
-  // two-tone are deliberately excluded: their narrow carrier / twin-tone fools
-  // the percentile fit into collapsing the dB window onto the noise floor,
-  // rendering the clean carrier as "grass". Those fall back to the Thetis-parity
-  // fixed TX_FIXED_DB_MIN/MAX (-80..+20) window via restoreSavedTxWindows().
-  txAutoRange: true,
+  // Master enable for the TX display auto-fit. OFF by default
+  // (DEFAULT_TX_AUTO_RANGE) so the TX panadapter/waterfall follow the
+  // operator's manual dB-scale slider — a stable, configurable level instead of
+  // the per-frame auto-fit that tracked speech so tightly it flat-topped at
+  // full-scale. When enabled it only engages for voice MOX/PTT — see
+  // shouldTxAutoRange(). TUNE and two-tone are deliberately excluded: their
+  // narrow carrier / twin-tone fools the percentile fit into collapsing the dB
+  // window onto the noise floor, rendering the clean carrier as "grass". Those
+  // fall back to the Thetis-parity fixed TX_FIXED_DB_MIN/MAX (-80..+20) window
+  // via restoreSavedTxWindows().
+  txAutoRange: DEFAULT_TX_AUTO_RANGE,
   colormap: 'blue',
   waterfallScrollSpeed: initialWaterfallScrollSpeed,
   // Defaults until the server-side fetch lands (see hydrateFromServer at the
@@ -736,7 +748,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
       txDisplayFftSize: DEFAULT_TX_DISPLAY_FFT_SIZE,
       txDisplayWindow: DEFAULT_TX_DISPLAY_WINDOW,
       txDisplayAvgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS,
-      txAutoRange: true,
+      txAutoRange: DEFAULT_TX_AUTO_RANGE,
     });
     scheduleTxDisplaySave();
   },

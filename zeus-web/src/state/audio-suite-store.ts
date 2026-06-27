@@ -1421,6 +1421,19 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
     {
       name: 'zeus-audio-suite',
       version: 1,
+      // The TX/RX Audio Suite windows must NEVER auto-open on startup — they
+      // open only when the operator explicitly clicks the button after boot.
+      // We still persist window placement/size and profile selections, but the
+      // open flags are forced closed on every rehydrate so a suite left open at
+      // shutdown does not reappear on the next launch. This override wins over
+      // both already-saved `txOpen:true` data and any legacy `migrate` output.
+      merge: (persisted, current) => ({
+        ...current,
+        ...(persisted as Partial<AudioSuiteState>),
+        isOpen: false,
+        txOpen: false,
+        rxOpen: false,
+      }),
       migrate: (persisted) => {
         const state = persisted as Partial<AudioSuitePersistedState>;
         const suiteRoute: AudioSuiteRoute = state.suiteRoute === 'rx' ? 'rx' : 'tx';
