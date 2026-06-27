@@ -47,9 +47,14 @@ public sealed class ConnectionProbe : IDiagnosticProbe
             items.Add(new("endpoint", string.IsNullOrWhiteSpace(state.Endpoint) ? "none" : state.Endpoint!));
             items.Add(new("sample.rate.hz", state.SampleRate.ToString()));
 
-            // Firmware / gateware version: not surfaced by RadioService or
-            // IProtocol1Client today, so there is nothing read-only to report.
-            items.Add(new("firmware.version", "not exposed by RadioService"));
+            // Firmware / gateware version: captured at connect from the
+            // discovery reply (P1 code-version byte / P2 raw[13]+beta). Lets a
+            // "Report a problem" snapshot pin board-specific firmware (e.g. an
+            // ANAN-10E on its Protocol-2 beta — issue #1053). "unknown" when
+            // connected via a path that skipped discovery (forced/reclaim
+            // connect); "n/a (disconnected)" when nothing is connected.
+            items.Add(new("firmware.version",
+                connected ? (radio.ConnectedFirmware ?? "unknown") : "n/a (disconnected)"));
         }
         catch (Exception ex)
         {

@@ -209,6 +209,14 @@ public sealed class RadioService : IDisposable
     // supply a byte, in which case ConnectedBoardKind falls back to OrionMkII
     // for backward compat.
     private HpsdrBoardKind _p2BoardKind = HpsdrBoardKind.Unknown;
+    // Firmware / gateware version string for the live connection, captured at
+    // connect time from the discovery reply (P1: code-version byte raw[9];
+    // P2: raw[13] + beta). Diagnostics-only — surfaced by ConnectionProbe so a
+    // "Report a problem" snapshot records the exact firmware the operator is
+    // running (it's what disambiguates an ANAN-10E and pins board-specific
+    // reports, e.g. issue #1053). Null when no discovery info was available
+    // (e.g. a forced/reclaim connect that skips the probe). Guarded by _sync.
+    private string? _connectedFirmware;
     private bool _preampOn;
     // Manual notch filters (MNF). Authoritative on the server so notches
     // survive reconnects and backend restarts (a fresh engine starts with an empty WDSP notch DB);
@@ -810,6 +818,18 @@ public sealed class RadioService : IDisposable
     }
 
     /// <summary>
+    /// Firmware / gateware version string for the live connection (e.g.
+    /// <c>"10.3"</c>), captured at connect from the discovery reply, or
+    /// <c>null</c> when no discovery info was available. Read-only; consumed by
+    /// the diagnostics ConnectionProbe so a "Report a problem" snapshot records
+    /// the exact firmware the operator is running.
+    /// </summary>
+    public string? ConnectedFirmware
+    {
+        get { lock (_sync) return _connectedFirmware; }
+    }
+
+    /// <summary>
     /// True when any backend (P1 or P2) has a live connection. Needed by
     /// TxService's MOX / TUN interlock — a G2 on P2 has no ActiveClient
     /// (Protocol1Client is null) but still wants to accept TX requests.
@@ -920,7 +940,7 @@ public sealed class RadioService : IDisposable
     }
 
     public async Task<StateDto> ConnectAsync(string endpoint, int sampleRate, CancellationToken ct = default,
-        HpsdrBoardKind discoveredKind = HpsdrBoardKind.Unknown)
+        HpsdrBoardKind discoveredKind = HpsdrBoardKind.Unknown, string? firmware = null)
     {
         if (!TryParseEndpoint(endpoint, out var ipEndpoint))
             throw new ArgumentException($"Invalid endpoint '{endpoint}'.", nameof(endpoint));
@@ -950,6 +970,8 @@ public sealed class RadioService : IDisposable
             client.AdcOverloadObserved += OnAdcOverload;
             client.Disconnected += OnClientDisconnected;
             _activeClient = client;
+            // Record the discovered firmware for the diagnostics snapshot.
+            _connectedFirmware = firmware;
             _state = _state with
             {
                 Status = ConnectionStatus.Connecting,
@@ -1078,6 +1100,7 @@ public sealed class RadioService : IDisposable
         {
             client = _activeClient;
             _activeClient = null;
+            _connectedFirmware = null;
         }
 
         if (client is not null)
@@ -4122,7 +4145,8 @@ public sealed class RadioService : IDisposable
         string endpoint,
         int sampleRateHz,
         Protocol2Client? client = null,
-        HpsdrBoardKind boardKind = HpsdrBoardKind.Unknown)
+        HpsdrBoardKind boardKind = HpsdrBoardKind.Unknown,
+        string? firmware = null)
     {
         Protocol2Client? previous;
         lock (_sync)
@@ -4131,6 +4155,8 @@ public sealed class RadioService : IDisposable
             _p2Client = client;
             _p2Active = true;
             _p2BoardKind = boardKind;
+            // Record the discovered firmware for the diagnostics snapshot.
+            _connectedFirmware = firmware;
             _attOffsetDb = 0;
             _adcOverloadLevel = 0;
             _overloadSeenInWindow = false;
@@ -4177,6 +4203,7 @@ public sealed class RadioService : IDisposable
             _p2Client = null;
             _p2Active = false;
             _p2BoardKind = HpsdrBoardKind.Unknown;
+            _connectedFirmware = null;
             _attOffsetDb = 0;
             _adcOverloadLevel = 0;
             _overloadSeenInWindow = false;
