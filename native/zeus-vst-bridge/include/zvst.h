@@ -33,8 +33,13 @@ extern "C" {
 
 /* Bridge ABI version. Bump when any function below changes shape.
  * v2 added the editor (IPlugView) entry points at the end of this
- * header: zvst_editor_open / zvst_editor_close / zvst_editor_is_open. */
-#define ZVST_ABI 2
+ * header: zvst_editor_open / zvst_editor_close / zvst_editor_is_open.
+ * v3 added zvst_get_latency_samples (end of header) and the
+ * ZVST_UNSUPPORTED_PRECISION status. Existing signatures are unchanged;
+ * v3 also makes zvst_load_vst3 bridge a host/plug-in channel-count
+ * mismatch internally (mono host <-> stereo-only plug-in, and the
+ * reverse) — the host I/O geometry stays exactly `channels` either way. */
+#define ZVST_ABI 3
 
 /* Status codes — must match VstBridgeStatus in C#. */
 typedef enum zvst_status_t {
@@ -47,6 +52,7 @@ typedef enum zvst_status_t {
     ZVST_INVALID_HANDLE        = 6,
     ZVST_INVALID_ARGUMENTS     = 7,
     ZVST_NOT_IMPLEMENTED       = 8,
+    ZVST_UNSUPPORTED_PRECISION = 9,  /* plug-in refuses 32-bit float processing */
     ZVST_OTHER                 = 255
 } zvst_status_t;
 
@@ -67,8 +73,18 @@ ZVST_EXPORT int32_t zvst_init(int32_t abi);
  *
  * `path` is a UTF-8 absolute path to either a .vst3 bundle directory
  * (the common case) or a single .vst3 file (some flat-file Linux
- * builds). `channels` is 1 or 2; `sample_rate` 44100..192000;
- * `block_size` 32..4096.
+ * builds). `channels` is 1 or 2 and describes the HOST buffer geometry
+ * passed to zvst_process; `sample_rate` 44100..192000; `block_size`
+ * 32..4096.
+ *
+ * Channel bridging (v3): if the plug-in cannot accept `channels`
+ * directly (e.g. a stereo-only effect with a mono host, or a mono-only
+ * effect with a stereo host) the bridge negotiates the plug-in's
+ * supported 1- or 2-channel arrangement and up/down-mixes inside
+ * zvst_process. The host always passes and receives exactly `channels`;
+ * the conversion is unity-gain and reversible (mono duplicated to both
+ * sides; stereo summed back as (L+R)/2). Load fails ZVST_ACTIVATE_FAILED
+ * if the plug-in needs more than 2 channels.
  *
  * The handle is owned by the bridge until zvst_unload is called.
  */
@@ -168,6 +184,19 @@ ZVST_EXPORT int32_t zvst_editor_close(zvst_handle_t handle);
  * NOTE: this is a boolean, NOT a zvst_status_t.
  */
 ZVST_EXPORT int32_t zvst_editor_is_open(zvst_handle_t handle);
+
+/* --- Latency reporting — ABI v3 --------------------------------------
+ *
+ * Return the plug-in's reported processing latency in samples at the
+ * geometry it was loaded with (IAudioProcessor::getLatencySamples),
+ * captured once at load. 0 for a zero-latency effect, a NULL handle, or
+ * a plug-in that does not report latency. Used by the host to surface
+ * the total VST-insert latency of a chain; it is NOT a zvst_status_t.
+ *
+ * Forward-compatible addition — a new entry point only; no existing
+ * signature changed.
+ */
+ZVST_EXPORT int32_t zvst_get_latency_samples(zvst_handle_t handle);
 
 #ifdef __cplusplus
 }
