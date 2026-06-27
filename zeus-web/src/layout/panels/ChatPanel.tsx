@@ -33,11 +33,9 @@ import {
   CHAT_IMAGE_ACCEPT,
 } from '../../util/chat-image';
 import { useQrzStore } from '../../state/qrz-store';
+import { useProfileOverlayStore } from '../../state/profile-overlay-store';
+import { useDisplaySettingsStore } from '../../state/display-settings-store';
 import { ConfirmDialog } from '../ConfirmDialog';
-import { QrzCard } from '../../components/design/QrzCard';
-import { qrzStationToContact } from '../../components/design/qrz-contact';
-import type { Contact } from '../../components/design/data';
-import type { QrzStation } from '../../api/qrz';
 
 const MAX_MESSAGE_CHARS = 2000;
 
@@ -695,103 +693,6 @@ function ImageLightbox({ att, onClose }: { att: ChatAttachment; onClose: () => v
   );
 }
 
-function ProfileOverlay({
-  callsign,
-  onClose,
-}: {
-  callsign: string;
-  onClose: () => void;
-}) {
-  const lookupCached = useQrzStore((s) => s.lookupCached);
-  const qrzConnected = useQrzStore((s) => s.connected);
-  const qrzHome = useQrzStore((s) => s.home);
-  const [station, setStation] = useState<QrzStation | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let live = true;
-    setLoading(true);
-    setError(null);
-    void lookupCached(callsign)
-      .then((s) => {
-        if (!live) return;
-        if (s) setStation(s);
-        else setError(qrzConnected ? 'No QRZ record' : 'Log into QRZ to view profiles');
-      })
-      .finally(() => {
-        if (live) setLoading(false);
-      });
-    return () => {
-      live = false;
-    };
-  }, [callsign, lookupCached, qrzConnected]);
-
-  const contact: Contact | null = useMemo(
-    () => qrzStationToContact(station, qrzHome),
-    [station, qrzHome],
-  );
-
-  return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'absolute',
-        inset: 0,
-        background: 'rgba(0,0,0,0.55)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 30,
-        padding: 16,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: 'var(--panel-top)',
-          border: '1px solid var(--panel-border)',
-          borderRadius: 'var(--r-lg)',
-          boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
-          width: 340,
-          maxWidth: '100%',
-          maxHeight: '90%',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '6px 10px',
-            borderBottom: '1px solid var(--panel-border)',
-          }}
-        >
-          <span
-            className="mono"
-            style={{ fontWeight: 700, letterSpacing: '0.06em', color: 'var(--fg-0)' }}
-          >
-            {callsign}
-          </span>
-          <button type="button" className="btn sm" onClick={onClose} title="Close">
-            ✕
-          </button>
-        </div>
-        <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
-          <QrzCard
-            contact={contact}
-            enriching={loading}
-            lookupError={!loading && !contact ? (error ?? 'No QRZ record') : null}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Eye icon — inline SVG for freq visibility toggle
 // ---------------------------------------------------------------------------
@@ -828,6 +729,37 @@ function EyeIcon({ open }: { open: boolean }) {
   );
 }
 
+// Panadapter chat-roster overlay toggle — a spectrum baseline with an operator
+// marker pin, echoing how the overlay paints callsigns on the panadapter. The
+// `open` (slashed) variant marks the overlay hidden, mirroring the EyeIcon.
+function RosterOverlayIcon({ on }: { on: boolean }) {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 16 16"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      {/* spectrum baseline */}
+      <path
+        d="M1.5 12.5 L4 12.5 L5.5 9 L7 12.5 L11 12.5"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {/* operator marker pin + dot */}
+      <line x1="11.5" y1="12.5" x2="11.5" y2="4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <circle cx="11.5" cy="3.5" r="1.6" fill="currentColor" />
+      {!on && (
+        <line x1="2" y1="14" x2="14" y2="2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      )}
+    </svg>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Tab bar sub-components
 // ---------------------------------------------------------------------------
@@ -843,10 +775,46 @@ const GOLD_RING_HOVER =
 const GOLD_RING_ACTIVE =
   'inset 0 0 0 1px rgba(255,177,60,0.40), 0 0 14px rgba(255,177,60,0.20)';
 
+// Violet glow for group rooms — the same soft-ring treatment as the gold DM
+// glow, in the dedicated group hue (--chat-group, #b07cff) so a group tab reads
+// as visually distinct from a DM at a glance.
+const VIOLET_RING_IDLE =
+  'inset 0 0 0 1px rgba(176,124,255,0.22), 0 0 8px rgba(176,124,255,0.10)';
+const VIOLET_RING_HOVER =
+  'inset 0 0 0 1px rgba(176,124,255,0.35), 0 0 12px rgba(176,124,255,0.16)';
+const VIOLET_RING_ACTIVE =
+  'inset 0 0 0 1px rgba(176,124,255,0.40), 0 0 14px rgba(176,124,255,0.20)';
+
+/** Per-tab tone: which channel kind drives the accent color/glow. */
+type TabTone = 'public' | 'group' | 'dm';
+
+/**
+ * Whether `me` is a member of `room` (case-insensitive). Returns true when our
+ * callsign is unknown (pre-connect) so a group never shows as locked before we
+ * know who we are.
+ */
+function isRoomMember(room: { members: string[] }, me: string | null): boolean {
+  const meUp = (me ?? '').toUpperCase();
+  if (!meUp) return true;
+  return room.members.some((m) => m.toUpperCase() === meUp);
+}
+
+/** A small padlock, shown on a group tab the viewer isn't a member of. */
+function LockGlyph() {
+  return (
+    <svg width="9" height="9" viewBox="0 0 12 12" fill="none" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <rect x="2.5" y="5.5" width="7" height="5" rx="1" stroke="currentColor" strokeWidth="1.1" />
+      <path d="M4 5.5V4a2 2 0 0 1 4 0v1.5" stroke="currentColor" strokeWidth="1.1" />
+    </svg>
+  );
+}
+
 interface TabItemProps {
   id: string;
   label: string;
-  isPrivate: boolean;
+  tone: TabTone;
+  /** Group the viewer isn't a member of: discoverable but locked until added. */
+  locked?: boolean;
   isActive: boolean;
   unread: number;
   closable?: boolean;
@@ -854,22 +822,23 @@ interface TabItemProps {
   onClose?: () => void;
 }
 
-function TabItem({ id: _id, label, isPrivate, isActive, unread, closable, onClick, onClose }: TabItemProps) {
+function TabItem({ id: _id, label, tone, locked, isActive, unread, closable, onClick, onClose }: TabItemProps) {
   const [hovered, setHovered] = useState(false);
 
-  const boxShadow = isPrivate
-    ? isActive
-      ? GOLD_RING_ACTIVE
-      : hovered
-      ? GOLD_RING_HOVER
-      : GOLD_RING_IDLE
-    : 'none';
+  const ring = (idle: string, hover: string, active: string) =>
+    isActive ? active : hovered ? hover : idle;
+  const boxShadow =
+    tone === 'dm'
+      ? ring(GOLD_RING_IDLE, GOLD_RING_HOVER, GOLD_RING_ACTIVE)
+      : tone === 'group'
+      ? ring(VIOLET_RING_IDLE, VIOLET_RING_HOVER, VIOLET_RING_ACTIVE)
+      : 'none';
 
-  const borderBottom = isActive
-    ? isPrivate
-      ? '2px solid var(--power)'
-      : '2px solid var(--accent-bright)'
-    : '2px solid transparent';
+  // Accent per channel kind: public=blue, group=violet, dm=gold.
+  const accent =
+    tone === 'dm' ? 'var(--power)' : tone === 'group' ? 'var(--chat-group)' : 'var(--accent-bright)';
+
+  const borderBottom = isActive ? `2px solid ${accent}` : '2px solid transparent';
 
   return (
     <div
@@ -894,16 +863,22 @@ function TabItem({ id: _id, label, isPrivate, isActive, unread, closable, onClic
         flexShrink: 0,
       }}
     >
+      {locked && (
+        <span style={{ color: accent, display: 'inline-flex', opacity: 0.85 }} title="Invite-only — an admin must add you">
+          <LockGlyph />
+        </span>
+      )}
       <span
         style={{
           fontSize: 11,
           fontWeight: isActive ? 700 : 500,
           letterSpacing: '0.04em',
           color: isActive
-            ? isPrivate
-              ? 'var(--power)'
-              : 'var(--fg-0)'
+            ? tone === 'public'
+              ? 'var(--fg-0)'
+              : accent
             : 'var(--fg-2)',
+          opacity: locked && !isActive ? 0.7 : 1,
           transition: `color var(--dur-fast) var(--ease-out)`,
           maxWidth: 88,
           overflow: 'hidden',
@@ -923,7 +898,8 @@ function TabItem({ id: _id, label, isPrivate, isActive, unread, closable, onClic
             height: 15,
             padding: '0 4px',
             borderRadius: 8,
-            background: isPrivate ? 'var(--power)' : 'var(--accent)',
+            background:
+              tone === 'dm' ? 'var(--power)' : tone === 'group' ? 'var(--chat-group)' : 'var(--accent)',
             color: '#fff',
             fontSize: 9,
             fontWeight: 700,
@@ -1617,9 +1593,10 @@ export function ChatPanel() {
   const ban = useChatStore((s) => s.ban);
 
   const qrzConnected = useQrzStore((s) => s.connected);
+  const showRosterOverlay = useDisplaySettingsStore((s) => s.showChatRosterOverlay);
+  const setShowRosterOverlay = useDisplaySettingsStore((s) => s.setShowChatRosterOverlay);
 
   const [draft, setDraft] = useState('');
-  const [profileCall, setProfileCall] = useState<string | null>(null);
   // Pending inline photo: compressed and ready to send, shown as a preview chip
   // above the composer until the operator sends or removes it.
   const [pendingAttachment, setPendingAttachment] = useState<ChatAttachment | null>(null);
@@ -1713,9 +1690,7 @@ export function ChatPanel() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [activeMessages.length, activeRoom]);
 
-  const openProfile = useCallback((callsign: string) => {
-    setProfileCall(callsign.trim().toUpperCase());
-  }, []);
+  const openProfile = useProfileOverlayStore((s) => s.open);
 
   // Sorted roster
   const sortedRoster = useMemo(() => {
@@ -1788,12 +1763,20 @@ export function ChatPanel() {
     [rooms, activeRoom],
   );
 
-  const isPrivateRoom = activeRoomObj ? activeRoomObj.kind !== 'public' : false;
+  // Tone of the active room drives the thread/composer accent (group=violet, dm=gold).
+  const activeTone: TabTone =
+    activeRoomObj?.kind === 'group' ? 'group' : activeRoomObj?.kind === 'dm' ? 'dm' : 'public';
+  // The active room is a group the operator hasn't been added to: discoverable
+  // but invite-only — show a locked body and block the composer until an admin
+  // adds them. (Admins still get the management strip below to add members.)
+  const lockedActive =
+    !!activeRoomObj && activeRoomObj.kind === 'group' && !isRoomMember(activeRoomObj, ownCall);
 
   // Placeholder label for the composer
   const composerPlaceholder = (() => {
     if (!connected) return 'Not connected';
     if (!activeRoomObj) return 'Message… (Enter to send)';
+    if (lockedActive) return 'Invite-only group — an admin must add you to post';
     if (activeRoomObj.kind === 'dm') {
       const other = dmOther(activeRoomObj.id, ownCall);
       return `Message @${other ?? activeRoomObj.name} (Enter to send, Shift+Enter for newline)`;
@@ -1809,6 +1792,7 @@ export function ChatPanel() {
   const canSend =
     enabled &&
     connected &&
+    !lockedActive &&
     draft.length <= MAX_MESSAGE_CHARS &&
     (draft.trim().length > 0 || pendingAttachment !== null);
 
@@ -1863,10 +1847,20 @@ export function ChatPanel() {
   // Admin: create group room
   const handleCreateRoom = () => setCreatingRoom(true);
 
-  // Golden thread border for private rooms
-  const threadTopBorder = isPrivateRoom
-    ? '2px solid rgba(255,177,60,0.30)'
-    : '1px solid transparent';
+  // Accent thread/composer border for private rooms — violet for groups, gold
+  // for DMs, none for the public lobby.
+  const threadTopBorder =
+    activeTone === 'group'
+      ? '2px solid rgba(176,124,255,0.30)'
+      : activeTone === 'dm'
+      ? '2px solid rgba(255,177,60,0.30)'
+      : '1px solid transparent';
+  const composerBorder =
+    activeTone === 'group'
+      ? '1px solid rgba(176,124,255,0.28)'
+      : activeTone === 'dm'
+      ? '1px solid rgba(255,177,60,0.28)'
+      : '1px solid var(--line-strong)';
 
   return (
     <div
@@ -1938,6 +1932,39 @@ export function ChatPanel() {
         ) : null}
 
         <div style={{ flex: 1 }} />
+
+        {/* Panadapter chat-roster overlay toggle — show/hide operators on the
+            panadapter, mirroring the frequency-visibility eye next to it. */}
+        {enabled && (
+          <button
+            type="button"
+            onClick={() => setShowRosterOverlay(!showRosterOverlay)}
+            aria-label={
+              showRosterOverlay
+                ? 'Operators are shown on the panadapter — click to hide'
+                : 'Operators are hidden from the panadapter — click to show'
+            }
+            aria-pressed={showRosterOverlay}
+            title={
+              showRosterOverlay
+                ? 'Showing operators on the panadapter'
+                : 'Operators hidden from the panadapter'
+            }
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: '2px 4px',
+              cursor: 'pointer',
+              color: showRosterOverlay ? 'var(--accent-bright)' : 'var(--fg-3)',
+              display: 'flex',
+              alignItems: 'center',
+              borderRadius: 'var(--r-sm)',
+              transition: 'color var(--dur-fast) var(--ease-out)',
+            }}
+          >
+            <RosterOverlayIcon on={showRosterOverlay} />
+          </button>
+        )}
 
         {/* Freq visibility eye toggle */}
         {enabled && connected && (
@@ -2202,7 +2229,12 @@ export function ChatPanel() {
         </div>
 
         {/* ── Right column: tab bar + thread + composer ── */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        {/* minWidth:0 is load-bearing — without it this flex child keeps its
+            content's intrinsic min-content width (the tab strip's TabItems are
+            flexShrink:0), so the whole column overflows the body and gets clipped
+            instead of the inner tab bar scrolling. That left scrollWidth ===
+            clientWidth, so the overflow arrows never lit up. */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0 }}>
 
           {/* ── Tab bar ── */}
           <div
@@ -2238,7 +2270,11 @@ export function ChatPanel() {
             >
               {orderedRooms.map((room) => {
                 const isDm = room.kind === 'dm';
-                const isPrivate = room.kind !== 'public';
+                const tone: TabTone =
+                  room.kind === 'public' ? 'public' : room.kind === 'group' ? 'group' : 'dm';
+                // A group the viewer isn't a member of: visible but locked. Only
+                // flagged once we know our own callsign (avoids a false lock pre-connect).
+                const locked = room.kind === 'group' && !isRoomMember(room, ownCall);
                 const label = isDm
                   ? (dmOther(room.id, ownCall) ?? room.name)
                   : room.name;
@@ -2247,7 +2283,8 @@ export function ChatPanel() {
                     key={room.id}
                     id={room.id}
                     label={label}
-                    isPrivate={isPrivate}
+                    tone={tone}
+                    locked={locked}
                     isActive={activeRoom === room.id}
                     unread={unreadByRoom[room.id] ?? 0}
                     closable={isDm}
@@ -2314,7 +2351,32 @@ export function ChatPanel() {
               transition: `border-color var(--dur-fast) var(--ease-out)`,
             }}
           >
-            {activeMessages.length === 0 ? (
+            {lockedActive ? (
+              <div
+                style={{
+                  margin: 'auto',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: 8,
+                  maxWidth: 260,
+                  textAlign: 'center',
+                  padding: 16,
+                  color: 'var(--fg-3)',
+                }}
+              >
+                <span style={{ color: 'var(--chat-group)', display: 'inline-flex' }}>
+                  <LockGlyph />
+                </span>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--chat-group)' }}>
+                  {activeRoomObj?.name}
+                </div>
+                <div style={{ fontSize: 11.5, lineHeight: 1.5 }}>
+                  This is an invite-only group. An admin must add you before you can
+                  read or post here.
+                </div>
+              </div>
+            ) : activeMessages.length === 0 ? (
               <div
                 style={{
                   margin: 'auto',
@@ -2429,9 +2491,9 @@ export function ChatPanel() {
               <button
                 type="button"
                 className="btn sm"
-                disabled={!connected || attaching}
+                disabled={!connected || attaching || lockedActive}
                 onClick={() => fileInputRef.current?.click()}
-                title={connected ? 'Attach a photo' : 'Not connected'}
+                title={connected ? (lockedActive ? 'Not a member of this group' : 'Attach a photo') : 'Not connected'}
                 aria-label="Attach a photo"
                 style={{ flexShrink: 0, padding: '5px 8px' }}
               >
@@ -2459,7 +2521,7 @@ export function ChatPanel() {
                   }
                 }}
                 placeholder={composerPlaceholder}
-                disabled={!connected}
+                disabled={!connected || lockedActive}
                 rows={1}
                 maxLength={MAX_MESSAGE_CHARS + 64}
                 style={{
@@ -2471,9 +2533,7 @@ export function ChatPanel() {
                   padding: '5px 8px',
                   boxSizing: 'border-box',
                   borderRadius: 'var(--r-sm)',
-                  border: isPrivateRoom
-                    ? '1px solid rgba(255,177,60,0.28)'
-                    : '1px solid var(--line-strong)',
+                  border: composerBorder,
                   background: connected ? '#0c0c10' : 'var(--bg-1)',
                   color: '#d8d8dc',
                   fontSize: 12,
@@ -2509,10 +2569,9 @@ export function ChatPanel() {
         </div>
       </div>
 
-      {/* ── QRZ profile overlay ── */}
-      {profileCall ? (
-        <ProfileOverlay callsign={profileCall} onClose={() => setProfileCall(null)} />
-      ) : null}
+      {/* QRZ profile overlay is mounted once at the app root (ProfileOverlayHost)
+          and opened via profile-overlay-store, so it's shared with the
+          panadapter chat-roster overlay. */}
 
       {/* ── Full-size photo viewer ── */}
       {lightbox ? <ImageLightbox att={lightbox} onClose={() => setLightbox(null)} /> : null}

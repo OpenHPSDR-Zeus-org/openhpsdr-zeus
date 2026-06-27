@@ -1,0 +1,11 @@
+Fitter Status : Successful - Sat Apr 11 19:02:02 2009
+Quartus II Version : 9.0 Build 132 02/25/2009 SJ Web Edition
+Revision Name : Janus
+Top-level Entity Name : Janus
+Family : MAX II
+Device : EPM240T100C5
+Timing Models : Final
+Total logic elements : 195 / 240 ( 81 % )
+Total pins : 46 / 80 ( 57 % )
+Total virtual pins : 0
+UFM blocks : 0 / 1 ( 0 % )

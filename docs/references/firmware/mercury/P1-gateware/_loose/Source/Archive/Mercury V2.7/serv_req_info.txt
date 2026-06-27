@@ -1,0 +1,60 @@
+<internal_error>
+	<executable>quartus.exe</executable>
+	<sub_system>unknown</sub_system>
+	<file>unknown</file>
+	<line>0</line>
+	<callstack>
+	0x4c05c3f0: AOT803AS + 0x5c3f0 (SECTabControlBase::GetActiveTab + 0x0)
+	0x06271b70: RESR_MSW + 0x1b70 (?set_last_active_view@MSW_MESSAGE_WND@@QAIXPAVMSW_VIEW@@@Z + 0x4c0)
+	0x100062ac: GCL_AFC + 0x62ac (?OnWndMsg@AFC_NESTED_FRAME@@UAEHIIJPAJ@Z + 0x3c)
+	0x78610e19: mfc90 + 0x30e19
+	0x7860fa0b: mfc90 + 0x2fa0b
+	0x7860fc97: mfc90 + 0x2fc97
+	0x7860da38: mfc90 + 0x2da38
+	0x7e418733: USER32 + 0x8733 (GetDC + 0x6c)
+	0x7e418815: USER32 + 0x8815 (GetDC + 0x14e)
+	0x7e41b4bf: USER32 + 0xb4bf (DefWindowProcW + 0x183)
+	0x7e41b50b: USER32 + 0xb50b (DefWindowProcW + 0x1cf)
+	0x7c90e452: ntdll + 0xe452 (KiUserCallbackDispatcher + 0x12)
+	0x786787f6: mfc90 + 0x987f6
+	0x7867eef9: mfc90 + 0x9eef9
+	0x78616983: mfc90 + 0x36983
+	0x78611250: mfc90 + 0x31250
+	0x100062ac: GCL_AFC + 0x62ac (?OnWndMsg@AFC_NESTED_FRAME@@UAEHIIJPAJ@Z + 0x3c)
+	0x78610e19: mfc90 + 0x30e19
+	0x7860fa0b: mfc90 + 0x2fa0b
+	0x7860fc97: mfc90 + 0x2fc97
+	0x7860da38: mfc90 + 0x2da38
+	0x7e418733: USER32 + 0x8733 (GetDC + 0x6c)
+	0x7e418815: USER32 + 0x8815 (GetDC + 0x14e)
+	0x7e41b89a: USER32 + 0xb89a (GetParent + 0x16b)
+	0x7e42f41b: USER32 + 0x1f41b (SendMessageA + 0x48)
+	0x09c4a526: resr_rpw + 0x2a526 (resr_rpw_dll_get_template_classes + 0x20356)
+	0x09c4a5e6: resr_rpw + 0x2a5e6 (resr_rpw_dll_get_template_classes + 0x20416)
+	0x78611485: mfc90 + 0x31485
+	0x7e41cfb7: USER32 + 0xcfb7 (CallWindowProcA + 0x1a)
+	0x78610516: mfc90 + 0x30516
+	0x78610e30: mfc90 + 0x30e30
+	0x100062ac: GCL_AFC + 0x62ac (?OnWndMsg@AFC_NESTED_FRAME@@UAEHIIJPAJ@Z + 0x3c)
+	0x7860fa0b: mfc90 + 0x2fa0b
+	0x7860e60b: mfc90 + 0x2e60b
+	0x7860db1f: mfc90 + 0x2db1f
+	0x7860fb52: mfc90 + 0x2fb52
+	0x7860fc97: mfc90 + 0x2fc97
+	0x7860da38: mfc90 + 0x2da38
+	0x7e418733: USER32 + 0x8733 (GetDC + 0x6c)
+	0x7e418815: USER32 + 0x8815 (GetDC + 0x14e)
+	0x7e4189cc: USER32 + 0x89cc (GetWindowLongW + 0x126)
+	0x7e4196c6: USER32 + 0x96c6 (DispatchMessageA + 0xe)
+	0x7864fc07: mfc90 + 0x6fc07
+	</callstack>
+	<error>Current editor: STED, RPW
+Current dockable window: TMW</error>
+	<date>Sun Mar 29 01:49:04 2009</date>
+	<version>Quartus II Version 9.0 Build 132 02/25/2009 SJ Web Edition</version>
+	<full_error>Access Violation at 0X4C05C3F0
+Current editor: STED, RPW
+Current dockable window: TMW
+Quartus II Version 9.0 Build 132 02/25/2009 SJ Web Edition </full_error>
+</internal_error>
+

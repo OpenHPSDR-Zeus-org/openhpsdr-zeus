@@ -1,0 +1,96 @@
+--------------------------------------------------------------------------------------
+Timing Analyzer Summary
+--------------------------------------------------------------------------------------
+
+Type           : Worst-case tsu
+Slack          : N/A
+Required Time  : None
+Actual Time    : 1.208 ns
+From           : IQOUT
+To             : I_data[10]
+From Clock     : --
+To Clock       : C8
+Failed Paths   : 0
+
+Type           : Worst-case tco
+Slack          : N/A
+Required Time  : None
+Actual Time    : 25.686 ns
+From           : pfd:Janus_pfd|inst4
+To             : TUNE
+From Clock     : CLK_12MHZ
+To Clock       : --
+Failed Paths   : 0
+
+Type           : Worst-case tpd
+Slack          : N/A
+Required Time  : None
+Actual Time    : 6.925 ns
+From           : CLK_MCLK
+To             : CMCLK
+From Clock     : --
+To Clock       : --
+Failed Paths   : 0
+
+Type           : Worst-case th
+Slack          : N/A
+Required Time  : None
+Actual Time    : 2.361 ns
+From           : C9
+To             : IQ_state.011
+From Clock     : --
+To Clock       : C8
+Failed Paths   : 0
+
+Type           : Clock Setup: 'ref_in'
+Slack          : N/A
+Required Time  : None
+Actual Time    : 121.18 MHz ( period = 8.252 ns )
+From           : counter1:counter1|lpm_counter:lpm_counter_component|cntr_45j:auto_generated|safe_q[5]
+To             : counter1:counter1|lpm_counter:lpm_counter_component|cntr_45j:auto_generated|safe_q[3]
+From Clock     : ref_in
+To Clock       : ref_in
+Failed Paths   : 0
+
+Type           : Clock Setup: 'CLK_12MHZ'
+Slack          : N/A
+Required Time  : None
+Actual Time    : 122.20 MHz ( period = 8.183 ns )
+From           : counter2:counter2|lpm_counter:lpm_counter_component|cntr_c5j:auto_generated|safe_q[1]
+To             : counter2:counter2|lpm_counter:lpm_counter_component|cntr_c5j:auto_generated|safe_q[3]
+From Clock     : CLK_12MHZ
+To Clock       : CLK_12MHZ
+Failed Paths   : 0
+
+Type           : Clock Setup: 'C8'
+Slack          : N/A
+Required Time  : None
+Actual Time    : 160.28 MHz ( period = 6.239 ns )
+From           : bit_count[1]
+To             : Q_data[9]
+From Clock     : C8
+To Clock       : C8
+Failed Paths   : 0
+
+Type           : Clock Setup: 'CLK_48MHZ'
+Slack          : N/A
+Required Time  : None
+Actual Time    : 168.58 MHz ( period = 5.932 ns )
+From           : I_in[0]
+To             : I_accumulator[8]
+From Clock     : CLK_48MHZ
+To Clock       : CLK_48MHZ
+Failed Paths   : 0
+
+Type           : Total number of failed paths
+Slack          : 
+Required Time  : 
+Actual Time    : 
+From           : 
+To             : 
+From Clock     : 
+To Clock       : 
+Failed Paths   : 0
+
+--------------------------------------------------------------------------------------
+

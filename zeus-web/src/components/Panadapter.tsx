@@ -69,6 +69,7 @@ import { PassbandOverlay } from './PassbandOverlay';
 import { ImdReadings } from './ImdReadings';
 import { DbScale } from './DbScale';
 import { SpotOverlay } from './SpotOverlay';
+import { ChatRosterOverlay } from './ChatRosterOverlay';
 import { PeakMarkerOverlay } from './PeakMarkerOverlay';
 import { NotchOverlay } from './NotchOverlay';
 import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
@@ -511,6 +512,7 @@ export function Panadapter({
       {rxIndex === 0 && (!stitched || foreground) && (
         <>
           <SpotOverlay />
+          <ChatRosterOverlay />
           <PeakMarkerOverlay />
           <NotchOverlay interactive resizable containerRef={containerRef} />
           <ImdReadings />

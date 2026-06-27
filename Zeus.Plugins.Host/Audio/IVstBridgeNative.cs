@@ -65,6 +65,15 @@ public interface IVstBridgeNative
         json = "[]";
         return VstBridgeStatus.NotImplemented;
     }
+
+    /// <summary>
+    /// The plugin's reported processing latency in samples at its loaded
+    /// geometry (captured once at load). 0 for a zero-latency effect, an
+    /// invalid handle, or a plugin that reports none. Defaulted so existing
+    /// test fakes need no change; the production bridge overrides it via
+    /// <c>zvst_get_latency_samples</c> (ABI v3).
+    /// </summary>
+    int GetLatencySamples(nint handle) => 0;
 }
 
 /// <summary>
@@ -90,6 +99,7 @@ public static class VstBridgeStatus
     public const int InvalidHandle       = 6;
     public const int InvalidArguments    = 7;
     public const int NotImplemented      = 8;
+    public const int UnsupportedPrecision = 9;  // plugin refuses 32-bit float
     public const int Other               = 255;
 }
 
@@ -101,5 +111,8 @@ public static class VstBridgeStatus
 public static class VstBridgeAbi
 {
     // v2: added the editor entry points (zvst_editor_open/close/is_open).
-    public const int Current = 2;
+    // v3: added zvst_get_latency_samples + the ZVST_UNSUPPORTED_PRECISION
+    //     status, and host/plugin channel-count bridging inside zvst_process
+    //     (no existing signature changed).
+    public const int Current = 3;
 }

@@ -1,0 +1,7 @@
+{
+	"common_dir" : "/home/mh/Desktop/SDR/HPSDR/LATEST/ORION_MKIII_CV/Bootloader_CV_N1GP/",
+	"acds_version" : "Version 20.1.1",
+	"platform" : "linux",
+	"os" : "Debian GNU/Linux",
+	"qpf" : "Bootloader.qpf"
+}

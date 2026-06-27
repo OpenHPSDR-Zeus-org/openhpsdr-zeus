@@ -71,6 +71,7 @@ import { ModeFavorites } from './components/toolbar/ModeFavorites';
 import { CtunButton } from './components/CtunButton';
 import { MoxButton } from './components/MoxButton';
 import { PreampButton } from './components/PreampButton';
+import { ProfileOverlayHost } from './components/ProfileOverlay';
 import { PsToggleButton } from './components/PsToggleButton';
 import { PaTempChip } from './components/PaTempChip';
 import { WorkspaceZoomControls } from './components/WorkspaceZoomControls';
@@ -944,6 +945,7 @@ export default function App() {
         </div>
         {disconnectedOverlay}
         <FreeDvWindow />
+        <ProfileOverlayHost />
       </div>
       </SpectrumWheelActionsContext.Provider>
       </WorkspaceContext.Provider>
@@ -1216,6 +1218,7 @@ export default function App() {
       />
       <UpdatePrompt show={updateAvailable} onUpdate={installUpdate} />
       <ReportProblemModal />
+      <ProfileOverlayHost />
       {remoteMode && <RemoteGate />}
     </div>
     </SpectrumWheelActionsContext.Provider>

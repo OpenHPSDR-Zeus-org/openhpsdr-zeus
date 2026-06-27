@@ -1,0 +1,22 @@
+**** HOw to program EPCS16/M25P16  and boot FPGA from it *****
+
+In Quartus Device\Device and Pin options\Configuration in Configuration scheme: select 'Active Serial (can use Configuration Device)'
+
+In Configuration Device select 'EPCS16'
+
+In Programmer select Mode: 'Active Serial Programming'
+
+In file select 'Penelope.pof'
+
+In device select 'EPCS16'
+
+Check Program/Configure and Verify for both lines
+
+Set Jumpers on FPGA board to Active Serial i.e. Config A and B = 0 
+
+Program!
+
+
+
+
+

@@ -1,0 +1,249 @@
+--------------------------------------------------------------------------------
+                              Batch Process Report
+
+                     CADSTAR Design Editor Version 10.0.0.4
+
+Design:     E:\ALEX TEST BOARD\GERBER_ALEX\ALEX TESTBOARD_02.pcb
+
+Design Title:
+2 Layer Defaults
+
+Units:            Millimetres
+Decimal Places:   3
+
+Date:      Tuesday, August 26, 2014
+Time:      11:24 AM
+
+--------------------------------------------------------------------------------
+
+Results Summary
+---------------
+
+Row 1 completed successfully.
+Row 2 completed successfully.
+Row 3 completed successfully.
+Row 4 completed successfully.
+Row 5 completed successfully.
+Row 6 completed successfully.
+Row 7 completed successfully.
+
+Results
+-------
+
+************************************ ROW 1 ************************************
+
+TOP ELECTRIC
+ [<None>] :: [Artwork] :: [HW_L01.col] :: [Photo Plotter] :: [rs274-x.usr] :: [G3060232.sel] :: [L01.spl] 
+
+
+Symbol Availability Report
+--------------------------
+
+Position    Shape          Usage           Size    Orient        Length     Count
+--------    -----          -----           ----    ------        ------     -----
+
+Predefined Symbols
+------------------
+
+
+Auto Allocated Symbols
+----------------------
+
+11          CIRCLE         Drawn          0.254                                  
+12          CIRCLE         Drawn          0.889                                  
+13          CIRCLE         Drawn         0.3048                                  
+14          CIRCLE         Drawn          0.508                                  
+15          CIRCLE         Drawn          1.016                                  
+16          CIRCLE         Drawn         0.2032                                  
+17          CIRCLE         Drawn          0.127                                  
+18          RECTANGLE      Flashed        1.300     0.000         0.200       148
+19          RECTANGLE      Flashed        1.300    90.000         0.200        12
+20          RECTANGLE      Flashed        1.500   180.000         0.500         3
+21          RECTANGLE      Flashed        2.300   270.000         1.550         1
+22          RECTANGLE      Flashed        1.600    90.000         0.200         4
+23          RECTANGLE      Flashed        1.010    90.000         0.760       108
+24          CIRCLE         Flashed        2.500                                 4
+25          SQUARE         Flashed        1.778   270.000                       1
+26          CIRCLE         Flashed        1.778                                 9
+27          CIRCLE         Flashed        1.016                                48
+
+
+Row 1 completed successfully.
+
+************************************ ROW 2 ************************************
+
+BOTTOM ELECTRIC
+ [<None>] :: [Artwork] :: [HW_L04.col] :: [Photo Plotter] :: [rs274-x.usr] :: [G3060232.sel] :: [L02.spl] 
+
+
+Symbol Availability Report
+--------------------------
+
+Position    Shape          Usage           Size    Orient        Length     Count
+--------    -----          -----           ----    ------        ------     -----
+
+Predefined Symbols
+------------------
+
+
+Auto Allocated Symbols
+----------------------
+
+11          CIRCLE         Drawn          0.889                                  
+12          CIRCLE         Drawn         0.3048                                  
+13          CIRCLE         Drawn          1.016                                  
+14          CIRCLE         Drawn          0.127                                  
+15          CIRCLE         Flashed        2.500                                 4
+16          SQUARE         Flashed        1.778   270.000                       1
+17          CIRCLE         Flashed        1.778                                 9
+18          CIRCLE         Drawn          0.254                                  
+19          CIRCLE         Flashed        1.016                                48
+
+
+Row 2 completed successfully.
+
+************************************ ROW 3 ************************************
+
+SILK TOP 
+ [<None>] :: [Artwork] :: [SST.col] :: [Photo Plotter] :: [rs274-x.usr] :: [G3060232.sel] :: [SST.spl] 
+
+
+Symbol Availability Report
+--------------------------
+
+Position    Shape          Usage           Size    Orient        Length     Count
+--------    -----          -----           ----    ------        ------     -----
+
+Predefined Symbols
+------------------
+
+
+Auto Allocated Symbols
+----------------------
+
+11          CIRCLE         Drawn          0.127                                  
+12          CIRCLE         Drawn         0.1524                                  
+13          CIRCLE         Drawn          0.254                                  
+
+
+Row 3 completed successfully.
+
+************************************ ROW 4 ************************************
+
+SOLER MASK TOP
+ [<None>] :: [Artwork] :: [SMT.col] :: [Photo Plotter] :: [rs274-x.usr] :: [G3060232.sel] :: [SMT.spl] 
+
+
+Symbol Availability Report
+--------------------------
+
+Position    Shape          Usage           Size    Orient        Length     Count
+--------    -----          -----           ----    ------        ------     -----
+
+Predefined Symbols
+------------------
+
+
+Auto Allocated Symbols
+----------------------
+
+11          CIRCLE         Drawn          0.127                                  
+12          RECTANGLE      Flashed        1.425     0.000         0.200       148
+13          RECTANGLE      Flashed        1.425    90.000         0.200        12
+14          RECTANGLE      Flashed      1.61417   180.000         0.500         3
+15          RECTANGLE      Flashed        2.425   270.000         1.550         1
+16          RECTANGLE      Flashed        1.725    90.000         0.200         4
+17          RECTANGLE      Flashed        1.135    90.000         0.760       108
+18          CIRCLE         Flashed        2.750                                 4
+19          SQUARE         Flashed        2.032   270.000                       1
+20          CIRCLE         Flashed        2.032                                 9
+21          CIRCLE         Drawn          0.254                                  
+
+
+Row 4 completed successfully.
+
+************************************ ROW 5 ************************************
+
+SOLER MASK BOTTOM
+ [<None>] :: [Artwork] :: [SMB.col] :: [Photo Plotter] :: [rs274-x.usr] :: [G3060232.sel] :: [SMB.spl] 
+
+
+Symbol Availability Report
+--------------------------
+
+Position    Shape          Usage           Size    Orient        Length     Count
+--------    -----          -----           ----    ------        ------     -----
+
+Predefined Symbols
+------------------
+
+
+Auto Allocated Symbols
+----------------------
+
+11          CIRCLE         Drawn          0.127                                  
+12          CIRCLE         Flashed        2.750                                 4
+13          SQUARE         Flashed        2.032   270.000                       1
+14          CIRCLE         Flashed        2.032                                 9
+15          CIRCLE         Drawn          0.254                                  
+
+
+Row 5 completed successfully.
+
+************************************ ROW 6 ************************************
+
+NC DRILL PTH
+ [<None>] :: [N.C. Drill] :: [LDD.col] :: [NCDrill File] :: [excellon2.usr] :: [HF_VHF_NCD.sel] :: [NCD_PTH.spl] 
+
+ Drill No.  Tool No.      Size     Count   File Name
+------------------------------------------------------------
+         0         1     0.500        48
+         1         2     1.000        10
+         2         3     1.500         4
+------------------------------------------------------------
+                         TOTAL        62
+
+Row 6 completed successfully.
+
+************************************ ROW 7 ************************************
+
+DRILL DRAWING
+ [<None>] :: [Drill Drawing] :: [LDD.col] :: [Photo Plotter] :: [rs274-x.usr] :: [DAUGHTER.sel] :: [LDD.spl] 
+
+
+Drill Report
+------------
+
+      Size    Plate Through    Letter     Count
+      ----    -------------    ------     -----
+     0.500              Yes         A        48
+     1.000              Yes         B        10
+     1.500              Yes         K         4
+
+
+Symbol Availability Report
+--------------------------
+
+Position    Shape          Usage           Size    Orient        Length     Count
+--------    -----          -----           ----    ------        ------     -----
+
+Predefined Symbols
+------------------
+
+
+Auto Allocated Symbols
+----------------------
+
+11          CIRCLE         Drawn          0.127                                  
+12          CIRCLE         Drawn          0.254                                  
+13          CIRCLE         Drawn         0.2032                                  
+14          CIRCLE         Drawn         0.1524                                  
+15          ANNULUS        Flashed        0.500                   0.250        62
+16          CIRCLE         Drawn          0.200                                  
+
+
+Row 7 completed successfully.
+
+--------------------------------------------------------------------------------
+                                 End of report
+--------------------------------------------------------------------------------

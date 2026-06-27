@@ -1,0 +1,218 @@
+# -------------------------------------------------------------------------- #
+#
+# Copyright (C) 1991-2010 Altera Corporation
+# Your use of Altera Corporation's design tools, logic functions 
+# and other software and tools, and its AMPP partner logic 
+# functions, and any output files from any of the foregoing 
+# (including device programming or simulation files), and any 
+# associated documentation or information are expressly subject 
+# to the terms and conditions of the Altera Program License 
+# Subscription Agreement, Altera MegaCore Function License 
+# Agreement, or other applicable license agreement, including, 
+# without limitation, that your use is for the sole purpose of 
+# programming logic devices manufactured by Altera and sold by 
+# Altera or its authorized distributors.  Please refer to the 
+# applicable agreement for further details.
+#
+# -------------------------------------------------------------------------- #
+#
+# Quartus II
+# Version 9.1 Build 350 03/24/2010 Service Pack 2 SJ Web Edition
+# Date created = 16:08:58  November 09, 2010
+#
+# -------------------------------------------------------------------------- #
+#
+# Notes:
+#
+# 1) The default values for assignments are stored in the file:
+#		Bootloader_assignment_defaults.qdf
+#    If this file doesn't exist, see file:
+#		assignment_defaults.qdf
+#
+# 2) Altera recommends that you do not modify this file. This
+#    file is updated automatically by the Quartus II software
+#    and any changes you make may be lost or overwritten.
+#
+# -------------------------------------------------------------------------- #
+
+
+set_global_assignment -name FAMILY "Cyclone III"
+set_global_assignment -name DEVICE EP3C25Q240C8
+set_global_assignment -name TOP_LEVEL_ENTITY Bootloader
+set_global_assignment -name ORIGINAL_QUARTUS_VERSION "9.1 SP2"
+set_global_assignment -name PROJECT_CREATION_TIME_DATE "16:08:58  NOVEMBER 09, 2010"
+set_global_assignment -name LAST_QUARTUS_VERSION 13.1
+set_global_assignment -name USE_GENERATED_PHYSICAL_CONSTRAINTS OFF -section_id eda_blast_fpga
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 85
+set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -entity OzyII -section_id Top
+set_global_assignment -name PARTITION_COLOR 16764057 -entity OzyII -section_id Top
+set_global_assignment -name LL_ROOT_REGION ON -entity OzyII -section_id "Root Region"
+set_global_assignment -name LL_MEMBER_STATE LOCKED -entity OzyII -section_id "Root Region"
+set_location_assignment PIN_52 -to PHY_MDIO
+set_location_assignment PIN_56 -to PHY_RESET_N
+set_location_assignment PIN_51 -to PHY_MDC
+set_location_assignment PIN_43 -to PHY_TX_CLOCK
+set_location_assignment PIN_107 -to MODE1
+set_location_assignment PIN_149 -to PHY_CLK125
+set_location_assignment PIN_31 -to PHY_RX_CLOCK
+set_location_assignment PIN_41 -to PHY_TX_EN
+set_location_assignment PIN_50 -to PHY_TX[0]
+set_location_assignment PIN_49 -to PHY_TX[1]
+set_location_assignment PIN_45 -to PHY_TX[2]
+set_location_assignment PIN_44 -to PHY_TX[3]
+set_location_assignment PIN_6 -to PHY_RX[0]
+set_location_assignment PIN_13 -to PHY_RX[1]
+set_location_assignment PIN_18 -to PHY_RX[2]
+set_location_assignment PIN_21 -to PHY_RX[3]
+set_location_assignment PIN_113 -to PHY_DV
+set_instance_assignment -name CLOCK_SETTINGS IF_clk -to IF_clk -entity OzyII
+set_instance_assignment -name CLOCK_SETTINGS Tx_clock_2 -to Tx_clock_2 -entity OzyII
+set_location_assignment PIN_68 -to SCK
+set_location_assignment PIN_38 -to SI
+set_location_assignment PIN_63 -to NCONFIG
+set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -entity OzyII -section_id Top
+set_global_assignment -name USE_CONFIGURATION_DEVICE ON
+set_global_assignment -name ALLOW_POWER_UP_DONT_CARE OFF
+set_global_assignment -name STRATIXIII_UPDATE_MODE REMOTE
+set_global_assignment -name FORCE_CONFIGURATION_VCCIO ON
+set_global_assignment -name CYCLONEIII_CONFIGURATION_DEVICE EPCS16
+set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -section_id Top
+set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
+set_global_assignment -name LL_ROOT_REGION ON -section_id "Root Region"
+set_global_assignment -name LL_MEMBER_STATE LOCKED -section_id "Root Region"
+set_global_assignment -name STRATIX_DEVICE_IO_STANDARD "2.5 V"
+set_location_assignment PIN_70 -to CONFIG
+set_location_assignment PIN_87 -to NODE_ADDR_CS
+set_global_assignment -name VERILOG_FILE Rx_fifo.v
+set_global_assignment -name VERILOG_FILE EEPROM.v
+set_global_assignment -name VERILOG_FILE ASMI.v
+set_global_assignment -name VERILOG_FILE Bootloader.v
+set_global_assignment -name VERILOG_FILE CRC32.v
+set_global_assignment -name VERILOG_FILE Led_control.v
+set_global_assignment -name VERILOG_FILE Led_flash.v
+set_global_assignment -name VERILOG_FILE MDIO.v
+set_global_assignment -name VERILOG_FILE PHY_fifo.v
+set_global_assignment -name VERILOG_FILE PLL_clocks.v
+set_global_assignment -name VERILOG_FILE Reconfigure.v
+set_global_assignment -name VERILOG_FILE Remote.v
+set_global_assignment -name ON_CHIP_BITSTREAM_DECOMPRESSION ON
+set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -section_id Top
+set_global_assignment -name CRC_ERROR_OPEN_DRAIN OFF
+set_global_assignment -name OUTPUT_IO_TIMING_NEAR_END_VMEAS "HALF VCCIO" -rise
+set_global_assignment -name OUTPUT_IO_TIMING_NEAR_END_VMEAS "HALF VCCIO" -fall
+set_global_assignment -name OUTPUT_IO_TIMING_FAR_END_VMEAS "HALF SIGNAL SWING" -rise
+set_global_assignment -name OUTPUT_IO_TIMING_FAR_END_VMEAS "HALF SIGNAL SWING" -fall
+set_location_assignment PIN_9 -to DEBUG_LED1
+set_location_assignment PIN_93 -to DEBUG_LED2
+set_location_assignment PIN_142 -to DEBUG_LED3
+set_location_assignment PIN_139 -to DEBUG_LED4
+set_location_assignment PIN_188 -to DEBUG_LED5
+set_location_assignment PIN_37 -to DEBUG_LED6
+set_location_assignment PIN_111 -to DEBUG_LED7
+set_location_assignment PIN_112 -to DEBUG_LED8
+set_location_assignment PIN_103 -to DEBUG_LED9
+set_location_assignment PIN_106 -to DEBUG_LED10
+set_location_assignment PIN_80 -to STATUS_LED
+set_global_assignment -name DEVICE_FILTER_PACKAGE "ANY QFP"
+set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -entity Hermes -section_id Top
+set_global_assignment -name PARTITION_COLOR 16764057 -entity Hermes -section_id Top
+set_global_assignment -name LL_ROOT_REGION ON -entity Hermes -section_id "Root Region"
+set_global_assignment -name LL_MEMBER_STATE LOCKED -entity Hermes -section_id "Root Region"
+set_global_assignment -name LL_ROOT_REGION ON -entity Mercury -section_id "Root Region"
+set_global_assignment -name LL_MEMBER_STATE LOCKED -entity Mercury -section_id "Root Region"
+set_instance_assignment -name CLOCK_SETTINGS IFCLK -to IFCLK -entity Hermes
+set_instance_assignment -name CLOCK_SETTINGS CMCLK -to CMCLK -entity Hermes
+set_instance_assignment -name CLOCK_SETTINGS CBCLK -to CBCLK -entity Hermes
+set_instance_assignment -name CLOCK_SETTINGS CLRCIN -to CLRCIN -entity Hermes
+set_instance_assignment -name CLOCK_SETTINGS CLRCOUT -to CLRCOUT -entity Hermes
+set_instance_assignment -name CLOCK_SETTINGS TLV2208_125Mhz -to LTC2208_125Mhz -entity Hermes
+set_instance_assignment -name CLOCK_SETTINGS OSC_10MHz -to OSC_10MHZ -entity Hermes
+set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -entity Hermes -section_id Top
+set_location_assignment PIN_226 -to MOSI
+set_location_assignment PIN_232 -to CLRCOUT
+set_location_assignment PIN_236 -to CLRCIN
+set_location_assignment PIN_224 -to SSCK
+set_location_assignment PIN_218 -to DACD[11]
+set_location_assignment PIN_219 -to DACD[12]
+set_location_assignment PIN_221 -to DACD[13]
+set_location_assignment PIN_194 -to SHDN
+set_location_assignment PIN_196 -to DACD[1]
+set_location_assignment PIN_200 -to DACD[3]
+set_location_assignment PIN_201 -to DACD[4]
+set_location_assignment PIN_202 -to DACD[5]
+set_location_assignment PIN_207 -to DACD[7]
+set_location_assignment PIN_214 -to DACD[8]
+set_location_assignment PIN_171 -to INA[6]
+set_location_assignment PIN_33 -to CLK_25MHZ
+set_location_assignment PIN_152 -to LTC2208_122MHz
+set_location_assignment PIN_150 -to _122MHz
+set_location_assignment PIN_89 -to OSC_10MHZ
+set_location_assignment PIN_84 -to FPGA_PTT
+set_location_assignment PIN_76 -to KEY_DOT
+set_location_assignment PIN_70 -to KEY_DASH
+set_location_assignment PIN_110 -to MODE2
+set_location_assignment PIN_146 -to OVERFLOW
+set_location_assignment PIN_133 -to USEROUT2
+set_location_assignment PIN_173 -to INA[5]
+set_location_assignment PIN_169 -to INA[7]
+set_location_assignment PIN_164 -to INA[9]
+set_location_assignment PIN_159 -to INA[13]
+set_location_assignment PIN_177 -to INA[3]
+set_location_assignment PIN_189 -to DITH
+set_location_assignment PIN_195 -to DACD[0]
+set_location_assignment PIN_203 -to DACD[6]
+set_location_assignment PIN_216 -to DACD[9]
+set_location_assignment PIN_223 -to CMCLK
+set_location_assignment PIN_230 -to CMODE
+set_location_assignment PIN_235 -to CDOUT
+set_location_assignment PIN_55 -to PHY_INT_N
+set_location_assignment PIN_57 -to ADCMISO
+set_location_assignment PIN_78 -to ADCMOSI
+set_location_assignment PIN_87 -to IO4
+set_location_assignment PIN_98 -to PTT
+set_location_assignment PIN_99 -to IO5
+set_location_assignment PIN_100 -to IO6
+set_location_assignment PIN_118 -to nADCCS
+set_location_assignment PIN_126 -to IO8
+set_location_assignment PIN_127 -to USEROUT6
+set_location_assignment PIN_144 -to FPGA_PLL
+set_location_assignment PIN_145 -to RAND
+set_location_assignment PIN_128 -to USEROUT5
+set_location_assignment PIN_131 -to USEROUT4
+set_location_assignment PIN_132 -to USEROUT3
+set_location_assignment PIN_134 -to USEROUT1
+set_location_assignment PIN_135 -to USEROUT0
+set_location_assignment PIN_137 -to DAC_ALC
+set_location_assignment PIN_143 -to PGA
+set_location_assignment PIN_161 -to INA[11]
+set_location_assignment PIN_160 -to INA[12]
+set_location_assignment PIN_162 -to INA[10]
+set_location_assignment PIN_166 -to INA[8]
+set_location_assignment PIN_185 -to INA[0]
+set_location_assignment PIN_176 -to INA[4]
+set_location_assignment PIN_183 -to INA[2]
+set_location_assignment PIN_184 -to INA[1]
+set_location_assignment PIN_197 -to DACD[2]
+set_location_assignment PIN_217 -to DACD[10]
+set_location_assignment PIN_239 -to CDIN
+set_location_assignment PIN_240 -to CBCLK
+set_location_assignment PIN_231 -to nCS
+set_location_assignment PIN_39 -to ATTN_DATA
+set_location_assignment PIN_69 -to ATTN_LE
+set_location_assignment PIN_94 -to ANT_TUNE
+set_location_assignment PIN_22 -to ATTN_CLK
+set_location_assignment PIN_82 -to ADCCLK
+set_location_assignment PIN_95 -to IO1
+set_location_assignment PIN_46 -to IO2
+set_location_assignment PIN_80 -to SPI_SDO
+set_location_assignment PIN_83 -to SPI_SCK
+set_location_assignment PIN_117 -to J15_6
+set_location_assignment PIN_113 -to J15_5
+set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to PHY_CLK125 -entity Hermes
+set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -entity Hermes -section_id Top
+set_global_assignment -name ENABLE_CONFIGURATION_PINS OFF
+set_global_assignment -name ENABLE_NCE_PIN OFF
+set_global_assignment -name ENABLE_BOOT_SEL_PIN OFF
+set_global_assignment -name TRI_STATE_SPI_PINS ON
+set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top

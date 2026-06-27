@@ -17,10 +17,20 @@ docs/references/
 ├── protocol-2/                                        (newer "Ethernet protocol" a.k.a. P2)
 │   ├── openHPSDR_Ethernet_Protocol_v4.4.pdf           ← latest P2 spec
 │   └── New_protocol_FPGA_Block_diagrams.pdf           ← FPGA-side block diagrams
+├── firmware/                                          (radio-side FPGA gateware + MCU firmware SOURCE)
+│   ├── README.md                                      ← coverage map: every radio → its source dir
+│   ├── <board>/                                       ← source-only gateware mirror per board, each w/ SOURCE.md
+│   └── _tools/                                        ← acquire script + Quartus .qar extractor
 └── radios/
     ├── anan-g2-user-manual-v1.4-2.pdf                 ← Apache Labs operator manual (G2 MkII)
-    └── Orion_MkII_P2_firmware_v1.9_release_notes.txt  ← TAPR firmware change log for G2 FPGA
+    ├── Orion_MkII_P2_firmware_v1.9_release_notes.txt  ← TAPR firmware change log for G2 FPGA
+    └── square-sdr-2/                                  ← HL2-derived SquareSDR2 firmware+gateware mirror
 ```
+
+For **radio-side** questions ("what does this board actually put on the wire / do in
+gateware?"), see [`firmware/`](firmware/) — a source-only mirror of the FPGA gateware
+and MCU firmware for every P1/P2 radio Zeus supports, with a coverage map resolving
+each radio to its directory. Host behaviour is still cross-checked against Thetis.
 
 ## Which protocol does which radio use?
 

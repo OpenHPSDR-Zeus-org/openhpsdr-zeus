@@ -88,6 +88,14 @@ export const DEFAULT_TX_DISPLAY_CAL_OFFSET_DB = 0;
 export const DEFAULT_TX_DISPLAY_FFT_SIZE = 16384;
 export const DEFAULT_TX_DISPLAY_WINDOW = 2;
 export const DEFAULT_TX_DISPLAY_AVG_TAU_MS = 175;
+// TX display auto-range default. OFF — the TX panadapter/waterfall follow the
+// operator's manual dB-scale slider (the fixed/saved TX window), matching
+// Thetis's fixed manual TXWFAmpMin/Max thresholds. The per-frame auto-fit was
+// too sensitive: it tracked the live speech so tightly that peaks railed at
+// full-scale (the "flat-topping on TX" report) and the operator had no stable
+// level to configure. Auto-range stays available via the Spectrum Scale
+// settings checkbox for anyone who prefers the auto fit.
+export const DEFAULT_TX_AUTO_RANGE = false;
 export const TX_DISPLAY_CAL_OFFSET_ABS_DB = 60;
 export const TX_DISPLAY_AVG_TAU_MIN_MS = 0;
 export const TX_DISPLAY_AVG_TAU_MAX_MS = 2000;
@@ -99,6 +107,7 @@ const WF_TX_STORAGE_KEY = 'zeus.display.wfTxDbRange';
 const WF_SCROLL_SPEED_STORAGE_KEY = 'zeus.display.wfScrollSpeed';
 const BAND_OVERLAY_STORAGE_KEY = 'zeus.display.bandOverlay';
 const BAND_EDGE_ALERT_STORAGE_KEY = 'zeus.display.bandEdgeAlert';
+const CHAT_ROSTER_OVERLAY_STORAGE_KEY = 'zeus.display.chatRosterOverlay';
 
 // Legacy localStorage keys — pre-server-side storage. Read once on first
 // load to migrate the operator's existing image / colour up to the backend,
@@ -457,8 +466,13 @@ export type DisplaySettingsState = {
   // Issue #846: short audible tone when the VFO crosses from in-licence into
   // out-of-licence (or into a band gap). Mirrors the alarm Icoms ship with.
   bandEdgeAlertEnabled: boolean;
+  // Paint connected ZeusChat operators (callsign + transmit dot) onto the
+  // panadapter at the frequency they're tuned to. Local-only display
+  // preference; the overlay itself lives in components/ChatRosterOverlay.tsx.
+  showChatRosterOverlay: boolean;
   setShowBandOverlay: (v: boolean) => void;
   setBandEdgeAlertEnabled: (v: boolean) => void;
+  setShowChatRosterOverlay: (v: boolean) => void;
   setPanBackground: (v: PanBackgroundMode) => Promise<void>;
   setBackgroundImage: (dataUrl: string | null) => Promise<boolean>;
   setBackgroundImageFit: (v: BackgroundImageFit) => Promise<void>;
@@ -544,6 +558,7 @@ const initialWfTxRange = readSavedWfTxRange();
 const initialWaterfallScrollSpeed = readSavedWaterfallScrollSpeed();
 const initialShowBandOverlay = readBoolFlag(BAND_OVERLAY_STORAGE_KEY, true);
 const initialBandEdgeAlertEnabled = readBoolFlag(BAND_EDGE_ALERT_STORAGE_KEY, true);
+const initialShowChatRosterOverlay = readBoolFlag(CHAT_ROSTER_OVERLAY_STORAGE_KEY, true);
 
 export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) => ({
   autoRange: false,
@@ -559,13 +574,17 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   txDisplayFftSize: DEFAULT_TX_DISPLAY_FFT_SIZE,
   txDisplayWindow: DEFAULT_TX_DISPLAY_WINDOW,
   txDisplayAvgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS,
-  // Master enable for the TX display auto-fit. ON by default, but it only
-  // actually engages for voice MOX/PTT — see shouldTxAutoRange(). TUNE and
-  // two-tone are deliberately excluded: their narrow carrier / twin-tone fools
-  // the percentile fit into collapsing the dB window onto the noise floor,
-  // rendering the clean carrier as "grass". Those fall back to the Thetis-parity
-  // fixed TX_FIXED_DB_MIN/MAX (-80..+20) window via restoreSavedTxWindows().
-  txAutoRange: true,
+  // Master enable for the TX display auto-fit. OFF by default
+  // (DEFAULT_TX_AUTO_RANGE) so the TX panadapter/waterfall follow the
+  // operator's manual dB-scale slider — a stable, configurable level instead of
+  // the per-frame auto-fit that tracked speech so tightly it flat-topped at
+  // full-scale. When enabled it only engages for voice MOX/PTT — see
+  // shouldTxAutoRange(). TUNE and two-tone are deliberately excluded: their
+  // narrow carrier / twin-tone fools the percentile fit into collapsing the dB
+  // window onto the noise floor, rendering the clean carrier as "grass". Those
+  // fall back to the Thetis-parity fixed TX_FIXED_DB_MIN/MAX (-80..+20) window
+  // via restoreSavedTxWindows().
+  txAutoRange: DEFAULT_TX_AUTO_RANGE,
   colormap: 'blue',
   waterfallScrollSpeed: initialWaterfallScrollSpeed,
   // Defaults until the server-side fetch lands (see hydrateFromServer at the
@@ -581,6 +600,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   rxTraceColor: DEFAULT_RX_TRACE_COLOR,
   showBandOverlay: initialShowBandOverlay,
   bandEdgeAlertEnabled: initialBandEdgeAlertEnabled,
+  showChatRosterOverlay: initialShowChatRosterOverlay,
   setShowBandOverlay: (v) => {
     set({ showBandOverlay: v });
     writeBoolFlag(BAND_OVERLAY_STORAGE_KEY, v);
@@ -588,6 +608,10 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   setBandEdgeAlertEnabled: (v) => {
     set({ bandEdgeAlertEnabled: v });
     writeBoolFlag(BAND_EDGE_ALERT_STORAGE_KEY, v);
+  },
+  setShowChatRosterOverlay: (v) => {
+    set({ showChatRosterOverlay: v });
+    writeBoolFlag(CHAT_ROSTER_OVERLAY_STORAGE_KEY, v);
   },
   setPanBackground: async (panBackground) => {
     const prev = get().panBackground;
@@ -736,7 +760,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
       txDisplayFftSize: DEFAULT_TX_DISPLAY_FFT_SIZE,
       txDisplayWindow: DEFAULT_TX_DISPLAY_WINDOW,
       txDisplayAvgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS,
-      txAutoRange: true,
+      txAutoRange: DEFAULT_TX_AUTO_RANGE,
     });
     scheduleTxDisplaySave();
   },
