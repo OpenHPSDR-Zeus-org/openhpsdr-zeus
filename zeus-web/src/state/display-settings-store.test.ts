@@ -333,6 +333,18 @@ describe('TX auto-range', () => {
     expect(useDisplaySettingsStore.getState().txAutoRange).toBe(false);
   });
 
+  it('dragging the TX panadapter scale switches auto-range off so the drag sticks', () => {
+    useDisplaySettingsStore.setState({ txAutoRange: true });
+    useDisplaySettingsStore.getState().shiftTxDbRange(5);
+    expect(useDisplaySettingsStore.getState().txAutoRange).toBe(false);
+  });
+
+  it('dragging the TX waterfall scale switches auto-range off so the drag sticks', () => {
+    useDisplaySettingsStore.setState({ txAutoRange: true });
+    useDisplaySettingsStore.getState().shiftWfTxDbRange(5);
+    expect(useDisplaySettingsStore.getState().txAutoRange).toBe(false);
+  });
+
   describe('shouldTxAutoRange — engages only for voice MOX/PTT', () => {
     const tx = (over: Partial<{ moxOn: boolean; tunOn: boolean; twoToneOn: boolean }> = {}) => ({
       moxOn: false,
