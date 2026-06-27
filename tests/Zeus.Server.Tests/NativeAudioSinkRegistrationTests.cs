@@ -34,15 +34,24 @@ public class NativeAudioSinkRegistrationTests
         var app = ZeusHost.Build(Array.Empty<string>(), opts);
 
         var sinks = app.Services.GetServices<IRxAudioSink>().ToArray();
-        Assert.Single(sinks);
         // Server mode keeps the WS sink — bit-for-bit equivalent of the
         // pre-seam direct hub broadcast.
-        Assert.Equal("WebSocketAudioSink", sinks[0].GetType().Name);
+        Assert.Contains(sinks, s => s.GetType().Name == "WebSocketAudioSink");
+        // Plus the Protocol-1 radio-speaker sink, registered in BOTH host modes
+        // (a headless Zeus next to a P1 radio can drive its codec speaker). It's
+        // a managed ring-feeder, not a native audio device, and self-gates to
+        // off-by-default, so it never opens hardware on its own.
+        Assert.Contains(sinks, s => s.GetType().Name == "RadioSpeakerAudioSink");
+        Assert.DoesNotContain(sinks, s => s.GetType().Name == "NativeAudioSink");
+        Assert.DoesNotContain(sinks, s => s.GetType().Name == "SaturnSpeakerAudioSink");
 
-        // Native capture must never be registered in server mode.
+        // Native capture / device-owning services must never be registered in
+        // server mode. RadioSpeakerAudioSink is NOT among them — it owns no
+        // device and is not a hosted service.
         var hosted = app.Services.GetServices<IHostedService>().ToArray();
         Assert.DoesNotContain(hosted, h => h.GetType().Name == "NativeAudioSink");
         Assert.DoesNotContain(hosted, h => h.GetType().Name == "SaturnSpeakerAudioSink");
+        Assert.DoesNotContain(hosted, h => h.GetType().Name == "RadioSpeakerAudioSink");
         Assert.DoesNotContain(hosted, h => h.GetType().Name == "NativeMicCapture");
 
         await app.DisposeAsync();
@@ -67,6 +76,8 @@ public class NativeAudioSinkRegistrationTests
         Assert.Contains(sinks, sink => sink.GetType().Name == "NativeAudioSink");
         Assert.Contains(sinks, sink => sink.GetType().Name == "SaturnSpeakerAudioSink");
         Assert.Contains(sinks, sink => sink.GetType().Name == "GatedWebSocketAudioSink");
+        // P1 radio-speaker sink is present in desktop mode too (both modes).
+        Assert.Contains(sinks, sink => sink.GetType().Name == "RadioSpeakerAudioSink");
         Assert.DoesNotContain(sinks, sink => sink.GetType().Name == "WebSocketAudioSink");
 
         // Same NativeAudioSink instance must also be wired as a hosted

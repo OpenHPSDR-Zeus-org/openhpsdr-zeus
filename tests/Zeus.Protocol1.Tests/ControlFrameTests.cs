@@ -561,6 +561,102 @@ public class ControlFrameTests
         return (peak, firstI, firstQ);
     }
 
+    private static (int peak, int firstL, int firstR) FirstFrameAudioStats(ReadOnlySpan<byte> packet)
+    {
+        const int payloadStart = 16;
+        int peak = 0;
+        int firstL = (short)((packet[payloadStart + 0] << 8) | packet[payloadStart + 1]);
+        int firstR = (short)((packet[payloadStart + 2] << 8) | packet[payloadStart + 3]);
+        for (int s = 0; s < 63; s++)
+        {
+            int off = payloadStart + s * 8;
+            int l = (short)((packet[off + 0] << 8) | packet[off + 1]);
+            int r = (short)((packet[off + 2] << 8) | packet[off + 3]);
+            peak = Math.Max(peak, Math.Max(Math.Abs(l), Math.Abs(r)));
+        }
+        return (peak, firstL, firstR);
+    }
+
+    // Fills every requested slot with a constant s16, returning the full count —
+    // the steady-state "ring has plenty of audio" case.
+    private sealed class ConstRxAudioSource : IRxAudioSource
+    {
+        private readonly short _v;
+        public ConstRxAudioSource(short v) { _v = v; }
+        public int Read(Span<short> dest) { dest.Fill(_v); return dest.Length; }
+    }
+
+    // Always empty — models a ring that has nothing buffered (feature off / HL2 /
+    // underrun). Must leave the L/R slots zero, byte-identical to legacy behaviour.
+    private sealed class EmptyRxAudioSource : IRxAudioSource
+    {
+        public int Read(Span<short> dest) => 0;
+    }
+
+    [Fact]
+    public void BuildDataPacket_MoxOff_WithRxAudio_FillsLrAndLeavesIqZero()
+    {
+        // RX (not transmitting): demodulated audio rides the EP2 L/R slots so the
+        // radio codec drives its speaker jacks; the I/Q slots carry no carrier.
+        var buf = new byte[1032];
+        var state = BaseState() with { Board = HpsdrBoardKind.Hermes, Mox = false };
+        var rx = new ConstRxAudioSource(0x1234);
+
+        ControlFrame.BuildDataPacket(
+            buf, 1,
+            ControlFrame.CcRegister.Config,
+            ControlFrame.CcRegister.RxFreq,
+            state, iqSource: null, rxAudioSource: rx);
+
+        var (audioPeak, firstL, firstR) = FirstFrameAudioStats(buf);
+        var (iqPeak, _, _) = FirstFrameIqStats(buf);
+        Assert.Equal(0x1234, firstL);
+        Assert.Equal(0x1234, firstR);   // mono duplicated to both channels
+        Assert.Equal(0x1234, audioPeak);
+        Assert.Equal(0, iqPeak);        // no carrier while receiving
+    }
+
+    [Fact]
+    public void BuildDataPacket_MoxOff_EmptyRxAudio_KeepsPayloadZero()
+    {
+        // Empty ring (feature off / HL2 / underrun) → L/R stay zero, byte-identical
+        // to a radio that carries no RX audio at all.
+        var buf = new byte[1032];
+        var state = BaseState() with { Board = HpsdrBoardKind.Hermes, Mox = false };
+
+        ControlFrame.BuildDataPacket(
+            buf, 1,
+            ControlFrame.CcRegister.Config,
+            ControlFrame.CcRegister.RxFreq,
+            state, iqSource: null, rxAudioSource: new EmptyRxAudioSource());
+
+        var (audioPeak, _, _) = FirstFrameAudioStats(buf);
+        Assert.Equal(0, audioPeak);
+    }
+
+    [Fact]
+    public void BuildDataPacket_MoxOn_IgnoresRxAudio_LeavesLrZero()
+    {
+        // While transmitting, the L/R slots stay zero even if an RX-audio source
+        // is plumbed — the radio is keyed, not monitoring, and the I/Q path owns
+        // the frame. Guards against feeding TX-monitor audio to the radio speaker.
+        var buf = new byte[1032];
+        var state = BaseState() with { Board = HpsdrBoardKind.Hermes, Mox = true, DriveLevel = 0x80 };
+        var iq = new ConstIqSource(0x2000, -0x2000);
+        var rx = new ConstRxAudioSource(0x7FFF);
+
+        ControlFrame.BuildDataPacket(
+            buf, 1,
+            ControlFrame.CcRegister.Config,
+            ControlFrame.CcRegister.RxFreq,
+            state, iqSource: iq, rxAudioSource: rx);
+
+        var (audioPeak, _, _) = FirstFrameAudioStats(buf);
+        var (iqPeak, _, _) = FirstFrameIqStats(buf);
+        Assert.Equal(0, audioPeak);   // no RX audio on the wire during TX
+        Assert.True(iqPeak > 0);      // IQ path unchanged
+    }
+
     [Theory]
     [InlineData(HpsdrBoardKind.Hermes)]        // ANAN-10E reports here (issue #294)
     [InlineData(HpsdrBoardKind.HermesII)]      // ANAN-10E w/ HermesII firmware

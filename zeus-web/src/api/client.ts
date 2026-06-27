@@ -5156,6 +5156,26 @@ export function restartApp(
   );
 }
 
+/** Ask the backend to exit (close the app). Used by the login dialog's Exit
+ *  button — the desktop Photino window tears down cleanly when the process
+ *  exits. The response may not arrive before the process dies. */
+export function quitApp(
+  signal?: AbortSignal,
+): Promise<{ quitting: boolean }> {
+  return jsonFetch(
+    '/api/app/quit',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      signal,
+    },
+    (raw) => {
+      const o = (raw ?? {}) as Record<string, unknown>;
+      return { quitting: o.quitting === true };
+    },
+  );
+}
+
 export type UpdateAction = 'none' | 'download' | 'openRelease';
 
 /** Status of the local install vs the latest production build on the download

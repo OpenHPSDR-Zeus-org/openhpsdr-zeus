@@ -2013,6 +2013,19 @@ public sealed record AudioFrontEndSetRequest(
     bool MicBias,
     int LineInGain);
 
+// Radio-side speaker output (Protocol-1 codec radios). Whether to send
+// demodulated RX audio down the EP2 frame's L/R slots so the radio's onboard
+// codec drives its speaker/headphone/line-out jacks. <c>Available</c> is true
+// only while a P1 codec radio (not the codec-less HL2) is connected; the toggle
+// is otherwise inert. The Protocol-2 Saturn/G2 appliance speaker path is
+// separate and is NOT governed by this setting.
+public sealed record RadioSpeakerOutputDto(
+    bool Enabled,
+    bool Available);
+
+public sealed record RadioSpeakerOutputSetRequest(
+    bool Enabled);
+
 // HL2-specific optional toggles surfaced via /api/radio/hl2-options.
 // Shape is an object (not a bare bool) so future mi0bot HL2 toggles can
 // slot in without breaking the contract. Currently carries Band Volts
