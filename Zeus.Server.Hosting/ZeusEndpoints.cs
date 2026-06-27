@@ -1216,7 +1216,7 @@ public static class ZeusEndpoints
             return Results.Ok(new { freed = true });
         });
 
-        app.MapPost("/api/connect", async (ConnectRequest req, RadioService r, WdspWisdomInitializer wisdom, HttpContext ctx) =>
+        app.MapPost("/api/connect", async (ConnectRequest req, RadioService r, WdspWisdomInitializer wisdom, IRadioDiscovery p1Discovery, HttpContext ctx) =>
         {
             log.LogInformation(
                 "api.connect endpoint={Ep} rate={Rate} preamp={Pre} atten={Atten}",
@@ -1244,9 +1244,29 @@ public static class ZeusEndpoints
             // defaulting to HermesLite2 for every P1 connection — issue #294.
             var p1BoardKind = req.BoardId is byte bid ? MapBoardByteP1(bid) : HpsdrBoardKind.Unknown;
 
+            // Best-effort firmware capture for the "Report a problem" diagnostic
+            // snapshot. A short discovery broadcast (the radio isn't connected
+            // yet, so it answers) lets us match the code-version byte for this
+            // endpoint. Fail-open: any failure leaves firmware null and never
+            // blocks the connect — the diagnostic just shows "unknown".
+            string? firmware = null;
+            if (TryParseIpEndpoint(req.Endpoint, out var fwIp))
+            {
+                try
+                {
+                    var found = await p1Discovery.DiscoverAsync(TimeSpan.FromMilliseconds(400), ctx.RequestAborted);
+                    firmware = found.FirstOrDefault(d => d.Ip.Equals(fwIp.Address))?.FirmwareString;
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    log.LogWarning(ex, "api.connect firmware probe failed — diagnostic firmware will be 'unknown'");
+                }
+            }
+
             try
             {
-                var state = await r.ConnectAsync(req.Endpoint, req.SampleRate, ctx.RequestAborted, p1BoardKind);
+                var state = await r.ConnectAsync(req.Endpoint, req.SampleRate, ctx.RequestAborted, p1BoardKind, firmware);
                 return Results.Ok(state);
             }
             catch (ArgumentException ex)
@@ -1292,9 +1312,12 @@ public static class ZeusEndpoints
             // legitimate connect. The probe must NOT weaken the co-located
             // ephemeral-port bind — it only reads discovery, it doesn't touch the
             // connect socket.
+            // Probe result is reused after the busy-gate to capture the
+            // firmware version for the diagnostics snapshot — null on a forced
+            // connect, which deliberately skips the probe.
+            Zeus.Protocol2.Discovery.DiscoveredRadio? probe = null;
             if (!req.Force)
             {
-                Zeus.Protocol2.Discovery.DiscoveredRadio? probe = null;
                 try
                 {
                     probe = await p2Discovery.ProbeAsync(
@@ -1344,9 +1367,12 @@ public static class ZeusEndpoints
             // for every P2 connection (issue #171 — Brick2 is Hermes/0x01 on P2).
             var boardKind = req.BoardId is byte b ? MapBoardByteP2(b) : HpsdrBoardKind.Unknown;
 
+            // Firmware version for the "Report a problem" diagnostic snapshot.
+            var firmware = probe?.FirmwareString;
+
             try
             {
-                rateKhz = await dsp.ConnectP2Async(ipEndpoint, rateKhz, numAdc: 2, ctx.RequestAborted, boardKind);
+                rateKhz = await dsp.ConnectP2Async(ipEndpoint, rateKhz, numAdc: 2, ctx.RequestAborted, boardKind, firmware);
                 return Results.Ok(new { protocol = "P2", endpoint = req.Endpoint, sampleRateKhz = rateKhz });
             }
             catch (InvalidOperationException ex)
