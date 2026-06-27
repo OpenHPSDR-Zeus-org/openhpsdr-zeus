@@ -34,6 +34,7 @@ namespace Zeus.Server;
 
 public sealed class AntennaSettingsStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<AntennaBandEntry> _bands;
     private readonly ILogger<AntennaSettingsStore> _log;
@@ -51,7 +52,8 @@ public sealed class AntennaSettingsStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _bands = _db.GetCollection<AntennaBandEntry>("antenna_bands");
         _bands.EnsureIndex(x => x.Band, unique: true);
 
@@ -134,7 +136,7 @@ public sealed class AntennaSettingsStore : IDisposable
     private static RxAuxInputSel ClampAux(byte v) =>
         v <= (byte)RxAuxInputSel.Bypass ? (RxAuxInputSel)v : RxAuxInputSel.None;
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 /// <summary>

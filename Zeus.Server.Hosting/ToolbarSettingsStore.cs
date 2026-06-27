@@ -29,6 +29,7 @@ public sealed class ToolbarSettingsStore : IDisposable
     public const int DefaultStepHz = 500;
     public const int MaxStepHz = 5_000;
 
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<ToolbarSettingsEntry> _docs;
     private readonly ILogger<ToolbarSettingsStore> _log;
@@ -46,7 +47,8 @@ public sealed class ToolbarSettingsStore : IDisposable
             Directory.CreateDirectory(dir);
         }
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _docs = _db.GetCollection<ToolbarSettingsEntry>("toolbar_settings");
 
         _log.LogInformation("ToolbarSettingsStore initialized at {Path}", dbPath);
@@ -111,7 +113,7 @@ public sealed class ToolbarSettingsStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
     internal static int NormalizeStepHz(int? stepHz) =>
         stepHz is >= 1 and <= MaxStepHz ? stepHz.Value : DefaultStepHz;

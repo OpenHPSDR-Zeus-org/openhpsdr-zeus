@@ -25,6 +25,7 @@ public sealed class RotctldConfigStore : IDisposable
 {
     public const int MaxSlots = 4;
 
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<MultiEntry> _multi;
     private readonly ILiteCollection<LegacyEntry> _legacy;
@@ -36,7 +37,8 @@ public sealed class RotctldConfigStore : IDisposable
         _log = log;
         var dbPath = dbPathOverride ?? PrefsDbPath.Get();
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _multi = _db.GetCollection<MultiEntry>("rotctld_multi_config");
         _multi.EnsureIndex(e => e.Id, unique: true);
         _legacy = _db.GetCollection<LegacyEntry>("rotctld_config");
@@ -100,7 +102,7 @@ public sealed class RotctldConfigStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
     private const int SingletonId = 1;
 

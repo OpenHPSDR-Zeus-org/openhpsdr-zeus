@@ -14,6 +14,7 @@ public sealed class DisplayIntelligenceSettingsStore : IDisposable
     private const int LegacyWaterfallReliefDepth = 48;
     private const int LegacyWaterfallSmoothness = 42;
 
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<DisplayIntelligenceSettingsEntry> _docs;
     private readonly ILogger<DisplayIntelligenceSettingsStore> _log;
@@ -29,7 +30,8 @@ public sealed class DisplayIntelligenceSettingsStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _docs = _db.GetCollection<DisplayIntelligenceSettingsEntry>("display_intelligence_settings");
 
         _log.LogInformation("DisplayIntelligenceSettingsStore initialized at {Path}", dbPath);
@@ -179,7 +181,7 @@ public sealed class DisplayIntelligenceSettingsStore : IDisposable
             ? fallback
             : Math.Clamp(value, min, max);
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class DisplayIntelligenceSettingsEntry

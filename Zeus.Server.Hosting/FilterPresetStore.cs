@@ -44,6 +44,7 @@ public sealed class FilterPresetStore : IDisposable
         }
     }
 
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<FilterPresetStoreEntry> _entries;
     private readonly ILogger<FilterPresetStore> _log;
@@ -60,7 +61,8 @@ public sealed class FilterPresetStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _entries = _db.GetCollection<FilterPresetStoreEntry>("filter_presets");
         _entries.EnsureIndex("ModeKey", "$.ModeKey", unique: true);
 
@@ -142,7 +144,7 @@ public sealed class FilterPresetStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
     // Sentinel mode key used for pane-visibility and other ribbon-scope flags
     // that aren't tied to any particular RX mode. Keeps the schema flat while

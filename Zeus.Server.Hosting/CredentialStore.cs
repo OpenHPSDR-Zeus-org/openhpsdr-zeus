@@ -49,6 +49,7 @@ namespace Zeus.Server;
 
 public sealed class CredentialStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<StoredCredential> _credentials;
     private readonly ILogger<CredentialStore> _log;
@@ -79,7 +80,8 @@ public sealed class CredentialStore : IDisposable
             _log.LogInformation("Created credential store directory: {Dir}", dir);
         }
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _credentials = _db.GetCollection<StoredCredential>("credentials");
         _credentials.EnsureIndex(x => x.Service, unique: true);
 
@@ -137,7 +139,7 @@ public sealed class CredentialStore : IDisposable
 
     public void Dispose()
     {
-        _db?.Dispose();
+        _dbLease.Dispose();
     }
 }
 
