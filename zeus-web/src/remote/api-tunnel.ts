@@ -28,6 +28,15 @@
 const API_PREFIX = '/api/';
 const REQUEST_TIMEOUT_MS = 15_000;
 
+// The LAN Browser proxy (/api/lan/proxy?...&inline=1) is the one tunnelled
+// endpoint whose reply is legitimately slow: the radio host fetches a whole
+// device page AND inlines its stylesheets/images/fonts before replying. The
+// 15 s default — sized for the small chrome JSON — fires before that work can
+// finish, so this path gets a longer deadline (kept above the server's own
+// inline budget; see LanProxyService.InlineMaxDuration).
+const LAN_PROXY_PREFIX = '/api/lan/proxy';
+const LAN_PROXY_TIMEOUT_MS = 60_000;
+
 interface TunnelResponse {
   id: number;
   status: number;
@@ -107,6 +116,11 @@ function tunnel(
   contentType?: string,
 ): Promise<TunnelResponse> {
   const id = nextId++;
+  // The LAN Browser proxy reply is legitimately slow (whole-page inline on the
+  // radio host); everything else is small chrome JSON on the default deadline.
+  const timeoutMs = path.startsWith(LAN_PROXY_PREFIX)
+    ? LAN_PROXY_TIMEOUT_MS
+    : REQUEST_TIMEOUT_MS;
   return new Promise<TunnelResponse>((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
@@ -114,7 +128,7 @@ function tunnel(
       const qi = queue.findIndex((q) => q.id === id);
       if (qi >= 0) queue.splice(qi, 1);
       reject(new Error('Remote API request timed out.'));
-    }, REQUEST_TIMEOUT_MS);
+    }, timeoutMs);
 
     pending.set(id, { resolve, reject, timer });
     const req: QueuedRequest = { id, path, method, body, contentType };

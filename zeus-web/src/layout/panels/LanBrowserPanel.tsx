@@ -31,19 +31,28 @@ import {
   useState,
   type FormEvent,
 } from 'react';
-import { GripVertical, ArrowRight, RefreshCw, X, Network } from 'lucide-react';
+import {
+  GripVertical,
+  ArrowRight,
+  RefreshCw,
+  X,
+  Network,
+  Star,
+} from 'lucide-react';
 import { TileLockButton } from '../TileChrome';
 import { isRemoteMode } from '../../remote/remote-client';
+import { urlEmbedTitle } from './urlEmbedConfig';
 import {
-  EMPTY_URL_EMBED_CONFIG,
-  urlEmbedTitle,
-  type UrlEmbedConfig,
-} from './urlEmbedConfig';
+  EMPTY_LAN_BROWSER_CONFIG,
+  lanBookmarkLabel,
+  normalizeLanUrl,
+  type LanBrowserConfig,
+} from './lanBrowserConfig';
 
 interface LanBrowserPanelProps {
-  /** Per-instance config blob (shares the URL-embed shape: url + title). */
-  config?: UrlEmbedConfig;
-  setConfig?: (next: UrlEmbedConfig) => void;
+  /** Per-instance config blob (URL-embed shape: url + title, plus bookmarks). */
+  config?: LanBrowserConfig;
+  setConfig?: (next: LanBrowserConfig) => void;
   onRemove?: () => void;
   tileLocked?: boolean;
   workspaceLocked?: boolean;
@@ -55,26 +64,6 @@ interface LanBrowserPanelProps {
 // runs in an opaque origin and cannot reach window.parent, Zeus cookies, or
 // the operator's session. Scripts/forms still work for ordinary device UIs.
 const SANDBOX = 'allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox';
-
-/** Normalise operator input into a private-LAN http(s) URL, defaulting a bare
- *  host to http:// (device admin pages are overwhelmingly plain HTTP). Returns
- *  null for anything that isn't an http/https URL. The SERVER is the real
- *  guard (rejects non-private targets); this is just input hygiene. */
-function normalizeLanUrl(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const candidate = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)
-    ? trimmed
-    : `http://${trimmed}`;
-  try {
-    const parsed = new URL(candidate);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
-    if (!parsed.hostname) return null;
-    return parsed.toString();
-  } catch {
-    return null;
-  }
-}
 
 /** Wrap an absolute LAN URL as the same-origin proxy path the iframe loads. */
 function proxySrc(url: string): string {
@@ -88,7 +77,7 @@ function proxyInlineSrc(url: string): string {
 }
 
 export function LanBrowserPanel({
-  config = EMPTY_URL_EMBED_CONFIG,
+  config = EMPTY_LAN_BROWSER_CONFIG,
   setConfig,
   onRemove,
   tileLocked = false,
@@ -175,6 +164,38 @@ export function LanBrowserPanel({
     [draft, config, setConfig],
   );
 
+  const bookmarks = config.bookmarks;
+  const isBookmarked = useMemo(
+    () => !!committedUrl && bookmarks.some((b) => b.url === committedUrl),
+    [bookmarks, committedUrl],
+  );
+
+  // Navigate to a pinned page (used by the bookmark chips).
+  const openBookmark = useCallback(
+    (url: string) => {
+      setDraft(url);
+      setError(false);
+      setConfig?.({ ...config, url });
+    },
+    [config, setConfig],
+  );
+
+  // Star button: pin the current page if it isn't pinned, else un-pin it.
+  const toggleBookmark = useCallback(() => {
+    if (!committedUrl) return;
+    const next = isBookmarked
+      ? bookmarks.filter((b) => b.url !== committedUrl)
+      : [...bookmarks, { url: committedUrl, label: '' }];
+    setConfig?.({ ...config, bookmarks: next });
+  }, [committedUrl, isBookmarked, bookmarks, config, setConfig]);
+
+  const removeBookmark = useCallback(
+    (url: string) => {
+      setConfig?.({ ...config, bookmarks: bookmarks.filter((b) => b.url !== url) });
+    },
+    [bookmarks, config, setConfig],
+  );
+
   const handleRemove = onRemove ?? (() => {});
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
   const title = urlEmbedTitle(config);
@@ -227,6 +248,23 @@ export function LanBrowserPanel({
         {committedUrl ? (
           <button
             type="button"
+            className={`url-embed-btn${isBookmarked ? ' url-embed-btn--active' : ''}`}
+            title={isBookmarked ? 'Remove bookmark' : 'Bookmark this page'}
+            aria-label={isBookmarked ? 'Remove bookmark' : 'Bookmark this page'}
+            aria-pressed={isBookmarked}
+            onClick={(e) => {
+              stop(e);
+              toggleBookmark();
+            }}
+            onMouseDown={stop}
+            onPointerDown={stop}
+          >
+            <Star size={13} fill={isBookmarked ? 'currentColor' : 'none'} />
+          </button>
+        ) : null}
+        {committedUrl ? (
+          <button
+            type="button"
             className="url-embed-btn url-embed-ext"
             title="Reload page"
             aria-label="Reload page"
@@ -262,6 +300,44 @@ export function LanBrowserPanel({
           <X size={12} />
         </button>
       </div>
+      {bookmarks.length ? (
+        <div className="lan-bookmark-bar" onPointerDown={stop} onMouseDown={stop}>
+          {bookmarks.map((bm) => {
+            const label = lanBookmarkLabel(bm);
+            const active = bm.url === committedUrl;
+            return (
+              <span
+                key={bm.url}
+                className={`lan-bookmark${active ? ' lan-bookmark--active' : ''}`}
+              >
+                <button
+                  type="button"
+                  className="lan-bookmark-go"
+                  title={bm.url}
+                  onClick={(e) => {
+                    stop(e);
+                    openBookmark(bm.url);
+                  }}
+                >
+                  {label}
+                </button>
+                <button
+                  type="button"
+                  className="lan-bookmark-del"
+                  aria-label={`Remove bookmark ${label}`}
+                  title="Remove bookmark"
+                  onClick={(e) => {
+                    stop(e);
+                    removeBookmark(bm.url);
+                  }}
+                >
+                  <X size={9} />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      ) : null}
       <div className="workspace-tile-body url-embed-body">
         {committedUrl && remote ? (
           // Remote: render the tunnelled, self-contained page via srcDoc.

@@ -160,6 +160,51 @@ public class LanProxyServiceTests
         Assert.Contains("</body>", result);
     }
 
+    [Fact]
+    public void NeutralizeEscapingRefs_BlanksFramesAndExternalRefs()
+    {
+        var html =
+            "<iframe src=\"http://192.168.1.50:53433/console\"></iframe>" +
+            "<frame src='http://nas.local/ui'>" +
+            "<script src=\"http://192.168.1.50/app.js\"></script>" +
+            "<link rel=\"icon\" href=\"http://192.168.1.50/favicon.ico\">" +
+            "<img src=\"data:image/png;base64,AAAA\">" +
+            "<a href=\"#\" data-zeus-lan=\"http://192.168.1.50/next\">next</a>" +
+            "<a href=\"#top\">top</a>";
+
+        var result = LanProxyService.NeutralizeEscapingRefs(html);
+
+        // Frames point at about:blank — never the LAN (the mixed-content source).
+        Assert.Contains("src=\"about:blank\"", result);
+        Assert.DoesNotContain(":53433", result);
+        Assert.DoesNotContain("nas.local", result);
+        // External script + icon link are emptied.
+        Assert.DoesNotContain("app.js", result);
+        Assert.DoesNotContain("favicon.ico", result);
+        // Self-contained + in-page references survive untouched.
+        Assert.Contains("src=\"data:image/png;base64,AAAA\"", result);
+        Assert.Contains("data-zeus-lan=\"http://192.168.1.50/next\"", result);
+        Assert.Contains("href=\"#top\"", result);
+    }
+
+    [Fact]
+    public async Task InlineHtml_IsSelfContained_NoLanRefsEscape()
+    {
+        // No <link>/<img>/<style> → the throwing factory is never hit; this proves
+        // a device page with a frame + external script comes back self-contained.
+        var svc = NewService();
+        var baseUri = new Uri("http://192.168.1.50/index.html");
+        var html =
+            "<html><body><iframe src=\"http://192.168.1.50:53433/\"></iframe>" +
+            "<script src=\"http://192.168.1.50/x.js\"></script></body></html>";
+
+        var result = await svc.InlineHtmlAsync(html, baseUri, default);
+
+        Assert.DoesNotContain(":53433", result);
+        Assert.DoesNotContain("x.js", result);
+        Assert.Contains("about:blank", result);
+    }
+
     // -- minimal fakes --------------------------------------------------------
 
     private sealed class ThrowingHttpClientFactory : IHttpClientFactory

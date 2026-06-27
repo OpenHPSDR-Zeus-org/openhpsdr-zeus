@@ -324,6 +324,18 @@ public sealed partial class LanProxyService
     private const int InlineBudgetBytes = 6 * 1024 * 1024;
     private const int InlinePerResourceBytes = 2 * 1024 * 1024;
 
+    // Overall wall-clock budget for inlining one page (fetch every sub-resource +
+    // base64-encode it). Kept comfortably UNDER the remote tunnel's LAN-proxy
+    // client deadline (api-tunnel.ts LAN_PROXY_TIMEOUT_MS, 60 s) so the reply
+    // always beats the client's timeout — the prior unbounded serial fetch could
+    // run past the flat 15 s tunnel deadline and surface as a spurious "Remote
+    // API request timed out." Sub-resources not fetched within the budget are
+    // simply omitted (the page still renders), never an error.
+    internal static readonly TimeSpan InlineMaxDuration = TimeSpan.FromSeconds(30);
+    // Per-sub-resource ceiling so one slow/hung asset can't consume the whole
+    // page budget on its own.
+    private static readonly TimeSpan InlineSubResourceTimeout = TimeSpan.FromSeconds(5);
+
     // Injected into the inlined page so anchor clicks / form submits ask the Zeus
     // panel (the iframe's parent) to navigate, instead of the sandboxed srcdoc
     // iframe trying to load a URL it can't reach over the remote tunnel.
@@ -352,27 +364,67 @@ public sealed partial class LanProxyService
             baseUri = declared;
         }
 
+        // Bound the whole inline operation. A device with many (or slow) sub-
+        // resources must not push the tunnelled reply past the client's deadline;
+        // when this elapses, in-flight/remaining sub-resource fetches fast-fail
+        // and the asset is omitted. The outer `ct` (real client cancel) is still
+        // honoured and propagated by FetchSubResourceAsync.
+        using var inlineCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        inlineCts.CancelAfter(InlineMaxDuration);
+        var ict = inlineCts.Token;
+
         int budget = InlineBudgetBytes;
 
-        // 1. Stylesheets: <link rel="stylesheet" href="…"> → <style>…</style>.
+        // Inline the url(...) assets (web fonts, background images) a CSS string
+        // references as data: URIs, resolving each against its own stylesheet
+        // base. Un-fetchable assets (over budget, unreachable, timed out) are
+        // left as-is. This is what stops the operator's HTTPS, off-LAN browser
+        // from trying to pull web fonts straight off the radio's LAN (the
+        // "Failed to decode font / OTS parsing error" symptom).
+        async Task<string> InlineCssAsync(string css, Uri cssBase) =>
+            await ReplaceAsync(CssUrlRegex(), css, async m =>
+            {
+                var raw = m.Groups["url"].Value.Trim().Trim('\'', '"', ' ');
+                if (raw.Length == 0
+                    || raw[0] == '#'
+                    || raw.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) return m.Value;
+                if (!Uri.TryCreate(cssBase, raw, out var abs)) return m.Value;
+                if (abs.Scheme != Uri.UriSchemeHttp && abs.Scheme != Uri.UriSchemeHttps) return m.Value;
+                var res = await FetchSubResourceAsync(abs, ict, ct).ConfigureAwait(false);
+                if (res is null || budget - res.Value.bytes.Length < 0) return m.Value;
+                budget -= res.Value.bytes.Length;
+                var mime = res.Value.contentType ?? "application/octet-stream";
+                return $"url(\"data:{mime};base64,{Convert.ToBase64String(res.Value.bytes)}\")";
+            }).ConfigureAwait(false);
+
+        // 1. Inline <style> blocks: inline their url(...) assets (page-relative).
+        //    Done before stylesheet links so it only sees the page's own blocks.
+        html = await ReplaceAsync(StyleBlockRegex(), html, async m =>
+        {
+            var css = await InlineCssAsync(m.Groups["css"].Value, baseUri).ConfigureAwait(false);
+            return $"<style{m.Groups["attrs"].Value}>{css}</style>";
+        }).ConfigureAwait(false);
+
+        // 2. Stylesheets: <link rel="stylesheet" href="…"> → <style>…</style>,
+        //    with the stylesheet's own url(...) assets inlined against its base.
         html = await ReplaceAsync(StylesheetLinkRegex(), html, async m =>
         {
             var href = m.Groups["url"].Value;
             if (!Uri.TryCreate(baseUri, href, out var abs)) return m.Value;
-            var res = await FetchSubResourceAsync(abs, ct).ConfigureAwait(false);
+            var res = await FetchSubResourceAsync(abs, ict, ct).ConfigureAwait(false);
             if (res is null || budget - res.Value.bytes.Length < 0) return m.Value;
             budget -= res.Value.bytes.Length;
-            var css = Encoding.UTF8.GetString(res.Value.bytes);
+            var css = await InlineCssAsync(Encoding.UTF8.GetString(res.Value.bytes), abs).ConfigureAwait(false);
             return $"<style>{css}</style>";
         }).ConfigureAwait(false);
 
-        // 2. Images: <img … src="…"> → data: URI.
+        // 3. Images: <img … src="…"> → data: URI.
         html = await ReplaceAsync(ImgTagRegex(), html, async m =>
         {
             var src = m.Groups["url"].Value;
             if (src.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) return m.Value;
             if (!Uri.TryCreate(baseUri, src, out var abs)) return m.Value;
-            var res = await FetchSubResourceAsync(abs, ct).ConfigureAwait(false);
+            var res = await FetchSubResourceAsync(abs, ict, ct).ConfigureAwait(false);
             if (res is null || budget - res.Value.bytes.Length < 0) return m.Value;
             budget -= res.Value.bytes.Length;
             var mime = res.Value.contentType ?? "image/*";
@@ -380,7 +432,7 @@ public sealed partial class LanProxyService
             return m.Value.Replace(src, dataUri, StringComparison.Ordinal);
         }).ConfigureAwait(false);
 
-        // 3. Anchors: route clicks to the parent panel instead of the dead iframe.
+        // 4. Anchors: route clicks to the parent panel instead of the dead iframe.
         html = AnchorHrefRegex().Replace(html, m =>
         {
             var href = m.Groups["url"].Value;
@@ -392,7 +444,7 @@ public sealed partial class LanProxyService
             return $"<a href=\"#\" data-zeus-lan=\"{EscapeAttr(abs.ToString())}\"";
         });
 
-        // 4. Forms: relay the action target too (GET forms; best-effort).
+        // 5. Forms: relay the action target too (GET forms; best-effort).
         html = FormActionRegex().Replace(html, m =>
         {
             var action = m.Groups["url"].Value;
@@ -401,33 +453,87 @@ public sealed partial class LanProxyService
             return $"<form data-zeus-lan-form=\"{EscapeAttr(abs.ToString())}\"";
         });
 
-        // 5. Inject the nav interceptor just before </body> (or append).
+        // 6. Neutralise every reference that would otherwise make the operator's
+        //    (HTTPS, off-LAN) browser fetch from the radio's LAN itself, which it
+        //    cannot: framesets/iframes, external scripts, and any leftover
+        //    src/href. Without this the srcdoc is NOT self-contained — those loads
+        //    fail as mixed-content (http:// in an https page), DNS errors (LAN
+        //    hostnames), or font-decode errors, spraying the console and breaking
+        //    layout. This was the source of the "insecure frame" /
+        //    ERR_NAME_NOT_RESOLVED symptoms. After this pass the page renders from
+        //    inlined assets only.
+        html = NeutralizeEscapingRefs(html);
+
+        // 7. Inject the nav interceptor just before </body> (or append).
         int bodyEnd = html.LastIndexOf("</body>", StringComparison.OrdinalIgnoreCase);
         html = bodyEnd >= 0 ? html.Insert(bodyEnd, NavInterceptorScript) : html + NavInterceptorScript;
 
         return html;
     }
 
-    /// <summary>Fetch one sub-resource for inlining: validate it's private, GET it,
-    /// cap its size. Returns null on any failure (the caller keeps the original).</summary>
-    private async Task<(string? contentType, byte[] bytes)?> FetchSubResourceAsync(Uri abs, CancellationToken ct)
+    /// <summary>Fetch one sub-resource for inlining: validate it's private, GET it
+    /// (under its own short timeout, also bounded by the page-wide
+    /// <paramref name="inlineCt"/>), cap its size. Returns null on any failure or
+    /// timeout — the caller then leaves the original reference (which the final
+    /// neutralise pass blanks). A genuine client cancel (<paramref name="outerCt"/>)
+    /// still propagates.</summary>
+    private async Task<(string? contentType, byte[] bytes)?> FetchSubResourceAsync(
+        Uri abs, CancellationToken inlineCt, CancellationToken outerCt)
     {
         if (!TryValidateTarget(abs.ToString(), out _, out _)) return null;
         try
         {
+            using var perResource = CancellationTokenSource.CreateLinkedTokenSource(inlineCt);
+            perResource.CancelAfter(InlineSubResourceTimeout);
             var client = _httpFactory.CreateClient(HttpClientName);
             using var req = new HttpRequestMessage(HttpMethod.Get, abs);
             req.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (Zeus LAN Browser)");
-            using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct)
+            using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, perResource.Token)
                 .ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode) return null;
             if (resp.Content.Headers.ContentLength is > InlinePerResourceBytes) return null;
-            var bytes = await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+            var bytes = await resp.Content.ReadAsByteArrayAsync(perResource.Token).ConfigureAwait(false);
             if (bytes.Length > InlinePerResourceBytes) return null;
             return (resp.Content.Headers.ContentType?.ToString(), bytes);
         }
-        catch (OperationCanceledException) { throw; }
+        // Real client cancel propagates; a per-resource/page-budget timeout just
+        // skips this asset.
+        catch (OperationCanceledException) when (outerCt.IsCancellationRequested) { throw; }
         catch { return null; }
+    }
+
+    /// <summary>
+    /// Blank every remaining network reference in an inlined page so the result is
+    /// truly self-contained for an iframe <c>srcdoc</c>: iframes/framesets point at
+    /// <c>about:blank</c>, and any leftover <c>src</c>/<c>href</c> to a fetchable
+    /// target (external script, icon/preload link, media, an un-inlined asset) is
+    /// emptied. In-page (<c>#</c>), <c>data:</c>, <c>about:</c>, and the
+    /// non-navigating schemes are left untouched, as are the intercept anchors
+    /// (which carry their target on <c>data-zeus-lan</c>, not <c>href</c>).
+    /// </summary>
+    internal static string NeutralizeEscapingRefs(string html)
+    {
+        // Iframes/framesets first — blank the src so the remote browser never
+        // tries to load a LAN frame (the mixed-content / unreachable-frame source).
+        html = FrameSrcRegex().Replace(html, m =>
+            $"{m.Groups["pre"].Value} src=\"about:blank\"{m.Groups["post"].Value}");
+
+        // Any residual src=/href= that still points somewhere fetchable → empty it.
+        html = ResidualRefRegex().Replace(html, m =>
+        {
+            var url = m.Groups["url"].Value.Trim();
+            if (url.Length == 0
+                || url[0] == '#'
+                || url.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("about:", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("tel:", StringComparison.OrdinalIgnoreCase))
+                return m.Value;
+            return $"{m.Groups["attr"].Value}=\"\"";
+        });
+
+        return html;
     }
 
     private static string EscapeAttr(string s) =>
@@ -522,4 +628,17 @@ public sealed partial class LanProxyService
     // Opening <form … action="…"
     [GeneratedRegex(@"<form\b[^>]*?\baction\s*=\s*[""'](?<url>[^""']*)[""']", RegexOptions.IgnoreCase)]
     private static partial Regex FormActionRegex();
+
+    // A <style …>…</style> block: its attributes and inner CSS captured separately.
+    [GeneratedRegex(@"<style(?<attrs>[^>]*)>(?<css>.*?)</style>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex StyleBlockRegex();
+
+    // <iframe|frame … src="…" …> split around src so the value can be blanked,
+    // preserving the attributes on either side.
+    [GeneratedRegex(@"(?<pre><(?:iframe|frame)\b[^>]*?)\bsrc\s*=\s*(?<q>[""'])[^""']*\k<q>(?<post>[^>]*>)", RegexOptions.IgnoreCase)]
+    private static partial Regex FrameSrcRegex();
+
+    // Any src= / href= with a quoted value (residual-reference neutraliser).
+    [GeneratedRegex(@"(?<attr>\b(?:src|href))\s*=\s*(?<q>[""'])(?<url>[^""']*)\k<q>", RegexOptions.IgnoreCase)]
+    private static partial Regex ResidualRefRegex();
 }
