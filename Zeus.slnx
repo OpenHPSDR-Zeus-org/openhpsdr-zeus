@@ -11,6 +11,7 @@
   </Folder>
   <Project Path="Zeus.Contracts/Zeus.Contracts.csproj" />
   <Project Path="Zeus.Support.Contracts/Zeus.Support.Contracts.csproj" />
+  <Project Path="Zeus.SupportAgent/Zeus.SupportAgent.csproj" />
   <Project Path="Zeus.Dsp/Zeus.Dsp.csproj" />
   <Project Path="Zeus.Dsp.FreeDv/Zeus.Dsp.FreeDv.csproj" />
   <Project Path="Zeus.Plugins.Contracts/Zeus.Plugins.Contracts.csproj" />

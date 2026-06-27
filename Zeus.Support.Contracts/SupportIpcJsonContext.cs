@@ -15,4 +15,5 @@ namespace Zeus.Support.Contracts;
     UseStringEnumConverter = true,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(SupportIpcMessage))]
+[JsonSerializable(typeof(SupportCrashRecord))]
 public sealed partial class SupportIpcJsonContext : JsonSerializerContext;

@@ -45,6 +45,10 @@ public sealed class AppRestartService
             // Never block the exit on a best-effort hook.
         }
 
+        // Deliberate exit — let any supervising support sidecar see this as a
+        // clean shutdown, not a crash.
+        SupportSidecar.MarkCleanExit();
+
         // Let the in-flight HTTP response flush before the process dies.
         _ = Task.Run(async () =>
         {
@@ -75,6 +79,11 @@ public sealed class AppRestartService
         {
             // Never block the relaunch on a best-effort hook.
         }
+
+        // A relaunch is a deliberate exit — mark it clean so a supervising sidecar
+        // doesn't capture a crash record for the old PID. (The fresh process will
+        // spawn its own sidecar.)
+        SupportSidecar.MarkCleanExit();
 
         // Let the in-flight HTTP response flush before the process dies.
         _ = Task.Run(async () =>

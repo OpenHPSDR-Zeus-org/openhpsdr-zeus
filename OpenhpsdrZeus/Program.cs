@@ -349,6 +349,11 @@ public partial class Program
         app.StartAsync().GetAwaiter().GetResult();
         StartupDiagnostics.Phase("desktop: host started");
 
+        // Spawn the out-of-process support sidecar now the backend is up. It runs
+        // detached so it survives a backend crash and can capture the crash logs
+        // the in-memory ring would lose. Best-effort — never blocks launch.
+        SupportSidecarLauncher.TryLaunch();
+
         // Resolve the bound URLs after Start — Kestrel writes the OS-assigned
         // loopback port (plus the LAN HTTPS port we configured) into
         // IServerAddressesFeature here. Photino must load the loopback HTTP URL:
@@ -699,6 +704,10 @@ public partial class Program
     //    above).
     private static void ShutdownDesktopHost(WebApplication app)
     {
+        // Deliberate shutdown — tell any supervising sidecar this is a clean exit,
+        // not a crash, BEFORE we tear the host down or _exit(2).
+        SupportSidecar.MarkCleanExit();
+
         StopAndDisposeHost(app);
 
         Console.Out.Flush();
