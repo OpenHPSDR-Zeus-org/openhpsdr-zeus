@@ -971,6 +971,7 @@ export function AudioSuiteWindow({
   embedded = false,
 }: { route?: AudioSuiteRoute; embedded?: boolean } = {}) {
   const isRxSuite = route === 'rx';
+  const txProfileApplyRevision = useTxAudioProfileStore((s) => s.applyRevision);
   const isOpen = useAudioSuiteStore((s) => (isRxSuite ? s.rxOpen : s.txOpen));
   const close = useAudioSuiteStore((s) => (isRxSuite ? s.closeRx : s.closeTx));
   const x = useAudioSuiteStore((s) => (isRxSuite ? s.rxX : s.txX));
@@ -1049,7 +1050,6 @@ export function AudioSuiteWindow({
   const loadRxMasterBypassFromServer = useAudioSuiteStore(
     (s) => s.loadRxMasterBypassFromServer,
   );
-  const pluginSettingsRevision = useAudioSuiteStore((s) => s.pluginSettingsRevision);
   const setPosition = useCallback(
     (nextX: number, nextY: number) => setWindowPosition(route, nextX, nextY),
     [route, setWindowPosition],
@@ -1594,6 +1594,11 @@ export function AudioSuiteWindow({
     [chainPanels, effectiveSelectedId],
   );
   const SelectedComponent = selectedPanel?.component ?? null;
+  const selectedComponentKey = selectedPanel
+    ? isRxSuite
+      ? `${selectedPanel.pluginId}::${selectedPanel.panelId}`
+      : `${selectedPanel.pluginId}::${selectedPanel.panelId}::${txProfileApplyRevision}`
+    : undefined;
 
   // Embedded mode (rendered inline inside Audio Tools) is always
   // visible; the floating window only renders when opened.
@@ -2075,9 +2080,7 @@ export function AudioSuiteWindow({
         }}
       >
         {SelectedComponent ? (
-          <SelectedComponent
-            key={`${selectedPanel!.pluginId}::${selectedPanel!.panelId}::${pluginSettingsRevision}`}
-          />
+          <SelectedComponent key={selectedComponentKey} />
         ) : (
           <span
             style={{ color: 'var(--fg-3)', fontSize: 12, fontStyle: 'italic' }}

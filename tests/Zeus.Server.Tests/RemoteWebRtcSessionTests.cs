@@ -326,6 +326,84 @@ public sealed class RemoteWebRtcSessionTests
     }
 
     [Fact]
+    public async Task PostUnlock_QrzLookupAndChat_ReachLoopback()
+    {
+        // The remote operator is the authenticated station owner, so QRZ lookup
+        // and chat are 1:1 with the desk — formerly denied, now tunnelled. Only
+        // the credential/secret exfil paths above stay refused.
+        var seen = new List<string>();
+        var factory = new StubHttpClientFactory((req) =>
+        {
+            seen.Add(req.RequestUri!.AbsolutePath);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json"),
+            };
+        });
+        ApiSession(factory, out var server);
+        await using var client = new ProverClient(Password);
+        await UnlockAsync(server, client);
+
+        var qrz = await SendApiUntilReply(
+            client, 31, "POST", "/api/qrz/lookup", "{\"call\":\"KB2UKA\"}", "application/json");
+        using (var d = JsonDocument.Parse(qrz))
+            Assert.Equal(200, d.RootElement.GetProperty("status").GetInt32());
+
+        var chat = await SendApiUntilReply(
+            client, 32, "POST", "/api/chat/send", "{\"text\":\"hi\"}", "application/json");
+        using (var d = JsonDocument.Parse(chat))
+            Assert.Equal(200, d.RootElement.GetProperty("status").GetInt32());
+
+        Assert.Contains("/api/qrz/lookup", seen);
+        Assert.Contains("/api/chat/send", seen);
+        Assert.Equal(2, factory.CallCount);
+
+        server.Close();
+    }
+
+    [Fact]
+    public void OpusRx_IsEnabledByDefault()
+    {
+        // RX audio defaults to the Opus WebRTC-track path (jitter buffer + PLC,
+        // robust over the internet). ZEUS_REMOTE_OPUS_RX=0 opts back to PCM.
+        Assert.True(RemoteWebRtcSession.OpusRxEnabled);
+    }
+
+    [Fact]
+    public void ParseIceServers_FlattensUrls_KeepsStunAndUdpTurn_WithCredentials()
+    {
+        // Real broker /turn body shape: stun array (no creds) + turn array with a
+        // shared username/credential, including TLS + TCP transports we must drop.
+        const string json = """
+        {"iceServers":[
+          {"urls":["stun:stun.cloudflare.com:3478","stun:stun.cloudflare.com:53"]},
+          {"urls":[
+            "turn:turnv2.realtime.cloudflare.com:3478?transport=udp",
+            "turn:turn.cloudflare.com:3478?transport=tcp",
+            "turns:turn.cloudflare.com:5349?transport=tcp",
+            "turn:turn.cloudflare.com:53?transport=udp"
+          ],"username":"user123","credential":"cred456"}
+        ]}
+        """;
+
+        var servers = Zeus.Server.Hosting.Remote.RemoteWebRtcService.ParseIceServers(json);
+
+        // 2 stun + 2 udp turn kept; tcp + turns(TLS) dropped.
+        Assert.Equal(4, servers.Count);
+        var turns = servers.Where(s => s.urls.StartsWith("turn:", StringComparison.OrdinalIgnoreCase)).ToList();
+        Assert.Equal(2, turns.Count);
+        Assert.All(turns, t => Assert.DoesNotContain("transport=tcp", t.urls));
+        Assert.All(turns, t =>
+        {
+            Assert.Equal("user123", t.username);
+            Assert.Equal("cred456", t.credential);
+        });
+        // STUN entries carry no credentials and there is a relay candidate source.
+        Assert.Contains(servers, s => s.urls == "stun:stun.cloudflare.com:3478");
+        Assert.DoesNotContain(servers, s => s.urls.StartsWith("turns:", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task PreUnlock_ApiInput_DoesNothing()
     {
         var factory = new StubHttpClientFactory(_ =>
