@@ -14,6 +14,13 @@
   height: 100%;
   overflow: hidden;
   background: #04060c;
+  /* isolation: isolate contains every descendant z-index inside this panel's
+   * own stacking context — Leaflet's internal panes (200–700) and controls
+   * (800–1000) plus our HUD/recenter/alert buttons (450–600). Without it those
+   * high z-indexes escape the panel and paint over whatever sibling panel is
+   * layered on top (e.g. the VST editor overlay). Same fix as .rc-map in
+   * layout.css for the rotator compass. */
+  isolation: isolate;
 }
 
 .lightning-map .lm-host {
