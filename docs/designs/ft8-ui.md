@@ -228,3 +228,51 @@ FT8/FT4 behaviour prefs (auto-seq, decode depth Fast/Normal/Deep → `/api/ft8`
 operator feels changes until they touch a control, and TX still requires an
 explicit arm. **DO-NOT-MERGE until G2 bench confirms ungate → arm → auto-seq →
 log.**
+
+## FINAL layout — KB2UKA 2026-06-27 (WOW-factor pass; build to THIS)
+
+New target: `ft8-ui/refs/ft8-final-layout-2026-06-27.png`. This SUPERSEDES the
+earlier mockup for layout. It is a "people-see-this-and-go-wow" pass. Doug is the
+visual/UX authority and approves this. Tokens only (no raw hex). **Do NOT break any
+FT8 function — they all work (decode, click-to-call, TX, auto-seq, logging,
+waterfall click-to-tune, settings). Re-arrange, don't rip out.**
+
+Top bar: Zeus / OpenHPSDR FT8 · MODE (USB/LSB/CWU/CWD/AM/DIG) · FILTER · BAND
+(40/20/15/10/6/2m) · SPEED · AGC · NR · Disconnect · ⚙ settings.
+
+LEFT column (hero): big VFO readout + FT8/TX badges + RX offset line; S-meter
+(-120..0, S9+xx); **BIG waterfall** (the centerpiece — make it large), Inferno
+palette, freq axis + dB axis, TX/RX cursor. Waterfall control strip: **WF dB
+slider (MUST work exactly like the main panadapter dbMin/dbMax range — it
+currently does NOT)**, Palette, RBW, Smoothing, Center, Zoom, Span.
+
+CENTER column: the decode/station list — **SMALLER than now** (narrower, per the
+photo): UTC/dB/DT/FREQ/MESSAGE, color-coded rows, click-to-select.
+
+RIGHT-CENTER (TX CONTROL): TX ENABLE · HOLD TX FREQ · slot 1ST/2ND/3RD/4TH ·
+MSG field · macros CQ/QRZ/GRID/REPLY/RR73/73/CALL 1ST · PWR & QRM (TX PWR / TX
+EVEN / QRM sliders) · TUNE / HALT · STATS (QSO today/total/confirmed/pending/
+decoded/avg-snr).
+
+RIGHT column (STATION INFO = the QRZ panel we ALREADY have): callsign + flag,
+name, QTH, grid, CQ/ITU zone, IOTA, loc, 10-10, DOK, WAZ, VUCC, **profile photo**,
+VIEW ON QRZ.COM / ADD TO LOG, BIO. **Populates when the operator clicks a station
+(and when a station answers the user / the user answers a station) — clicking the
+station triggers a QRZ lookup for that call and fills this panel.**
+
+BOTTOM status bar: FT8 ● DECODED:Xs · DATE · UTC · CALLSIGN · BAND · MODE · RST
+TX · RST RX · COUNTRY · GRID · **LOG QSO · VIEW LOG · EXPORT ADIF** · version.
+
+Functional requirements this pass MUST deliver:
+1. Bigger waterfall; **WF dB slider wired to the panadapter dbMin/dbMax like the
+   main display** (the broken part).
+2. Smaller station list (per photo).
+3. Keep ALL existing controls, placed per the photo.
+4. **QRZ STATION INFO panel** wired to station-click (QRZ lookup by callsign;
+   reuse the existing QRZ component/service).
+5. **VIEW LOG** → opens a modal/popup: whole log, search box, edit entries,
+   delete, with **persistence after save** (needs log update/delete endpoints).
+6. **EXPORT ADIF** button → actually downloads ADIF (endpoint /api/log/export/adif
+   already works — wire the button).
+7. Incorporate the three staged UX fixes (reachable settings, live TX-message
+   banner, own-TX echo rows).

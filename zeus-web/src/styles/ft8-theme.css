@@ -72,6 +72,26 @@
 .ft8-row--worked { color: var(--hud-worked); }
 .ft8-row--new    { color: var(--hud-new); }
 
+/* Our own transmissions, echoed into the decode flow (WSJT-X yellow Tx line).
+   Reads unmistakably as YOUR TX, not a received decode: --tx accent + badge. */
+.ft8-row--tx {
+  color: var(--tx);
+  background: color-mix(in srgb, var(--tx) 12%, transparent);
+}
+.ft8-row--tx td.num { color: var(--tx); }
+.ft8-row__tx-badge {
+  display: inline-block;
+  padding: 0 5px;
+  margin-right: 4px;
+  border-radius: 2px;
+  background: var(--tx);
+  color: #1a0604;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  vertical-align: middle;
+}
+
 .ft8-decode-empty {
   padding: 16px;
   text-align: center;
@@ -93,10 +113,10 @@
   display: flex;
   align-items: center;
   gap: 16px;
-  /* Right padding reserves space for the absolutely-positioned Exit button so
-     header content never slides under it. The header row is a fixed 44px grid
-     row with overflow:hidden, so it must NOT wrap. */
-  padding: 0 104px 0 14px;
+  /* Right padding reserves space for the absolutely-positioned actions cluster
+     (view toggle + Exit) so header content never slides under it. The header row
+     is a fixed 44px grid row with overflow:hidden, so it must NOT wrap. */
+  padding: 0 224px 0 14px;
   background: var(--hud-panel-2);
   border-bottom: 1px solid var(--hud-cyan-line);
   overflow: hidden;
@@ -194,14 +214,20 @@
   font: inherit;
   text-transform: uppercase;
 }
-/* Visible, filled Exit button — pinned to the workspace's top-right corner
-   (absolute, out of the fixed-height header flow) so header crowding can never
-   clip it. The workspace is position:fixed, so this anchors to its corner. */
-.ft8-ws-close {
+/* View toggle + Exit, pinned to the workspace's top-right corner (absolute, out
+   of the fixed-height header flow) so header crowding can never clip them. The
+   workspace is position:fixed, so this anchors to its corner. The flex container
+   keeps the two buttons from ever overlapping regardless of window width. */
+.ft8-ws-actions {
   position: absolute;
   top: 7px;
   right: 12px;
   z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ft8-ws-close {
   background: var(--hud-me);
   border: 1px solid var(--hud-me);
   color: #1a0604;
@@ -212,6 +238,21 @@
   font-weight: 700;
 }
 .ft8-ws-close:hover { filter: brightness(1.12); }
+
+/* Always-visible DECODE↔SETTINGS toggle next to Exit (escapes the header clip). */
+.ft8-ws-viewtoggle {
+  background: transparent;
+  border: 1px solid var(--hud-cyan-line);
+  color: var(--hud-cyan);
+  border-radius: 3px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.ft8-ws-viewtoggle:hover { background: var(--hud-cyan-soft); }
 
 /* Read-only identity chip in the header (editing lives on the Settings page). */
 .ft8-ws-call {
@@ -259,6 +300,75 @@
   white-space: nowrap;
 }
 .ft8-ws-banner__cta:hover { filter: brightness(1.1); }
+
+/* Live-TX banner — slim, spans the operating view, shows the keyer message for
+   this cycle. --tx accent; pulses while actually transmitting. */
+.ft8-ws-txbanner {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 12px;
+  border: 1px solid var(--tx);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--tx) 12%, transparent);
+  color: var(--hud-text);
+  font-size: 12px;
+}
+.ft8-ws-txbanner.is-tx { animation: ft8-tx-pulse 1.2s ease-in-out infinite; }
+@keyframes ft8-tx-pulse {
+  0%, 100% { background: color-mix(in srgb, var(--tx) 12%, transparent); }
+  50%      { background: color-mix(in srgb, var(--tx) 26%, transparent); }
+}
+.ft8-ws-txbanner__tag {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: 2px;
+  background: var(--tx);
+  color: #1a0604;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.ft8-ws-txbanner__msg {
+  font-family: var(--font-mono, 'Archivo Narrow', monospace);
+  font-weight: 700;
+  color: var(--tx);
+  letter-spacing: 0.04em;
+}
+.ft8-ws-txbanner__slot {
+  margin-left: auto;
+  color: var(--hud-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* TX control cluster: live keyer message line (--tx accent). */
+.ft8-tx__live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--tx);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--tx) 12%, transparent);
+}
+.ft8-tx__live.is-tx { animation: ft8-tx-pulse 1.2s ease-in-out infinite; }
+.ft8-tx__live-tag {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: var(--tx);
+  color: #1a0604;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.ft8-tx__live-msg {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--tx);
+  font-size: 13px;
+}
+.ft8-tx__live-slot { margin-left: auto; font-size: 10px; color: var(--hud-text-dim); }
 
 /* ---- Settings view ---- */
 .ft8-ws-body--settings { display: block; overflow: auto; padding: 8px; }

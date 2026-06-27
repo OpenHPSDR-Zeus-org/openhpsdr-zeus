@@ -12,6 +12,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useFt8Store, type Ft8Row } from '../../state/ft8-store';
+import { useFt8TxStore } from '../../state/ft8-tx-store';
 import { useConnectionStore } from '../../state/connection-store';
 import { useOperatorStore } from '../../state/operator-store';
 import { useFt8SettingsStore } from '../../state/ft8-settings-store';
@@ -75,6 +76,10 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
   const error = useFt8Store((s) => s.error);
   const switchProtocol = useFt8Store((s) => s.switchProtocol);
   const qsyBand = useFt8Store((s) => s.qsyBand);
+
+  // Live keyer status (0x3A) + our own TX echoes for the decode-flow interleave.
+  const txStatus = useFt8TxStore((s) => s.status);
+  const txEchoes = useFt8TxStore((s) => s.txEcho);
 
   // DECODE (the live operating view) vs SETTINGS (the configuration page). The
   // protocol tabs (FT8/FT4) stay a separate switch; this is the view switch.
@@ -269,11 +274,25 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
           {myCall ? `${myCall}${myGrid ? ` · ${myGrid}` : ''}` : 'SET CALL'}
         </button>
         <span className="ft8-ws-clock">{clock}</span>
-        {onClose && (
-          <button type="button" className="ft8-ws-close" onClick={onClose}>
-            Exit · Esc
+        {/* Always-visible view toggle + Exit, pinned top-right OUT of the 44px
+            header clip (the in-header DECODE/SETTINGS tabs can scroll under the
+            clip on a narrow window; this guarantees both directions stay
+            clickable at any width). */}
+        <div className="ft8-ws-actions">
+          <button
+            type="button"
+            className="ft8-ws-viewtoggle"
+            onClick={() => setView(view === 'decode' ? 'settings' : 'decode')}
+            title={view === 'decode' ? 'Open FT8 settings' : 'Back to the decode view'}
+          >
+            {view === 'decode' ? '⚙ SETTINGS' : '← DECODE'}
           </button>
-        )}
+          {onClose && (
+            <button type="button" className="ft8-ws-close" onClick={onClose}>
+              Exit · Esc
+            </button>
+          )}
+        </div>
       </header>
 
       {view === 'settings' ? (
@@ -282,6 +301,25 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
         </div>
       ) : (
       <div className="ft8-ws-body">
+        {/* Live-TX banner — surface what is going out THIS cycle (or staged next
+            while armed) so it is unmistakable at a glance. Driven by the backend
+            keyer status (0x3A), not local optimism. */}
+        {txStatus && (txStatus.transmitting || txStatus.armed) && txStatus.message && (
+          <div
+            className={`ft8-ws-txbanner${txStatus.transmitting ? ' is-tx' : ''}`}
+            role="status"
+          >
+            <span className="ft8-ws-txbanner__tag">
+              {txStatus.transmitting ? '▶ TX' : 'TX ARMED'}
+            </span>
+            <span className="ft8-ws-txbanner__msg">{txStatus.message}</span>
+            {txStatus.slot && (
+              <span className="ft8-ws-txbanner__slot">
+                {txStatus.slot === 'even' ? '1ST' : '2ND'} · {Math.round(txStatus.audioHz)} Hz
+              </span>
+            )}
+          </div>
+        )}
         {/* Empty-call prompt — TX is gated on an operator callsign, so make the
             reason visible instead of leaving ENABLE a silent dead button. */}
         {!myCall && (
@@ -347,6 +385,7 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
                 onRowClick={onRowClick}
                 showOnlyCq={settings.showOnlyCq}
                 hideWorkedBefore={settings.hideWorkedBefore}
+                txEchoes={txEchoes}
               />
             </div>
           </section>

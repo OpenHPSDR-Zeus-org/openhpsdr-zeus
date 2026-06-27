@@ -91,6 +91,18 @@ export function Ft8TxControl({
         )}
       </div>
 
+      {/* Live keyer message — what is actually going out (or staged next while
+          armed). Backend-authoritative (0x3A), --tx accent. */}
+      {(transmitting || liveArmed) && status?.message && (
+        <div className={`ft8-tx__live${transmitting ? ' is-tx' : ''}`} role="status">
+          <span className="ft8-tx__live-tag">{transmitting ? '▶ TX' : 'TX armed'}</span>
+          <span className="ft8-tx__live-msg">{status.message}</span>
+          {status.slot && (
+            <span className="ft8-tx__live-slot">{status.slot === 'even' ? '1ST' : '2ND'}</span>
+          )}
+        </div>
+      )}
+
       {/* ENABLE-TX master + HOLD TX FREQ. */}
       <div className="ft8-tx__row">
         <button
