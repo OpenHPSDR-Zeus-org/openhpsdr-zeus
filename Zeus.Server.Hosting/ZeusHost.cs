@@ -150,7 +150,15 @@ public static class ZeusHost
         // report builder snapshots what the provider has been filling.
         var diagnosticLogBuffer = new DiagnosticLogBuffer();
         builder.Services.AddSingleton(diagnosticLogBuffer);
-        builder.Logging.AddProvider(new RingBufferLoggerProvider(diagnosticLogBuffer));
+        // Mirror the same redacted lines to a rolling on-disk file under
+        // DataDir/logs so the recent log SURVIVES a backend crash and the
+        // out-of-process support sidecar can tail it (the in-memory ring dies
+        // with the process). Best-effort: the sink never throws into logging, so
+        // an unwritable log dir degrades to in-memory-only rather than blocking
+        // launch.
+        var diagnosticLogFileSink = new DiagnosticLogFileSink(PrefsDbPath.AppLogPath());
+        builder.Services.AddSingleton<IDiagnosticLogFileSink>(diagnosticLogFileSink);
+        builder.Logging.AddProvider(new RingBufferLoggerProvider(diagnosticLogBuffer, diagnosticLogFileSink));
 
         // Resolve TCI bind settings from configuration before DI builds, because
         // Kestrel's listeners have to be declared now. TCI shares Kestrel (rather

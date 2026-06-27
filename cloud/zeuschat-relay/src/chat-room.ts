@@ -72,6 +72,14 @@ const RL_WINDOW_MS = 5000;
  */
 const ROSTER_HEAL_INTERVAL_MS = 120_000;
 
+/**
+ * How long the in-memory admin set is trusted before re-reading the shared
+ * `zeus-admin` D1 store. Short enough that a dashboard add/disable propagates
+ * within ~a minute without a redeploy; long enough that the per-connection
+ * ensureLoaded() path stays a cheap no-op most of the time.
+ */
+const ADMIN_REFRESH_TTL_MS = 60_000;
+
 function norm(callsign: string): string {
   return callsign.trim().toUpperCase();
 }
@@ -99,17 +107,31 @@ export class ChatRoom extends DurableObject<Env> {
   private members = new Map<string, Set<string>>(); // roomId -> member callsigns
   private userRooms = new Map<string, Set<string>>(); // callsign -> roomIds
   private bans = new Set<string>();
+  // Admin callsign set. SOURCE OF TRUTH is the shared `zeus-admin` D1 store
+  // (env.ADMIN_DB), refreshed on a TTL in ensureLoaded(); the env.ADMINS seed is
+  // only a fallback when D1 is unbound/empty/unreachable. Every call site below
+  // is unchanged — only how this set is filled changed (see refreshAdmins()).
   private admins: Set<string>;
+  // env.ADMINS parsed once, kept as the D1 fallback / pre-migration seed.
+  private adminSeed: Set<string>;
+  // Last time we (re)loaded admins from D1, for the TTL refresh below.
+  private adminsLoadedAt = 0;
   private loaded = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.admins = new Set(
-      (env.ADMINS ?? 'N9WAR,KB2UKA')
+    // No hardcoded admin callsigns in source. The D1 `admins` store is the source
+    // of truth; env.ADMINS is only a bootstrap/disaster seed and must be set as a
+    // wrangler var (not baked in). Empty seed + unreachable D1 => no admins this
+    // minute (fail closed), never a silent re-grant of some baked-in pair.
+    this.adminSeed = new Set(
+      (env.ADMINS ?? '')
         .split(',')
         .map((s) => s.trim().toUpperCase())
         .filter(Boolean),
     );
+    // Start from the seed so admin checks work before the first D1 load.
+    this.admins = new Set(this.adminSeed);
     // Auto-answer keepalives without waking the DO. Backends must send the
     // exact request string for this to match.
     this.ctx.setWebSocketAutoResponse(
@@ -343,6 +365,11 @@ export class ChatRoom extends DurableObject<Env> {
   // --- persistence load ------------------------------------------------------
 
   private async ensureLoaded(): Promise<void> {
+    // Admins refresh on their own TTL (independent of the one-shot graph load
+    // below) so dashboard changes propagate to long-lived rooms without a
+    // redeploy. Cheap no-op while inside the TTL window.
+    await this.refreshAdmins();
+
     if (this.loaded) return;
     const fr = await this.ctx.storage.list<number>({ prefix: 'fr:' });
     for (const key of fr.keys()) {
@@ -380,6 +407,37 @@ export class ChatRoom extends DurableObject<Env> {
       await this.ctx.storage.setAlarm(Date.now() + ROSTER_HEAL_INTERVAL_MS);
     }
     this.loaded = true;
+  }
+
+  /**
+   * Repopulate the in-memory admin set from the shared `zeus-admin` D1 store,
+   * at most once per ADMIN_REFRESH_TTL_MS. The store is the source of truth;
+   * env.ADMINS is only a fallback. We fall back to the seed (and leave the
+   * current set untouched on a transient error) so a D1 hiccup never silently
+   * drops moderation powers mid-session.
+   */
+  private async refreshAdmins(): Promise<void> {
+    const now = Date.now();
+    if (this.adminsLoadedAt && now - this.adminsLoadedAt < ADMIN_REFRESH_TTL_MS) return;
+    this.adminsLoadedAt = now;
+
+    const db = this.env.ADMIN_DB;
+    if (!db) {
+      // No D1 bound (local dev / pre-migration): use the env.ADMINS seed.
+      this.admins = new Set(this.adminSeed);
+      return;
+    }
+    try {
+      const rows = await db
+        .prepare('SELECT callsign FROM admins WHERE disabled = 0')
+        .all<{ callsign: string }>();
+      const callsigns = (rows.results ?? []).map((r) => norm(r.callsign)).filter(Boolean);
+      // Empty store = not yet migrated; keep using the seed until it's populated.
+      this.admins = callsigns.length > 0 ? new Set(callsigns) : new Set(this.adminSeed);
+    } catch {
+      // D1 unreachable: fall back to the seed rather than dropping all admins.
+      this.admins = new Set(this.adminSeed);
+    }
   }
 
   // --- messages --------------------------------------------------------------

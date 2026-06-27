@@ -68,6 +68,7 @@ import {
   parseMeterGroupConfig,
   type MeterGroupConfig,
 } from '../components/meter-group/meterGroupConfig';
+import { useWorkspaceZoom } from '../util/use-workspace-zoom';
 import { HeroPanel } from './panels/HeroPanel';
 import { UrlEmbedPanel } from './panels/UrlEmbedPanel';
 import { LanBrowserPanel } from './panels/LanBrowserPanel';
@@ -304,6 +305,26 @@ function WorkspaceCanvas({
     ro.observe(el);
     return () => ro.disconnect();
   }, [containerRef]);
+
+  // Ctrl/⌘ + scroll-wheel zooms the workspace (the footer ZOOM cluster's
+  // gesture, usable directly over the canvas — like browser zoom but scoped to
+  // the panel grid). Native non-passive listener so preventDefault actually
+  // suppresses the browser's own Ctrl+wheel page zoom; React's onWheel is
+  // passive at the root and could not. Plain (unmodified) wheel is left alone
+  // so normal scrolling of the workspace and its panels is untouched.
+  const { stepBy: stepWorkspaceZoom } = useWorkspaceZoom();
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.deltaY === 0) return;
+      e.preventDefault();
+      stepWorkspaceZoom(e.deltaY < 0 ? 1 : -1);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [containerRef, stepWorkspaceZoom]);
 
   // Fixed-cell workspace. A column and a row are a CONSTANT pixel size, so a
   // panel never rescales when the window is resized — the core of the "hardware

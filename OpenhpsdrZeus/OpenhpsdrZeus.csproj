@@ -40,6 +40,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Zeus.Server.Hosting\Zeus.Server.Hosting.csproj" />
+    <!-- The support sidecar is a separate executable the desktop host launches
+         detached so it survives a backend crash. Referencing it co-locates
+         Zeus.SupportAgent(.exe) in this host's output dir for SupportSidecarLauncher
+         to spawn; the host does not use its types. -->
+    <ProjectReference Include="..\Zeus.SupportAgent\Zeus.SupportAgent.csproj" />
   </ItemGroup>
 
   <ItemGroup>

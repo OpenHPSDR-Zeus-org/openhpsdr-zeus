@@ -10,6 +10,10 @@ namespace Zeus.Server.Diagnostics;
 /// host's logging pipeline means the "Report a problem" button can snapshot the
 /// recent log retroactively — the ring is always being filled.
 ///
+/// When an <see cref="IDiagnosticLogFileSink"/> is supplied, the SAME redacted
+/// line is also mirrored to disk (redaction is computed once and fanned out), so
+/// the recent log survives a backend crash for the support sidecar to tail.
+///
 /// Trace/Debug are intentionally dropped to keep the (capacity-bounded) ring
 /// signal-dense. Scopes are no-ops. The underlying buffer is thread-safe, so the
 /// provider holds no per-call lock of its own.
@@ -17,15 +21,17 @@ namespace Zeus.Server.Diagnostics;
 public sealed class RingBufferLoggerProvider : ILoggerProvider
 {
     private readonly DiagnosticLogBuffer _buffer;
+    private readonly IDiagnosticLogFileSink? _fileSink;
 
-    public RingBufferLoggerProvider(DiagnosticLogBuffer buffer)
+    public RingBufferLoggerProvider(DiagnosticLogBuffer buffer, IDiagnosticLogFileSink? fileSink = null)
     {
         ArgumentNullException.ThrowIfNull(buffer);
         _buffer = buffer;
+        _fileSink = fileSink;
     }
 
     public ILogger CreateLogger(string categoryName) =>
-        new RingBufferLogger(_buffer, ShortCategory(categoryName));
+        new RingBufferLogger(_buffer, _fileSink, ShortCategory(categoryName));
 
     public void Dispose() { /* buffer is owned elsewhere (singleton); nothing to release */ }
 
@@ -42,11 +48,13 @@ public sealed class RingBufferLoggerProvider : ILoggerProvider
         private static readonly IDisposable NoopScope = new NoopDisposable();
 
         private readonly DiagnosticLogBuffer _buffer;
+        private readonly IDiagnosticLogFileSink? _fileSink;
         private readonly string _shortCategory;
 
-        public RingBufferLogger(DiagnosticLogBuffer buffer, string shortCategory)
+        public RingBufferLogger(DiagnosticLogBuffer buffer, IDiagnosticLogFileSink? fileSink, string shortCategory)
         {
             _buffer = buffer;
+            _fileSink = fileSink;
             _shortCategory = shortCategory;
         }
 
@@ -75,7 +83,11 @@ public sealed class RingBufferLoggerProvider : ILoggerProvider
                 ? $"{ts} {Level(logLevel)} {_shortCategory} {message}"
                 : $"{ts} {Level(logLevel)} {_shortCategory} {message} {exception}";
 
-            _buffer.Add(Redaction.Scrub(line));
+            // Redact once, fan out to both the in-memory ring and (when present)
+            // the on-disk sink so the same scrubbed line lands in both.
+            string redacted = Redaction.Scrub(line);
+            _buffer.Add(redacted);
+            _fileSink?.Append(redacted);
         }
 
         private static string Level(LogLevel level) => level switch
