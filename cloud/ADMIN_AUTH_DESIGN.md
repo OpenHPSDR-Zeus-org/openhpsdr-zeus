@@ -133,3 +133,13 @@ npm run deploy
 #   curl -sX POST .../admin/tokens -H 'Authorization: Bearer <session>' \
 #     -d '{"label":"agent"}'                                   # -> agent token (shown once)
 ```
+
+## Agent-facing consumer: `tools/zeus-support-cli` (Phase 4b)
+
+The non-interactive CLI in [`tools/zeus-support-cli`](../tools/zeus-support-cli)
+is the reference *consumer* of this admin surface. It wraps the curl flow above
+(`login` → `token mint`), lists consented online operators (`presence`), requests
+a read-only diagnostics session (`request`), and runs the full
+request → support-WS → WebRTC → `api`/`log` data-channel `pull`. It reads its
+Bearer token from `ZEUS_ADMIN_TOKEN` and writes no secret to disk. It changes no
+broker code — see that tool's README for usage and the agent-token flow.
