@@ -81,6 +81,19 @@ public static class PrefsDbPath
     // Full path of the active rolling runtime log file.
     public static string AppLogPath() => Path.Combine(LogDir(), "zeus-app.log");
 
+    // Directory for support-sidecar artifacts: the per-PID clean-exit markers the
+    // backend drops at a deliberate shutdown and the crash records the sidecar
+    // writes when the backend dies unexpectedly. Same ZEUS_PREFS_PATH isolation as
+    // the logs so tests/dev never touch the operator's real data dir.
+    public static string CrashDir()
+    {
+        var env = Environment.GetEnvironmentVariable("ZEUS_PREFS_PATH");
+        var dir = string.IsNullOrEmpty(env)
+            ? DataDir
+            : (Path.GetDirectoryName(Path.GetFullPath(env)) ?? DataDir);
+        return Path.Combine(dir, "crashes");
+    }
+
     // Relative path (under DataDir) of the active profile. Reads the pointer
     // file; falls back to the legacy zeus-prefs.db when the pointer is absent,
     // unreadable, or names a file that no longer exists.
