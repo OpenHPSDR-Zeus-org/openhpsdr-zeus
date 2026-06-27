@@ -825,7 +825,12 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   shiftTxDbRange: (deltaDb) => {
     const { txDbMin, txDbMax } = get();
     const { min: nextMin, max: nextMax } = clampShift(txDbMin, txDbMax, deltaDb);
-    set({ txDbMin: nextMin, txDbMax: nextMax });
+    // Dragging the TX scale is a manual window edit — it must take over from
+    // auto-range, exactly like setTxDbRange. Without this the per-frame
+    // updateTxAutoRange EMA fights the drag and snaps it back every frame, so
+    // the scale appears frozen during voice MOX. (Thetis parity: TX uses a
+    // fixed manual threshold, not an auto fit.)
+    set({ txAutoRange: false, txDbMin: nextMin, txDbMax: nextMax });
     writeSavedTxRange(nextMin, nextMax);
     scheduleDbRangeSave();
   },
@@ -839,7 +844,13 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   shiftWfTxDbRange: (deltaDb) => {
     const { wfTxDbMin, wfTxDbMax } = get();
     const { min: nextMin, max: nextMax } = clampShift(wfTxDbMin, wfTxDbMax, deltaDb);
-    set({ wfTxDbMin: nextMin, wfTxDbMax: nextMax });
+    // Dragging the TX waterfall scale is a manual window edit — it must take
+    // over from auto-range, exactly like setWfTxDbRange. Without this the
+    // per-frame updateTxAutoRange EMA fights the drag and snaps it back every
+    // frame, so the waterfall slider appears to do nothing during voice MOX.
+    // (Thetis parity: the TX waterfall follows the operator's slider, not an
+    // auto fit.)
+    set({ txAutoRange: false, wfTxDbMin: nextMin, wfTxDbMax: nextMax });
     writeSavedWfTxRange(nextMin, nextMax);
     scheduleDbRangeSave();
   },
