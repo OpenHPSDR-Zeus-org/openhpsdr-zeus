@@ -104,6 +104,26 @@ public static class ZeusHost
             WebRootPath = string.IsNullOrWhiteSpace(webRoot) ? null : webRoot,
         });
 
+        // A peripheral BackgroundService that throws on startup must NEVER take
+        // the whole host down. The shared zeus-prefs.db is opened by ~20 stores
+        // on a Connection=shared LiteDatabase; when several BackgroundServices
+        // (G2 front panel, KiwiSDR, remote broker, …) first query it at the same
+        // instant during boot, one open can lose the file-open race and surface a
+        // transient "used by another process" IOException. Under the .NET default
+        // (BackgroundServiceExceptionBehavior.StopHost) that single transient read
+        // failure fires ApplicationStopping, which cancels Kestrel's BindAsync and
+        // the desktop user sees only a useless "A task was canceled" dialog with
+        // the radio UI never opening. Ignore keeps the host up and the radio UI
+        // loads; the failing service is still logged as "BackgroundService
+        // failed". Same "a saved setting must never block launch" rule as the
+        // #635/#637 prefs-corruption guard and the NativeMicCapture
+        // background-open fix. (The deeper fix — serialising the concurrent
+        // prefs-DB opens so those peripheral services reliably initialise — is
+        // tracked separately.)
+        builder.Services.Configure<Microsoft.Extensions.Hosting.HostOptions>(o =>
+            o.BackgroundServiceExceptionBehavior =
+                Microsoft.Extensions.Hosting.BackgroundServiceExceptionBehavior.Ignore);
+
         // Emit enums as strings on the wire ("USB", not 1) per doc 04 §3. The
         // converter also accepts ordinal integers on read, so older clients that
         // POST numeric mode values keep working.
