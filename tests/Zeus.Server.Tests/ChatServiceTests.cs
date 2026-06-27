@@ -189,6 +189,18 @@ public class ChatServiceTests : IDisposable
     }
 
     [Fact]
+    public void ParseRoster_ReadsAdminFlag_DefaultingFalse()
+    {
+        using var doc = JsonDocument.Parse(
+            """{"t":"roster","roster":[{"callsign":"N9WAR","admin":true,"since":1},{"callsign":"EI6LF","since":2}]}""");
+
+        var roster = ChatService.ParseRoster(doc.RootElement, "roster");
+        Assert.NotNull(roster);
+        Assert.True(roster![0].Admin);  // explicit admin:true
+        Assert.False(roster[1].Admin);  // absent → default false
+    }
+
+    [Fact]
     public void ParseRoster_ReturnsNull_WhenPropertyMissingOrNotArray()
     {
         using var doc = JsonDocument.Parse("""{"t":"welcome"}""");
@@ -304,11 +316,27 @@ public class ChatServiceTests : IDisposable
         var status = chat.GetStatus();
         Assert.False(status.Enabled);   // opt-in default OFF
         Assert.False(status.Connected); // worker never ran a connection
+        Assert.False(status.SeeAllFreq); // admin see-all override default OFF
         Assert.Equal(ChatService.DefaultRelayUrl, status.RelayUrl);
 
         // Send must fail with 409-mapped exception when not connected.
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => chat.SendMessageAsync("hello", null, null, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task SetSeeAllFreq_ReflectsInStatus_WhenDisconnected()
+    {
+        using var chat = BuildChat();
+
+        // Toggling the override while offline persists the session flag and shows
+        // in status (no relay frame is sent — there's no socket), so the admin
+        // console reflects their choice immediately.
+        await chat.SetSeeAllFreqAsync(true, CancellationToken.None);
+        Assert.True(chat.GetStatus().SeeAllFreq);
+
+        await chat.SetSeeAllFreqAsync(false, CancellationToken.None);
+        Assert.False(chat.GetStatus().SeeAllFreq);
     }
 
     [Fact]

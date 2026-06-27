@@ -36,6 +36,10 @@ interface Attachment {
   status?: PresenceStatus;
   /** Whether this operator's freq may ever be shared (eye toggle). Default true. */
   freqPublic?: boolean;
+  /** Admin-only "see all frequencies" override: while true, this connection's
+   *  roster carries everyone's freq regardless of friendship / eye toggle.
+   *  Ignored for non-admins. Default false. */
+  seeAllFreq?: boolean;
   since: number;
   // Per-connection message rate-limit window (fixed window).
   rlWindowStart?: number;
@@ -81,7 +85,9 @@ function norm(callsign: string): string {
  *
  * Frequency is private: an operator's freq is only included in another
  * operator's roster when (a) they are mutual friends AND (b) the owner has not
- * hidden their frequency via the eye toggle (freqPublic=false).
+ * hidden their frequency via the eye toggle (freqPublic=false). The one
+ * exception is an admin who has armed the per-connection "see all" override
+ * (admin_see_all), which reveals every operator's freq to that admin alone.
  */
 export class ChatRoom extends DurableObject<Env> {
   // Friend graph (callsign -> related callsigns).
@@ -170,7 +176,7 @@ export class ChatRoom extends DurableObject<Env> {
         ws.serializeAttachment(next);
         this.send(ws, {
           t: 'welcome',
-          self: toOperator(next),
+          self: toOperator(next, true, this.admins.has(callsign)),
           roster: this.rosterFor(callsign),
           isAdmin: this.admins.has(callsign),
         });
@@ -272,6 +278,14 @@ export class ChatRoom extends DurableObject<Env> {
         return;
       case 'admin_list_bans':
         if (this.isAdmin(me)) this.sendBans(ws);
+        return;
+      case 'admin_see_all':
+        if (this.isAdmin(me)) {
+          ws.serializeAttachment({ ...att, seeAllFreq: !!msg.on });
+          // Only the toggling admin's own view changes — re-push their roster
+          // with freqs now un/revealed; everyone else's roster is untouched.
+          this.send(ws, { t: 'roster', roster: this.rosterFor(me) });
+        }
         return;
 
       case 'ping':
@@ -745,12 +759,18 @@ export class ChatRoom extends DurableObject<Env> {
       const cur = best.get(att.callsign);
       if (!cur || attRank(att) > attRank(cur)) best.set(att.callsign, att);
     }
+    // Admin "see all" override: an admin viewer who has armed it sees every
+    // operator's frequency, regardless of friendship or the owner's eye toggle.
+    // Gated on the viewer actually being an admin so a stale/forged attachment
+    // flag can never widen a non-admin's view.
+    const seeAll = this.admins.has(viewer) && best.get(viewer)?.seeAllFreq === true;
     const out: Operator[] = [];
     for (const att of best.values()) {
       const canSeeFreq =
         att.callsign === viewer ||
+        seeAll ||
         (att.freqPublic !== false && (fset?.has(att.callsign) ?? false));
-      out.push(toOperator(att, canSeeFreq));
+      out.push(toOperator(att, canSeeFreq, this.admins.has(att.callsign)));
     }
     out.sort((a, b) => a.callsign.localeCompare(b.callsign));
     return out;
@@ -815,7 +835,7 @@ function attRank(a: Attachment): number {
   return helloed * 1e15 + (a.since ?? 0);
 }
 
-function toOperator(a: Attachment, includeFreq = true): Operator {
+function toOperator(a: Attachment, includeFreq = true, isAdmin = false): Operator {
   return {
     callsign: a.callsign,
     grid: a.grid,
@@ -823,5 +843,6 @@ function toOperator(a: Attachment, includeFreq = true): Operator {
     mode: a.mode,
     status: a.status,
     since: a.since,
+    admin: isAdmin || undefined,
   };
 }
