@@ -160,6 +160,38 @@ describe('SettingsView — Audio Tools', () => {
     expect(tabs).toContain('AUDIO TOOLS');
   });
 
+  it('lists the ZEUS DIGITAL tab', async () => {
+    seed();
+    await act(async () => {
+      root.render(<SettingsView onClose={() => {}} />);
+      await flushEffects();
+    });
+    const tabs = Array.from(
+      container.querySelectorAll('[role="tablist"] button'),
+    ).map((b) => b.textContent?.trim() ?? '');
+    expect(tabs).toContain('ZEUS DIGITAL');
+  });
+
+  it('mounts the Zeus Digital panel when its tab is selected', async () => {
+    seed();
+    await act(async () => {
+      root.render(<SettingsView onClose={() => {}} />);
+      await flushEffects();
+    });
+    const tabButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="tablist"] button'),
+    );
+    const digitalTab = tabButtons.find((b) => b.textContent?.trim() === 'ZEUS DIGITAL');
+    expect(digitalTab).toBeDefined();
+    await act(async () => {
+      digitalTab!.click();
+      await flushEffects();
+    });
+    // The panel's GLOBAL identity field + per-mode selector prove it mounted.
+    expect(container.textContent).toContain('My Call');
+    expect(container.textContent).toContain('Editing settings for');
+  });
+
   it('shows CFC inside the Audio Tools tab', async () => {
     seed();
     await act(async () => {

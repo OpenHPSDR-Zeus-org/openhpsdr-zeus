@@ -140,19 +140,24 @@ public static class ZeusEndpoints
                 return Results.Ok(OperatorIdentityResolver.Status(store, qrz));
             });
 
-        // FT8/FT4 workspace behaviour preferences (auto-seq, decode depth, macros,
-        // logging). Persisted server-side so they survive desktop restarts. Pure
-        // behaviour/UI — none of these transmit; TX still requires an explicit arm.
+        // FT8/FT4/WSPR workspace behaviour + display preferences (auto-seq, decode
+        // depth, macros, logging, waterfall/display). Persisted server-side PER
+        // MODE so each digital mode remembers its own config across desktop
+        // restarts. The `mode` query param selects FT8/FT4/WSPR; omitted → FT8
+        // (back-compat with the pre-per-mode mode-less caller). Pure behaviour/UI —
+        // none of these transmit; TX still requires an explicit arm.
         app.MapGet("/api/ft8/settings",
-            (Ft8SettingsStore store) => Results.Ok(store.Get()));
+            (string? mode, Ft8SettingsStore store) =>
+                Results.Ok(store.Get(Ft8SettingsStore.NormalizeMode(mode))));
 
         app.MapPost("/api/ft8/settings",
-            (Zeus.Contracts.Ft8Settings body, Ft8SettingsStore store) =>
+            (Zeus.Contracts.Ft8Settings body, string? mode, Ft8SettingsStore store) =>
             {
-                var saved = store.Set(body);
+                var m = Ft8SettingsStore.NormalizeMode(mode);
+                var saved = store.Set(m, body);
                 log.LogInformation(
-                    "api.ft8.settings autoseq={Auto} passes={Passes} autolog={Log}",
-                    saved.AutoSequence, saved.DecodePasses, saved.AutoLog);
+                    "api.ft8.settings mode={Mode} autoseq={Auto} passes={Passes} autolog={Log}",
+                    m, saved.AutoSequence, saved.DecodePasses, saved.AutoLog);
                 return Results.Ok(saved);
             });
 

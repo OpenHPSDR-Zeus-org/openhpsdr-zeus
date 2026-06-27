@@ -5,11 +5,15 @@
 //                         Douglas J. Cerrato (KB2UKA),
 //                         Christian Suarez (N9WAR), and contributors.
 //
-// Ft8SettingsStore — persists the FT8/FT4 workspace behaviour preferences
-// (Ft8Settings) in a single-row LiteDB collection sharing zeus-prefs.db,
-// mirroring SpottingSettingsStore. First run (no row) returns the Ft8Settings
-// defaults, which match the current pre-settings behaviour exactly. These are
-// behaviour/UI knobs only — none transmit; TX still requires an explicit arm.
+// Ft8SettingsStore — persists the FT8/FT4/WSPR workspace behaviour + display
+// preferences (Ft8Settings) PER MODE in a LiteDB collection sharing
+// zeus-prefs.db, mirroring SpottingSettingsStore. Each digital mode (FT8, FT4,
+// WSPR) keeps its OWN row keyed by Mode; first run (no row) returns the
+// Ft8Settings defaults, which match the current pre-settings behaviour exactly.
+// A legacy single, un-keyed row written before per-mode keying is migrated
+// in place to the FT8 row so no operator config is lost. These are
+// behaviour/UI/display knobs only — none transmit; TX still requires an
+// explicit arm.
 
 using LiteDB;
 using Zeus.Contracts;
@@ -17,11 +21,20 @@ using Zeus.Contracts;
 namespace Zeus.Server;
 
 /// <summary>
-/// Reads/writes the single <see cref="Ft8Settings"/> row. Thread-safe; values are
-/// normalized on write (offset/passes clamped, macros trimmed/capped).
+/// Reads/writes one <see cref="Ft8Settings"/> row PER digital mode (FT8/FT4/WSPR).
+/// Thread-safe; values are normalized on write (offset/passes clamped, macros
+/// trimmed/capped, waterfall/display bounded). The legacy single un-keyed row is
+/// adopted as the FT8 row on first access so upgrades preserve the operator's
+/// existing FT8 config.
 /// </summary>
 public sealed class Ft8SettingsStore : IDisposable
 {
+    /// <summary>Mode used when the caller omits one (back-compat with the old
+    /// mode-less endpoint and the legacy single-row migration target).</summary>
+    public const string DefaultMode = "FT8";
+
+    private static readonly string[] ValidModes = { "FT8", "FT4", "WSPR" };
+
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<Ft8SettingsEntry> _entries;
     private readonly ILogger<Ft8SettingsStore> _log;
@@ -41,56 +54,104 @@ public sealed class Ft8SettingsStore : IDisposable
         _log.LogInformation("Ft8SettingsStore initialized at {Path}", dbPath);
     }
 
-    /// <summary>The saved settings (normalized), or the defaults if none.</summary>
-    public Ft8Settings Get()
+    /// <summary>Whitelist a mode token (case-insensitive); unknown → FT8.</summary>
+    public static string NormalizeMode(string? mode)
     {
+        if (string.IsNullOrWhiteSpace(mode)) return DefaultMode;
+        var m = mode.Trim().ToUpperInvariant();
+        return Array.IndexOf(ValidModes, m) >= 0 ? m : DefaultMode;
+    }
+
+    /// <summary>The default-mode (FT8) settings — back-compat with the
+    /// mode-less endpoint.</summary>
+    public Ft8Settings Get() => Get(DefaultMode);
+
+    /// <summary>The saved settings for <paramref name="mode"/> (normalized), or
+    /// the defaults if that mode has no row yet.</summary>
+    public Ft8Settings Get(string mode)
+    {
+        var m = NormalizeMode(mode);
         lock (_sync)
         {
-            var e = _entries.FindAll().FirstOrDefault();
+            var e = FindEntry(m);
             if (e is null) return new Ft8Settings();
-            return new Ft8Settings(
-                AutoSequence: e.AutoSequence,
-                CallFirst: e.CallFirst,
-                HoldTxFreq: e.HoldTxFreq,
-                DisableTxAfter73: e.DisableTxAfter73,
-                DefaultTxSlot: e.DefaultTxSlot,
-                DefaultTxOffsetHz: e.DefaultTxOffsetHz,
-                Rr73InsteadOfRrr: e.Rr73InsteadOfRrr,
-                SkipGrid: e.SkipGrid,
-                CallerMaxRetries: e.CallerMaxRetries,
-                CqMessage: e.CqMessage ?? "CQ",
-                CqDxMessage: e.CqDxMessage ?? "CQ DX",
-                FreeTextMacro: e.FreeTextMacro ?? "",
-                DecodePasses: e.DecodePasses,
-                ShowOnlyCq: e.ShowOnlyCq,
-                HideWorkedBefore: e.HideWorkedBefore,
-                AutoLog: e.AutoLog,
-                PromptBeforeLog: e.PromptBeforeLog,
-                ClearDxAfterLog: e.ClearDxAfterLog,
-                ReportToComment: e.ReportToComment).Normalized();
+            return ToSettings(e).Normalized();
         }
     }
 
-    /// <summary>Persist settings (normalized) and return what was stored.</summary>
-    public Ft8Settings Set(Ft8Settings settings)
+    /// <summary>Persist default-mode (FT8) settings — back-compat overload.</summary>
+    public Ft8Settings Set(Ft8Settings settings) => Set(DefaultMode, settings);
+
+    /// <summary>Persist settings (normalized) for <paramref name="mode"/> and
+    /// return what was stored. Each mode is an independent row.</summary>
+    public Ft8Settings Set(string mode, Ft8Settings settings)
     {
+        var m = NormalizeMode(mode);
         var s = settings.Normalized();
         lock (_sync)
         {
-            var existing = _entries.FindAll().FirstOrDefault();
+            var existing = FindEntry(m);
             var nowUtc = DateTime.UtcNow;
             if (existing is null)
             {
-                _entries.Insert(FromSettings(new Ft8SettingsEntry(), s, nowUtc));
+                var e = new Ft8SettingsEntry { Mode = m };
+                FromSettings(e, s, nowUtc);
+                _entries.Insert(e);
             }
             else
             {
+                // Re-stamp the row's Mode (a legacy row already hydrates as "FT8";
+                // this also future-proofs against any partially-written row).
+                existing.Mode = m;
                 FromSettings(existing, s, nowUtc);
                 _entries.Update(existing);
             }
         }
         return s;
     }
+
+    // The collection holds at most one row per mode (≤3), so an in-memory scan
+    // is trivially cheap and avoids LiteDB query-translation edge cases around
+    // null/missing Mode on legacy rows.
+    //
+    // Legacy single-row migration: a row written before per-mode keying has no
+    // Mode field in the BSON document. LiteDB leaves fields missing from the
+    // document at their C# initializer value, and Ft8SettingsEntry.Mode
+    // initializes to DefaultMode ("FT8") — so a legacy row hydrates with
+    // Mode == "FT8" and is matched here by the ordinary exact-match lookup, with
+    // no separate fallback branch needed. (Keep the Mode initializer at "FT8"
+    // for this to hold; do not change it to null without restoring a fallback.)
+    private Ft8SettingsEntry? FindEntry(string mode) =>
+        _entries.FindAll().FirstOrDefault(
+            e => string.Equals(e.Mode, mode, StringComparison.OrdinalIgnoreCase));
+
+    private static Ft8Settings ToSettings(Ft8SettingsEntry e) => new(
+        AutoSequence: e.AutoSequence,
+        CallFirst: e.CallFirst,
+        HoldTxFreq: e.HoldTxFreq,
+        DisableTxAfter73: e.DisableTxAfter73,
+        DefaultTxSlot: e.DefaultTxSlot,
+        DefaultTxOffsetHz: e.DefaultTxOffsetHz,
+        Rr73InsteadOfRrr: e.Rr73InsteadOfRrr,
+        SkipGrid: e.SkipGrid,
+        CallerMaxRetries: e.CallerMaxRetries,
+        CqMessage: e.CqMessage ?? "CQ",
+        CqDxMessage: e.CqDxMessage ?? "CQ DX",
+        FreeTextMacro: e.FreeTextMacro ?? "",
+        DecodePasses: e.DecodePasses,
+        ShowOnlyCq: e.ShowOnlyCq,
+        HideWorkedBefore: e.HideWorkedBefore,
+        AutoLog: e.AutoLog,
+        PromptBeforeLog: e.PromptBeforeLog,
+        ClearDxAfterLog: e.ClearDxAfterLog,
+        ReportToComment: e.ReportToComment,
+        WfDbMin: e.WfDbMin,
+        WfDbMax: e.WfDbMax,
+        Palette: e.Palette ?? Ft8Settings.DefaultPalette,
+        Rbw: e.Rbw ?? Ft8Settings.DefaultRbw,
+        Smoothing: e.Smoothing,
+        Zoom: e.Zoom,
+        SpanHz: e.SpanHz);
 
     private static Ft8SettingsEntry FromSettings(Ft8SettingsEntry e, Ft8Settings s, DateTime nowUtc)
     {
@@ -113,6 +174,13 @@ public sealed class Ft8SettingsStore : IDisposable
         e.PromptBeforeLog = s.PromptBeforeLog;
         e.ClearDxAfterLog = s.ClearDxAfterLog;
         e.ReportToComment = s.ReportToComment;
+        e.WfDbMin = s.WfDbMin;
+        e.WfDbMax = s.WfDbMax;
+        e.Palette = s.Palette;
+        e.Rbw = s.Rbw;
+        e.Smoothing = s.Smoothing;
+        e.Zoom = s.Zoom;
+        e.SpanHz = s.SpanHz;
         e.UpdatedUtc = nowUtc;
         return e;
     }
@@ -123,6 +191,13 @@ public sealed class Ft8SettingsStore : IDisposable
 public sealed class Ft8SettingsEntry
 {
     public int Id { get; set; }
+    /// <summary>Digital mode this row belongs to ("FT8"|"FT4"|"WSPR"). The
+    /// initializer is the migration mechanism: a legacy pre-per-mode row has NO
+    /// Mode field in its BSON document, and LiteDB leaves missing fields at their
+    /// C# initializer value, so such a row hydrates as "FT8" and is adopted as
+    /// the FT8 row. Do not change this initializer to null without restoring the
+    /// legacy fallback in <see cref="Ft8SettingsStore.FindEntry"/>.</summary>
+    public string? Mode { get; set; } = Ft8SettingsStore.DefaultMode;
     public bool AutoSequence { get; set; } = true;
     public bool CallFirst { get; set; }
     public bool HoldTxFreq { get; set; }
@@ -135,12 +210,23 @@ public sealed class Ft8SettingsEntry
     public string? CqMessage { get; set; } = "CQ";
     public string? CqDxMessage { get; set; } = "CQ DX";
     public string? FreeTextMacro { get; set; } = "";
-    public int DecodePasses { get; set; } = 2;
+    // Match the contract default (3 passes = Deep). The old 2 here only ever bit
+    // a partially-written row; aligning it removes that latent mismatch.
+    public int DecodePasses { get; set; } = 3;
     public bool ShowOnlyCq { get; set; }
     public bool HideWorkedBefore { get; set; }
     public bool AutoLog { get; set; } = true;
     public bool PromptBeforeLog { get; set; }
     public bool ClearDxAfterLog { get; set; } = true;
     public bool ReportToComment { get; set; }
+    // Waterfall / display (per-mode). Defaults mirror the contract so a row
+    // written before these fields existed deserialises to sane values.
+    public double WfDbMin { get; set; } = Ft8Settings.DefaultWfDbMin;
+    public double WfDbMax { get; set; } = Ft8Settings.DefaultWfDbMax;
+    public string? Palette { get; set; } = Ft8Settings.DefaultPalette;
+    public string? Rbw { get; set; } = Ft8Settings.DefaultRbw;
+    public int Smoothing { get; set; } = Ft8Settings.DefaultSmoothing;
+    public double Zoom { get; set; } = Ft8Settings.DefaultZoom;
+    public int SpanHz { get; set; } = Ft8Settings.DefaultSpanHz;
     public DateTime UpdatedUtc { get; set; }
 }
