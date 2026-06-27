@@ -1142,6 +1142,35 @@
   filter: brightness(1.1);
 }
 
+/* Chat composer ghost-icon buttons (mic, paperclip). Borderless square hit
+   targets that live INSIDE the unified composer field, so they carry no chrome
+   at rest and only wash in on hover — keeps the field reading as one surface. */
+.chat-composer-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.chat-composer-icon:hover:not(:disabled) {
+  background: rgba(255,255,255,0.07);
+  color: var(--fg-0);
+}
+.chat-composer-icon:active:not(:disabled) {
+  background: rgba(255,255,255,0.04);
+}
+.chat-composer-icon:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* 4K-and-above bump. 34" ultrawide (3440 CSS px) stays under this threshold
    on purpose — buttons are already sized right there. Native-scaled 4K
    (3840 CSS px) and 5K trigger this and get larger, ergonomic buttons. */
@@ -3127,6 +3156,37 @@
 .swx--fair  { color: var(--power); border-color: var(--power); }
 .swx--poor  { color: var(--tx); border-color: var(--tx); }
 .swx--muted { color: var(--fg-2); }
+
+/* ── Active Sessions panel ─────────────────────────────────────────────── */
+.sess-panel { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+.sess-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; border-bottom: 1px solid var(--panel-border, var(--line-strong));
+  flex: 0 0 auto;
+}
+.sess-title { font-size: 11px; font-weight: 700; color: var(--accent); letter-spacing: 0.04em; }
+.sess-count {
+  font-size: 10px; font-weight: 700; color: var(--fg-1);
+  background: var(--bg-2); border: 1px solid var(--line-strong);
+  border-radius: var(--r-xs); padding: 0 6px; min-width: 18px; text-align: center;
+}
+.sess-empty { padding: 16px; color: var(--fg-2); }
+.sess-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 0; }
+.sess-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1.2fr) minmax(0, 1.4fr) 56px 64px;
+  align-items: center; gap: 8px;
+  padding: 5px 8px;
+  border-bottom: 1px dotted rgba(255,255,255,0.06);
+  font-size: 11px;
+}
+.sess-kind { display: flex; align-items: center; gap: 5px; font-weight: 700; white-space: nowrap; }
+.sess-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+.sess-addr { color: var(--fg-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess-agent { color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess-dur { color: var(--fg-1); text-align: right; }
+.sess-stream { color: var(--fg-2); text-align: right; white-space: nowrap; }
+.sess-stream.is-on { color: var(--ok); font-weight: 700; }
 
 .cs-input {
   width: 90px;
