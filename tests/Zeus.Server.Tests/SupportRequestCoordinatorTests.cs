@@ -112,6 +112,73 @@ public sealed class SupportRequestCoordinatorTests
         Assert.False(coord.Approve("req-1"));     // too late to approve
     }
 
+    // ---- L1 availability gate (remote-diag P5) -------------------------
+
+    private static (SupportRequestCoordinator coord, SupportAvailabilityStore avail, string dbPath) NewGated(bool available)
+    {
+        var clock = new TestClock(T0);
+        var grants = new SupportGrantStore(clock, TimeSpan.FromMinutes(2));
+        var dbPath = Path.Combine(Path.GetTempPath(), $"zeus-support-gate-{Guid.NewGuid():N}.db");
+        var avail = new SupportAvailabilityStore(NullLogger<SupportAvailabilityStore>.Instance, dbPath);
+        avail.Set(available, autoShareCrashes: false);
+        var coord = new SupportRequestCoordinator(
+            grants, avail, NullLogger<SupportRequestCoordinator>.Instance, clock);
+        return (coord, avail, dbPath);
+    }
+
+    private static void Cleanup(string dbPath)
+    {
+        try { if (File.Exists(dbPath)) File.Delete(dbPath); } catch { /* best effort */ }
+        try { if (File.Exists(dbPath + "-log")) File.Delete(dbPath + "-log"); } catch { /* best effort */ }
+    }
+
+    [Fact]
+    public void RegisterRequest_Refused_WhenUnavailable()
+    {
+        var (coord, _, dbPath) = NewGated(available: false);
+        try
+        {
+            PendingSupportRequest? seen = null;
+            coord.Requested += r => seen = r;
+
+            Assert.False(coord.RegisterRequest("req-1", "KB2UKA")); // gate closed
+            Assert.Null(seen);                                      // no prompt surfaced
+            Assert.Empty(coord.Pending());                          // nothing parked
+        }
+        finally { Cleanup(dbPath); }
+    }
+
+    [Fact]
+    public void RegisterRequest_Allowed_WhenAvailable()
+    {
+        var (coord, _, dbPath) = NewGated(available: true);
+        try
+        {
+            PendingSupportRequest? seen = null;
+            coord.Requested += r => seen = r;
+
+            Assert.True(coord.RegisterRequest("req-1", "KB2UKA"));
+            Assert.NotNull(seen);
+            Assert.Single(coord.Pending());
+        }
+        finally { Cleanup(dbPath); }
+    }
+
+    [Fact]
+    public void RegisterRequest_TogglingAvailability_GatesLive()
+    {
+        var (coord, avail, dbPath) = NewGated(available: true);
+        try
+        {
+            Assert.True(coord.RegisterRequest("req-1", "KB2UKA"));
+
+            // Operator turns the master switch OFF: new requests are refused.
+            avail.Set(available: false, autoShareCrashes: false);
+            Assert.False(coord.RegisterRequest("req-2", "KB2UKA"));
+        }
+        finally { Cleanup(dbPath); }
+    }
+
     private sealed class TestClock(DateTimeOffset start) : TimeProvider
     {
         private DateTimeOffset _now = start;

@@ -416,8 +416,17 @@ public static class ZeusHost
         //   • SupportWebRtcService — answers a support offer ONLY against a live
         //     grant, with a diagnostics-only allowlist + a live-log channel.
         // Inert until the operator both opts in and approves a specific request.
+        // L1 master switch (remote-diag P5): the operator's persisted opt-in to
+        // being reachable for remote diagnostics, plus the crash auto-share
+        // sub-toggle. OFF by default; gates SupportRequestCoordinator below so a
+        // request is refused outright while the operator hasn't opted in.
+        builder.Services.AddSingleton<Zeus.Server.Hosting.Support.SupportAvailabilityStore>();
         builder.Services.AddSingleton<Zeus.Server.Hosting.Support.SupportGrantStore>();
-        builder.Services.AddSingleton<Zeus.Server.Hosting.Support.SupportRequestCoordinator>();
+        builder.Services.AddSingleton<Zeus.Server.Hosting.Support.SupportRequestCoordinator>(sp =>
+            new Zeus.Server.Hosting.Support.SupportRequestCoordinator(
+                sp.GetRequiredService<Zeus.Server.Hosting.Support.SupportGrantStore>(),
+                sp.GetRequiredService<Zeus.Server.Hosting.Support.SupportAvailabilityStore>(),
+                sp.GetRequiredService<ILogger<Zeus.Server.Hosting.Support.SupportRequestCoordinator>>()));
         builder.Services.AddSingleton<Zeus.Server.Hosting.Support.SupportWebRtcService>(sp =>
             new Zeus.Server.Hosting.Support.SupportWebRtcService(
                 sp.GetRequiredService<Zeus.Server.Hosting.Support.SupportGrantStore>(),

@@ -44,6 +44,7 @@ public sealed class SupportRequestCoordinator
     public static readonly TimeSpan DefaultPendingTtl = TimeSpan.FromSeconds(90);
 
     private readonly SupportGrantStore _grants;
+    private readonly SupportAvailabilityStore? _availability;
     private readonly TimeProvider _time;
     private readonly TimeSpan _pendingTtl;
     private readonly ILogger<SupportRequestCoordinator> _log;
@@ -51,14 +52,31 @@ public sealed class SupportRequestCoordinator
 
     public SupportRequestCoordinator(
         SupportGrantStore grants,
+        SupportAvailabilityStore availability,
         ILogger<SupportRequestCoordinator> log,
         TimeProvider? timeProvider = null,
         TimeSpan? pendingTtl = null)
     {
         _grants = grants;
+        _availability = availability;
         _log = log;
         _time = timeProvider ?? TimeProvider.System;
         _pendingTtl = pendingTtl ?? DefaultPendingTtl;
+    }
+
+    // Overload retained for tests / call sites that pre-date the L1 availability
+    // gate. With no store the gate is treated as OPEN — exercising the
+    // request→Allow/Deny flow in isolation. Production always supplies the store
+    // (DI wires the gated overload), so a real radio is never reachable without
+    // the operator's explicit opt-in.
+    public SupportRequestCoordinator(
+        SupportGrantStore grants,
+        ILogger<SupportRequestCoordinator> log,
+        TimeProvider? timeProvider = null,
+        TimeSpan? pendingTtl = null)
+        : this(grants, availability: null!, log, timeProvider, pendingTtl)
+    {
+        _availability = null;
     }
 
     /// <summary>Raised when a new request arrives (the operator UI shows an Allow/Deny prompt).</summary>
@@ -78,6 +96,19 @@ public sealed class SupportRequestCoordinator
     public bool RegisterRequest(string requestId, string adminCallsign)
     {
         if (string.IsNullOrWhiteSpace(requestId)) return false;
+
+        // L1 master gate: when the operator has not opted in to remote
+        // diagnostics, an inbound request is refused outright — no grant, no
+        // prompt, nothing surfaced to the UI. This is the deny-by-default
+        // posture (ADR-0008) at the very front of the flow.
+        if (_availability is not null && !_availability.IsAvailable)
+        {
+            _log.LogInformation(
+                "support.request from {Admin} (id {RequestId}) refused — remote diagnostics not available",
+                adminCallsign ?? "", requestId);
+            return false;
+        }
+
         PruneExpired();
 
         var now = _time.GetUtcNow();

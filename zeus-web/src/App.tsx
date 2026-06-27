@@ -54,6 +54,7 @@ import {
   restorePersistedWorkspaceWindows,
 } from './layout/workspace-windows';
 import { ConfirmDialog } from './layout/ConfirmDialog';
+import { SupportSessionWatcher } from './components/SupportSessionWatcher';
 import { FreeDvWindow } from './components/FreeDvWindow';
 import { AfGainSlider } from './components/AfGainSlider';
 import { AgcSlider } from './components/AgcSlider';
@@ -1223,6 +1224,7 @@ export default function App() {
       <UpdatePrompt show={updateAvailable} onUpdate={installUpdate} />
       <ReportProblemModal />
       <ProfileOverlayHost />
+      <SupportSessionWatcher />
       {remoteMode && <RemoteGate />}
     </div>
     </SpectrumWheelActionsContext.Provider>

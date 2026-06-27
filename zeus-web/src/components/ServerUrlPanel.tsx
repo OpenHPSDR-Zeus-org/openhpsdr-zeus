@@ -14,6 +14,10 @@ import {
 } from '../serverUrl';
 import { useCapabilitiesStore } from '../state/capabilities-store';
 import { useQrzStore } from '../state/qrz-store';
+import {
+  getSupportAvailability,
+  setSupportAvailability,
+} from '../api/support';
 
 // Settings tab: lets the operator point a Capacitor / standalone build at a
 // specific Zeus.Server on their LAN (e.g. https://192.168.1.23:6443). Browser
@@ -254,7 +258,143 @@ export function ServerUrlPanel() {
 
       <RemotePasswordSection />
 
+      <RemoteDiagnosticsSection />
+
       <RemoteQrSection />
+    </div>
+  );
+}
+
+// Remote Diagnostics master switch (remote-diag P5). OFF by default. When on, a
+// maintainer can REQUEST a read-only diagnostics session; each request still
+// needs the operator's explicit Allow (the in-app prompt). They see logs +
+// diagnostics only — never radio control, never transmit. The crash auto-share
+// sub-toggle pre-authorises attaching a crash report when the backend dies.
+function RemoteDiagnosticsSection() {
+  const [available, setAvailable] = useState<boolean | null>(null);
+  const [autoShare, setAutoShare] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    (async () => {
+      try {
+        const s = await getSupportAvailability(ctrl.signal);
+        setAvailable(s.available);
+        setAutoShare(s.autoShareCrashes);
+      } catch {
+        if (!ctrl.signal.aborted) setAvailable(false);
+      }
+    })();
+    return () => ctrl.abort();
+  }, []);
+
+  const persist = async (next: { available: boolean; autoShareCrashes: boolean }) => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const s = await setSupportAvailability(next);
+      setAvailable(s.available);
+      setAutoShare(s.autoShareCrashes);
+    } catch (e) {
+      setNotice((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleAvailable = () =>
+    void persist({ available: !(available ?? false), autoShareCrashes: autoShare });
+  const toggleAutoShare = () =>
+    void persist({ available: available ?? false, autoShareCrashes: !autoShare });
+
+  const isOn = available === true;
+
+  return (
+    <div style={{ marginTop: 28 }}>
+      <h3
+        style={{
+          margin: '0 0 14px',
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+          color: 'var(--fg-2)',
+        }}
+      >
+        REMOTE DIAGNOSTICS
+      </h3>
+
+      <p style={{ fontSize: 12, color: 'var(--fg-2)', lineHeight: 1.5, marginTop: 0 }}>
+        Lets a Zeus maintainer <strong>request</strong> a read-only diagnostics
+        session to help troubleshoot a problem. This is off by default and is
+        separate from remote access — turning it on does not let anyone in by
+        itself. Each request still pops up an in-app prompt that <em>you</em>{' '}
+        must Allow. A maintainer can only see your logs and diagnostics; they can
+        never control your radio, change settings, or transmit.
+      </p>
+
+      <label
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          marginTop: 14,
+          cursor: busy || available === null ? 'default' : 'pointer',
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={isOn}
+          disabled={busy || available === null}
+          onChange={toggleAvailable}
+        />
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>
+          Remote Diagnostics available
+        </span>
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            color: isOn ? 'var(--accent)' : 'var(--fg-2)',
+          }}
+        >
+          {available === null ? '…' : isOn ? 'ON' : 'OFF'}
+        </span>
+      </label>
+
+      <label
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 10,
+          marginTop: 12,
+          opacity: isOn ? 1 : 0.6,
+          cursor: busy || !isOn ? 'default' : 'pointer',
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={autoShare}
+          disabled={busy || !isOn}
+          onChange={toggleAutoShare}
+          style={{ marginTop: 2 }}
+        />
+        <span style={{ fontSize: 12, color: 'var(--fg-2)', lineHeight: 1.5 }}>
+          <span style={{ fontWeight: 600, color: 'var(--fg-1)' }}>
+            Auto-share crash reports
+          </span>
+          <br />
+          If Zeus crashes, allow a crash report (logs + diagnostics snapshot) to
+          be attached automatically so the problem can be diagnosed without you
+          re-creating it.
+        </span>
+      </label>
+
+      {notice && (
+        <div style={{ marginTop: 12, fontSize: 11, color: 'var(--tx)' }}>{notice}</div>
+      )}
     </div>
   );
 }
