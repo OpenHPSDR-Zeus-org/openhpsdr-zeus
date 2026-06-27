@@ -209,6 +209,14 @@ public sealed class RadioService : IDisposable
     // supply a byte, in which case ConnectedBoardKind falls back to OrionMkII
     // for backward compat.
     private HpsdrBoardKind _p2BoardKind = HpsdrBoardKind.Unknown;
+    // Firmware / gateware version string for the live connection, captured at
+    // connect time from the discovery reply (P1: code-version byte raw[9];
+    // P2: raw[13] + beta). Diagnostics-only — surfaced by ConnectionProbe so a
+    // "Report a problem" snapshot records the exact firmware the operator is
+    // running (it's what disambiguates an ANAN-10E and pins board-specific
+    // reports, e.g. issue #1053). Null when no discovery info was available
+    // (e.g. a forced/reclaim connect that skips the probe). Guarded by _sync.
+    private string? _connectedFirmware;
     private bool _preampOn;
     // Manual notch filters (MNF). Authoritative on the server so notches
     // survive reconnects and backend restarts (a fresh engine starts with an empty WDSP notch DB);
@@ -810,6 +818,18 @@ public sealed class RadioService : IDisposable
     }
 
     /// <summary>
+    /// Firmware / gateware version string for the live connection (e.g.
+    /// <c>"10.3"</c>), captured at connect from the discovery reply, or
+    /// <c>null</c> when no discovery info was available. Read-only; consumed by
+    /// the diagnostics ConnectionProbe so a "Report a problem" snapshot records
+    /// the exact firmware the operator is running.
+    /// </summary>
+    public string? ConnectedFirmware
+    {
+        get { lock (_sync) return _connectedFirmware; }
+    }
+
+    /// <summary>
     /// True when any backend (P1 or P2) has a live connection. Needed by
     /// TxService's MOX / TUN interlock — a G2 on P2 has no ActiveClient
     /// (Protocol1Client is null) but still wants to accept TX requests.
@@ -920,7 +940,7 @@ public sealed class RadioService : IDisposable
     }
 
     public async Task<StateDto> ConnectAsync(string endpoint, int sampleRate, CancellationToken ct = default,
-        HpsdrBoardKind discoveredKind = HpsdrBoardKind.Unknown)
+        HpsdrBoardKind discoveredKind = HpsdrBoardKind.Unknown, string? firmware = null)
     {
         if (!TryParseEndpoint(endpoint, out var ipEndpoint))
             throw new ArgumentException($"Invalid endpoint '{endpoint}'.", nameof(endpoint));
@@ -950,6 +970,8 @@ public sealed class RadioService : IDisposable
             client.AdcOverloadObserved += OnAdcOverload;
             client.Disconnected += OnClientDisconnected;
             _activeClient = client;
+            // Record the discovered firmware for the diagnostics snapshot.
+            _connectedFirmware = firmware;
             _state = _state with
             {
                 Status = ConnectionStatus.Connecting,
@@ -1012,6 +1034,16 @@ public sealed class RadioService : IDisposable
                 client.EnableHl2BandVolts = _preferredRadioStore.GetEnableHl2BandVolts();
             }
 
+            // LT2208 ADC dither / digital-output randomizer — rehydrate the
+            // persisted operator preference into the fresh client so the first
+            // Config frame carries the correct C3 bits 3/4. Skipped on HL2 (no
+            // LT2208; its bit 3 is Band Volts, seeded above). Default off, so a
+            // board the operator has never configured stays byte-identical.
+            if (client.BoardKind != HpsdrBoardKind.HermesLite2)
+            {
+                ApplyAdcOptionsToP1Client(client, client.BoardKind);
+            }
+
             // Frequency-correction factor (issue #325) — rehydrate so the
             // first tune-write on the fresh client carries the operator's
             // calibrated correction. Cheap default when no calibration has
@@ -1068,6 +1100,7 @@ public sealed class RadioService : IDisposable
         {
             client = _activeClient;
             _activeClient = null;
+            _connectedFirmware = null;
         }
 
         if (client is not null)
@@ -3082,6 +3115,23 @@ public sealed class RadioService : IDisposable
     public G2OptionsDto GetG2Options()
     {
         var options = ResolveG2AdcOptionsFor(EffectiveBoardKind, EffectiveOrionMkIIVariant);
+        // Protocol-1 LT2208 boards expose the same ADC dither/random controls,
+        // but the Thetis default is OFF (netInterface.c) and there is no RX1
+        // stepped attenuator on this path. Surfaced only when a non-HL2 P1 board
+        // is the live connection, so the shipped P2/G2 reporting is untouched.
+        if (!options.Supported && ConnectedP1SupportsAdcDitherRandom)
+        {
+            var (p1Dither, p1Random) = ResolveP1AdcOptions();
+            return new G2OptionsDto(
+                DitherEnabled: p1Dither,
+                RandomEnabled: p1Random,
+                MaxRxFreqMHz: 60.0,
+                Supported: true,
+                Rx1AttenuatorDb: 0,
+                Rx1AttenuatorMinDb: 0,
+                Rx1AttenuatorMaxDb: 31,
+                Rx1AttenuatorSupported: false);
+        }
         return new G2OptionsDto(
             DitherEnabled: _preferredRadioStore?.GetG2AdcDitherEnabled() ?? true,
             RandomEnabled: _preferredRadioStore?.GetG2AdcRandomEnabled() ?? true,
@@ -3097,7 +3147,12 @@ public sealed class RadioService : IDisposable
     {
         _preferredRadioStore?.SetG2AdcOptions(req.DitherEnabled, req.RandomEnabled, req.Rx1AttenuatorDb);
         var options = GetG2Options();
+        // Push to whichever protocol is live. ActiveClient is non-null only for
+        // Protocol 1; _p2Client only for Protocol 2 — so at most one of these
+        // does real work, and each no-ops on the board kinds it does not apply
+        // to (HL2 for P1; non-G2 for P2).
         ApplyG2AdcOptionsToP2Client(_p2Client, ConnectedBoardKind);
+        ApplyAdcOptionsToP1Client(_activeClient, ConnectedBoardKind);
         return options;
     }
 
@@ -3107,6 +3162,43 @@ public sealed class RadioService : IDisposable
         var options = ResolveG2AdcOptionsForWire(connectedBoard);
         client.SetAdcDitherRandom(options.DitherEnabled, options.RandomEnabled);
         client.SetRx1Attenuator(options.Rx1AttenuatorSupported ? options.Rx1AttenuatorDb : 0);
+    }
+
+    /// <summary>
+    /// True when a non-HL2 Protocol-1 board is the live connection. Protocol 1
+    /// is the only protocol with a live <see cref="IProtocol1Client"/>
+    /// (<see cref="ActiveClient"/>); HL2's AD9866 has no LT2208 dither/random
+    /// (its C3 bit 3 is Band Volts), so it is excluded.
+    /// </summary>
+    private bool ConnectedP1SupportsAdcDitherRandom =>
+        _activeClient is not null
+        && ConnectedBoardKind != HpsdrBoardKind.HermesLite2;
+
+    /// <summary>
+    /// Resolve the persisted LT2208 ADC dither/random with the Thetis Protocol-1
+    /// default of OFF (netInterface.c <c>adc[i].dither = adc[i].random = 0</c>).
+    /// Uses the nullable raw store getters so an operator who has only ever set
+    /// the P2/G2 controls does not inherit the P2 default-on here.
+    /// </summary>
+    private (bool DitherEnabled, bool RandomEnabled) ResolveP1AdcOptions()
+    {
+        bool dither = _preferredRadioStore?.GetG2AdcDitherEnabledRaw() ?? false;
+        bool random = _preferredRadioStore?.GetG2AdcRandomEnabledRaw() ?? false;
+        return (dither, random);
+    }
+
+    /// <summary>
+    /// Push the persisted LT2208 ADC dither/random to a live Protocol-1 client.
+    /// No-op on HL2 (no LT2208) and when no client is connected. The bits ride
+    /// the next periodic Config frame — the Config register is on the TX-tick
+    /// round-robin, so no explicit send is required. Mirrors
+    /// <see cref="ApplyG2AdcOptionsToP2Client"/> for the P1 path.
+    /// </summary>
+    public void ApplyAdcOptionsToP1Client(IProtocol1Client? client, HpsdrBoardKind connectedBoard)
+    {
+        if (client is null || connectedBoard == HpsdrBoardKind.HermesLite2) return;
+        var (dither, random) = ResolveP1AdcOptions();
+        client.SetAdcDitherRandom(dither, random);
     }
 
     /// <summary>
@@ -4053,7 +4145,8 @@ public sealed class RadioService : IDisposable
         string endpoint,
         int sampleRateHz,
         Protocol2Client? client = null,
-        HpsdrBoardKind boardKind = HpsdrBoardKind.Unknown)
+        HpsdrBoardKind boardKind = HpsdrBoardKind.Unknown,
+        string? firmware = null)
     {
         Protocol2Client? previous;
         lock (_sync)
@@ -4062,6 +4155,8 @@ public sealed class RadioService : IDisposable
             _p2Client = client;
             _p2Active = true;
             _p2BoardKind = boardKind;
+            // Record the discovered firmware for the diagnostics snapshot.
+            _connectedFirmware = firmware;
             _attOffsetDb = 0;
             _adcOverloadLevel = 0;
             _overloadSeenInWindow = false;
@@ -4108,6 +4203,7 @@ public sealed class RadioService : IDisposable
             _p2Client = null;
             _p2Active = false;
             _p2BoardKind = HpsdrBoardKind.Unknown;
+            _connectedFirmware = null;
             _attOffsetDb = 0;
             _adcOverloadLevel = 0;
             _overloadSeenInWindow = false;

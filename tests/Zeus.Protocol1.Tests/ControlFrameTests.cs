@@ -175,14 +175,91 @@ public class ControlFrameTests
     }
 
     [Fact]
-    public void ControlFrame_Preamp_On_SetsC3Bit4()
+    public void ControlFrame_Preamp_On_SetsC3Bit2_OnLt2208Board()
     {
         Span<byte> cc = stackalloc byte[5];
-        var s = BaseState() with { PreampOn = true };
+        // LT2208 board (Hermes): preamp/gain → C3 bit 2. Verified against ramdor
+        // Thetis networkproto1.c case 0 (`(rx[0].preamp << 2)`) and piHPSDR
+        // old_protocol.c (`LT2208_GAIN_ON = 0x04`). Was previously emitted at
+        // bit 4 (the RANDOM bit) — the move frees bit 4 for the randomizer.
+        var s = BaseState() with { Board = HpsdrBoardKind.Hermes, PreampOn = true };
         ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, s);
 
-        // C3[4] = preamp bit (doc 02 §4.1)
+        Assert.Equal(1 << 2, cc[3] & (1 << 2));     // preamp bit 2 set
+        Assert.Equal(0, cc[3] & (1 << 4));          // RANDOM bit 4 NOT set by preamp
+        Assert.Equal(1 << 2, cc[3]);                // only preamp; antenna ANT1, no dither/random
+    }
+
+    [Fact]
+    public void ControlFrame_Preamp_On_Hl2_SetsNoC3Bit()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        // HL2's AD9866 has no LT2208 preamp; C3 bit 2 is VNA gain and bit 4 is
+        // the FPGA PSU switching clock. The operator's preamp toggle must NOT
+        // touch C3 on HL2 (HL2 RX gain is the LNA register 0x0a). This pins the
+        // fix for the prior bug where preamp-on disabled the HL2 PSU clock.
+        var s = BaseState() with { PreampOn = true }; // BaseState board = HL2
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, s);
+
+        Assert.Equal(0, cc[3]);
+    }
+
+    [Fact]
+    public void ControlFrame_AdcDither_On_SetsC3Bit3_OnLt2208Board()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        // LT2208 ADC dither → C3 bit 3 (Thetis networkproto1.c case 0
+        // `(adc[0].dither << 3)`; piHPSDR `LT2208_DITHER_ON = 0x08`).
+        var s = BaseState() with { Board = HpsdrBoardKind.Hermes, AdcDitherEnabled = true };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, s);
+
+        Assert.Equal(1 << 3, cc[3] & (1 << 3));
+        Assert.Equal(1 << 3, cc[3]); // only dither; no random/preamp/antenna
+    }
+
+    [Fact]
+    public void ControlFrame_AdcRandom_On_SetsC3Bit4_OnLt2208Board()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        // LT2208 ADC randomizer → C3 bit 4 (Thetis `(adc[0].random << 4)`;
+        // piHPSDR `LT2208_RANDOM_ON = 0x10`).
+        var s = BaseState() with { Board = HpsdrBoardKind.Hermes, AdcRandomEnabled = true };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, s);
+
         Assert.Equal(1 << 4, cc[3] & (1 << 4));
+        Assert.Equal(1 << 4, cc[3]); // only random; no dither/preamp/antenna
+    }
+
+    [Fact]
+    public void ControlFrame_AdcDitherRandomAndPreamp_CoexistOnC3()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        // Preamp (bit 2), dither (bit 3) and random (bit 4) are independent
+        // bits and must coexist — this is the regression guard for the old
+        // preamp/random collision at bit 4.
+        var s = BaseState() with
+        {
+            Board = HpsdrBoardKind.Hermes,
+            PreampOn = true,
+            AdcDitherEnabled = true,
+            AdcRandomEnabled = true,
+        };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, s);
+
+        Assert.Equal((1 << 2) | (1 << 3) | (1 << 4), cc[3]);
+    }
+
+    [Fact]
+    public void ControlFrame_AdcDitherRandom_On_Hl2_DoesNotTouchC3()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        // Defence in depth: even if dither/random are somehow set on an HL2
+        // state, the wire layer must not light C3 bits 3/4 there — bit 3 is
+        // reserved for Band Volts (off here) and HL2 has no LT2208.
+        var s = BaseState() with { AdcDitherEnabled = true, AdcRandomEnabled = true };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, s);
+
+        Assert.Equal(0, cc[3]);
     }
 
     [Fact]
@@ -352,6 +429,42 @@ public class ControlFrameTests
         Span<byte> cc = stackalloc byte[5];
         ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.DriveFilter, client.SnapshotState());
         Assert.Equal(expectedC1, cc[1]);
+    }
+
+    [Fact]
+    public void Protocol1Client_SetAdcDitherRandom_FlowsToConfigC3_OnLt2208Board()
+    {
+        // Full client plumbing: the setter lands in SnapshotState and the
+        // Config encoder lights C3 bits 3 (dither) and 4 (random) for a
+        // non-HL2 board.
+        using var client = new Protocol1Client();
+        client.SetBoardKind(HpsdrBoardKind.Hermes);
+        client.SetAdcDitherRandom(ditherEnabled: true, randomEnabled: true);
+
+        var state = client.SnapshotState();
+        Assert.True(state.AdcDitherEnabled);
+        Assert.True(state.AdcRandomEnabled);
+
+        Span<byte> cc = stackalloc byte[5];
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, state);
+        Assert.Equal((1 << 3) | (1 << 4), cc[3]);
+    }
+
+    [Fact]
+    public void Protocol1Client_AdcDitherRandom_DefaultOff_LeavesConfigC3Clean()
+    {
+        // Default (operator never opted in) → no C3 dither/random bits, on a
+        // non-HL2 board. Guards the "byte-identical until enabled" promise.
+        using var client = new Protocol1Client();
+        client.SetBoardKind(HpsdrBoardKind.Hermes);
+
+        var state = client.SnapshotState();
+        Assert.False(state.AdcDitherEnabled);
+        Assert.False(state.AdcRandomEnabled);
+
+        Span<byte> cc = stackalloc byte[5];
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, state);
+        Assert.Equal(0, cc[3]);
     }
 
     [Fact]

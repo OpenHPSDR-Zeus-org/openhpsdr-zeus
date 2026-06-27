@@ -284,6 +284,32 @@ public sealed class PreferredRadioStore : IDisposable
         }
     }
 
+    /// <summary>
+    /// Raw (nullable) ADC dither preference — <c>null</c> when the operator has
+    /// never set it. Lets the caller apply a protocol-specific default: the
+    /// Protocol-2 G2 path defaults on (<see cref="GetG2AdcDitherEnabled"/>),
+    /// while the Protocol-1 LT2208 path defaults off (Thetis netInterface.c).
+    /// </summary>
+    public bool? GetG2AdcDitherEnabledRaw()
+    {
+        lock (_sync)
+        {
+            return _entries.FindAll().FirstOrDefault()?.G2AdcDitherEnabled;
+        }
+    }
+
+    /// <summary>
+    /// Raw (nullable) ADC randomizer preference. See
+    /// <see cref="GetG2AdcDitherEnabledRaw"/> for the default-by-protocol rule.
+    /// </summary>
+    public bool? GetG2AdcRandomEnabledRaw()
+    {
+        lock (_sync)
+        {
+            return _entries.FindAll().FirstOrDefault()?.G2AdcRandomEnabled;
+        }
+    }
+
     public int GetG2Rx1AttenuatorDb()
     {
         lock (_sync)
@@ -310,8 +336,13 @@ public sealed class PreferredRadioStore : IDisposable
                 {
                     Board = HpsdrBoardKind.Unknown,
                     OverrideDetection = false,
-                    G2AdcDitherEnabled = ditherEnabled ?? true,
-                    G2AdcRandomEnabled = randomEnabled ?? true,
+                    // Store exactly what the operator set; leave unspecified
+                    // options null so the resolver can apply the correct
+                    // default for the active protocol (P2 on / P1 off). The
+                    // shipped GetG2Adc*Enabled() getters still collapse null →
+                    // true for the P2 path, so this is byte-identical there.
+                    G2AdcDitherEnabled = ditherEnabled,
+                    G2AdcRandomEnabled = randomEnabled,
                     G2Rx1AttenuatorDb = clampedRx1Atten ?? 0,
                     UpdatedUtc = DateTime.UtcNow,
                 });

@@ -296,7 +296,17 @@ internal static class ControlFrame
         // Thetis-mi0bot networkproto1.c case 11 (`C3 = prn->user_dig_out & 0x0F`);
         // ramdor Thetis identical. HL2 only — gated at the wire layer. Default 0
         // → byte-identical to today (the 0x14 frame's C3 was previously 0).
-        byte UserDigOut = 0);
+        byte UserDigOut = 0,
+        // LT2208 ADC dither / digital-output randomizer (Config frame C3 bits 3
+        // and 4). Verified against ramdor Thetis networkproto1.c case 0
+        // (lines 453-455: `(adc[0].dither << 3) | (adc[0].random << 4)`) and
+        // piHPSDR old_protocol.c (`LT2208_DITHER_ON = 0x08`, `LT2208_RANDOM_ON =
+        // 0x10`). LT2208-based boards only — HL2's AD9866 has no dither/random
+        // and reuses C3 bit 3 as Band Volts PWM, so the wire encoder gates these
+        // off for HL2. Both default false → matches Thetis' netInterface.c init
+        // (`adc[i].dither = adc[i].random = 0`) and is byte-identical to today.
+        bool AdcDitherEnabled = false,
+        bool AdcRandomEnabled = false);
 
     /// <summary>
     /// Write the 5 C&amp;C bytes for <paramref name="register"/> given the current
@@ -606,26 +616,50 @@ internal static class ControlFrame
         byte c2 = (byte)(ocPins << 1);
         c14[1] = c2;
 
-        // C3: Atlas step attenuator [1:0], RAND [2], DITHER [3], preamp [4],
-        // RX antenna [7:5]. We leave [1:0] zero — the dedicated extended
-        // attenuator register (C0=0x14) is the single source of truth for RX
-        // attenuation on every board we target. Setting both would double
-        // up on Atlas-era gateware.
+        // C3: Atlas step attenuator [1:0], preamp [2], DITHER [3], RANDOM [4],
+        // RX antenna [6:5], RX-out [7]. We leave [1:0] zero — the dedicated
+        // extended attenuator register (C0=0x14) is the single source of truth
+        // for RX attenuation on every board we target. Setting both would double
+        // up on Atlas-era gateware. Bit positions verified against ramdor Thetis
+        // networkproto1.c case 0 (lines 453-455) and piHPSDR old_protocol.c
+        // (`LT2208_GAIN_ON = 0x04`, `LT2208_DITHER_ON = 0x08`,
+        // `LT2208_RANDOM_ON = 0x10`).
         byte c3 = 0;
-        // HL2 Band Volts PWM enable. Per
-        // docs/references/protocol-1/hermes-lite2-protocol.md line 39
-        // (`| 0x00 | [11] | Fan or Band Volts PWM (0=Fan, 1=Band Volts) |`),
-        // C3 bit 3 selects band-volts PWM on the FAN connector for external
-        // amplifier band-steering. Off by default; flipped on per-HL2 by the
-        // operator through the RADIO settings panel. The same bit reads as
-        // LT2208 DITHER on legacy HPSDR boards — Zeus never sets it for
-        // them, so the rename is purely client-side.
-        if (s.EnableHl2BandVolts) c3 |= 1 << 3;
-        if (s.PreampOn) c3 |= 1 << 4;             // Q#2: single global preamp bit for MVP.
+        if (s.Board == HpsdrBoardKind.HermesLite2)
+        {
+            // HL2 (AD9866) has no LT2208 preamp/dither/random. C3 bit 3 is the
+            // Band Volts PWM enable — per
+            // docs/references/protocol-1/hermes-lite2-protocol.md line 39
+            // (`| 0x00 | [11] | Fan or Band Volts PWM (0=Fan, 1=Band Volts) |`),
+            // it selects band-volts PWM on the FAN connector for external
+            // amplifier band-steering. The preamp / dither / random bits below
+            // are LT2208-only and are deliberately NOT written here: on HL2,
+            // C3 bit 2 = VNA RX gain and bit 4 = FPGA PSU switching clock
+            // (DATA[10] / DATA[12]). Driving bit 4 from the operator's preamp
+            // toggle (the prior behaviour) disabled the PSU clock — a latent
+            // bug; HL2 RX gain is the LNA register (0x0a), not a C3 bit.
+            if (s.EnableHl2BandVolts) c3 |= 1 << 3;
+        }
+        else
+        {
+            // LT2208 boards (Mercury / Hermes / ANAN-class on P1): preamp/gain
+            // at C3 bit 2, ADC dither at bit 3, digital-output randomizer at
+            // bit 4. Bit positions verified against ramdor Thetis
+            // networkproto1.c case 0 (lines 453-455) and piHPSDR old_protocol.c
+            // (`LT2208_GAIN_ON = 0x04`, `LT2208_DITHER_ON = 0x08`,
+            // `LT2208_RANDOM_ON = 0x10`). Preamp was previously emitted at bit 4
+            // (the RANDOM bit) — corrected here so the two no longer collide.
+            // Dither/random default off (Thetis netInterface.c init), so a board
+            // the operator has not configured stays byte-identical to before.
+            if (s.PreampOn) c3 |= 1 << 2;
+            if (s.AdcDitherEnabled) c3 |= 1 << 3;
+            if (s.AdcRandomEnabled) c3 |= 1 << 4;
+        }
         // RX-antenna relay select C3[7:5]. Routed through the shared pure helper
         // so the wire-layer HL2 clamp (single jack → ANT1) and the external-port
-        // encoder seam emit identical bytes. Co-tenant C3[3] (band-volts) and
-        // C3[4] (preamp) are already OR'd above; the helper only touches [7:5].
+        // encoder seam emit identical bytes. Co-tenant bits C3[2] (preamp), C3[3]
+        // (HL2 band-volts / LT2208 dither) and C3[4] (LT2208 random) are already
+        // OR'd above; the helper only touches [7:5].
         c3 |= EncodeRxAntennaC3Bits(s.RxAntenna, s.Board);
         c14[2] = c3;
 

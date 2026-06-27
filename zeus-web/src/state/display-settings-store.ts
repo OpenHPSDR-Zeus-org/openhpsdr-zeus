@@ -107,6 +107,7 @@ const WF_TX_STORAGE_KEY = 'zeus.display.wfTxDbRange';
 const WF_SCROLL_SPEED_STORAGE_KEY = 'zeus.display.wfScrollSpeed';
 const BAND_OVERLAY_STORAGE_KEY = 'zeus.display.bandOverlay';
 const BAND_EDGE_ALERT_STORAGE_KEY = 'zeus.display.bandEdgeAlert';
+const CHAT_ROSTER_OVERLAY_STORAGE_KEY = 'zeus.display.chatRosterOverlay';
 
 // Legacy localStorage keys — pre-server-side storage. Read once on first
 // load to migrate the operator's existing image / colour up to the backend,
@@ -465,8 +466,13 @@ export type DisplaySettingsState = {
   // Issue #846: short audible tone when the VFO crosses from in-licence into
   // out-of-licence (or into a band gap). Mirrors the alarm Icoms ship with.
   bandEdgeAlertEnabled: boolean;
+  // Paint connected ZeusChat operators (callsign + transmit dot) onto the
+  // panadapter at the frequency they're tuned to. Local-only display
+  // preference; the overlay itself lives in components/ChatRosterOverlay.tsx.
+  showChatRosterOverlay: boolean;
   setShowBandOverlay: (v: boolean) => void;
   setBandEdgeAlertEnabled: (v: boolean) => void;
+  setShowChatRosterOverlay: (v: boolean) => void;
   setPanBackground: (v: PanBackgroundMode) => Promise<void>;
   setBackgroundImage: (dataUrl: string | null) => Promise<boolean>;
   setBackgroundImageFit: (v: BackgroundImageFit) => Promise<void>;
@@ -552,6 +558,7 @@ const initialWfTxRange = readSavedWfTxRange();
 const initialWaterfallScrollSpeed = readSavedWaterfallScrollSpeed();
 const initialShowBandOverlay = readBoolFlag(BAND_OVERLAY_STORAGE_KEY, true);
 const initialBandEdgeAlertEnabled = readBoolFlag(BAND_EDGE_ALERT_STORAGE_KEY, true);
+const initialShowChatRosterOverlay = readBoolFlag(CHAT_ROSTER_OVERLAY_STORAGE_KEY, true);
 
 export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) => ({
   autoRange: false,
@@ -593,6 +600,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   rxTraceColor: DEFAULT_RX_TRACE_COLOR,
   showBandOverlay: initialShowBandOverlay,
   bandEdgeAlertEnabled: initialBandEdgeAlertEnabled,
+  showChatRosterOverlay: initialShowChatRosterOverlay,
   setShowBandOverlay: (v) => {
     set({ showBandOverlay: v });
     writeBoolFlag(BAND_OVERLAY_STORAGE_KEY, v);
@@ -600,6 +608,10 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   setBandEdgeAlertEnabled: (v) => {
     set({ bandEdgeAlertEnabled: v });
     writeBoolFlag(BAND_EDGE_ALERT_STORAGE_KEY, v);
+  },
+  setShowChatRosterOverlay: (v) => {
+    set({ showChatRosterOverlay: v });
+    writeBoolFlag(CHAT_ROSTER_OVERLAY_STORAGE_KEY, v);
   },
   setPanBackground: async (panBackground) => {
     const prev = get().panBackground;
