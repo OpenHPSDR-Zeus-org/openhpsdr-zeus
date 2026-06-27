@@ -127,10 +127,12 @@ public class VstHostAudioPluginTests : IDisposable
         public int LoadStatus { get; set; } = VstBridgeStatus.Ok;
         public int ProcessStatus { get; set; } = VstBridgeStatus.Ok;
         public nint HandleToReturn { get; set; } = 0xABCD;
+        public int LatencyToReturn { get; set; }
 
         public bool InitCalled;
         public string? LastLoadPath;
         public int LastBlockSize;
+        public int LastSampleRate;
         public int ProcessCount;
         public int UnloadCount;
 
@@ -144,9 +146,12 @@ public class VstHostAudioPluginTests : IDisposable
         {
             LastLoadPath = path;
             LastBlockSize = blockSize;
+            LastSampleRate = sampleRate;
             handle = LoadStatus == VstBridgeStatus.Ok ? HandleToReturn : 0;
             return LoadStatus;
         }
+
+        public int GetLatencySamples(nint handle) => LatencyToReturn;
 
         public int Process(nint handle, ReadOnlySpan<float> input, Span<float> output, int frames)
         {
@@ -177,15 +182,58 @@ public class VstHostAudioPluginTests : IDisposable
     {
         private readonly int _currentBlockSize;
 
-        public StubHost(int currentBlockSize = 256)
+        private readonly int _currentSampleRate;
+
+        public StubHost(int currentBlockSize = 256, int currentSampleRate = 48000)
         {
             _currentBlockSize = currentBlockSize;
+            _currentSampleRate = currentSampleRate;
         }
 
-        public int CurrentSampleRate => 48000;
+        public int CurrentSampleRate => _currentSampleRate;
         public int CurrentChannels => 1;
         public int CurrentBlockSize => _currentBlockSize;
         public string Slot => "tx.post-leveler";
+    }
+
+    [Fact]
+    public async Task Initialize_CapturesReportedLatency()
+    {
+        // ABI v3: the plugin surfaces the bridge's reported processing latency.
+        var bridge = new FakeBridge { HandleToReturn = 0xCAFE, LatencyToReturn = 2238 };
+        var pluginDir = Path.GetTempPath();
+        var vst3Abs = Path.Combine(pluginDir, "vst3", "Fake.vst3");
+        Directory.CreateDirectory(Path.GetDirectoryName(vst3Abs)!);
+        File.WriteAllText(vst3Abs, "stub");
+        try
+        {
+            var plugin = new VstHostAudioPlugin(bridge, AudioManifest(), pluginDir, "FakeFx");
+            Assert.Equal(0, plugin.ReportedLatencySamples); // before load
+            await plugin.InitializeAudioAsync(new StubHost(currentBlockSize: 1024), default);
+            Assert.Equal(2238, plugin.ReportedLatencySamples);
+        }
+        finally { File.Delete(vst3Abs); }
+    }
+
+    [Fact]
+    public async Task Initialize_LoadsAtHostSampleRate_NotManifestRate()
+    {
+        // The plugin must run at the host's ACTUAL processing rate, not the
+        // manifest's declared rate, or its time-based DSP is detuned.
+        var bridge = new FakeBridge();
+        var pluginDir = Path.GetTempPath();
+        var vst3Abs = Path.Combine(pluginDir, "vst3", "Fake.vst3");
+        Directory.CreateDirectory(Path.GetDirectoryName(vst3Abs)!);
+        File.WriteAllText(vst3Abs, "stub");
+        try
+        {
+            // Manifest declares 48000; host reports 44100 → host wins.
+            var plugin = new VstHostAudioPlugin(bridge, AudioManifest(), pluginDir, "FakeFx");
+            await plugin.InitializeAudioAsync(
+                new StubHost(currentBlockSize: 1024, currentSampleRate: 44100), default);
+            Assert.Equal(44100, bridge.LastSampleRate);
+        }
+        finally { File.Delete(vst3Abs); }
     }
 
     [Fact]
