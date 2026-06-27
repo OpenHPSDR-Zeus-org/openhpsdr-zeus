@@ -31,6 +31,7 @@ namespace Zeus.Server.FrontPanel;
 
 public sealed class G2PanelSettingsStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<G2PanelSettingsEntry> _rows;
     private readonly ILogger<G2PanelSettingsStore> _log;
@@ -47,7 +48,8 @@ public sealed class G2PanelSettingsStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _rows = _db.GetCollection<G2PanelSettingsEntry>("g2_panel_settings");
 
         _log.LogInformation("G2PanelSettingsStore initialized at {Path}", dbPath);
@@ -95,7 +97,7 @@ public sealed class G2PanelSettingsStore : IDisposable
         Changed?.Invoke();
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class G2PanelSettingsEntry

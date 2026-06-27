@@ -26,6 +26,7 @@ public sealed class RadioSpeakerSettingsStore : IDisposable
 {
     public const bool DefaultEnabled = false;
 
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<RadioSpeakerSettingsEntry> _docs;
     private readonly ILogger<RadioSpeakerSettingsStore> _log;
@@ -46,7 +47,8 @@ public sealed class RadioSpeakerSettingsStore : IDisposable
             Directory.CreateDirectory(dir);
         }
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _docs = _db.GetCollection<RadioSpeakerSettingsEntry>("radio_speaker_settings");
 
         _log.LogInformation("RadioSpeakerSettingsStore initialized at {Path}", dbPath);
@@ -86,7 +88,7 @@ public sealed class RadioSpeakerSettingsStore : IDisposable
         if (changed) Changed?.Invoke();
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
     private void EnsureCacheLocked()
     {

@@ -23,6 +23,7 @@ namespace Zeus.Server;
 /// (only a <c>HasPassword</c> bool).</summary>
 public sealed class KiwiSettingsStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<KiwiSettingsEntry> _entries;
     private readonly ILogger<KiwiSettingsStore> _log;
@@ -39,7 +40,8 @@ public sealed class KiwiSettingsStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _entries = _db.GetCollection<KiwiSettingsEntry>("kiwi_settings");
         _log.LogInformation("KiwiSettingsStore initialized at {Path}", dbPath);
     }
@@ -73,7 +75,7 @@ public sealed class KiwiSettingsStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 /// <summary>Immutable snapshot of the persisted Kiwi settings.</summary>

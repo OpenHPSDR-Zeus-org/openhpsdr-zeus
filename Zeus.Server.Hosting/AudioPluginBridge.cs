@@ -546,11 +546,16 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         bool processed;
         try { processed = vst.TryProcess(input, output, ctx); }
         finally { Volatile.Write(ref _engineGate, 0); }
-        DspPipelineService.SanitizeAudioBuffer(output[..sampleCount]);
         // Sample master IN/OUT peaks so the Audio Suite meters stay live in VST
-        // mode (the native chain's own metering path didn't run).
+        // mode (the native chain's own metering path didn't run). Tap the OUT
+        // peak from the RAW engine output BEFORE the ±1 safety clamp below, so
+        // the meter shows real overshoot (a hot plugin railing past full scale)
+        // instead of pinning at exactly 0 dBFS once the chain clips. This
+        // mirrors the native AudioChain, which also meters pre-clamp; BlockPeak
+        // skips non-finite samples, so reading un-sanitized output is safe.
         if (processed || recordPassthroughMeters)
             RecordEngineMeters(input, output[..sampleCount]);
+        DspPipelineService.SanitizeAudioBuffer(output[..sampleCount]);
         return true;
     }
 

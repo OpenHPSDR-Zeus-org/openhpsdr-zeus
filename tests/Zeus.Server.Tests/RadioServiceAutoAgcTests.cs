@@ -199,29 +199,34 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
     }
 
     [Fact]
-    public void AutoAgc_LowersEffectiveGainWhenWdspAgcIsCuttingAndAdcIsNearFullScale()
+    public void AutoAgc_IgnoresAdcPressureAndAgcCut_TracksNoiseFloorOnly()
     {
+        // Thetis parity (console.cs tmrAutoAGC_Tick): the auto-AGC-T servo seats the
+        // knee at the noise floor and does NOTHING else. A hot ADC (-5 dBfs) with
+        // WDSP cutting hard (-28 dB) must NOT pull the effective gain below the
+        // floor-path target. The old Zeus-only ADC-overload cut did exactly that and
+        // manufactured loudness pumping on strong signals ("low then high"); it has
+        // been removed. So the offset equals the pure noise-floor value regardless
+        // of ADC peak / WDSP AGC gain.
         using var radio = NewRadio();
         radio.SetAgcTop(60.0);
         radio.SetAutoAgc(true);
 
-        radio.HandleRxMetersForAutoAgc(signalDbm: -72.0, adcPkDbfs: -5.0, agcGainDb: -28.0, nowMs: 0);
+        for (int i = 0; i < 20; i++)
+            radio.HandleRxMetersForAutoAgc(signalDbm: -72.0, adcPkDbfs: -5.0, agcGainDb: -28.0, nowMs: i * 500);
 
-        // ADC overload protection now JUMPS the cut (fast protection) instead of
-        // crawling -0.5 dB/tick: effective target = clamp(60 + (-28-(-8)) - 1, 20,
-        // 100) = 39, so the offset snaps to 39-60 = -21 on the first event.
         var snap = radio.Snapshot();
         Assert.Equal(60.0, snap.AgcTopDb);
-        Assert.Equal(-21.0, snap.AgcOffsetDb);
+        Assert.Equal(radio.AutoAgcTopFromNoiseFloor(-72.0) - 60.0, snap.AgcOffsetDb);
     }
 
     [Fact]
     public void AutoAgc_DoesNotLowerEffectiveGainWhenWdspAgcCutsWithCleanAdcHeadroom()
     {
-        // The protective ADC cut must require ADC pressure: WDSP AGC cutting
-        // (agcGain -24.5) with clean ADC headroom (-60 dBfs) must NOT pull gain
-        // below what the noise-floor servo alone wants. So the offset equals the
-        // pure floor-path value (no extra protective cut applied).
+        // WDSP AGC cutting (agcGain -24.5) with clean ADC headroom (-60 dBfs) must
+        // track the pure noise-floor servo target — no extra cut. (With the ADC cut
+        // removed this is the same path as the hot-ADC case above; kept as a
+        // regression guard that AGC-gain alone never moves the offset.)
         using var radio = NewRadio();
         radio.SetAgcTop(52.0);
         radio.SetAutoAgc(true);
@@ -232,31 +237,6 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
         var snap = radio.Snapshot();
         Assert.Equal(52.0, snap.AgcTopDb);
         Assert.Equal(radio.AutoAgcTopFromNoiseFloor(-92.0) - 52.0, snap.AgcOffsetDb);
-    }
-
-    [Fact]
-    public void AutoAgc_RecoversNegativeOffsetWhenAgcCutClears()
-    {
-        using var radio = NewRadio();
-        radio.SetAgcTop(60.0);
-        radio.SetAutoAgc(true);
-
-        // Floor-path target for a -70 dBm floor at baseline 60 (≈ -2 dB offset).
-        double floorOffset = radio.AutoAgcTopFromNoiseFloor(-70.0) - 60.0;
-
-        // Sustained overload (ADC near full scale, WDSP cutting hard) drives the
-        // protective cut BELOW the floor-path target (jumps fast).
-        for (int i = 0; i < 4; i++)
-            radio.HandleRxMetersForAutoAgc(signalDbm: -70.0, adcPkDbfs: -5.0, agcGainDb: -28.0, nowMs: i * 500);
-
-        Assert.True(radio.Snapshot().AgcOffsetDb < floorOffset,
-            "overload should cut the offset below the floor-path target");
-
-        // ADC pressure clears and WDSP is no longer cutting: the offset recovers
-        // (jumps) back to the pure noise-floor target.
-        radio.HandleRxMetersForAutoAgc(signalDbm: -70.0, adcPkDbfs: -18.0, agcGainDb: 0.0, nowMs: 2_000);
-
-        Assert.Equal(floorOffset, radio.Snapshot().AgcOffsetDb);
     }
 
     // ── issue #733: AGC-T slider must be authoritative ────────────────────────

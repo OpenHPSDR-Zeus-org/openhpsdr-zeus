@@ -253,11 +253,6 @@ public sealed class RadioService : IDisposable
     // re-seeds to the new band's noise within ~1.5 s instead of averaging the
     // old band in (Thetis fast-attack on band/freq delta > 0.5 MHz).
     private const double AgcFastAttackVfoDeltaHz = 500_000.0;
-    private const double AgcMinEffectiveAgcT = 20.0;
-    private const double AgcMaxEffectiveAgcT = 100.0;
-    private const double AgcCutStressThresholdDb = -10.0;
-    private const double AgcCutTargetDb = -8.0;
-    private const double AgcAdcPressureThresholdDbfs = -6.0;
 
     // ── Auto-AGC-T threshold servo (Thetis parity) ──────────────────────────
     // Auto-AGC-T sets the AGC *threshold* (knee) to the noise floor, exactly as
@@ -2509,6 +2504,11 @@ public sealed class RadioService : IDisposable
     // which in this integration is the post-AGC audio-RMS fallback (it moves with
     // the signal, not the floor), is kept only as the degraded fallback for when
     // no fresh spectrum is available (stale analyzer frame / near-dead span).
+    //
+    // adcPkDbfs and agcGainDb are retained for call-site/back-compat and
+    // diagnostics only — they NO LONGER drive the loop. They previously fed a
+    // Zeus-only ADC-overload cut that pumped strong signals; Thetis's servo
+    // tracks the noise floor and nothing else (see the windowReady block below).
     internal void HandleRxMetersForAutoAgc(double signalDbm, double spectrumFloorDbm, double adcPkDbfs, double agcGainDb, long nowMs)
     {
         bool changedOffset = false;
@@ -2521,10 +2521,7 @@ public sealed class RadioService : IDisposable
             if (_mox) return;   // Pause during TX
             bool hasSpectrumFloor = double.IsFinite(spectrumFloorDbm) && spectrumFloorDbm > -250.0;
             bool hasSignalMeter = double.IsFinite(signalDbm) && signalDbm > -250.0;
-            bool hasAgcGain = double.IsFinite(agcGainDb) && agcGainDb > -199.5;
-            bool hasAdcPeak = double.IsFinite(adcPkDbfs) && adcPkDbfs > -199.5;
-            bool adcUnderPressure = hasAdcPeak && adcPkDbfs > AgcAdcPressureThresholdDbfs;
-            if (!hasSpectrumFloor && !hasSignalMeter && !hasAgcGain) return;
+            if (!hasSpectrumFloor && !hasSignalMeter) return;
 
             // If we paused for longer than the analysis window (TX,
             // just-toggled-on, RX dropout) the
@@ -2610,28 +2607,19 @@ public sealed class RadioService : IDisposable
                 double autoTop = AutoAgcTopFromNoiseFloor(noiseFloor);
                 desiredOffset = autoTop - _state.AgcTopDb;
             }
-            else if (_agcOffsetDb < 0.0 && (!hasAgcGain || agcGainDb >= AgcCutStressThresholdDb || !adcUnderPressure))
-            {
-                // Warm-up release: the window isn't ready yet (just re-seeded / too
-                // few samples) but a leftover negative offset from an earlier
-                // ADC-pressure cut is still applied. If the stress has cleared,
-                // release it to 0 until the noise-floor path can take over once the
-                // window fills. (With symmetric tracking, a steady-state negative
-                // offset is normal and is owned by the windowReady branch above —
-                // this branch only governs the not-ready transient.)
-                desiredOffset = 0.0;
-            }
-
-            if (hasAgcGain && agcGainDb < AgcCutStressThresholdDb && adcUnderPressure)
-            {
-                double effectiveNow = _state.AgcTopDb + _agcOffsetDb;
-                double adcUrgencyDb = Math.Min(6.0, adcPkDbfs + 6.0);
-                double targetEffective = Math.Clamp(
-                    effectiveNow + (agcGainDb - AgcCutTargetDb) - adcUrgencyDb,
-                    AgcMinEffectiveAgcT,
-                    AgcMaxEffectiveAgcT);
-                desiredOffset = Math.Min(desiredOffset, targetEffective - _state.AgcTopDb);
-            }
+            // Thetis's auto-AGC-T tick (console.cs tmrAutoAGC_Tick:46066) does ONE
+            // thing: seat the AGC threshold at the SETTLED noise floor. It never
+            // reacts to instantaneous signal level or ADC peak. An earlier Zeus-only
+            // "ADC overload protection" used to cut the effective AGC-T whenever WDSP
+            // was cutting hard AND the ADC ran hot — which, on a steady strong
+            // signal, pulled the gain down and then released it as the signal paused.
+            // That MANUFACTURED the loudness pumping operators reported ("a strong
+            // signal goes low then high"). Removed: the noise-floor servo alone is
+            // the Thetis-faithful, non-pumping behaviour. Recovering from a genuine
+            // ADC overload is the operator's RF-gain / attenuation call (auto-ATT
+            // owns that path) — it is not the audio AGC loop's job, and post-ADC AGC
+            // cannot un-clip an already-overdriven sample anyway. When the floor
+            // window isn't ready yet, desiredOffset simply holds the current offset.
 
             double delta = desiredOffset - _agcOffsetDb;
             // Deadband: ignore sub-0.5 dB wobble so a jumpy floor estimate can't

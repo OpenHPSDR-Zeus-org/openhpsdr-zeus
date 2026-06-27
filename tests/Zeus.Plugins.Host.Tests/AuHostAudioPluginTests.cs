@@ -11,6 +11,9 @@ namespace Zeus.Plugins.Host.Tests;
 /// identity (no filesystem check), the gate still applies, and bridge
 /// failure / gated-off / uninitialised states all pass audio through clean.
 /// </summary>
+// Shares the process-global NativeLoadEnabledOverride static and ZEUS_*_VST_LOAD
+// env vars with the other load-gate tests — serialise to avoid a cross-class race.
+[Collection("LoadSensitive")]
 public class AuHostAudioPluginTests : IDisposable
 {
     public AuHostAudioPluginTests() => VstHostAudioPlugin.NativeLoadEnabledOverride = true;

@@ -48,6 +48,7 @@ public sealed class TxAudioProfileStore : IDisposable
     private const int DefaultHighCutHz = 2900;
     private const int DefaultTargetSpectralDensity = 55;
 
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<TxAudioProfileEntry> _profiles;
     private readonly ILiteCollection<TxAudioProfileLastLoadedEntry> _lastLoaded;
@@ -68,7 +69,8 @@ public sealed class TxAudioProfileStore : IDisposable
         var prefsDir = Path.GetDirectoryName(Path.GetFullPath(dbPath));
         _profileDir = Path.Combine(string.IsNullOrEmpty(prefsDir) ? "." : prefsDir, ProfileDirName);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _profiles = _db.GetCollection<TxAudioProfileEntry>("tx_audio_profiles");
         // Race-safe unique index seed (FilterPresetStore pattern): parallel
         // WebApplicationFactory hosts on CI can both reach EnsureIndex; swallow
@@ -399,7 +401,7 @@ public sealed class TxAudioProfileStore : IDisposable
         return result;
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class TxAudioProfileEntry

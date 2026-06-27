@@ -27,6 +27,7 @@ namespace Zeus.Server;
 // shell bridge), so the set stays empty there.
 public sealed class OpenWorkspaceWindowsStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<OpenWorkspaceWindowEntry> _docs;
     private readonly ILogger<OpenWorkspaceWindowsStore> _log;
@@ -44,7 +45,8 @@ public sealed class OpenWorkspaceWindowsStore : IDisposable
             Directory.CreateDirectory(dir);
         }
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _docs = _db.GetCollection<OpenWorkspaceWindowEntry>("open_workspace_windows");
         _docs.EnsureIndex(x => x.LayoutId, unique: true);
 
@@ -90,7 +92,7 @@ public sealed class OpenWorkspaceWindowsStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 // Returned verbatim from GET /api/ui/workspace-windows (camelCased by the

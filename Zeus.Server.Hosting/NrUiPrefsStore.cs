@@ -22,6 +22,7 @@ namespace Zeus.Server;
 // Lives in zeus-prefs.db alongside the other non-sensitive preferences.
 public sealed class NrUiPrefsStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<NrUiPrefsEntry> _docs;
     private readonly ILogger<NrUiPrefsStore> _log;
@@ -37,7 +38,8 @@ public sealed class NrUiPrefsStore : IDisposable
             Directory.CreateDirectory(dir);
         }
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _docs = _db.GetCollection<NrUiPrefsEntry>("nr_ui_prefs");
 
         _log.LogInformation("NrUiPrefsStore initialized at {Path}", dbPath);
@@ -79,7 +81,7 @@ public sealed class NrUiPrefsStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class NrUiPrefsEntry

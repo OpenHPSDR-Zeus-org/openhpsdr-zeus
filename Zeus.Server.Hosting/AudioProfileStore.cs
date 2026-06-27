@@ -27,6 +27,7 @@ namespace Zeus.Server;
 /// </summary>
 public sealed class AudioProfileStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<AudioProfileEntry> _profiles;
     private readonly ILogger<AudioProfileStore> _log;
@@ -40,7 +41,8 @@ public sealed class AudioProfileStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _profiles = _db.GetCollection<AudioProfileEntry>("audio_profiles");
         _profiles.EnsureIndex(x => x.Name, unique: true);
 
@@ -115,7 +117,7 @@ public sealed class AudioProfileStore : IDisposable
             return _profiles.DeleteMany(p => p.Name == name) > 0;
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class AudioProfileEntry

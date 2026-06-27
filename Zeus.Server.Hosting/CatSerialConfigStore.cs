@@ -25,6 +25,7 @@ namespace Zeus.Server;
 
 public sealed class CatSerialConfigStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<CatSerialConfigEntry> _rows;
     private readonly ILogger<CatSerialConfigStore> _log;
@@ -41,7 +42,8 @@ public sealed class CatSerialConfigStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _rows = _db.GetCollection<CatSerialConfigEntry>("cat_serial_config");
 
         _log.LogInformation("CatSerialConfigStore initialized at {Path}", dbPath);
@@ -143,7 +145,7 @@ public sealed class CatSerialConfigStore : IDisposable
         StopBits = c.StopBits,
     };
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class CatSerialConfigEntry

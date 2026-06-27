@@ -12,6 +12,7 @@ namespace Zeus.Server.Hosting.Remote;
 /// </summary>
 public sealed class RemotePasswordStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<RemotePasswordEntry> _col;
     private readonly ILogger<RemotePasswordStore> _log;
@@ -25,7 +26,8 @@ public sealed class RemotePasswordStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _col = _db.GetCollection<RemotePasswordEntry>("remote_password");
     }
 
@@ -87,7 +89,7 @@ public sealed class RemotePasswordStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
     public sealed class RemotePasswordEntry
     {

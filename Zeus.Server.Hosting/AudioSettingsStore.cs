@@ -35,6 +35,7 @@ namespace Zeus.Server;
 
 public sealed class AudioSettingsStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<AudioFrontEndEntry> _rows;
     private readonly ILogger<AudioSettingsStore> _log;
@@ -52,7 +53,8 @@ public sealed class AudioSettingsStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _rows = _db.GetCollection<AudioFrontEndEntry>("audio_frontend");
 
         _log.LogInformation("AudioSettingsStore initialized at {Path}", dbPath);
@@ -114,7 +116,7 @@ public sealed class AudioSettingsStore : IDisposable
     private static TxAudioSource ClampSource(byte raw) =>
         Enum.IsDefined(typeof(TxAudioSource), raw) ? (TxAudioSource)raw : TxAudioSource.Host;
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 /// <summary>

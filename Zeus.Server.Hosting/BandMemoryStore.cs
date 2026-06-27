@@ -54,6 +54,7 @@ namespace Zeus.Server;
 // juggling two LiteDB connections to the same file.
 public sealed class BandMemoryStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<BandMemoryEntry> _entries;
     private readonly ILogger<BandMemoryStore> _log;
@@ -69,7 +70,8 @@ public sealed class BandMemoryStore : IDisposable
             Directory.CreateDirectory(dir);
         }
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _entries = _db.GetCollection<BandMemoryEntry>("band_memory");
         // Pre-existing rows can violate the unique-Band invariant if they were
         // written by a build before EnsureIndex(unique:true) was added, or by a
@@ -152,7 +154,7 @@ public sealed class BandMemoryStore : IDisposable
         _entries.Update(existing);
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
 }
 

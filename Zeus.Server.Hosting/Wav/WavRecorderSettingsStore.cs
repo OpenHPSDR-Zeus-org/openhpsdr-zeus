@@ -29,6 +29,7 @@ namespace Zeus.Server.Wav;
 /// </summary>
 public sealed class WavRecorderSettingsStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<WavRecorderSettingsEntry> _entries;
     private readonly ILogger<WavRecorderSettingsStore> _log;
@@ -42,7 +43,8 @@ public sealed class WavRecorderSettingsStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _entries = _db.GetCollection<WavRecorderSettingsEntry>("wav_recorder_settings");
 
         _log.LogInformation("WavRecorderSettingsStore initialized at {Path}", dbPath);
@@ -85,7 +87,7 @@ public sealed class WavRecorderSettingsStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class WavRecorderSettingsEntry

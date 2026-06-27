@@ -14,6 +14,7 @@ namespace Zeus.Server;
 // because LiteDB's BsonMapper races on parallel construction (commit b57c12d).
 public sealed class DspSettingsStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<DspSettingsEntry> _entries;
     private readonly ILogger<DspSettingsStore> _log;
@@ -27,7 +28,8 @@ public sealed class DspSettingsStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _entries = _db.GetCollection<DspSettingsEntry>("dsp_settings");
         _entries.EnsureIndex(x => x.ProfileId, unique: true);
 
@@ -580,7 +582,7 @@ public sealed class DspSettingsStore : IDisposable
             ? mode
             : NrMode.Off;
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
 }
 

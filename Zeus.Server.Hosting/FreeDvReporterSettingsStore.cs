@@ -28,6 +28,7 @@ namespace Zeus.Server;
 /// </summary>
 public sealed class FreeDvReporterSettingsStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<FreeDvReporterSettingsEntry> _state;
     private readonly ILogger<FreeDvReporterSettingsStore> _log;
@@ -41,7 +42,8 @@ public sealed class FreeDvReporterSettingsStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _state = _db.GetCollection<FreeDvReporterSettingsEntry>("freedv_reporter_settings");
 
         _log.LogInformation("FreeDvReporterSettingsStore initialized at {Path}", dbPath);
@@ -96,7 +98,7 @@ public sealed class FreeDvReporterSettingsStore : IDisposable
         UpdatedUtc = nowUtc,
     };
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class FreeDvReporterSettingsEntry

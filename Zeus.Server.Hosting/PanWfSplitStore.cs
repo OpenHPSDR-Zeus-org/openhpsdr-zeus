@@ -27,6 +27,7 @@ public sealed class PanWfSplitStore : IDisposable
     public const double MinPanPercent = 10.0;
     public const double MaxPanPercent = 90.0;
 
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<PanWfSplitEntry> _docs;
     private readonly ILogger<PanWfSplitStore> _log;
@@ -42,7 +43,8 @@ public sealed class PanWfSplitStore : IDisposable
             Directory.CreateDirectory(dir);
         }
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _docs = _db.GetCollection<PanWfSplitEntry>("pan_wf_split");
 
         _log.LogInformation("PanWfSplitStore initialized at {Path}", dbPath);
@@ -80,7 +82,7 @@ public sealed class PanWfSplitStore : IDisposable
         return v;
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class PanWfSplitEntry
