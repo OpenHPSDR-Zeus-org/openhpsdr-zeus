@@ -44,7 +44,9 @@ public sealed class UninstallManifestTests
     {
         var os = HostOs();
         var home = Path.Combine(Path.GetTempPath(), "zeus-uatest-home-" + Guid.NewGuid().ToString("N"));
-        var exe = Path.Combine(Path.GetTempPath(), "zeus-uatest-app", os == OsKind.Windows ? "OpenhpsdrZeus.exe" : "OpenhpsdrZeus");
+        // Keep the exe UNDER home so the Windows next-to-exe webview cache
+        // (ProcessPath dir → EBWebView) stays within the home tree the test asserts.
+        var exe = Path.Combine(home, "app", os == OsKind.Windows ? "OpenhpsdrZeus.exe" : "OpenhpsdrZeus");
         return new FakeEnv
         {
             Os = os,

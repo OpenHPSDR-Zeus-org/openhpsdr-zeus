@@ -237,9 +237,15 @@ public static class UninstallManifestBuilder
 
         // ---- 3. External ZEUS_PREFS_PATH override — FILE-only, never the dir. ----
         var prefsOverride = env.GetEnv("ZEUS_PREFS_PATH");
+        // GetFullPath throws on illegal characters (e.g. a newline on Windows);
+        // a malformed override is simply skipped, not crashed on.
+        string? full = null;
         if (!string.IsNullOrWhiteSpace(prefsOverride) && Path.IsPathFullyQualified(prefsOverride))
         {
-            var full = Path.GetFullPath(prefsOverride);
+            try { full = Path.GetFullPath(prefsOverride); } catch { full = null; }
+        }
+        if (full is not null)
+        {
             // Only act if it resolves OUTSIDE DataDir (inside is already covered).
             if (!IsStrictDescendant(full, dataDir))
             {
