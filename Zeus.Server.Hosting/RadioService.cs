@@ -2874,7 +2874,20 @@ public sealed class RadioService : IDisposable
         // Encode the wire bytes as PURE FUNCTIONS of the resolved source. Host →
         // literal zero on every surface, byte-identical to today; no param
         // fallthrough.
-        var encoder = ExternalPortEncoders.For(board, variant);
+        //
+        // Dispatch the encoder by the LIVE transport, not the board's default
+        // protocol. ANAN-10E (HermesII) is a P1 board by default, but its
+        // firmware can also run Protocol 2 — the operator flashes one or the
+        // other. Without this override, ExternalPortEncoders.For defaults
+        // HermesII to the Protocol-1 encoder, whose P2 byte-50/51 surfaces are
+        // zero, so the TxSpecific "switch to line-in" bit is never set and the
+        // radio's codec stays on its default mic input (issue #1053). On a P2
+        // connection force the Protocol-2 encoder; otherwise let dispatch fall
+        // back to the board's default transport.
+        bool p2Active;
+        lock (_sync) p2Active = _p2Active;
+        RadioProtocol? liveProtocol = p2Active ? RadioProtocol.Protocol2 : null;
+        var encoder = ExternalPortEncoders.For(board, variant, liveProtocol);
         var portState = new ExternalPortState(
             Source: resolved.Source,
             MicBoost: resolved.MicBoost,
