@@ -110,6 +110,13 @@ public sealed class Protocol1Client : IProtocol1Client
     // HL2's AD9866 doesn't need (see hermes-lite2-protocol.md line 39 and
     // mi0bot's HL2 fork, which exposes this in the UI as "Band Volts").
     private int _enableHl2BandVolts;
+    // LT2208 ADC dither / digital-output randomizer (Config-frame C3 bits 3/4
+    // on non-HL2 boards). Default off — matches Thetis netInterface.c init and
+    // keeps the Config frame byte-identical until an operator opts in. Gated to
+    // LT2208 boards at the wire layer (WriteConfigPayload); RadioService only
+    // pushes these for a connected non-HL2 P1 board.
+    private int _adcDither;     // 0 / 1
+    private int _adcRandom;     // 0 / 1
     private int _boardKind = (int)HpsdrBoardKind.HermesLite2;
     private int _hasN2adr;      // 0 / 1
     private int _mox;           // 0 / 1
@@ -664,6 +671,19 @@ public sealed class Protocol1Client : IProtocol1Client
 
     public void SetSampleRate(HpsdrSampleRate rate) => Interlocked.Exchange(ref _rate, (int)rate);
     public void SetPreamp(bool on) => Interlocked.Exchange(ref _preamp, on ? 1 : 0);
+    /// <summary>
+    /// Enable/disable the LT2208 ADC dither and digital-output randomizer
+    /// (Config-frame C3 bits 3/4 on non-HL2 boards). Mirrors the Protocol-2
+    /// <c>SetAdcDitherRandom</c> API. The bits ride the next periodic Config
+    /// frame; no immediate send is needed because the Config register is on the
+    /// round-robin emitted every TX tick. Wire gating to LT2208 boards lives in
+    /// <see cref="ControlFrame.WriteConfigPayload"/>.
+    /// </summary>
+    public void SetAdcDitherRandom(bool ditherEnabled, bool randomEnabled)
+    {
+        Interlocked.Exchange(ref _adcDither, ditherEnabled ? 1 : 0);
+        Interlocked.Exchange(ref _adcRandom, randomEnabled ? 1 : 0);
+    }
     public void SetAttenuator(HpsdrAtten atten) => Interlocked.Exchange(ref _attenDb, atten.ClampedDb);
     /// <summary>
     /// Select the RX antenna relay (ANT1/2/3). SAFETY (external-ports plan —
@@ -885,6 +905,8 @@ public sealed class Protocol1Client : IProtocol1Client
             RxAntenna: (HpsdrAntenna)Volatile.Read(ref _antenna),
             Mox: Volatile.Read(ref _mox) != 0,
             EnableHl2BandVolts: Volatile.Read(ref _enableHl2BandVolts) != 0,
+            AdcDitherEnabled: Volatile.Read(ref _adcDither) != 0,
+            AdcRandomEnabled: Volatile.Read(ref _adcRandom) != 0,
             Board: (HpsdrBoardKind)Volatile.Read(ref _boardKind),
             HasN2adr: Volatile.Read(ref _hasN2adr) != 0,
             DriveLevel: drive,

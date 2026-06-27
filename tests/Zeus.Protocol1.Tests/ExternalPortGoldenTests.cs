@@ -24,8 +24,9 @@ namespace Zeus.Protocol1.Tests;
 /// refactor changed behaviour. Do not "fix" these to match new output —
 /// they ARE the contract.
 ///
-/// Co-tenancy is the point: C3 carries RxAntenna[7:5] alongside HL2 band-volts
-/// [3] and preamp [4]; C4 carries duplex[2] + RX-count[5:3] and must NEVER pick
+/// Co-tenancy is the point: C3 carries RxAntenna[7:5] alongside LT2208 preamp
+/// [2] / dither [3] / random [4] and (HL2-only) band-volts [3]; C4 carries
+/// duplex[2] + RX-count[5:3] and must NEVER pick
 /// up TX-antenna bits for any supported board. The asserts below pin every
 /// co-tenant so the refactor can't clobber one while moving another.
 /// </summary>
@@ -81,8 +82,9 @@ public class ExternalPortGoldenTests
         Assert.Equal(0x04, cc[4]);
     }
 
-    // RxAntenna co-tenants C3 with preamp[4] and (HL2-only) band-volts[3].
-    // Pin that the antenna shift never clobbers the neighbours.
+    // RxAntenna co-tenants C3 with preamp[2] (LT2208 boards), dither[3]/random[4]
+    // and (HL2-only) band-volts[3]. Pin that the antenna shift never clobbers the
+    // neighbours.
     [Fact]
     public void Config_C3_RxAntenna_CoTenants_Preamp_AreLocked()
     {
@@ -92,16 +94,18 @@ public class ExternalPortGoldenTests
             PreampOn = true,
         });
 
-        // preamp[4]=0x10 | antenna Ant3 [7:5]=0x40 → 0x50.
-        Assert.Equal(0x50, cc[3]);
+        // preamp[2]=0x04 | antenna Ant3 [7:5]=0x40 → 0x44.
+        Assert.Equal(0x44, cc[3]);
         Assert.Equal(0x04, cc[4]);
     }
 
     // DIFFERENTIAL (external-ports plan, Phase 2): the HL2 RX-antenna wire
     // clamp. HL2 has a single jack — C3[5] drives the N2ADR antenna pad, not an
     // ANT1/2/3 relay — so an operator (or a stale per-band) ANT2/3 MUST be
-    // forced to ANT1 at the wire layer. The co-tenant band-volts[3] / preamp[4]
-    // bits are preserved; only the [7:5] antenna field is zeroed.
+    // forced to ANT1 at the wire layer. The co-tenant band-volts[3] bit is
+    // preserved; only the [7:5] antenna field is zeroed. Preamp does NOT light a
+    // C3 bit on HL2 (no LT2208; the LT2208 preamp/dither/random bits are gated
+    // off for HL2 in WriteConfigPayload), so it cannot appear here.
     [Theory]
     [InlineData(HpsdrAntenna.Ant1)]
     [InlineData(HpsdrAntenna.Ant2)]
@@ -115,9 +119,9 @@ public class ExternalPortGoldenTests
             PreampOn = true,
         });
 
-        // band-volts[3]=0x08 | preamp[4]=0x10 | antenna [7:5]=0 (clamped) → 0x18,
-        // regardless of which antenna was requested.
-        Assert.Equal(0x18, cc[3]);
+        // band-volts[3]=0x08 | antenna [7:5]=0 (clamped) → 0x08, regardless of
+        // which antenna was requested. Preamp is a no-op on HL2's C3.
+        Assert.Equal(0x08, cc[3]);
         Assert.Equal(0x04, cc[4]);
         // Antenna field is hard-zero on HL2.
         Assert.Equal(0x00, cc[3] & 0xE0);

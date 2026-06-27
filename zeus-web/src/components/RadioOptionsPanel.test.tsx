@@ -274,4 +274,48 @@ describe('RadioOptionsPanel', () => {
     expect(rx1Put).toBeDefined();
     expect(useRadioOptionsStore.getState().g2Options.rx1AttenuatorDb).toBe(12);
   });
+
+  it('renders Protocol-1 LT2208 ADC options via runtime supported flag', async () => {
+    // No static G2 capability (a legacy P1 board), but the server reports
+    // g2Options.supported = true once a non-HL2 P1 radio is connected. The card
+    // must render dither/random with the board-neutral title and omit the
+    // G2-only MaxRXFreq / RX1-attenuator rows.
+    useRadioStore.setState((s) => ({
+      ...s,
+      capabilities: UNKNOWN_BOARD_CAPABILITIES, // supportsG2AdcOptions = false
+    }));
+    stubRadioOptionsFetch(
+      { bandVolts: false },
+      {
+        ditherEnabled: false,
+        randomEnabled: false,
+        maxRxFreqMHz: 60,
+        supported: true,
+        rx1AttenuatorDb: 0,
+        rx1AttenuatorMinDb: 0,
+        rx1AttenuatorMaxDb: 31,
+        rx1AttenuatorSupported: false,
+      },
+    );
+
+    await act(async () => {
+      root.render(<RadioOptionsPanel />);
+    });
+    await flushMicrotasks();
+
+    expect(container.textContent).toContain('ADC Options');
+    expect(container.textContent).not.toContain('ANAN-G2 Options');
+    expect(container.textContent).toContain('Dither Enabled');
+    expect(container.textContent).toContain('Random Enabled');
+    // G2-only rows are gated out on the P1 path.
+    expect(container.textContent).not.toContain('MaxRXFreq');
+    expect(container.querySelector('select')).toBeNull();
+
+    const checkboxes = Array.from(
+      container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    );
+    expect(checkboxes).toHaveLength(2);
+    expect(checkboxes[0]!.checked).toBe(false);
+    expect(checkboxes[1]!.checked).toBe(false);
+  });
 });

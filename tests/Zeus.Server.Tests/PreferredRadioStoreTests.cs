@@ -225,6 +225,32 @@ public class PreferredRadioStoreTests : IDisposable
     }
 
     [Fact]
+    public void Empty_Store_Returns_Null_For_Raw_Adc_Options()
+    {
+        // The raw getters preserve "operator never set this" as null so the
+        // resolver can apply a protocol-specific default (P2 on / P1 off). The
+        // shipped non-raw getters still collapse null → true for the P2 path.
+        using var store = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        Assert.Null(store.GetG2AdcDitherEnabledRaw());
+        Assert.Null(store.GetG2AdcRandomEnabledRaw());
+    }
+
+    [Fact]
+    public void Setting_One_Adc_Option_Leaves_The_Other_Raw_Null()
+    {
+        // Partial PUT (only dither) must not materialize the P2 default-on for
+        // the untouched random field — that would wrongly force random on for a
+        // Protocol-1 board, whose default is off.
+        using var store = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        store.SetG2AdcOptions(ditherEnabled: true);
+
+        Assert.True(store.GetG2AdcDitherEnabledRaw());
+        Assert.Null(store.GetG2AdcRandomEnabledRaw());
+        // P2 getter still defaults the untouched field on.
+        Assert.True(store.GetG2AdcRandomEnabled());
+    }
+
+    [Fact]
     public void G2_Adc_Options_Round_Trip_And_Persist()
     {
         using (var s1 = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath))

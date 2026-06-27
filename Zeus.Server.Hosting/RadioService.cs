@@ -1012,6 +1012,16 @@ public sealed class RadioService : IDisposable
                 client.EnableHl2BandVolts = _preferredRadioStore.GetEnableHl2BandVolts();
             }
 
+            // LT2208 ADC dither / digital-output randomizer — rehydrate the
+            // persisted operator preference into the fresh client so the first
+            // Config frame carries the correct C3 bits 3/4. Skipped on HL2 (no
+            // LT2208; its bit 3 is Band Volts, seeded above). Default off, so a
+            // board the operator has never configured stays byte-identical.
+            if (client.BoardKind != HpsdrBoardKind.HermesLite2)
+            {
+                ApplyAdcOptionsToP1Client(client, client.BoardKind);
+            }
+
             // Frequency-correction factor (issue #325) — rehydrate so the
             // first tune-write on the fresh client carries the operator's
             // calibrated correction. Cheap default when no calibration has
@@ -3082,6 +3092,23 @@ public sealed class RadioService : IDisposable
     public G2OptionsDto GetG2Options()
     {
         var options = ResolveG2AdcOptionsFor(EffectiveBoardKind, EffectiveOrionMkIIVariant);
+        // Protocol-1 LT2208 boards expose the same ADC dither/random controls,
+        // but the Thetis default is OFF (netInterface.c) and there is no RX1
+        // stepped attenuator on this path. Surfaced only when a non-HL2 P1 board
+        // is the live connection, so the shipped P2/G2 reporting is untouched.
+        if (!options.Supported && ConnectedP1SupportsAdcDitherRandom)
+        {
+            var (p1Dither, p1Random) = ResolveP1AdcOptions();
+            return new G2OptionsDto(
+                DitherEnabled: p1Dither,
+                RandomEnabled: p1Random,
+                MaxRxFreqMHz: 60.0,
+                Supported: true,
+                Rx1AttenuatorDb: 0,
+                Rx1AttenuatorMinDb: 0,
+                Rx1AttenuatorMaxDb: 31,
+                Rx1AttenuatorSupported: false);
+        }
         return new G2OptionsDto(
             DitherEnabled: _preferredRadioStore?.GetG2AdcDitherEnabled() ?? true,
             RandomEnabled: _preferredRadioStore?.GetG2AdcRandomEnabled() ?? true,
@@ -3097,7 +3124,12 @@ public sealed class RadioService : IDisposable
     {
         _preferredRadioStore?.SetG2AdcOptions(req.DitherEnabled, req.RandomEnabled, req.Rx1AttenuatorDb);
         var options = GetG2Options();
+        // Push to whichever protocol is live. ActiveClient is non-null only for
+        // Protocol 1; _p2Client only for Protocol 2 — so at most one of these
+        // does real work, and each no-ops on the board kinds it does not apply
+        // to (HL2 for P1; non-G2 for P2).
         ApplyG2AdcOptionsToP2Client(_p2Client, ConnectedBoardKind);
+        ApplyAdcOptionsToP1Client(_activeClient, ConnectedBoardKind);
         return options;
     }
 
@@ -3107,6 +3139,43 @@ public sealed class RadioService : IDisposable
         var options = ResolveG2AdcOptionsForWire(connectedBoard);
         client.SetAdcDitherRandom(options.DitherEnabled, options.RandomEnabled);
         client.SetRx1Attenuator(options.Rx1AttenuatorSupported ? options.Rx1AttenuatorDb : 0);
+    }
+
+    /// <summary>
+    /// True when a non-HL2 Protocol-1 board is the live connection. Protocol 1
+    /// is the only protocol with a live <see cref="IProtocol1Client"/>
+    /// (<see cref="ActiveClient"/>); HL2's AD9866 has no LT2208 dither/random
+    /// (its C3 bit 3 is Band Volts), so it is excluded.
+    /// </summary>
+    private bool ConnectedP1SupportsAdcDitherRandom =>
+        _activeClient is not null
+        && ConnectedBoardKind != HpsdrBoardKind.HermesLite2;
+
+    /// <summary>
+    /// Resolve the persisted LT2208 ADC dither/random with the Thetis Protocol-1
+    /// default of OFF (netInterface.c <c>adc[i].dither = adc[i].random = 0</c>).
+    /// Uses the nullable raw store getters so an operator who has only ever set
+    /// the P2/G2 controls does not inherit the P2 default-on here.
+    /// </summary>
+    private (bool DitherEnabled, bool RandomEnabled) ResolveP1AdcOptions()
+    {
+        bool dither = _preferredRadioStore?.GetG2AdcDitherEnabledRaw() ?? false;
+        bool random = _preferredRadioStore?.GetG2AdcRandomEnabledRaw() ?? false;
+        return (dither, random);
+    }
+
+    /// <summary>
+    /// Push the persisted LT2208 ADC dither/random to a live Protocol-1 client.
+    /// No-op on HL2 (no LT2208) and when no client is connected. The bits ride
+    /// the next periodic Config frame — the Config register is on the TX-tick
+    /// round-robin, so no explicit send is required. Mirrors
+    /// <see cref="ApplyG2AdcOptionsToP2Client"/> for the P1 path.
+    /// </summary>
+    public void ApplyAdcOptionsToP1Client(IProtocol1Client? client, HpsdrBoardKind connectedBoard)
+    {
+        if (client is null || connectedBoard == HpsdrBoardKind.HermesLite2) return;
+        var (dither, random) = ResolveP1AdcOptions();
+        client.SetAdcDitherRandom(dither, random);
     }
 
     /// <summary>

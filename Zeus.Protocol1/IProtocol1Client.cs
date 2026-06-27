@@ -80,6 +80,13 @@ public interface IProtocol1Client : IDisposable
     void SetVfoAHz(long hz);
     void SetSampleRate(HpsdrSampleRate rate);
     void SetPreamp(bool on);
+    /// <summary>
+    /// Enable/disable the LT2208 ADC dither and digital-output randomizer
+    /// (Config-frame C3 bits 3/4). No-op on the wire for HL2 (gated in
+    /// <c>ControlFrame.WriteConfigPayload</c>). Mirrors the Protocol-2
+    /// <c>Protocol2Client.SetAdcDitherRandom</c> shape.
+    /// </summary>
+    void SetAdcDitherRandom(bool ditherEnabled, bool randomEnabled);
     void SetAttenuator(HpsdrAtten atten);
     void SetAntennaRx(HpsdrAntenna ant);
     /// <summary>
