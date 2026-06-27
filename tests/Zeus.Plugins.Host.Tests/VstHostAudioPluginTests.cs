@@ -4,6 +4,13 @@ using Zeus.Plugins.Host.Audio;
 
 namespace Zeus.Plugins.Host.Tests;
 
+// Mutates the process-global VstHostAudioPlugin.NativeLoadEnabledOverride
+// static and the ZEUS_*_VST_LOAD env vars. Serialise with the other
+// load-gate tests so a sibling class's ctor can't reassert the override
+// mid-test (that race surfaced as an intermittent windows-arm64 flake:
+// the kill-switch test fell through to file validation and threw
+// "VST3 path not found").
+[Collection("LoadSensitive")]
 public class VstHostAudioPluginTests : IDisposable
 {
     // Native load is gated OFF by default (real .vst3 loads can crash the
@@ -215,7 +222,7 @@ public class VstHostAudioPluginTests : IDisposable
             Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", previousEnable);
             Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", previousDisable);
             Environment.SetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD", previousTxDisable);
-            VstHostAudioPlugin.NativeLoadEnabledOverride = true;
+            VstHostAudioPlugin.NativeLoadEnabledOverride = null;
         }
     }
 
@@ -247,7 +254,7 @@ public class VstHostAudioPluginTests : IDisposable
             Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", previousEnable);
             Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", previousDisable);
             Environment.SetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD", previousTxDisable);
-            VstHostAudioPlugin.NativeLoadEnabledOverride = true;
+            VstHostAudioPlugin.NativeLoadEnabledOverride = null;
         }
     }
 
@@ -287,7 +294,7 @@ public class VstHostAudioPluginTests : IDisposable
             Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", previousEnable);
             Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", previousDisable);
             Environment.SetEnvironmentVariable("ZEUS_DISABLE_RX_VST_LOAD", previousRxDisable);
-            VstHostAudioPlugin.NativeLoadEnabledOverride = true;
+            VstHostAudioPlugin.NativeLoadEnabledOverride = null;
         }
     }
 }
