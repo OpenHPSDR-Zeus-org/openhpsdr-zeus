@@ -13,6 +13,7 @@ import { Ft8PopBody } from './Ft8PopBody';
 import { useFt8Store, type Ft8Row } from '../../state/ft8-store';
 import { useOperatorStore } from '../../state/operator-store';
 import { useLayoutStore } from '../../state/layout-store';
+import { useHamClockStore } from '../../state/hamclock-store';
 
 function row(text: string): Ft8Row {
   return {
@@ -41,6 +42,12 @@ describe('Ft8PopBody → existing QRZ panel wiring', () => {
       useFt8Store.setState({ open: true, protocol: 'FT8', band: '20m', rows: [row('CQ K1ABC FN42')] });
       // Operator call must be set or click-to-call bails to the settings view.
       useOperatorStore.setState({ resolvedCall: 'MYCALL', resolvedGrid: 'FN31' } as never);
+      // Default the HamClock DX push OFF; loadPushConfig stubbed so no fetch fires.
+      useHamClockStore.setState({
+        pushConfig: { enabled: false, trigger: 'on-click', target: 'external', externalHost: '', externalPort: 8080 },
+        loadPushConfig: async () => {},
+        pushDx: async () => {},
+      } as never);
     });
   });
 
@@ -58,6 +65,51 @@ describe('Ft8PopBody → existing QRZ panel wiring', () => {
     });
 
     expect(runQrzLookup).toHaveBeenCalledWith('K1ABC');
+    unmount();
+  });
+
+  it('clicking a station pushes its grid to HamClock when on-click push is enabled', () => {
+    const pushDx = vi.fn(async () => {});
+    act(() => {
+      useHamClockStore.setState({
+        pushConfig: { enabled: true, trigger: 'on-click', target: 'external', externalHost: '10.0.0.5', externalPort: 8080 },
+        loadPushConfig: async () => {},
+        pushDx,
+      } as never);
+    });
+    const { container, unmount } = renderWithQrz(vi.fn());
+
+    const targetRow = Array.from(container.querySelectorAll('tbody tr')).find((tr) =>
+      tr.textContent?.includes('K1ABC'),
+    );
+    expect(targetRow).toBeTruthy();
+    act(() => {
+      targetRow!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    // Grid (FN42) is parsed from the decode and forwarded; call is context only.
+    expect(pushDx).toHaveBeenCalledWith('FN42', 'K1ABC');
+    unmount();
+  });
+
+  it('does NOT push to HamClock on click when the push feature is disabled', () => {
+    const pushDx = vi.fn(async () => {});
+    act(() => {
+      useHamClockStore.setState({
+        pushConfig: { enabled: false, trigger: 'on-click', target: 'external', externalHost: '', externalPort: 8080 },
+        loadPushConfig: async () => {},
+        pushDx,
+      } as never);
+    });
+    const { container, unmount } = renderWithQrz(vi.fn());
+
+    const targetRow = Array.from(container.querySelectorAll('tbody tr')).find((tr) =>
+      tr.textContent?.includes('K1ABC'),
+    );
+    act(() => {
+      targetRow!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(pushDx).not.toHaveBeenCalled();
     unmount();
   });
 

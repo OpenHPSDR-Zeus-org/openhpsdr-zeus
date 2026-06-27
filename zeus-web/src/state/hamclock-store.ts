@@ -70,12 +70,63 @@ const EMPTY_STATUS: HamClockStatus = {
   log: [],
 };
 
+/**
+ * Config for the outbound "push worked station to HamClock" feature. SEND-ONLY
+ * (the backend issues a single HTTP GET to the HamClock REST API), egress OFF by
+ * default. Mirrors the server-side HamClockPushConfig — these never cross the
+ * SignalR/StateDto wire, only the /api/hamclock/push-config + /api/hamclock/dx
+ * REST endpoints. `bundled` (the embedded OpenHamClock sidecar) has no set-DX
+ * endpoint today, so that target is surfaced as unsupported in the UI.
+ */
+export interface HamClockPushConfig {
+  enabled: boolean;
+  trigger: 'on-click' | 'on-active-QSO';
+  target: 'bundled' | 'external';
+  externalHost: string;
+  externalPort: number;
+}
+
+export const HAMCLOCK_PUSH_DEFAULT_PORT = 8080;
+
+const DEFAULT_PUSH_CONFIG: HamClockPushConfig = {
+  enabled: false,
+  trigger: 'on-click',
+  target: 'external',
+  externalHost: '',
+  externalPort: HAMCLOCK_PUSH_DEFAULT_PORT,
+};
+
+function normalizePushConfig(raw: unknown): HamClockPushConfig {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    enabled: Boolean(r.enabled),
+    trigger: r.trigger === 'on-active-QSO' ? 'on-active-QSO' : 'on-click',
+    target: r.target === 'bundled' ? 'bundled' : 'external',
+    externalHost: typeof r.externalHost === 'string' ? r.externalHost : '',
+    externalPort:
+      typeof r.externalPort === 'number' && r.externalPort > 0 && r.externalPort < 65536
+        ? r.externalPort
+        : HAMCLOCK_PUSH_DEFAULT_PORT,
+  };
+}
+
 interface HamClockState {
   status: HamClockStatus;
   loadStatus(): Promise<void>;
   install(): Promise<void>;
   start(): Promise<void>;
   stop(): Promise<void>;
+
+  /** Outbound DX-push config (server-backed, egress OFF by default). */
+  pushConfig: HamClockPushConfig;
+  /** GET /api/hamclock/push-config → seed the push form. */
+  loadPushConfig(): Promise<void>;
+  /** POST /api/hamclock/push-config → persist + apply live. */
+  savePushConfig(cfg: HamClockPushConfig): Promise<void>;
+  /** POST /api/hamclock/dx → forward a worked station's grid to HamClock.
+   *  Server-side forward (avoids browser CORS / HTTPS mixed-content). The server
+   *  also gates on `enabled`; this no-ops silently on any failure. */
+  pushDx(grid: string, call?: string | null): Promise<void>;
   /** Enable the HamClock workspace: ensure the layout exists and switch to it.
    *  Creates it (single full-bleed hamclock tile) on first use. Idempotent. */
   openWorkspace(): void;
@@ -165,5 +216,42 @@ export const useHamClockStore = create<HamClockState>()((set) => ({
     const ls = useLayoutStore.getState();
     const existing = ls.layouts.find((l) => l.name === HAMCLOCK_LAYOUT_NAME);
     if (existing) ls.removeLayout(existing.id);
+  },
+
+  pushConfig: DEFAULT_PUSH_CONFIG,
+
+  loadPushConfig: async () => {
+    try {
+      const res = await fetch('/api/hamclock/push-config');
+      if (!res.ok) return;
+      set({ pushConfig: normalizePushConfig(await res.json()) });
+    } catch (err) {
+      console.warn('hamclock push-config GET threw', err);
+    }
+  },
+
+  savePushConfig: async (cfg) => {
+    try {
+      const res = await fetch('/api/hamclock/push-config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(cfg),
+      });
+      if (res.ok) set({ pushConfig: normalizePushConfig(await res.json()) });
+    } catch (err) {
+      console.warn('hamclock push-config POST threw', err);
+    }
+  },
+
+  pushDx: async (grid, call) => {
+    try {
+      await fetch('/api/hamclock/dx', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ grid, call: call ?? null }),
+      });
+    } catch (err) {
+      console.warn('hamclock dx POST threw', err);
+    }
   },
 }));
