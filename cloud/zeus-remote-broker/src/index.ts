@@ -67,7 +67,8 @@ export default {
         return new Response('expected websocket upgrade', { status: 426 });
       }
 
-      const role = url.searchParams.get('role') === 'host' ? 'host' : 'client';
+      const roleParam = url.searchParams.get('role');
+      const role = roleParam === 'host' ? 'host' : roleParam === 'support' ? 'support' : 'client';
       let callsign = (url.searchParams.get('callsign') ?? '').trim().toUpperCase();
       const headers = new Headers(request.headers);
 
@@ -84,6 +85,11 @@ export default {
         callsign = verified || callsign;
         headers.set('X-Operator-Callsign', callsign);
       }
+      // role=support is NOT QRZ-gated here: the admin already proved authorisation
+      // to /admin/request, which issued the single-use ticket carried on this WS.
+      // The SignalRoom DO redeems + validates that ticket before joining the room,
+      // so an unauthorised peer can never become a support connection. `callsign`
+      // is the TARGET operator's room (supplied by the dashboard).
 
       if (!callsign) return new Response('callsign required', { status: 400 });
 

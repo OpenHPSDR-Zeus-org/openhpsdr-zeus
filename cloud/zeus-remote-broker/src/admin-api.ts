@@ -114,12 +114,10 @@ export async function handleAdmin(
       return json(body, 200, cors);
     }
 
-    // diagnostics-session request (STUB in P2; wired in P3)
+    // diagnostics-session request (remote-diag P3): notify the target operator and
+    // hand the dashboard a single-use ticket to open the support WebSocket with.
     if (path === '/admin/request' && request.method === 'POST') {
-      const target = norm(((await safeJson(request)).callsign as string) ?? '');
-      if (!target) return json({ error: 'callsign required' }, 400, cors);
-      await insertAudit(env.ADMIN_DB, { actor: auth.callsign, action: 'request', target });
-      return json({ ok: true, status: 'stub', note: 'diagnostics session wired in P3' }, 202, cors);
+      return await handleSupportRequest(request, env, auth, cors);
     }
 
     return json({ error: 'not found' }, 404, cors);
@@ -300,6 +298,43 @@ async function handleDisableAdmin(
     detail: admin ? 'existed' : 'absent',
   });
   return json({ ok: true }, 200, cors);
+}
+
+// --- support request --------------------------------------------------------
+
+/**
+ * Ask the target operator's SignalRoom to mint a maintainer-support request and
+ * notify the radio (host). On success the dashboard gets a single-use `ticket` it
+ * opens `role=support&callsign=<target>&ticket=<ticket>` with; the operator must
+ * still approve at the radio before anything flows (remote-diag P3). 503 when the
+ * operator is offline (no host socket).
+ */
+async function handleSupportRequest(
+  request: Request,
+  env: Env,
+  auth: AuthCtx,
+  cors: Record<string, string>,
+): Promise<Response> {
+  const target = norm(((await safeJson(request)).callsign as string) ?? '');
+  if (!target) return json({ error: 'callsign required' }, 400, cors);
+
+  const room = env.SIGNAL_ROOM.get(env.SIGNAL_ROOM.idFromName(target));
+  const res = await room.fetch('https://signal.internal/support-request', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ admin: auth.callsign }),
+  });
+
+  if (res.status === 503) {
+    await insertAudit(env.ADMIN_DB, { actor: auth.callsign, action: 'request', target, detail: 'offline' });
+    return json({ error: 'operator offline' }, 503, cors);
+  }
+  if (!res.ok) return json({ error: 'error' }, 502, cors);
+
+  const { requestId, ticket } = await res.json<{ requestId: string; ticket: string }>();
+  await insertAudit(env.ADMIN_DB, { actor: auth.callsign, action: 'request', target, detail: requestId });
+  // The ticket is a short-lived secret — never let an intermediary cache it.
+  return json({ ok: true, requestId, ticket, callsign: target }, 200, cors, { 'Cache-Control': 'no-store' });
 }
 
 // --- auth -------------------------------------------------------------------
