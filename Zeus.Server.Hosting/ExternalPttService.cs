@@ -306,18 +306,7 @@ public sealed class ExternalPttService : IHostedService, IDisposable
         // The fire-and-forget Task.Run is OK because OnHardwarePttChanged is
         // already edge-triggered (single rise per external press) and a
         // subsequent fall is handled by HandleFalling regardless of ordering.
-        _ = Task.Run(() =>
-        {
-            if (_tx.TrySetMox(true, MoxSource.Hardware, out var err))
-            {
-                _log.LogInformation("externalPtt.takeover.applied");
-            }
-            else
-            {
-                _log.LogWarning("externalPtt.takeover.rejected reason={Reason}", err);
-                lock (_sync) _owned = false;
-            }
-        });
+        _ = Task.Run(() => ApplyMox(true, "takeover"));
     }
 
     private void HandleFalling()
@@ -358,17 +347,37 @@ public sealed class ExternalPttService : IHostedService, IDisposable
         lock (_sync) { releaseNow = _owned; _owned = false; }
         if (!releaseNow) return;
 
-        _ = Task.Run(() =>
+        _ = Task.Run(() => ApplyMox(false, "release"));
+    }
+
+    // The single guarded MOX side-effect for every background hardware-PTT
+    // path (the two Task.Run continuations above and the OnHangElapsed timer
+    // callback). TrySetMox can throw from deep in the DSP/persistence stack
+    // (e.g. a torn-down store mid-shutdown); on a ThreadPool or Timer thread an
+    // escaping exception becomes an AppDomain.UnhandledException and kills the
+    // whole host. A footswitch op must never do that — swallow, log, and let
+    // the next edge re-sync. On a failed/faulted TAKEOVER we relinquish the
+    // ownership claim so a later release doesn't no-op; a release that fails
+    // leaves _owned already false (the caller cleared it).
+    private void ApplyMox(bool on, string op)
+    {
+        try
         {
-            if (_tx.TrySetMox(false, MoxSource.Hardware, out var err))
+            if (_tx.TrySetMox(on, MoxSource.Hardware, out var err))
             {
-                _log.LogInformation("externalPtt.release.applied");
+                _log.LogInformation("externalPtt.{Op}.applied", op);
             }
             else
             {
-                _log.LogWarning("externalPtt.release.rejected reason={Reason}", err);
+                _log.LogWarning("externalPtt.{Op}.rejected reason={Reason}", op, err);
+                if (on) lock (_sync) _owned = false;
             }
-        });
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "externalPtt.{Op}.faulted", op);
+            if (on) lock (_sync) _owned = false;
+        }
     }
 
     private void OnHangElapsed(object? _)
@@ -384,14 +393,10 @@ public sealed class ExternalPttService : IHostedService, IDisposable
         lock (_sync) { releaseNow = _owned; _owned = false; }
         if (!releaseNow) return;
 
-        if (_tx.TrySetMox(false, MoxSource.Hardware, out var err))
-        {
-            _log.LogInformation("externalPtt.release.applied");
-        }
-        else
-        {
-            _log.LogWarning("externalPtt.release.rejected reason={Reason}", err);
-        }
+        // Runs on a System.Threading.Timer thread — an unhandled exception here
+        // crashes the host, so go through the guarded helper like the Task.Run
+        // paths.
+        ApplyMox(false, "release");
     }
 
     private void OnTxActiveChanged(bool active)

@@ -49,12 +49,16 @@ public class ExternalPttServiceTests : IDisposable
         public StreamingHub Hub { get; }
         public PttSettingsStore Settings { get; }
         public ExternalPttService Service { get; }
+        private readonly DspSettingsStore _dspStore;
+        private readonly PaSettingsStore _paStore;
 
         public Harness(string dbPath, string pttDbPath, bool enabled = true)
         {
             var loggerFactory = NullLoggerFactory.Instance;
-            var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, dbPath);
-            var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, dbPath + ".pa");
+            _dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, dbPath);
+            _paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, dbPath + ".pa");
+            var dspStore = _dspStore;
+            var paStore = _paStore;
             Radio = new RadioService(loggerFactory, dspStore, paStore);
             // Connect P2 so TrySetMox's "not connected" interlock passes —
             // exactly how a live G2 looks to the service.
@@ -71,8 +75,16 @@ public class ExternalPttServiceTests : IDisposable
 
         public void Dispose()
         {
+            // Order matters: stop the service (its hang timer / event wiring)
+            // and the RadioService first, THEN release the LiteDB leases the
+            // stores hold. Closing the shared engines here — before the test
+            // class deletes the temp prefs files — means the files are flushed
+            // and closed, not deleted out from under an open handle.
             Service.Dispose();
+            Radio.Dispose();
             Settings.Dispose();
+            _paStore.Dispose();
+            _dspStore.Dispose();
         }
     }
 
