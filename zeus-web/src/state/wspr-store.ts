@@ -10,8 +10,7 @@ import { create } from 'zustand';
 import { dialHzFor, nearestDigitalBand } from '../dsp/digital-segments';
 import {
   configureRadioForDigital,
-  qsyToDigitalBand,
-  restoreRadio,
+  restoreRadioWhenIdle,
   snapshotRadio,
   type RadioModeSnapshot,
 } from './digital-mode';
@@ -61,8 +60,8 @@ interface WsprState {
   error: string | null;
   priorRadio: RadioModeSnapshot | null;
 
-  openWorkspace: () => void;
-  closeWorkspace: () => void;
+  openWorkspace: (opts?: { prior?: RadioModeSnapshot }) => void;
+  closeWorkspace: (opts?: { restore?: boolean }) => void;
   ingest: (batch: WsprSpotBatch) => void;
   refreshStatus: (signal?: AbortSignal) => Promise<void>;
   enable: (band: string) => Promise<boolean>;
@@ -80,8 +79,10 @@ export const useWsprStore = create<WsprState>((set, get) => ({
   error: null,
   priorRadio: null,
 
-  openWorkspace: () => {
-    const prior = get().priorRadio ?? snapshotRadio();
+  openWorkspace: (opts) => {
+    // A `prior` from a mode switch is the operator's TRUE pre-digital config and
+    // wins over re-snapshotting the (already-DIGU) radio.
+    const prior = opts?.prior ?? get().priorRadio ?? snapshotRadio();
     const band = nearestDigitalBand(useConnectionStore.getState().vfoHz).name;
     set({ open: true, band, priorRadio: prior });
     void (async () => {
@@ -90,12 +91,15 @@ export const useWsprStore = create<WsprState>((set, get) => ({
     })();
   },
 
-  closeWorkspace: () => {
+  closeWorkspace: (opts) => {
+    const restore = opts?.restore !== false;
     const prior = get().priorRadio;
     set({ open: false, priorRadio: null });
     void (async () => {
       await get().disable();
-      await restoreRadio(prior);
+      // Deferred until idle so disengaging mid-beacon-TX doesn't strand the
+      // radio; skipped when switching to another digital mode.
+      if (restore) restoreRadioWhenIdle(prior);
     })();
   },
 
@@ -161,7 +165,10 @@ export const useWsprStore = create<WsprState>((set, get) => ({
   qsyBand: (bandName) => {
     set({ band: bandName });
     void (async () => {
-      await qsyToDigitalBand('WSPR', bandName);
+      // Full digital re-config (DIGU + flat filter + QSY) so a cross-band move
+      // re-asserts DIGU after the server's per-band mode recall; then re-arm the
+      // WSPR decoder on the new dial.
+      await configureRadioForDigital('WSPR', bandName);
       if (get().enabled) await get().enable(bandName);
     })();
   },

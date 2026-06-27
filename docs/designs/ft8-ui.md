@@ -1,8 +1,86 @@
 # FT8 mode — UI design direction
 
-Status: **direction captured, palette decision OPEN.** Source of truth for the
-look/feel of Zeus's built-in FT8 (and later WSPR) workspace. Provided by
-KB2UKA 2026-06-25 from his "Redesigning FT8 Interface" session.
+Status: **SHIPPED as a FreeDV-style pop-out (2026-06-27), superseding the
+full-screen workspace below.** Source of truth for the look/feel of Zeus's
+built-in FT8/FT4/WSPR UI. Original direction provided by KB2UKA 2026-06-25;
+pivoted to the pop-out 2026-06-27 (KB2UKA call).
+
+## DIRECTION CHANGE (2026-06-27, KB2UKA) — FreeDV-style pop-out, REUSE everything
+
+The dedicated full-screen "command center" workspace (described in the sections
+below, now historical) was replaced by a **floating, draggable, always-on-top
+pop-out** modelled on the FreeDV modem popup — because it built **redundant**
+copies of features the operator already has. New core principle:
+
+> **REUSE Zeus's existing features — build NOTHING redundant.** No new VFO, no
+> new waterfall, no new panadapter, no new QRZ panel, no new logbook inside the
+> pop-out. The operator stays in their normal console (which already has the
+> panadapter / waterfall / VFO / QRZ / logbook / meters); FT8 is just a pop-out
+> of operating controls floating over it.
+
+What the pop-out is (`DigitalWindow.tsx`, body `Ft8PopBody` / `WsprPopBody`):
+
+- **Floating, draggable, always on top, NOT resizable.** Fixed size, ~2× the
+  FreeDV popup (`digital-window-store.ts` `DIGITAL_WINDOW_WIDTH/HEIGHT`, height
+  clamped to the viewport). "On top" = `zIndex: 420` (above the topbar 300,
+  below modals 10000), same mechanism as `FreeDvWindow` — no OS API.
+- **Contains ONLY operating essentials:** the colour-coded decode/station list
+  (with the operator's own TX line + the report being sent), the macro/message
+  buttons, TX ENABLE, slot (1ST/2ND), HOLD TX FREQ, OFFSET, TUNE/HALT, the
+  shared TX-power sliders, and a compact **⚙ gear** that opens the existing
+  `Ft8SettingsView` in place (decode depth / macros / logging). WSPR shows the
+  spot table + beacon TX cluster only.
+- **No** waterfall / VFO / QRZ / logbook / stats panels inside it — those are
+  the operator's existing panels underneath.
+
+State / source of truth:
+
+- Open/close is owned **entirely by `ft8-store.open` / `wspr-store.open`** — the
+  pop-out has no open flag of its own (`digital-window-store` is position-only).
+  Engaging the mode opens it; un-toggling closes it.
+- All the working FT8 logic is **re-housed, not rewritten**: the decode table
+  (`Ft8DecodeTable`), the TX-control cluster (`Ft8TxControl`), and the live
+  engine (`ft8-tx-runner` → `ft8-tx-controller` → `ft8-sequencer` → backend
+  keyer), own-TX echo, click-to-call, auto-sequence, CALL-1st, HOLD-TX-FREQ,
+  auto-log — all preserved verbatim.
+
+Mode-button behavior (`enter-digital.ts`, `ModeBandwidth`, `ModeFavorites`):
+
+- FT8/FT4/WSPR are a **toggle that stays DEPRESSED while engaged**. Engage =
+  snapshot the current freq+mode, QSY the **main** panadapter/VFO to that mode's
+  digital dial for the current band (reuses `configureRadioForDigital`), and
+  open the pop-out. Un-toggle = `exitDigital()` → restore the prior freq+mode.
+- While engaged, changing the **main band** re-QSYs to that band's digital dial
+  (band-follow effect in the pop-out bodies via `qsyBand`/`qsyToDigitalBand`).
+- FT8/FT4/WSPR remain mutually exclusive.
+
+REUSE wiring to existing panels:
+
+- **Click a station** → the operator's **existing QRZ panel** populates that
+  callsign (`useWorkspace().runQrzLookup`), in addition to staging the call.
+- **QSO partner** (we answer a station, or a station answers our CQ) →
+  auto-populates the same QRZ panel (effect on `tx.qso.dxCall`).
+- QSOs continue logging to the **existing logbook** (the runner's `onLogQso` →
+  `useLoggerStore`), unchanged.
+
+Station list beautification: vibrant colour-coded lines (CQ / directed-at-me /
+new-grid / worked-before / your-TX), the user's own TX line including the report
+being sent, and a small colour **key/legend** (`Ft8DecodeLegend`). Tokens only
+(`--hud-*` / `--tx`, `color-mix`) — no raw hex.
+
+Note (PR-level): the pop-out no longer mounts its own spectrum surfaces, so the
+old App.tsx WebGL-context-release optimization (which unmounted the main
+`FlexWorkspace` while the full-screen overlay was open) was dropped — there is
+no context competition because the main console stays mounted underneath.
+
+---
+
+_The sections below are the ORIGINAL full-screen-workspace direction, retained
+for history. They are SUPERSEDED by the pop-out above._
+
+Status (historical): **direction captured, palette decision OPEN.** Source of
+the look/feel; provided by KB2UKA 2026-06-25 from his "Redesigning FT8
+Interface" session.
 
 Reference images in [`ft8-ui/refs/`](ft8-ui/refs/):
 - `ft8-target-mockup.png` — **the target.** Dark-HUD command-center layout.

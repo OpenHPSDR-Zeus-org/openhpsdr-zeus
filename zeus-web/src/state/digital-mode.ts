@@ -81,9 +81,16 @@ export async function configureRadioForDigital(
   // the requested band (e.g. FT4 on 160 m).
   const dial = dialHzFor(protocol, band) ?? near.ft8Hz;
   try {
+    // QSY FIRST, then assert DIGU + the wide flat filter. A cross-band VFO move
+    // triggers the server's per-band mode recall (RestoreBandMode → SetMode,
+    // PR #974): if we set DIGU *before* the QSY, that recall fires afterwards and
+    // clobbers DIGU back to the band's stored phone/CW mode (and a narrow
+    // filter), silently breaking decode. Setting mode/filter LAST makes the
+    // digital config win over the recall. setMode/setFilter are idempotent when
+    // already DIGU, so an in-band re-config is a no-op on the wire.
+    if (dial && Math.abs(dial - vfoHz) > 1) await setVfo(dial);
     await setMode('DIGU');
     await setFilter(DIGITAL_RX_FILTER_LOW_HZ, DIGITAL_RX_FILTER_HIGH_HZ);
-    if (dial && Math.abs(dial - vfoHz) > 1) await setVfo(dial);
     // Frame the waterfall onto the FT8 passband (CTUN / LO / zoom). Uses the
     // post-QSY dial so the passband centres on the sub-band we just moved to.
     // FT8-specific: WSPR shares this orchestration but renders no passband
@@ -92,31 +99,6 @@ export async function configureRadioForDigital(
   } catch {
     // Best-effort: the decoder still runs on whatever audio is present, and the
     // operator can tune manually. Don't let a transient radio error block entry.
-  }
-}
-
-/**
- * QSY to a specific band's dial for the active protocol (workspace band
- * buttons). Returns the dial Hz it moved to, or null when the band/protocol has
- * no sub-band or the move was suppressed (transmitting).
- */
-export async function qsyToDigitalBand(
-  protocol: DigitalProtocol,
-  bandName: string,
-): Promise<number | null> {
-  if (txActive()) return null;
-  const dial = dialHzFor(protocol, bandName);
-  if (!dial) return null;
-  try {
-    await setVfo(dial);
-    // Re-frame the passband around the new dial (under CTUN the frozen LO offset
-    // would otherwise stay anchored to the previous band's dial). FT8-specific —
-    // WSPR has no passband overlay and never framed on entry, so it never
-    // reframes on QSY either.
-    if (protocol !== 'WSPR') await applyFt8Framing(dial);
-    return dial;
-  } catch {
-    return null;
   }
 }
 
@@ -138,4 +120,26 @@ export async function restoreRadio(snap: RadioModeSnapshot | null): Promise<void
   } catch {
     // Best-effort restore.
   }
+}
+
+/**
+ * Restore the entry snapshot as soon as the radio is idle. If the radio is
+ * keyed/tuning right now (FT8 keys ~12.6 s of every 15 s slot), restoring is
+ * deferred to the next unkey instead of being dropped — otherwise disengaging
+ * mid-burst would silently strand the radio in DIGU on the digital dial. The
+ * snapshot is held in this closure (not the store) so it survives until the
+ * restore actually runs.
+ */
+export function restoreRadioWhenIdle(snap: RadioModeSnapshot | null): void {
+  if (!snap) return;
+  if (!txActive()) {
+    void restoreRadio(snap);
+    return;
+  }
+  const unsub = useTxStore.subscribe((s) => {
+    if (!s.moxOn && !s.tunOn) {
+      unsub();
+      void restoreRadio(snap);
+    }
+  });
 }
