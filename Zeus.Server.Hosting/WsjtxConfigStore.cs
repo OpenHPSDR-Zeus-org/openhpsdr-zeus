@@ -48,7 +48,15 @@ public sealed class WsjtxConfigStore : IDisposable
                 Enabled: e.Enabled,
                 Host: e.Host,
                 Port: e.Port,
-                InstanceId: string.IsNullOrWhiteSpace(e.InstanceId) ? "WSJT-X" : e.InstanceId);
+                InstanceId: string.IsNullOrWhiteSpace(e.InstanceId) ? "WSJT-X" : e.InstanceId,
+                // LiteDB returns the type default for columns absent from older rows
+                // (Transport="" / Group="" / Ttl=0) — coalesce to the documented
+                // defaults so a pre-multicast row reads back as plain unicast.
+                Transport: string.IsNullOrWhiteSpace(e.Transport) ? "unicast" : e.Transport,
+                MulticastGroup: string.IsNullOrWhiteSpace(e.MulticastGroup) ? "224.0.0.73" : e.MulticastGroup,
+                MulticastTtl: e.MulticastTtl <= 0 ? 1 : e.MulticastTtl,
+                SendQsoLogged: e.SendQsoLogged,
+                SendLiveDecodes: e.SendLiveDecodes);
         }
     }
 
@@ -65,6 +73,11 @@ public sealed class WsjtxConfigStore : IDisposable
                     Host = config.Host,
                     Port = config.Port,
                     InstanceId = config.InstanceId,
+                    Transport = config.Transport,
+                    MulticastGroup = config.MulticastGroup,
+                    MulticastTtl = config.MulticastTtl,
+                    SendQsoLogged = config.SendQsoLogged,
+                    SendLiveDecodes = config.SendLiveDecodes,
                     UpdatedUtc = DateTime.UtcNow,
                 });
             }
@@ -74,6 +87,11 @@ public sealed class WsjtxConfigStore : IDisposable
                 existing.Host = config.Host;
                 existing.Port = config.Port;
                 existing.InstanceId = config.InstanceId;
+                existing.Transport = config.Transport;
+                existing.MulticastGroup = config.MulticastGroup;
+                existing.MulticastTtl = config.MulticastTtl;
+                existing.SendQsoLogged = config.SendQsoLogged;
+                existing.SendLiveDecodes = config.SendLiveDecodes;
                 existing.UpdatedUtc = DateTime.UtcNow;
                 _entries.Update(existing);
             }
@@ -90,5 +108,10 @@ public sealed class WsjtxConfigEntry
     public string Host { get; set; } = "127.0.0.1";
     public int Port { get; set; } = 2237;
     public string InstanceId { get; set; } = "WSJT-X";
+    public string Transport { get; set; } = "unicast";
+    public string MulticastGroup { get; set; } = "224.0.0.73";
+    public int MulticastTtl { get; set; } = 1;
+    public bool SendQsoLogged { get; set; }
+    public bool SendLiveDecodes { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

@@ -18,8 +18,13 @@
 //
 // MESSAGE EDITING (CQ / CQ DX / free-text macros) is NOT here — it stays in the
 // digital pop-out (the macros still persist per-mode in the same store). This
-// panel only links out to it. Reporting (PSK / WSPRnet / WSJT-X UDP) is SURFACED
-// and deep-linked to the Network tab, never duplicated.
+// panel only links out to it. Spotting (PSK Reporter / WSPRnet) is SURFACED and
+// deep-linked to the Network tab, never duplicated. LOGGING, by contrast, is
+// owned here: the Zeus internal logbook is the always-on default and an ADDITIVE
+// external logger (WSJT-X UDP — the universal contract Log4OM / N1MM+ /
+// GridTracker / JTAlert all speak) plus QRZ cloud upload only ADD copies. The
+// external-logger form reuses the same wsjtx-store/api the Network tab uses (not
+// a fork); egress is OFF until the operator opts in and SAVES.
 //
 // Styling is HUD-token-only (ft8-theme.css --hud-*) — no raw hex.
 
@@ -29,7 +34,9 @@ import { useFt8SettingsStore } from '../state/ft8-settings-store';
 import { useFt8Store } from '../state/ft8-store';
 import { useSpottingStore } from '../state/spotting-store';
 import { useWsjtxStore } from '../state/wsjtx-store';
+import { useQrzStore } from '../state/qrz-store';
 import { useLayoutStore } from '../state/layout-store';
+import type { WsjtxConfig } from '../api/wsjtx';
 import {
   DIGITAL_MODES,
   WF_PALETTES,
@@ -46,6 +53,7 @@ import {
   Chip,
   NumberRow,
   SegRow,
+  SelectRow,
   TextRow,
   ToggleRow,
 } from '../layout/ft8/ft8-settings-controls';
@@ -91,8 +99,10 @@ export function ZeusDigitalSettingsPanel({
   // Reporting status (read-only chips — owned by the Network tab, surfaced here).
   const spotStatus = useSpottingStore((s) => s.status);
   const refreshSpotting = useSpottingStore((s) => s.refreshStatus);
-  const wsjtxStatus = useWsjtxStore((s) => s.status);
   const refreshWsjtx = useWsjtxStore((s) => s.refreshStatus);
+  // QRZ logbook (cloud) availability — surfaced as a logging option. Publishing
+  // QSOs to QRZ needs a logbook API key; the QRZ tab owns the credential.
+  const qrzHasApiKey = useQrzStore((s) => s.hasApiKey);
 
   // Freshen identity + reporting + the selected mode's settings on open / mode
   // switch so the panel always reflects the server (QRZ home may resolve late).
@@ -108,6 +118,7 @@ export function ZeusDigitalSettingsPanel({
   // Deep-link to the Network settings tab (PSK / WSPRnet / WSJT-X UDP live there).
   const setSettingsView = useLayoutStore((s) => s.setSettingsView);
   const openNetworkSettings = () => setSettingsView(true, 'network');
+  const openQrzSettings = () => setSettingsView(true, 'qrz');
 
   const isWspr = mode === 'WSPR';
 
@@ -366,29 +377,41 @@ export function ZeusDigitalSettingsPanel({
         </div>
       </section>
 
-      {/* § Reporting & Logging — surface/deep-link reporting, own logging. */}
+      {/* § Reporting — spotting networks (owned by the Network tab, surfaced). */}
       <section className="ft8-region ft8-set-section">
-        <div className="ft8-region__head">Reporting &amp; Logging</div>
+        <div className="ft8-region__head">Reporting</div>
         <div className="ft8-set-body">
           <div className="ft8-set-chips">
             <Chip label="PSK Reporter" on={!!spotStatus?.pskReporterEnabled} />
             <Chip label="WSPRnet" on={!!spotStatus?.wsprnetEnabled} />
-            <Chip label="WSJT-X UDP" on={!!wsjtxStatus?.enabled} />
           </div>
           <button type="button" className="ft8-set-link" onClick={openNetworkSettings}>
             Open Network settings →
           </button>
           <p className="ft8-set-note">
-            PSK Reporter, WSPRnet and WSJT-X UDP push are configured on the Network tab.
+            PSK Reporter and WSPRnet automatic spotting are configured on the Network tab.
+          </p>
+        </div>
+      </section>
+
+      {/* § Logging — Zeus internal logbook (ALWAYS on) + ADDITIVE external copies.
+          The internal logbook is the default and is never bypassed; the external
+          logger (WSJT-X UDP) and QRZ cloud upload only ADD copies. */}
+      <section className="ft8-region ft8-set-section">
+        <div className="ft8-region__head">Logging</div>
+        <div className="ft8-set-body">
+          <div className="ft8-set-chips">
+            <Chip label="Zeus internal logbook" on />
+          </div>
+          <p className="ft8-set-note">
+            Every QSO is always saved to the Zeus internal logbook. The options below ADD
+            external copies — they never replace it.
           </p>
 
-          {/* QSO logging is a non-WSPR concept — WSPR is a beacon mode with no
-              QSO/logbook path, so these toggles are hidden for WSPR (the WSPR
-              pop-out consumes none of them). */}
+          {/* Internal QSO-logging behaviour — non-WSPR (WSPR is a beacon mode
+              with no QSO/logbook path, so these toggles are hidden for it). */}
           {!isWspr && (
             <>
-              <div className="ft8-set-divider" />
-
               <ToggleRow
                 label="Auto-log QSO"
                 hint="Write completed QSOs to the logbook automatically."
@@ -420,8 +443,222 @@ export function ZeusDigitalSettingsPanel({
               </p>
             </>
           )}
+
+          <div className="ft8-set-divider" />
+
+          {/* Additive external logger over the WSJT-X UDP protocol. */}
+          <ExternalLoggingGroup />
+
+          <div className="ft8-set-divider" />
+
+          {/* QRZ cloud logbook — credential lives on the QRZ tab. */}
+          <div className="ft8-set-chips">
+            <Chip label="QRZ Logbook (cloud)" on={qrzHasApiKey} />
+          </div>
+          <button type="button" className="ft8-set-link" onClick={openQrzSettings}>
+            Open QRZ settings →
+          </button>
+          <p className="ft8-set-note">
+            Push logged QSOs to your QRZ.com logbook from the Logbook panel. Requires a QRZ
+            logbook API key, set on the QRZ tab.
+          </p>
         </div>
       </section>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// External logging over the WSJT-X UDP protocol — the universal contract every
+// modern logger speaks (Log4OM, N1MM+, GridTracker, JTAlert, …). This is the
+// SAME wsjtx-store/api the Network tab's WsjtxSettingsPanel uses (not a fork):
+// the additive fields (transport, multicast group/TTL, instance-id, type-5,
+// live decodes) are edited here, basic enable/host/port can be edited in either
+// place, and both POST through saveConfig so they stay coherent. Egress is OFF
+// by default and nothing leaves the machine until the operator hits SAVE.
+//
+// SEND-ONLY: Zeus never opens an inbound WSJT-X listener, so external loggers
+// cannot key the radio — there is no Reply/HaltTx/FreeText path. (Mirrored from
+// the backend safety note.)
+// ---------------------------------------------------------------------------
+
+type LoggerPreset = 'log4om' | 'n1mm' | 'gridtracker' | 'jtalert' | 'custom';
+
+const LOGGER_PRESETS: ReadonlyArray<{ value: LoggerPreset; label: string }> = [
+  { value: 'log4om', label: 'Log4OM' },
+  { value: 'n1mm', label: 'N1MM+' },
+  { value: 'gridtracker', label: 'GridTracker' },
+  { value: 'jtalert', label: 'JTAlert' },
+  { value: 'custom', label: 'Custom (raw WSJT-X UDP)' },
+];
+
+// Per-preset sensible defaults. Host/port match the WSJT-X convention
+// (127.0.0.1:2237) for every preset and stay fully editable; the meaningful
+// difference is which extra streams a tool wants — GridTracker needs the live
+// decode/status stream for its map & roster, Log4OM prefers the structured
+// type-5 QSOLogged. All additive, all overridable.
+const PRESET_DEFAULTS: Record<
+  Exclude<LoggerPreset, 'custom'>,
+  Pick<WsjtxConfig, 'host' | 'port' | 'transport' | 'sendQsoLogged' | 'sendLiveDecodes'>
+> = {
+  log4om: { host: '127.0.0.1', port: 2237, transport: 'unicast', sendQsoLogged: true, sendLiveDecodes: false },
+  n1mm: { host: '127.0.0.1', port: 2237, transport: 'unicast', sendQsoLogged: false, sendLiveDecodes: false },
+  gridtracker: { host: '127.0.0.1', port: 2237, transport: 'unicast', sendQsoLogged: false, sendLiveDecodes: true },
+  jtalert: { host: '127.0.0.1', port: 2237, transport: 'unicast', sendQsoLogged: false, sendLiveDecodes: false },
+};
+
+export function ExternalLoggingGroup() {
+  const config = useWsjtxStore((s) => s.config);
+  const status = useWsjtxStore((s) => s.status);
+  const saveConfig = useWsjtxStore((s) => s.saveConfig);
+
+  // Local form state — nothing is committed (no egress) until SAVE. Seeded from
+  // the server-backed config and re-seeded whenever it changes.
+  const [form, setForm] = useState<WsjtxConfig>(config);
+  const [preset, setPreset] = useState<LoggerPreset>('custom');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setForm(config);
+  }, [config]);
+
+  const patch = (p: Partial<WsjtxConfig>) => setForm((f) => ({ ...f, ...p }));
+  // Any manual field edit drops the preset back to Custom — the values no longer
+  // match a named tool's profile.
+  const editField = (p: Partial<WsjtxConfig>) => {
+    patch(p);
+    setPreset('custom');
+  };
+  const applyPreset = (p: LoggerPreset) => {
+    setPreset(p);
+    if (p !== 'custom') patch(PRESET_DEFAULTS[p]);
+  };
+
+  async function onSave() {
+    setSaving(true);
+    try {
+      const port =
+        Number.isFinite(form.port) && form.port > 0 && form.port < 65536 ? form.port : 2237;
+      await saveConfig({
+        ...form,
+        port,
+        host: form.host.trim() || '127.0.0.1',
+        instanceId: form.instanceId.trim() || 'WSJT-X',
+        multicastGroup: form.multicastGroup.trim() || '224.0.0.73',
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const live = status?.enabled ?? false;
+  const isMulticast = form.transport === 'multicast';
+
+  return (
+    <div aria-label="External logging (WSJT-X UDP)">
+      <ToggleRow
+        label="Also send to an external logger"
+        hint="Mirror each logged QSO out over the WSJT-X UDP protocol. Additive — Zeus keeps the internal copy."
+        checked={form.enabled}
+        onChange={(v) => patch({ enabled: v })}
+      />
+
+      {form.enabled && (
+        <>
+          <SelectRow<LoggerPreset>
+            label="Logger preset"
+            hint="Sets sensible host/port and stream defaults — all fields stay editable."
+            value={preset}
+            options={LOGGER_PRESETS}
+            onChange={applyPreset}
+          />
+          <TextRow
+            label="Host"
+            hint="127.0.0.1 for a logger on this machine; otherwise the logger's LAN IP."
+            value={form.host}
+            placeholder="127.0.0.1"
+            onChange={(v) => editField({ host: v })}
+          />
+          <NumberRow
+            label="Port"
+            hint="WSJT-X default is 2237 — match your logger's UDP input."
+            value={form.port}
+            min={1}
+            max={65535}
+            onChange={(v) => editField({ port: v })}
+          />
+          <SegRow
+            label="Transport"
+            hint="Multicast lets several loggers receive the same stream at once."
+            value={form.transport}
+            options={[
+              { value: 'unicast', label: 'Unicast' },
+              { value: 'multicast', label: 'Multicast' },
+            ]}
+            onChange={(v) => editField({ transport: v })}
+          />
+          {isMulticast && (
+            <>
+              <TextRow
+                label="Multicast group"
+                hint="IPv4 multicast address (224.0.0.0–239.255.255.255). WSJT-X uses 224.0.0.73."
+                value={form.multicastGroup}
+                placeholder="224.0.0.73"
+                onChange={(v) => editField({ multicastGroup: v })}
+              />
+              <NumberRow
+                label="Multicast TTL"
+                hint="Hop limit. 1 keeps the stream on the local subnet."
+                value={form.multicastTtl}
+                min={1}
+                max={255}
+                onChange={(v) => editField({ multicastTtl: v })}
+              />
+            </>
+          )}
+          <TextRow
+            label="Instance id"
+            hint='Identifies this sender to the logger. Leave "WSJT-X" for maximum compatibility.'
+            value={form.instanceId}
+            placeholder="WSJT-X"
+            onChange={(v) => editField({ instanceId: v })}
+          />
+          <ToggleRow
+            label="Send structured QSO (type 5) too"
+            hint="Emit QSOLogged alongside the ADIF record. Some loggers (e.g. Log4OM) prefer it."
+            checked={form.sendQsoLogged}
+            onChange={(v) => editField({ sendQsoLogged: v })}
+          />
+          <ToggleRow
+            label="Send live decodes & status (for GridTracker)"
+            hint="Stream Decode/WSPRDecode/Status/Heartbeat so map & roster tools stay live."
+            checked={form.sendLiveDecodes}
+            onChange={(v) => editField({ sendLiveDecodes: v })}
+          />
+        </>
+      )}
+
+      <div className="ft8-set-row ft8-set-row--readonly">
+        <span className="ft8-set-row__text">
+          <span className="ft8-set-row__label">
+            <span
+              className="ft8-set-chip__dot"
+              style={{ background: live ? 'var(--hud-cq)' : 'var(--hud-text-dim)' }}
+            />{' '}
+            External logger
+          </span>
+          <span className="ft8-set-row__hint">
+            {live
+              ? status?.transport === 'multicast'
+                ? `Sending to multicast ${status?.multicastGroup}:${status?.port}`
+                : `Sending to ${status?.host}:${status?.port}`
+              : 'Disabled — no QSO data leaves this machine.'}
+          </span>
+        </span>
+        <button type="button" className="ft8-set-link" disabled={saving} onClick={() => void onSave()}>
+          {saving ? 'SAVING…' : 'SAVE'}
+        </button>
+      </div>
     </div>
   );
 }

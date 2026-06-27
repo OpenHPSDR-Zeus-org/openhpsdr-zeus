@@ -3448,7 +3448,10 @@ public static class ZeusEndpoints
 
         app.MapPost("/api/wsjtx/config", (WsjtxRuntimeConfig req, WsjtxManagementService wsjtx, HttpContext ctx) =>
         {
-            log.LogInformation("api.wsjtx.config enabled={En} host={Host} port={Port}", req.Enabled, req.Host, req.Port);
+            log.LogInformation(
+                "api.wsjtx.config enabled={En} transport={Tr} host={Host} port={Port} group={Grp} ttl={Ttl} type5={T5} live={Live}",
+                req.Enabled, req.Transport, req.Host, req.Port, req.MulticastGroup, req.MulticastTtl,
+                req.SendQsoLogged, req.SendLiveDecodes);
             var status = wsjtx.SetConfig(req);
             return Results.Ok(status);
         });

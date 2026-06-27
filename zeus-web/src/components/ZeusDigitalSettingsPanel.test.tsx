@@ -87,16 +87,64 @@ vi.mock('../api/spotting', () => ({
 }));
 
 vi.mock('../api/wsjtx', () => ({
-  getWsjtxStatus: vi.fn(async () => ({ enabled: false, host: '127.0.0.1', port: 2237 })),
-  postWsjtxConfig: vi.fn(async (c: unknown) => c),
+  WSJTX_DEFAULT_PORT: 2237,
+  WSJTX_DEFAULT_GROUP: '224.0.0.73',
+  WSJTX_DEFAULT_TTL: 1,
+  WSJTX_DEFAULT_INSTANCE: 'WSJT-X',
+  getWsjtxStatus: vi.fn(async () => ({
+    enabled: false,
+    host: '127.0.0.1',
+    port: 2237,
+    instanceId: 'WSJT-X',
+    transport: 'unicast',
+    multicastGroup: '224.0.0.73',
+    multicastTtl: 1,
+    sendQsoLogged: false,
+    sendLiveDecodes: false,
+  })),
+  postWsjtxConfig: vi.fn(async (c: Record<string, unknown>) => ({ ...c })),
 }));
 
 import { ZeusDigitalSettingsPanel } from './ZeusDigitalSettingsPanel';
 import { useFt8Store } from '../state/ft8-store';
 import { useFt8SettingsStore } from '../state/ft8-settings-store';
 import { useLayoutStore } from '../state/layout-store';
+import { useWsjtxStore } from '../state/wsjtx-store';
+import type { WsjtxConfig } from '../api/wsjtx';
 import * as operatorApi from '../api/operator';
 import * as ft8SettingsApi from '../api/ft8-settings';
+import * as wsjtxApi from '../api/wsjtx';
+
+const WSJTX_BASE_CONFIG: WsjtxConfig = {
+  enabled: false,
+  host: '127.0.0.1',
+  port: 2237,
+  instanceId: 'WSJT-X',
+  transport: 'unicast',
+  multicastGroup: '224.0.0.73',
+  multicastTtl: 1,
+  sendQsoLogged: false,
+  sendLiveDecodes: false,
+};
+
+function setSelectValue(select: HTMLSelectElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLSelectElement.prototype,
+    'value',
+  )!.set!;
+  act(() => {
+    setter.call(select, value);
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
+function clickSwitch(container: HTMLElement, label: string) {
+  const btn = container.querySelector(
+    `button[aria-label="${label}"]`,
+  ) as HTMLButtonElement | null;
+  expect(btn, `switch "${label}"`).toBeTruthy();
+  act(() => btn!.click());
+}
 
 function setInputValue(input: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(
@@ -126,6 +174,9 @@ describe('ZeusDigitalSettingsPanel', () => {
       hydrated: { FT8: true, FT4: true, WSPR: true },
     });
     useLayoutStore.setState({ settingsViewOpen: false, settingsInitialTab: undefined });
+    // Reset the (singleton) WSJT-X store to a known disabled baseline so the
+    // external-logging form starts clean in every test.
+    useWsjtxStore.setState({ config: { ...WSJTX_BASE_CONFIG }, status: { ...WSJTX_BASE_CONFIG } });
   });
 
   it('renders the GLOBAL Station identity fields and the mode selector', () => {
@@ -225,10 +276,76 @@ describe('ZeusDigitalSettingsPanel', () => {
     const { container, unmount } = render(createElement(ZeusDigitalSettingsPanel));
     expect(container.textContent).toContain('PSK Reporter');
     expect(container.textContent).toContain('WSPRnet');
-    expect(container.textContent).toContain('WSJT-X UDP');
     clickByText(container, 'Open Network settings →');
     expect(useLayoutStore.getState().settingsViewOpen).toBe(true);
     expect(useLayoutStore.getState().settingsInitialTab).toBe('network');
+    unmount();
+  });
+
+  it('Logging group frames external logging as ADDITIVE to the internal logbook (default off)', () => {
+    const { container, unmount } = render(createElement(ZeusDigitalSettingsPanel));
+    expect(container.textContent).toContain('Zeus internal logbook');
+    expect(container.textContent).toContain('Also send to an external logger');
+    // Default off — the preset/host/port form is hidden until the operator opts in.
+    expect(container.textContent).not.toContain('Logger preset');
+    unmount();
+  });
+
+  it('opting in reveals the external-logger form and surfaces the multicast option', () => {
+    const { container, unmount } = render(createElement(ZeusDigitalSettingsPanel));
+    clickSwitch(container, 'Also send to an external logger');
+    expect(container.textContent).toContain('Logger preset');
+    expect(container.textContent).toContain('Host');
+    expect(container.textContent).toContain('Transport');
+    // Multicast group/TTL only show once Multicast transport is selected.
+    expect(container.textContent).not.toContain('Multicast group');
+    clickByText(container, 'Multicast');
+    expect(container.textContent).toContain('Multicast group');
+    expect(container.textContent).toContain('Multicast TTL');
+    unmount();
+  });
+
+  it('GridTracker preset turns on the live decode/status stream', () => {
+    const { container, unmount } = render(createElement(ZeusDigitalSettingsPanel));
+    clickSwitch(container, 'Also send to an external logger');
+    const presetSelect = container.querySelector(
+      'select[aria-label="Logger preset"]',
+    ) as HTMLSelectElement;
+    expect(presetSelect).toBeTruthy();
+    setSelectValue(presetSelect, 'gridtracker');
+    const liveSwitch = container.querySelector(
+      'button[aria-label="Send live decodes & status (for GridTracker)"]',
+    ) as HTMLButtonElement;
+    expect(liveSwitch.getAttribute('aria-checked')).toBe('true');
+    unmount();
+  });
+
+  it('SAVE persists the full external-logger config (transport/multicast/live) to the backend', async () => {
+    const { container, unmount } = render(createElement(ZeusDigitalSettingsPanel));
+    clickSwitch(container, 'Also send to an external logger');
+    clickByText(container, 'Multicast');
+    clickSwitch(container, 'Send live decodes & status (for GridTracker)');
+    clickByText(container, 'SAVE');
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(wsjtxApi.postWsjtxConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enabled: true,
+        transport: 'multicast',
+        multicastGroup: '224.0.0.73',
+        sendLiveDecodes: true,
+      }),
+    );
+    unmount();
+  });
+
+  it('surfaces QRZ cloud logging and deep-links to the QRZ tab', () => {
+    const { container, unmount } = render(createElement(ZeusDigitalSettingsPanel));
+    expect(container.textContent).toContain('QRZ Logbook (cloud)');
+    clickByText(container, 'Open QRZ settings →');
+    expect(useLayoutStore.getState().settingsViewOpen).toBe(true);
+    expect(useLayoutStore.getState().settingsInitialTab).toBe('qrz');
     unmount();
   });
 });

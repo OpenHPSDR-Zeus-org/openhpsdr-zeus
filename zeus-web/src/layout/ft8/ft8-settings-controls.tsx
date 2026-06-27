@@ -82,6 +82,37 @@ export function SegRow<T extends string>(props: {
   );
 }
 
+export function SelectRow<T extends string>(props: {
+  label: string;
+  hint?: string;
+  value: T;
+  options: ReadonlyArray<{ value: T; label: string }>;
+  disabled?: boolean;
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div className={`ft8-set-row${props.disabled ? ' is-disabled' : ''}`}>
+      <span className="ft8-set-row__text">
+        <span className="ft8-set-row__label">{props.label}</span>
+        {props.hint && <span className="ft8-set-row__hint">{props.hint}</span>}
+      </span>
+      <select
+        className="ft8-set-input"
+        aria-label={props.label}
+        value={props.value}
+        disabled={props.disabled}
+        onChange={(e) => props.onChange(e.target.value as T)}
+      >
+        {props.options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 export function TextRow(props: {
   label: string;
   hint?: string;

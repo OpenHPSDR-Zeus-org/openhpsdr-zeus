@@ -14,28 +14,58 @@
 
 import { ApiError } from './client';
 
+// "unicast" → one logger on Host:Port. "multicast" → many loggers receive the
+// same stream via MulticastGroup/MulticastTtl (the only way to feed e.g.
+// GridTracker AND Log4OM at once, since unicast hands the port to a single
+// binder). Mirrors WsjtxRuntimeConfig.Transport in Zeus.Contracts.
+export type WsjtxTransport = 'unicast' | 'multicast';
+
 export type WsjtxStatus = {
   enabled: boolean;
   host: string;
   port: number;
   instanceId: string;
+  transport: WsjtxTransport;
+  multicastGroup: string;
+  multicastTtl: number;
+  sendQsoLogged: boolean;
+  sendLiveDecodes: boolean;
 };
 
 export type WsjtxConfig = {
   enabled: boolean;
   host: string;
   port: number;
+  instanceId: string;
+  transport: WsjtxTransport;
+  multicastGroup: string;
+  multicastTtl: number;
+  sendQsoLogged: boolean;
+  sendLiveDecodes: boolean;
 };
 
-const DEFAULT_PORT = 2237;
+export const WSJTX_DEFAULT_PORT = 2237;
+export const WSJTX_DEFAULT_GROUP = '224.0.0.73';
+export const WSJTX_DEFAULT_TTL = 1;
+export const WSJTX_DEFAULT_INSTANCE = 'WSJT-X';
+
+function normalizeTransport(v: unknown): WsjtxTransport {
+  return v === 'multicast' ? 'multicast' : 'unicast';
+}
 
 function normalizeStatus(raw: unknown): WsjtxStatus {
   const r = (raw ?? {}) as Record<string, unknown>;
   return {
     enabled: Boolean(r.enabled),
     host: typeof r.host === 'string' ? r.host : '127.0.0.1',
-    port: typeof r.port === 'number' ? r.port : DEFAULT_PORT,
-    instanceId: typeof r.instanceId === 'string' ? r.instanceId : 'WSJT-X',
+    port: typeof r.port === 'number' ? r.port : WSJTX_DEFAULT_PORT,
+    instanceId: typeof r.instanceId === 'string' ? r.instanceId : WSJTX_DEFAULT_INSTANCE,
+    transport: normalizeTransport(r.transport),
+    multicastGroup:
+      typeof r.multicastGroup === 'string' ? r.multicastGroup : WSJTX_DEFAULT_GROUP,
+    multicastTtl: typeof r.multicastTtl === 'number' ? r.multicastTtl : WSJTX_DEFAULT_TTL,
+    sendQsoLogged: Boolean(r.sendQsoLogged),
+    sendLiveDecodes: Boolean(r.sendLiveDecodes),
   };
 }
 

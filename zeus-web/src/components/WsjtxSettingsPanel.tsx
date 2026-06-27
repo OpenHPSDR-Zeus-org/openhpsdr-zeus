@@ -38,7 +38,11 @@ export function WsjtxSettingsPanel() {
     try {
       const portNum = Number(port);
       if (!Number.isFinite(portNum) || portNum <= 0 || portNum >= 65536) return;
-      await saveConfig({ enabled, host: host.trim() || '127.0.0.1', port: portNum });
+      // Spread the current config so the additive fields (transport, multicast
+      // group/TTL, instance-id, type-5, live decodes) configured in the Zeus
+      // Digital "Logging" group are preserved — this Network-tab form only edits
+      // enable/host/port.
+      await saveConfig({ ...config, enabled, host: host.trim() || '127.0.0.1', port: portNum });
     } finally {
       setSaving(false);
     }

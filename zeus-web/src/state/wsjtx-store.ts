@@ -12,6 +12,10 @@ import { create } from 'zustand';
 import {
   getWsjtxStatus,
   postWsjtxConfig,
+  WSJTX_DEFAULT_GROUP,
+  WSJTX_DEFAULT_INSTANCE,
+  WSJTX_DEFAULT_PORT,
+  WSJTX_DEFAULT_TTL,
   type WsjtxConfig,
   type WsjtxStatus,
 } from '../api/wsjtx';
@@ -22,8 +26,31 @@ import {
 const DEFAULT_CONFIG: WsjtxConfig = {
   enabled: false,
   host: '127.0.0.1',
-  port: 2237,
+  port: WSJTX_DEFAULT_PORT,
+  instanceId: WSJTX_DEFAULT_INSTANCE,
+  transport: 'unicast',
+  multicastGroup: WSJTX_DEFAULT_GROUP,
+  multicastTtl: WSJTX_DEFAULT_TTL,
+  sendQsoLogged: false,
+  sendLiveDecodes: false,
 };
+
+// Project a status snapshot onto a config, coalescing any field a (possibly
+// older / mocked) backend omits to the back-compatible default so the form
+// never holds an undefined.
+function configFromStatus(status: WsjtxStatus): WsjtxConfig {
+  return {
+    enabled: status.enabled,
+    host: status.host ?? DEFAULT_CONFIG.host,
+    port: status.port ?? DEFAULT_CONFIG.port,
+    instanceId: status.instanceId ?? DEFAULT_CONFIG.instanceId,
+    transport: status.transport ?? DEFAULT_CONFIG.transport,
+    multicastGroup: status.multicastGroup ?? DEFAULT_CONFIG.multicastGroup,
+    multicastTtl: status.multicastTtl ?? DEFAULT_CONFIG.multicastTtl,
+    sendQsoLogged: status.sendQsoLogged ?? DEFAULT_CONFIG.sendQsoLogged,
+    sendLiveDecodes: status.sendLiveDecodes ?? DEFAULT_CONFIG.sendLiveDecodes,
+  };
+}
 
 export type WsjtxStoreState = {
   config: WsjtxConfig;
@@ -41,16 +68,18 @@ export const useWsjtxStore = create<WsjtxStoreState>((set, get) => ({
     try {
       const status = await getWsjtxStatus();
       const current = get().config;
+      const incoming = configFromStatus(status);
       const synced =
-        current.enabled === status.enabled &&
-        current.host === status.host &&
-        current.port === status.port;
-      set({
-        status,
-        config: synced
-          ? current
-          : { enabled: status.enabled, host: status.host, port: status.port },
-      });
+        current.enabled === incoming.enabled &&
+        current.host === incoming.host &&
+        current.port === incoming.port &&
+        current.instanceId === incoming.instanceId &&
+        current.transport === incoming.transport &&
+        current.multicastGroup === incoming.multicastGroup &&
+        current.multicastTtl === incoming.multicastTtl &&
+        current.sendQsoLogged === incoming.sendQsoLogged &&
+        current.sendLiveDecodes === incoming.sendLiveDecodes;
+      set({ status, config: synced ? current : incoming });
     } catch {
       /* transient — next refresh recovers */
     }
