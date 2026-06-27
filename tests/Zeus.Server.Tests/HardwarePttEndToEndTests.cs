@@ -52,12 +52,16 @@ public sealed class HardwarePttEndToEndTests : IDisposable
         public PttSettingsStore Settings { get; }
         public ExternalPttService Service { get; }
         public Protocol2Client Client { get; }
+        private readonly DspSettingsStore _dspStore;
+        private readonly PaSettingsStore _paStore;
 
         public Rig(string dbPath, string pttDbPath)
         {
             var lf = NullLoggerFactory.Instance;
-            var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, dbPath);
-            var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, dbPath + ".pa");
+            _dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, dbPath);
+            _paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, dbPath + ".pa");
+            var dspStore = _dspStore;
+            var paStore = _paStore;
             Radio = new RadioService(lf, dspStore, paStore);
             var hub = new StreamingHub(new NullLogger<StreamingHub>());
             var pipeline = new DspPipelineService(Radio, hub, Array.Empty<IRxAudioSink>(), lf);
@@ -82,7 +86,14 @@ public sealed class HardwarePttEndToEndTests : IDisposable
             try { Service.StopAsync(CancellationToken.None).GetAwaiter().GetResult(); } catch { }
             Client.Dispose();
             Service.Dispose();
+            // Close the RadioService and the LiteDB-backed stores (releasing
+            // their shared-engine leases) BEFORE the test class deletes the temp
+            // prefs files, so the engines flush and close instead of being
+            // deleted out from under an open handle.
+            Radio.Dispose();
             Settings.Dispose();
+            _paStore.Dispose();
+            _dspStore.Dispose();
         }
     }
 
@@ -118,6 +129,13 @@ public sealed class HardwarePttEndToEndTests : IDisposable
         // Sanity: the gate is at its untouched power-on default.
         Assert.True(rig.Settings.Get(), "fresh-install default must be ON (Thetis-faithful)");
 
+        // Exercise the CW hang explicitly: only CW modes hold MOX past the
+        // falling edge (issue #870 — voice/data modes drop on the edge). Without
+        // this the radio sits in the default USB voice mode, where the release
+        // fires immediately on a background Task.Run and the "MOX holds" assert
+        // below becomes a race against that task (it lost on a slow runner).
+        rig.Radio.SetMode(RxMode.CWU);
+
         // Footswitch down: a real hi-pri status packet with PTT bit set, run
         // through the live Protocol2Client → RadioService → ExternalPttService
         // chain (no test seam on the service itself).
@@ -127,7 +145,9 @@ public sealed class HardwarePttEndToEndTests : IDisposable
         Assert.Equal(MoxSource.Hardware, rig.Tx.MoxOwner);
         Assert.True(rig.Service.IsKeyed);
 
-        // Footswitch up: MOX holds through the CW hang, then releases.
+        // Footswitch up: in CW the falling edge arms the 250 ms hang timer
+        // (synchronous on the RX thread) rather than releasing, so MOX is
+        // deterministically still up here, then releases after the hang.
         rig.Client.RaiseHiPriStatusForTest(HiPriBody(pttIn: false));
         Assert.True(rig.Tx.IsMoxOn, "MOX dropped before the hang elapsed");
         Assert.False(rig.Service.IsKeyed); // lamp tracks the raw input immediately
