@@ -76,6 +76,10 @@ import {
   parseUrlEmbedConfig,
   type UrlEmbedConfig,
 } from './panels/urlEmbedConfig';
+import {
+  parseLanBrowserConfig,
+  type LanBrowserConfig,
+} from './panels/lanBrowserConfig';
 
 const WORKSPACE_GRID_MARGIN_PX = 3;
 
@@ -1185,12 +1189,12 @@ function LanBrowserTileBody({
   const updateTileInstanceConfig = useLayoutStore(
     (s) => s.updateTileInstanceConfigInLayout,
   );
-  const config: UrlEmbedConfig = useMemo(
-    () => parseUrlEmbedConfig(tile.instanceConfig),
+  const config: LanBrowserConfig = useMemo(
+    () => parseLanBrowserConfig(tile.instanceConfig),
     [tile.instanceConfig],
   );
   const setConfig = useCallback(
-    (next: UrlEmbedConfig) => {
+    (next: LanBrowserConfig) => {
       updateTileInstanceConfig(layoutId, tile.uid, next);
     },
     [layoutId, tile.uid, updateTileInstanceConfig],
