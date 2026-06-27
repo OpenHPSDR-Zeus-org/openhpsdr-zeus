@@ -258,15 +258,25 @@ struct LoadedPlugin {
     Steinberg::IPtr<vst::IAudioProcessor>  processor;
     Steinberg::IPtr<vst::IEditController>  controller; // optional
 
-    int32_t channels{1};
+    int32_t channels{1};          // HOST buffer geometry (what .NET passes)
+    int32_t plugin_channels{1};   // arrangement the plug-in actually accepted
     int32_t sample_rate{48000};
     int32_t block_size{256};
+    int32_t latency_samples{0};   // IAudioProcessor::getLatencySamples() at load
 
     // Pre-sized planar buffers; .NET passes pointers into these via the
     // process callback. We don't own .NET's memory but re-point each
-    // call.
+    // call. Sized to plugin_channels (the plug-in's view).
     std::vector<float*> in_buffer_ptrs;
     std::vector<float*> out_buffer_ptrs;
+
+    // Bridge scratch — allocated at load ONLY when channels != plugin_channels
+    // (mono host ⇄ stereo-only plug-in, or the reverse). Holds the plug-in's
+    // planar I/O so zvst_process can up/down-mix to/from the host geometry
+    // without allocating on the realtime thread. Empty in the matched-channel
+    // fast path (the common case), where buffers point straight at .NET's.
+    std::vector<float> plugin_in_scratch;
+    std::vector<float> plugin_out_scratch;
 
     // ProcessData reused across calls. AudioBusBuffers vectors must be
     // stable storage because ProcessData stores raw pointers into them.
@@ -420,23 +430,45 @@ bool wire_buses_and_activate(LoadedPlugin& p, int32_t* status_out) {
     }
     p.processor = Steinberg::owned(raw_proc);
 
-    // Speaker arrangement — mono or stereo.
-    vst::SpeakerArrangement arr = (p.channels == 1)
-        ? vst::SpeakerArr::kMono
-        : vst::SpeakerArr::kStereo;
-    if (p.processor->setBusArrangements(&arr, 1, &arr, 1) != kResultOk) {
-        // Some plugins are stereo-only; try stereo as a fallback for
-        // mono request.
-        if (p.channels == 1) {
-            arr = vst::SpeakerArr::kStereo;
-            if (p.processor->setBusArrangements(&arr, 1, &arr, 1) != kResultOk) {
-                *status_out = ZVST_ACTIVATE_FAILED;
-                return false;
-            }
+    // Speaker-arrangement negotiation. The host feeds `channels` (1 mono /
+    // 2 stereo); some effects only accept the opposite. Try the host's
+    // geometry first, then the alternate, then whatever the plug-in reports
+    // it prefers — recording the count we settle on so zvst_process can
+    // up/down-mix. Anything needing >2 channels can't bridge into the radio
+    // path, so it fails the load. (The previous revision forced stereo for a
+    // mono host but left the bus geometry at 1 channel — a latent mismatch
+    // that fed stereo-arranged plug-ins a single buffer pointer.)
+    auto try_arrangement = [&](vst::SpeakerArrangement a) -> bool {
+        return p.processor->setBusArrangements(&a, 1, &a, 1) == kResultTrue;
+    };
+    const vst::SpeakerArrangement want = (p.channels == 1)
+        ? vst::SpeakerArr::kMono : vst::SpeakerArr::kStereo;
+    const vst::SpeakerArrangement alt = (p.channels == 1)
+        ? vst::SpeakerArr::kStereo : vst::SpeakerArr::kMono;
+    if (try_arrangement(want)) {
+        p.plugin_channels = p.channels;
+    } else if (try_arrangement(alt)) {
+        p.plugin_channels = (p.channels == 1) ? 2 : 1;
+    } else {
+        // Honour the plug-in's own preferred input arrangement as a fallback.
+        vst::SpeakerArrangement got = 0;
+        int32_t got_ch = 0;
+        if (p.processor->getBusArrangement(vst::kInput, 0, got) == kResultTrue)
+            got_ch = vst::SpeakerArr::getChannelCount(got);
+        if (got_ch >= 1 && got_ch <= 2 && try_arrangement(got)) {
+            p.plugin_channels = got_ch;
         } else {
             *status_out = ZVST_ACTIVATE_FAILED;
             return false;
         }
+    }
+
+    // Refuse plug-ins that can't process 32-bit float. The whole Zeus audio
+    // path is float32; a 64-bit-only effect (vanishingly rare for audio
+    // effects) would otherwise fail opaquely inside setupProcessing.
+    if (p.processor->canProcessSampleSize(vst::kSample32) != kResultTrue) {
+        *status_out = ZVST_UNSUPPORTED_PRECISION;
+        return false;
     }
 
     p.process_setup.processMode = vst::kRealtime;
@@ -462,17 +494,32 @@ bool wire_buses_and_activate(LoadedPlugin& p, int32_t* status_out) {
         // Some plugins return kNotImplemented here — treat as soft success.
     }
 
+    // Capture the plug-in's reported processing latency once, at load, so the
+    // host can report total VST-insert latency (zvst_get_latency_samples).
+    p.latency_samples = static_cast<int32_t>(p.processor->getLatencySamples());
+
     // ProcessData scratch — point bus buffers at our per-channel pointer
-    // vectors; the actual data pointers are refreshed on every process
-    // call (input/output are caller-owned buffers).
-    p.in_buffer_ptrs.assign(static_cast<size_t>(p.channels), nullptr);
-    p.out_buffer_ptrs.assign(static_cast<size_t>(p.channels), nullptr);
-    p.in_bus.numChannels  = p.channels;
-    p.out_bus.numChannels = p.channels;
+    // vectors, sized to the plug-in's NEGOTIATED channel count. The data
+    // pointers are refreshed on every process call: straight at .NET's
+    // buffers when host and plug-in channel counts match, or at the bridge
+    // scratch (allocated once below) when they differ.
+    const int32_t pch = p.plugin_channels;
+    p.in_buffer_ptrs.assign(static_cast<size_t>(pch), nullptr);
+    p.out_buffer_ptrs.assign(static_cast<size_t>(pch), nullptr);
+    p.in_bus.numChannels  = pch;
+    p.out_bus.numChannels = pch;
     p.in_bus.channelBuffers32  = p.in_buffer_ptrs.data();
     p.out_bus.channelBuffers32 = p.out_buffer_ptrs.data();
     p.in_bus.silenceFlags = 0;
     p.out_bus.silenceFlags = 0;
+
+    if (pch != p.channels) {
+        // Private planar staging for the plug-in's view, so the realtime path
+        // can up/down-mix without allocating. Sized to the full block; any
+        // frames <= block_size call fits.
+        p.plugin_in_scratch.assign(static_cast<size_t>(pch) * p.block_size, 0.0f);
+        p.plugin_out_scratch.assign(static_cast<size_t>(pch) * p.block_size, 0.0f);
+    }
 
     p.process_data.processMode = vst::kRealtime;
     p.process_data.symbolicSampleSize = vst::kSample32;
@@ -1135,12 +1182,37 @@ int32_t zvst_process(
     auto* p = static_cast<LoadedPlugin*>(handle);
     if (frames < 1 || frames > p->block_size) return ZVST_INVALID_ARGUMENTS;
 
-    // Point each channel's pointer at the right offset in the caller's
-    // planar buffers (channel 0 starts at index 0, channel 1 at index
-    // `frames`, etc.).
-    for (int c = 0; c < p->channels; c++) {
-        p->in_buffer_ptrs[c]  = const_cast<float*>(input  + static_cast<size_t>(c) * frames);
-        p->out_buffer_ptrs[c] = output + static_cast<size_t>(c) * frames;
+    // Wire the plug-in's planar I/O for this block. When host and plug-in
+    // channel counts match (the common case) the bus buffers point straight
+    // at the caller's planar buffers (channel 0's frames first, then channel
+    // 1's). When they differ we up/down-mix through the pre-allocated scratch
+    // — no allocation, no lock, realtime-safe.
+    const int hch = p->channels;
+    const int pch = p->plugin_channels;
+    const size_t n = static_cast<size_t>(frames);
+    if (pch == hch) {
+        for (int c = 0; c < hch; c++) {
+            p->in_buffer_ptrs[c]  = const_cast<float*>(input  + static_cast<size_t>(c) * frames);
+            p->out_buffer_ptrs[c] = output + static_cast<size_t>(c) * frames;
+        }
+    } else if (hch == 1 && pch == 2) {
+        // Mono host -> stereo plug-in: duplicate mono to both sides (unity).
+        float* il = p->plugin_in_scratch.data();
+        float* ir = il + frames;
+        std::memcpy(il, input, n * sizeof(float));
+        std::memcpy(ir, input, n * sizeof(float));
+        p->in_buffer_ptrs[0]  = il;
+        p->in_buffer_ptrs[1]  = ir;
+        p->out_buffer_ptrs[0] = p->plugin_out_scratch.data();
+        p->out_buffer_ptrs[1] = p->plugin_out_scratch.data() + frames;
+    } else { // hch == 2 && pch == 1
+        // Stereo host -> mono plug-in: downmix (L+R)/2 in.
+        float* im = p->plugin_in_scratch.data();
+        const float* il = input;
+        const float* ir = input + frames;
+        for (size_t i = 0; i < n; i++) im[i] = 0.5f * (il[i] + ir[i]);
+        p->in_buffer_ptrs[0]  = im;
+        p->out_buffer_ptrs[0] = p->plugin_out_scratch.data();
     }
     p->process_data.numSamples = frames;
 
@@ -1160,11 +1232,25 @@ int32_t zvst_process(
     }
 
     if (p->processor->process(p->process_data) != Steinberg::kResultOk) {
-        // Soft fail — copy input to output and signal status. The .NET
-        // wrapper will downgrade the chain to pass-through.
+        // Soft fail — copy input to output (host geometry) and signal status.
+        // The .NET wrapper will downgrade the chain to pass-through.
         std::memcpy(output, input,
             static_cast<size_t>(p->channels) * static_cast<size_t>(frames) * sizeof(float));
         return ZVST_OTHER;
+    }
+
+    // Bridge the plug-in's output back to the host geometry (no-op on the
+    // matched fast path, where the plug-in wrote straight to `output`).
+    if (pch != hch) {
+        if (hch == 1 && pch == 2) {
+            const float* ol  = p->plugin_out_scratch.data();
+            const float* orr = ol + frames;
+            for (size_t i = 0; i < n; i++) output[i] = 0.5f * (ol[i] + orr[i]);
+        } else { // hch == 2 && pch == 1
+            const float* om = p->plugin_out_scratch.data();
+            std::memcpy(output,          om, n * sizeof(float));
+            std::memcpy(output + frames, om, n * sizeof(float));
+        }
     }
 
     // Clear any queued parameter changes — they've been applied. The output
@@ -1187,6 +1273,12 @@ int32_t zvst_set_param(
     // direct input_changes write raced with the audio thread's process().
     zvst_push_param_edit(p, param_id, normalized);
     return ZVST_OK;
+}
+
+int32_t zvst_get_latency_samples(zvst_handle_t handle) {
+    if (!handle) return 0;
+    auto* p = static_cast<LoadedPlugin*>(handle);
+    return p->latency_samples;
 }
 
 int32_t zvst_unload(zvst_handle_t handle) {

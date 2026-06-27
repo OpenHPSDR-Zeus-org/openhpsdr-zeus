@@ -51,6 +51,8 @@ public sealed partial class VstBridgeNative : IVstBridgeNative
 
     public int Shutdown() => zvst_shutdown();
 
+    public int GetLatencySamples(nint handle) => zvst_get_latency_samples(handle);
+
     public int EditorOpen(nint handle, string title) => zvst_editor_open(handle, title);
 
     public int EditorClose(nint handle) => zvst_editor_close(handle);
@@ -118,6 +120,9 @@ public sealed partial class VstBridgeNative : IVstBridgeNative
 
     [LibraryImport(LibraryName, EntryPoint = "zvst_shutdown")]
     private static partial int zvst_shutdown();
+
+    [LibraryImport(LibraryName, EntryPoint = "zvst_get_latency_samples")]
+    private static partial int zvst_get_latency_samples(nint handle);
 
     [LibraryImport(LibraryName, EntryPoint = "zvst_editor_open", StringMarshalling = StringMarshalling.Utf8)]
     private static partial int zvst_editor_open(nint handle, string title);
