@@ -660,22 +660,54 @@ public partial class Program
         // native window was still alive. We deliberately do NOT save here — the
         // window is torn down and its size getters are unsafe to read.
         Console.WriteLine("Window closed; stopping backend.");
-        StopAndDisposeHost(app);
+        ShutdownDesktopHost(app);
         return 0;
     }
 
-    // Desktop/status-window paths drive the host lifecycle by hand (Photino owns
-    // the main thread, so we can't use app.Run()). They historically called only
-    // StopAsync and returned — which stops hosted services but never disposes the
-    // DI container, so no IAsyncDisposable singleton's DisposeAsync ran. That left
-    // in-process macOS Audio Units in the active TX/RX chain undisposed: the
-    // plugin's JUCE Timer thread survived into CLR teardown and faulted with a
-    // SIGSEGV in juce::MessageQueue::post on the freed MessageManager mutex — the
-    // "crash dialog on window close" symptom. Disposing the host runs
-    // AudioPluginBridge.DisposeAsync (AudioChain teardown → AudioComponentInstanceDispose)
-    // and RxVstEngineService.DisposeAsync (out-of-process VST engine kill, which
-    // also stops it orphaning the engine process). The web/service path doesn't
-    // need this because app.RunAsync() disposes the host in its finally block.
+    // libc _exit(2): terminate the process immediately WITHOUT running atexit
+    // handlers or C-runtime static destructors. Present on macOS and Linux.
+    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "_exit")]
+    private static extern void LibcImmediateExit(int status);
+
+    // Orderly host teardown for the Photino desktop / status-window paths, which
+    // drive the host lifecycle by hand (Photino owns the main thread, so we can't
+    // use app.Run()).
+    //
+    // Two layered reasons this is non-trivial:
+    //
+    // 1. DISPOSE, not just stop. The paths historically called only StopAsync and
+    //    returned — which stops hosted services but never disposes the DI
+    //    container, so no IAsyncDisposable singleton's DisposeAsync ran. Disposing
+    //    the host runs AudioPluginBridge.DisposeAsync (AudioChain teardown) and
+    //    RxVstEngineService.DisposeAsync (out-of-process VST engine kill, so it
+    //    isn't orphaned). The web/service path gets this free via app.RunAsync()'s
+    //    finally block.
+    //
+    // 2. HARD-EXIT after the orderly shutdown. Disposing OUR managed chain is not
+    //    enough: a third-party in-process JUCE plugin (e.g. a Waves / Supertone
+    //    Audio Unit loaded through the macOS AU bridge) keeps its OWN background
+    //    juce::Timer thread alive that managed code cannot reach. If we then return
+    //    from Main, the CLR runs C-runtime static destructors, which free the
+    //    plugin's JUCE MessageManager while that Timer thread is still posting to
+    //    it → SIGSEGV in juce::MessageQueue::post (the "Zeus quit unexpectedly"
+    //    dialog on window close). After the orderly StopAsync + DisposeAsync above
+    //    (prefs flushed, LiteDB closed, engines killed), there is nothing left we
+    //    need the static-destructor phase for, so on macOS/Linux we _exit(2): the
+    //    kernel reaps the lingering plugin thread without running the destructors
+    //    it would fault in. Windows desktop does not host the in-process AU bridge,
+    //    so it returns normally (and avoids the WebView2 ProcessExit deadlock noted
+    //    above).
+    private static void ShutdownDesktopHost(WebApplication app)
+    {
+        StopAndDisposeHost(app);
+
+        Console.Out.Flush();
+        Console.Error.Flush();
+        if (OperatingSystem.IsWindows())
+            return; // no in-process JUCE plugins on Windows desktop; return normally
+        try { LibcImmediateExit(0); } catch { /* fall through to a normal return */ }
+    }
+
     private static void StopAndDisposeHost(WebApplication app)
     {
         app.StopAsync().GetAwaiter().GetResult();
@@ -1212,7 +1244,7 @@ public partial class Program
         window.WaitForClose();
 
         Console.WriteLine("Status window closed; stopping backend.");
-        StopAndDisposeHost(app);
+        ShutdownDesktopHost(app);
         return 0;
     }
 }
