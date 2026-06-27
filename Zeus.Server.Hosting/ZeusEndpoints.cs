@@ -121,6 +121,41 @@ public static class ZeusEndpoints
             return Results.Ok(new { enabled = false });
         });
 
+        // Shared operator identity (callsign + Maidenhead grid). This is the SAME
+        // identity the spotting uploaders and FreeDV Reporter resolve from — set
+        // it once here and FT8/FT4 TX ungates everywhere. Server-persisted so the
+        // desktop webview no longer loses it on restart. GET returns both the saved
+        // override and the effective resolved value (override → QRZ home fallback),
+        // so the Settings page can grey QRZ-sourced values.
+        app.MapGet("/api/operator",
+            (OperatorIdentityStore store, QrzService qrz) =>
+                Results.Ok(OperatorIdentityResolver.Status(store, qrz)));
+
+        app.MapPost("/api/operator",
+            (Zeus.Contracts.OperatorIdentity body, OperatorIdentityStore store, QrzService qrz) =>
+            {
+                store.Set(body);
+                log.LogInformation("api.operator.set call={Call} grid={Grid}",
+                    body.Callsign, body.Grid);
+                return Results.Ok(OperatorIdentityResolver.Status(store, qrz));
+            });
+
+        // FT8/FT4 workspace behaviour preferences (auto-seq, decode depth, macros,
+        // logging). Persisted server-side so they survive desktop restarts. Pure
+        // behaviour/UI — none of these transmit; TX still requires an explicit arm.
+        app.MapGet("/api/ft8/settings",
+            (Ft8SettingsStore store) => Results.Ok(store.Get()));
+
+        app.MapPost("/api/ft8/settings",
+            (Zeus.Contracts.Ft8Settings body, Ft8SettingsStore store) =>
+            {
+                var saved = store.Set(body);
+                log.LogInformation(
+                    "api.ft8.settings autoseq={Auto} passes={Passes} autolog={Log}",
+                    saved.AutoSequence, saved.DecodePasses, saved.AutoLog);
+                return Results.Ok(saved);
+            });
+
         // WSPR native spotting control. nativeAvailable is false where the
         // zeus_wspr decoder isn't shipped (e.g. Windows encode-only build today).
         app.MapGet("/api/wspr",

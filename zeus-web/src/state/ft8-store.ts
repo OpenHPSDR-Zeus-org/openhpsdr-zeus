@@ -92,6 +92,11 @@ interface Ft8State {
   clear: () => void;
   /** Move the RX focus cursor to an audio offset (clamped to the passband). */
   setRxFocusHz: (hz: number) => void;
+  /** Set the decode depth (passes 1..4). Applies live: if the decoder is
+   *  currently enabled it re-enables on the same receiver/protocol to push the
+   *  new pass count to the backend; otherwise it just updates the value used by
+   *  the next enable. Persistence is the settings store's job, not this one. */
+  setPasses: (passes: number) => void;
 }
 
 export const useFt8Store = create<Ft8State>((set, get) => ({
@@ -217,4 +222,13 @@ export const useFt8Store = create<Ft8State>((set, get) => ({
 
   setRxFocusHz: (hz) =>
     set({ rxFocusHz: Math.min(FT8_MAX_OFFSET_HZ, Math.max(FT8_MIN_OFFSET_HZ, hz)) }),
+
+  setPasses: (passes) => {
+    const p = Math.min(4, Math.max(1, Math.round(passes)));
+    const { enabled, receiver, protocol } = get();
+    set({ passes: p });
+    if (enabled) {
+      void get().enable({ receiver: receiver >= 0 ? receiver : 0, protocol, passes: p });
+    }
+  },
 }));

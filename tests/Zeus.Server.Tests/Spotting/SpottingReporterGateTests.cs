@@ -45,7 +45,9 @@ public sealed class SpottingReporterGateTests : IDisposable
         var qrz = new QrzService(
             new SingleClientFactory(), NullLogger<QrzService>.Instance,
             new CredentialStore(NullLogger<CredentialStore>.Instance, Path.Combine(_root, $"creds-{Guid.NewGuid():N}.db")));
-        var svc = new SpottingManagementService(NullLogger<SpottingManagementService>.Instance, store, qrz);
+        var identity = new OperatorIdentityStore(
+            NullLogger<OperatorIdentityStore>.Instance, Path.Combine(_root, $"operator-{Guid.NewGuid():N}.db"));
+        var svc = new SpottingManagementService(NullLogger<SpottingManagementService>.Instance, store, identity, qrz);
         if (pskEnabled || wsprEnabled || call.Length > 0 || grid.Length > 0)
             svc.SetConfig(new SpottingRuntimeConfig(pskEnabled, wsprEnabled, call, grid));
         return svc;

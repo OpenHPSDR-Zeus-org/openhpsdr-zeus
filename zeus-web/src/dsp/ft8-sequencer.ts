@@ -48,6 +48,9 @@ export interface QsoState {
   mode: DigitalQsoMode;
   myCall: string;
   myGrid4: string | null;
+  /** CQ directive for the calling state (e.g. "DX", "POTA"), or null for a plain
+   *  CQ. Set from the operator's CQ / CQ-DX macro text. */
+  cqDirective: string | null;
   dxCall: string | null;
   dxGrid4: string | null;
   /** Last numeric report HE sent us (logging only). */
@@ -121,6 +124,8 @@ export interface NewQsoOpts {
   holdTxFreq?: boolean;
   noReplyLimit?: number;
   singleShot?: boolean;
+  /** CQ directive (e.g. "DX") for the calling state; null/undefined = plain CQ. */
+  cqDirective?: string | null;
 }
 
 function baseState(opts: NewQsoOpts): QsoState {
@@ -130,6 +135,7 @@ function baseState(opts: NewQsoOpts): QsoState {
     mode: opts.mode ?? 'FT8',
     myCall: opts.myCall.toUpperCase(),
     myGrid4: opts.myGrid4 ?? null,
+    cqDirective: opts.cqDirective ?? null,
     dxCall: null,
     dxGrid4: null,
     rcvdReportFromHim: null,
@@ -176,7 +182,7 @@ export function currentOutgoing(s: QsoState): string | null {
   const his = s.dxCall ?? '';
   switch (s.progress) {
     case 'calling':
-      return genCq(s.myCall, s.myGrid4);
+      return genCq(s.myCall, s.myGrid4, s.cqDirective);
     case 'replying':
       return genTx1(his, s.myCall, s.myGrid4 ?? '');
     case 'report':

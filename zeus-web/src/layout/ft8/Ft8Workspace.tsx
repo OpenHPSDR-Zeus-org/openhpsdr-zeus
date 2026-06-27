@@ -14,8 +14,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { useFt8Store, type Ft8Row } from '../../state/ft8-store';
 import { useConnectionStore } from '../../state/connection-store';
 import { useOperatorStore } from '../../state/operator-store';
+import { useFt8SettingsStore } from '../../state/ft8-settings-store';
 import { DIGITAL_BANDS } from '../../dsp/digital-segments';
-import { slotOf } from '../../dsp/ft8-sequencer';
+import { slotOf, type Slot } from '../../dsp/ft8-sequencer';
 import { useFt8TxRunner } from '../../dsp/ft8-tx-runner';
 import { qsoStateToLogEntry } from '../../dsp/ft8-qso-log';
 import { useLoggerStore } from '../../state/logger-store';
@@ -24,6 +25,7 @@ import { Ft8TxControl } from './Ft8TxControl';
 import { Ft8ReceivePanel } from './Ft8ReceivePanel';
 import { Ft8ActivityLog } from './Ft8ActivityLog';
 import { Ft8Stats } from './Ft8Stats';
+import { Ft8SettingsView } from './Ft8SettingsView';
 import { SpottingIndicator } from './SpottingIndicator';
 import '../../styles/ft8-theme.css';
 
@@ -47,6 +49,22 @@ function fmtMHz(hz?: number): string {
   return (hz / 1e6).toFixed(6);
 }
 
+/** "Prompt before logging" gate. Returns true when logging should proceed.
+ *  window.confirm is unavailable in headless/test contexts — default to logging
+ *  there so the auto-log path never silently drops a QSO. */
+function confirmLog(dxCall: string | null): boolean {
+  if (typeof window === 'undefined' || typeof window.confirm !== 'function') return true;
+  return window.confirm(`Log QSO with ${dxCall ?? 'this station'}?`);
+}
+
+/** "dB report → comment": fold the exchanged reports into the QSO comment. */
+function reportComment(req: { rstSent: string; rstRcvd: string }): string {
+  const parts: string[] = [];
+  if (req.rstSent) parts.push(`Sent ${req.rstSent}`);
+  if (req.rstRcvd) parts.push(`Rcvd ${req.rstRcvd}`);
+  return parts.join(' ');
+}
+
 export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
   const clock = useUtcClock();
   const protocol = useFt8Store((s) => s.protocol);
@@ -58,13 +76,24 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
   const switchProtocol = useFt8Store((s) => s.switchProtocol);
   const qsyBand = useFt8Store((s) => s.qsyBand);
 
+  // DECODE (the live operating view) vs SETTINGS (the configuration page). The
+  // protocol tabs (FT8/FT4) stay a separate switch; this is the view switch.
+  const [view, setView] = useState<'decode' | 'settings'>('decode');
+
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const rxFocusHz = useFt8Store((s) => s.rxFocusHz);
   const setRxFocusHz = useFt8Store((s) => s.setRxFocusHz);
-  const myCall = useOperatorStore((s) => s.call);
-  const myGrid = useOperatorStore((s) => s.grid);
-  const setCall = useOperatorStore((s) => s.setCall);
-  const setGrid = useOperatorStore((s) => s.setGrid);
+  // Operator identity is server-authoritative. We TX/gate on the RESOLVED value
+  // (override else QRZ home) so a QRZ-home operator transmits without retyping;
+  // the editable override fields live on the Settings page, not the header.
+  const myCall = useOperatorStore((s) => s.resolvedCall);
+  const myGrid = useOperatorStore((s) => s.resolvedGrid);
+  const hydrateOperator = useOperatorStore((s) => s.hydrate);
+
+  // Persisted FT8 prefs — seed the TX controller defaults + drive the decode
+  // filters and the auto-log gate.
+  const settings = useFt8SettingsStore((s) => s.settings);
+  const settingsHydrated = useFt8SettingsStore((s) => s.hydrated);
 
   const addLogEntry = useLoggerStore((s) => s.addLogEntry);
   const entries = useLoggerStore((s) => s.entries);
@@ -97,14 +126,40 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
     mode: protocol,
     active: true,
     band,
+    // Seed the controller's starting slot / offset / hold / call-first from the
+    // operator's persisted FT8 Settings (applied at construction, re-applied once
+    // the settings store reports hydrated to cover the construct-before-hydrate
+    // race).
+    seed: {
+      audioHz: settings.defaultTxOffsetHz,
+      slot: (settings.defaultTxSlot === 0 ? 'even' : 'odd') as Slot,
+      holdTxFreq: settings.holdTxFreq,
+      callFirst: settings.callFirst,
+    },
+    seedReady: settingsHydrated,
+    // Live behaviour prefs — auto-sequence, disable-after-73, no-reply limit and
+    // the RR73/RRR ack — applied live so a Settings edit takes effect mid-session.
+    behavior: {
+      autoSequence: settings.autoSequence,
+      disableTxAfter73: settings.disableTxAfter73,
+      noReplyLimit: settings.callerMaxRetries,
+      txAck: settings.rr73InsteadOfRrr ? 'RR73' : 'RRR',
+    },
     onLogQso: (state) => {
+      // Respect the operator's logging preferences (FT8 Settings → Logging).
+      const s = useFt8SettingsStore.getState().settings;
+      if (!s.autoLog) return;
+      if (s.promptBeforeLog && !confirmLog(state.dxCall)) return;
       const dialHz = useConnectionStore.getState().vfoHz ?? 0;
       const req = qsoStateToLogEntry(state, {
         band: useFt8Store.getState().band,
         freqMhz: dialHz / 1e6,
         mode: state.mode,
       });
-      if (req) void useLoggerStore.getState().addLogEntry(req);
+      if (req) {
+        if (s.reportToComment) req.comment = reportComment(req);
+        void useLoggerStore.getState().addLogEntry(req);
+      }
     },
   });
 
@@ -120,6 +175,9 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
       mode: protocol,
     });
     if (req) {
+      // Manual log is an explicit action, so no prompt — but still honour the
+      // "dB report → comment" preference for parity with the auto-log path.
+      if (settings.reportToComment) req.comment = reportComment(req);
       void addLogEntry(req);
       tx.markLogged();
     }
@@ -132,7 +190,10 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
   // covers the initial fetch.
   useEffect(() => {
     void useLoggerStore.getState().loadEntries();
-  }, []);
+    // Refresh the shared operator identity on open — QRZ home may resolve after
+    // the initial connect, and the override may have been edited elsewhere.
+    void hydrateOperator();
+  }, [hydrateOperator]);
 
   // Esc closes the workspace.
   useEffect(() => {
@@ -148,8 +209,13 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
   }, [onClose]);
 
   // Click a decode → start calling that station (we reply in the opposite slot).
+  // With no operator call we can't generate Tx messages, so instead of silently
+  // doing nothing, send the operator to Settings to set their call.
   const onRowClick = (row: Ft8Row) => {
-    if (!myCall) return; // need an operator call to generate Tx messages
+    if (!myCall) {
+      setView('settings');
+      return;
+    }
     const secs = new Date(row.slotStartUnixMs).getUTCSeconds();
     const senderSlot = slotOf(secs, protocol);
     tx.callStation(row.text, senderSlot);
@@ -178,26 +244,30 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
             </button>
           ))}
         </div>
-        <label className="ft8-ws-id">
-          <span>Call</span>
-          <input
-            value={myCall}
-            onChange={(e) => setCall(e.target.value)}
-            placeholder="MYCALL"
-            spellCheck={false}
-            size={8}
-          />
-        </label>
-        <label className="ft8-ws-id">
-          <span>Grid</span>
-          <input
-            value={myGrid}
-            onChange={(e) => setGrid(e.target.value)}
-            placeholder="FN42"
-            spellCheck={false}
-            size={6}
-          />
-        </label>
+        <div className="ft8-ws-tabs" role="tablist" aria-label="Workspace view">
+          {(['decode', 'settings'] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="tab"
+              aria-selected={view === v}
+              className={`ft8-ws-tab${view === v ? ' is-active' : ''}`}
+              onClick={() => setView(v)}
+            >
+              {v === 'decode' ? 'DECODE' : 'SETTINGS'}
+            </button>
+          ))}
+        </div>
+        {/* Compact, read-only identity chip — editing lives on the Settings page
+            (out of this 44px clipping header). Click to jump to it. */}
+        <button
+          type="button"
+          className={`ft8-ws-call${myCall ? '' : ' is-empty'}`}
+          onClick={() => setView('settings')}
+          title="Edit your callsign / grid in Settings"
+        >
+          {myCall ? `${myCall}${myGrid ? ` · ${myGrid}` : ''}` : 'SET CALL'}
+        </button>
         <span className="ft8-ws-clock">{clock}</span>
         {onClose && (
           <button type="button" className="ft8-ws-close" onClick={onClose}>
@@ -206,7 +276,29 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
         )}
       </header>
 
+      {view === 'settings' ? (
+        <div className="ft8-ws-body ft8-ws-body--settings">
+          <Ft8SettingsView />
+        </div>
+      ) : (
       <div className="ft8-ws-body">
+        {/* Empty-call prompt — TX is gated on an operator callsign, so make the
+            reason visible instead of leaving ENABLE a silent dead button. */}
+        {!myCall && (
+          <div className="ft8-ws-banner" role="alert">
+            <span className="ft8-ws-banner__text">
+              <strong>Set your callsign to transmit.</strong> TX, macros and click-to-call stay
+              disabled until your station call is set.
+            </span>
+            <button
+              type="button"
+              className="ft8-ws-banner__cta"
+              onClick={() => setView('settings')}
+            >
+              Open Settings →
+            </button>
+          </div>
+        )}
         {/* Left — radio / VFO / band */}
         <div className="ft8-ws-col">
           <section className="ft8-region">
@@ -253,6 +345,8 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
                 workedCalls={workedCalls}
                 workedGrids={workedGrids}
                 onRowClick={onRowClick}
+                showOnlyCq={settings.showOnlyCq}
+                hideWorkedBefore={settings.hideWorkedBefore}
               />
             </div>
           </section>
@@ -272,7 +366,14 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
           <section className="ft8-region ft8-region--grow">
             <div className="ft8-region__head">TX control · QSO</div>
             <div className="ft8-region__body">
-              <Ft8TxControl runner={tx} myCall={myCall} myGrid={myGrid} />
+              <Ft8TxControl
+                runner={tx}
+                myCall={myCall}
+                myGrid={myGrid}
+                cqMessage={settings.cqMessage}
+                cqDxMessage={settings.cqDxMessage}
+                freeTextMacro={settings.freeTextMacro}
+              />
             </div>
           </section>
           <section className="ft8-region">
@@ -283,6 +384,7 @@ export function Ft8Workspace({ onClose }: Ft8WorkspaceProps) {
           </section>
         </div>
       </div>
+      )}
 
       <footer className="ft8-ws-status">
         <span className={nativeAvailable ? 'ok' : 'warn'}>
