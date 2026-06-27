@@ -3,18 +3,25 @@
 // Ft8TxControl — the TX control cluster for the FT8/FT4 workspace. Renders the
 // arm/transmit lamps (from the backend's 0x3A status, NOT local optimism), the
 // ENABLE-TX master, HOLD-TX-FREQ, TX EVEN/ODD selector, the message + macro row,
-// the TX audio-offset field, and TUNE. All keying flows through the runner
-// (sequencer → Ft8TxController → backend keyer); arming is explicit only.
+// the TX audio-offset field, the TX POWER / TUNE PWR sliders, and TUNE. All
+// keying flows through the runner (sequencer → Ft8TxController → backend keyer);
+// arming is explicit only.
 //
-// Power (Drive %, Tune %) is owned by the main app's TX controls (Team B) and is
-// intentionally not duplicated here — this cluster only arms, sequences, and
-// keys. TUNE reuses the same /api/tx/tun carrier the main rig uses.
+// Power lives in this cluster per the approved design (docs/designs/ft8-ui.md:
+// "TX CONTROL cluster … TX POWER slider, TUNE button"). NO forked power model:
+// TX POWER / TUNE PWR are the SAME DriveSlider / TunePowerSlider the main rig
+// uses (→ /api/tx/drive, /api/tx/tune-drive), and TUNE reuses /api/tx/tun. TUNE
+// reads server-authoritative tunOn from tx-store (not local optimism), and toggles
+// via setTunOn so the MOX/TUN mutual-exclusion invariant holds.
 
 import { useState } from 'react';
 import { setTun } from '../../api/client';
+import { DriveSlider } from '../../components/DriveSlider';
+import { TunePowerSlider } from '../../components/TunePowerSlider';
 import { genCq, genTx4, genTx5 } from '../../dsp/ft8-sequencer';
 import type { Ft8TxRunnerView } from '../../dsp/ft8-tx-runner';
 import { useFt8TxStore } from '../../state/ft8-tx-store';
+import { useTxStore } from '../../state/tx-store';
 
 export interface Ft8TxControlProps {
   runner: Ft8TxRunnerView;
@@ -25,7 +32,10 @@ export interface Ft8TxControlProps {
 export function Ft8TxControl({ runner, myCall, myGrid }: Ft8TxControlProps) {
   const status = useFt8TxStore((s) => s.status);
   const [custom, setCustom] = useState('');
-  const [tunOn, setTunOn] = useState(false);
+  // Server-authoritative TUN state + the action that keeps MOX/TUN mutually
+  // exclusive (setTunOn(true) clears moxOn) — identical to the main TunButton.
+  const tunOn = useTxStore((s) => s.tunOn);
+  const setTunOn = useTxStore((s) => s.setTunOn);
 
   const qso = runner.qso;
   const dx = qso.dxCall;
@@ -36,6 +46,8 @@ export function Ft8TxControl({ runner, myCall, myGrid }: Ft8TxControlProps) {
 
   const toggleTune = () => {
     const next = !tunOn;
+    // Optimistic via the store action so the button reacts immediately and the
+    // moxOn=false invariant holds; the keyer status frame reconciles.
     setTunOn(next);
     void setTun(next).catch(() => setTunOn(!next));
   };
@@ -199,6 +211,19 @@ export function Ft8TxControl({ runner, myCall, myGrid }: Ft8TxControlProps) {
         >
           STAGE
         </button>
+      </div>
+
+      {/* TX power — the SAME drive/tune sliders the main rig uses (server-
+          authoritative, no forked power model). Placed here per the design doc. */}
+      <div className="ft8-power" aria-label="TX power">
+        <div className="ft8-power__row">
+          <span className="ft8-power__label">TX POWER</span>
+          <DriveSlider />
+        </div>
+        <div className="ft8-power__row">
+          <span className="ft8-power__label">TUNE PWR</span>
+          <TunePowerSlider />
+        </div>
       </div>
 
       {/* TUNE + HALT. */}

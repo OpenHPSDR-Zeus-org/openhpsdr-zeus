@@ -10,6 +10,7 @@
 
 import { create } from 'zustand';
 import { nearestDigitalBand } from '../dsp/digital-segments';
+import { FT8_MAX_OFFSET_HZ, FT8_MIN_OFFSET_HZ } from '../dsp/ft8-passband';
 import {
   configureRadioForDigital,
   qsyToDigitalBand,
@@ -64,6 +65,11 @@ interface Ft8State {
   band: string;
   /** RX config captured at entry so exit restores the radio. */
   priorRadio: RadioModeSnapshot | null;
+  /** RX focus cursor — the audio offset (Hz) the waterfall click last set. FT8
+   *  decodes the whole passband, so this is purely a UI cursor: where a reply
+   *  defaults and which decode the operator is eyeing. Shared by the waterfall
+   *  RX-cursor marker (and, later, decode-row highlighting). */
+  rxFocusHz: number;
 
   /** Open the FT8 workspace: configure the radio (DIGU + wide filter + QSY to
    *  the band dial) and start decoding. */
@@ -84,6 +90,8 @@ interface Ft8State {
   disable: () => Promise<void>;
   /** Clear the decode table. */
   clear: () => void;
+  /** Move the RX focus cursor to an audio offset (clamped to the passband). */
+  setRxFocusHz: (hz: number) => void;
 }
 
 export const useFt8Store = create<Ft8State>((set, get) => ({
@@ -97,6 +105,7 @@ export const useFt8Store = create<Ft8State>((set, get) => ({
   error: null,
   band: '20m',
   priorRadio: null,
+  rxFocusHz: 1500,
 
   openWorkspace: (opts) => {
     const protocol = opts?.protocol ?? get().protocol;
@@ -205,4 +214,7 @@ export const useFt8Store = create<Ft8State>((set, get) => ({
   },
 
   clear: () => set({ rows: [] }),
+
+  setRxFocusHz: (hz) =>
+    set({ rxFocusHz: Math.min(FT8_MAX_OFFSET_HZ, Math.max(FT8_MIN_OFFSET_HZ, hz)) }),
 }));

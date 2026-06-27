@@ -50,6 +50,7 @@ import { FlexWorkspace } from './layout/FlexWorkspace';
 import { Ft8WorkspaceMount } from './layout/ft8/Ft8Workspace';
 import { WsprWorkspaceMount } from './layout/ft8/WsprWorkspace';
 import { useFt8Store } from './state/ft8-store';
+import { useWsprStore } from './state/wspr-store';
 import { WorkspaceErrorBoundary } from './layout/WorkspaceErrorBoundary';
 import { AppErrorBoundary } from './layout/AppErrorBoundary';
 import {
@@ -176,6 +177,16 @@ export default function App() {
   const preampOn = useConnectionStore((s) => s.preampOn);
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
+  // A digital workspace (FT8/FT4 or WSPR) is a fully-opaque full-screen overlay
+  // that mounts its OWN spectrum surfaces. While it is open, unmount the main
+  // console's FlexWorkspace so its (now-occluded) panadapter/waterfall WebGL
+  // contexts are released instead of drawing behind the overlay and competing
+  // for the browser's limited WebGL-context budget (which can evict and force a
+  // context-loss/restore on the main panadapter). Open/close is an explicit,
+  // infrequent operator action, so the remount cost is irrelevant.
+  const ft8WorkspaceOpen = useFt8Store((s) => s.open);
+  const wsprWorkspaceOpen = useWsprStore((s) => s.open);
+  const digitalWorkspaceOpen = ft8WorkspaceOpen || wsprWorkspaceOpen;
   const endpoint = useConnectionStore((s) => s.endpoint);
   const connected = status === 'Connected';
   // Brand sub label reflects what discovery actually saw on the wire
@@ -1121,7 +1132,7 @@ export default function App() {
               />
             </Suspense>
           </AppErrorBoundary>
-        ) : (
+        ) : digitalWorkspaceOpen ? null : (
           <WorkspaceErrorBoundary
             key={activeLayoutId}
             onReset={resetActiveWorkspaceLayout}
