@@ -66,7 +66,11 @@ REUSE wiring to existing panels:
 Station list beautification: vibrant colour-coded lines (CQ / directed-at-me /
 new-grid / worked-before / your-TX), the user's own TX line including the report
 being sent, and a small colour **key/legend** (`Ft8DecodeLegend`). Tokens only
-(`--hud-*` / `--tx`, `color-mix`) — no raw hex.
+(`--hud-*` / `--tx`, `color-mix`) — no raw hex. As of 2026-06-27 the `--hud-*`
+tokens are aliases of the global Zeus palette (see the palette-theme decision
+below — Option A's bespoke dark-HUD theme is reversed), so the colour-coded
+decode lines (CQ → `--ok` green, directed-at-me → `--power` amber, new →
+`--accent-bright`, worked → `--fg-2`, your-TX → `--tx`) read in the global hues.
 
 Note (PR-level): the pop-out no longer mounts its own spectrum surfaces, so the
 old App.tsx WebGL-context-release optimization (which unmounted the main
@@ -188,12 +192,37 @@ Three columns under a top status strip; status bar across the bottom.
 Maps cleanly onto the planned seam reuse: waterfall = existing panadapter,
 logbook = existing `LogService`/`AdifParser`, freq/CAT = existing VFO plumbing.
 
-## DECISION — palette / theme: **Option A, APPROVED (KB2UKA 2026-06-25)**
+## DECISION — palette / theme: **REVERSED (KB2UKA 2026-06-27) — matches the global palette**
 
-The FT8 workspace gets its **own dedicated dark-HUD theme** faithful to the
-mockup — cyan/teal-on-near-black-navy, color-coded decodes, monospaced data.
-Approved by KB2UKA (authority on Zeus visual design). KB2UKA further noted Zeus
-**may adopt this palette globally** at some later point.
+> **REVERSAL (2026-06-27, KB2UKA, visual authority):** Option A below is
+> superseded. The pop-out no longer uses a bespoke dark-HUD cyan/teal theme; it
+> now **matches the global Zeus palette** (`zeus-web/src/styles/tokens.css`).
+> The `--hud-*` layer survives only as a thin ALIAS set that points at global
+> tokens (`--hud-cyan → --accent-bright`, `--hud-bg → --bg-app`, `--hud-cq →
+> --ok`, `--hud-me → --power`, etc.), so the re-skin was colors-only with zero
+> component/markup change. Because the pop-out already tracks the global palette,
+> the "promote the HUD theme app-wide" path below is moot. The original Option A
+> text is retained for history.
+>
+> **Light-theme behaviour (2026-06-27):** the pop-out renders as an in-tree
+> `<div class="digital-window">` (not a portal), so it inherits the global
+> `:root[data-theme="light"]` chassis flip. Because the decode/status hues
+> (`--ok` green, `--power` amber, `--accent-bright` blue) have **no
+> dark-on-silver palette variants** and Zeus has no light-staying body-text
+> token, the pop-out is treated as a **lit instrument** (same doctrine as the
+> panadapter / VFO / S-meter / LED-meter wells, which `tokens.css` keeps dark in
+> light theme): a `:root[data-theme="light"] .digital-window` override keeps its
+> readout surfaces dark (`--bg-inset` / `--bg-meter`, the non-flipping
+> display-well tokens) and re-lights its text via `--btn-active-text` (the one
+> `#fff`-in-both-themes token). Dark theme — the default — is unchanged. This is
+> a light-theme **visual** decision (red-light territory): flagged for Brian
+> (EI6LF) / KB2UKA sign-off.
+
+The (historical) FT8 workspace direction gave it its **own dedicated dark-HUD
+theme** faithful to the mockup — cyan/teal-on-near-black-navy, color-coded
+decodes, monospaced data. Originally approved by KB2UKA (authority on Zeus
+visual design), who further noted Zeus **may adopt this palette globally** at
+some later point — now superseded by the reversal above.
 
 ### Engineering consequence — build it as a token LAYER, not hex
 Because this theme may later become Zeus-wide, do NOT hard-code the HUD colors
