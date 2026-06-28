@@ -423,6 +423,56 @@ public sealed class KiwiSdrTests : IDisposable
         Assert.Equal("waterfall socket closed", cfg.StatusDetail);
     }
 
+    [Fact]
+    public async Task Failed_reconnect_keeps_retrying_with_escalating_backoff()
+    {
+        using var svc = NewService();
+        // Fixed tiny back-off so the loop iterates fast.
+        svc.ReconnectDelayForTest = _ => TimeSpan.FromMilliseconds(1);
+        // Point the slice at a closed local port: every reconnect's
+        // StartClientAsync throws (connection refused) WITHOUT a live client, so
+        // no further "dropped" is ever raised. This is the persistent-outage case
+        // a one-shot reconnect would give up on after a single attempt. Radio is
+        // still down here, so SetConfig only stores the URL (no connect attempt).
+        await svc.SetConfigAsync(true, "127.0.0.1:9", null, CancellationToken.None);
+        svc.SetRadioConnectedForTest(true);
+        svc.SetEnabledForTest(true);
+
+        // Mid-session drop kicks off the back-off loop.
+        svc.OnClientStatusForTest("dropped", "waterfall socket closed");
+
+        // The one-shot bug stuck at attempt=1 forever; the loop must keep
+        // retrying a down host, so the attempt counter climbs well past 1.
+        await WaitForAsync(() => svc.ReconnectAttemptForTest >= 3, timeoutMs: 3000);
+        Assert.True(svc.ReconnectAttemptForTest >= 3,
+            $"expected escalating retries against a down host, got attempt={svc.ReconnectAttemptForTest}");
+
+        // Operator disables the slice: the loop must observe !wantOn and stop,
+        // releasing the single-in-flight guard.
+        svc.SetEnabledForTest(false);
+        await WaitForAsync(() => !svc.ReconnectBusyForTest, timeoutMs: 3000);
+        Assert.False(svc.ReconnectBusyForTest, "disabling the slice must end the reconnect loop");
+    }
+
+    [Fact]
+    public async Task Reconnect_loop_stops_when_radio_drops_midflight()
+    {
+        using var svc = NewService();
+        svc.ReconnectDelayForTest = _ => TimeSpan.FromMilliseconds(20);
+        await svc.SetConfigAsync(true, "127.0.0.1:9", null, CancellationToken.None);
+        svc.SetRadioConnectedForTest(true);
+        svc.SetEnabledForTest(true);
+
+        svc.OnClientStatusForTest("dropped", null);
+        Assert.True(svc.ReconnectBusyForTest);
+
+        // Radio goes down mid-back-off (OnRadioDisconnected bumps _reconnectGen and
+        // clears _radioConnected). The loop must abort and not resurrect a client.
+        svc.OnRadioDisconnectedForTest();
+        await WaitForAsync(() => !svc.ReconnectBusyForTest, timeoutMs: 3000);
+        Assert.False(svc.ReconnectBusyForTest, "radio-down must end the reconnect loop");
+    }
+
     // ---- KiwiDirectoryService: parse the public receiver list ---------------
 
     [Theory]
