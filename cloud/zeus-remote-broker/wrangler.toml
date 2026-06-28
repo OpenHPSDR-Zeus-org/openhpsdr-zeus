@@ -26,6 +26,10 @@ QRZ_VERIFY = "on"
 # app.openhpsdrzeus.com is the zeus-web-app Pages project (the SPA); the apex
 # openhpsdrzeus.com stays the marketing site and must NOT be used here.
 WEB_APP_ORIGIN = "https://app.openhpsdrzeus.com"
+# Origin(s) of the maintainer remote-diagnostics dashboard, comma-separated. It
+# runs at a different origin than the RX SPA above, so its /admin cross-origin
+# fetches need it on the allowlist. Update once the dashboard's final URL is set.
+ADMIN_ORIGINS = "https://openhpsdrzeus.com"
 
 # Per-callsign WebRTC signaling room (WebSocket Hibernation).
 [[durable_objects.bindings]]
