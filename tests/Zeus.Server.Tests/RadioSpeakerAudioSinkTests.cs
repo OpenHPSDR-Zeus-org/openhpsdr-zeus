@@ -114,4 +114,53 @@ public class RadioSpeakerAudioSinkTests : IDisposable
 
         Assert.Equal(0, ring.Count);
     }
+
+    // Issue #1122 — under Protocol 2 the speaker-output toggle must surface so
+    // operators of a P2 codec radio (e.g. ANAN-10E / HermesII firmware) can
+    // route audio to the radio's headphone jack. The actual wire path is
+    // SaturnSpeakerAudioSink (UDP port 1028); this sink owns the P1 path but
+    // shares the "available" reporting so /api/radio/speaker-output lights up
+    // the single Settings → Radio toggle regardless of protocol.
+    [Fact]
+    public void AvailableForConnectedBoard_True_OnP2CodecBoard()
+    {
+        using var radio = NewDisconnectedRadio();
+        using var settings = NewSettings();
+        var ring = new RxAudioRing();
+        var sink = new RadioSpeakerAudioSink(radio, ring, settings);
+
+        radio.MarkProtocol2Connected("127.0.0.1:1024", 192_000, client: null, boardKind: HpsdrBoardKind.HermesII);
+
+        Assert.True(sink.AvailableForConnectedBoard());
+    }
+
+    [Fact]
+    public void Publish_OnP2_DoesNotWriteP1Ring()
+    {
+        using var radio = NewDisconnectedRadio();
+        using var settings = NewSettings();
+        settings.Set(true);
+        var ring = new RxAudioRing();
+        var sink = new RadioSpeakerAudioSink(radio, ring, settings);
+
+        radio.MarkProtocol2Connected("127.0.0.1:1024", 192_000, client: null, boardKind: HpsdrBoardKind.HermesII);
+        sink.Publish(MonoFrame());
+
+        // P2 path is handled by SaturnSpeakerAudioSink; the P1 ring has no
+        // consumer in this mode and must stay empty so nothing piles up.
+        Assert.Equal(0, ring.Count);
+    }
+
+    [Fact]
+    public void AvailableForConnectedBoard_False_OnHl2()
+    {
+        using var radio = NewDisconnectedRadio();
+        using var settings = NewSettings();
+        var ring = new RxAudioRing();
+        var sink = new RadioSpeakerAudioSink(radio, ring, settings);
+
+        radio.MarkProtocol2Connected("127.0.0.1:1024", 192_000, client: null, boardKind: HpsdrBoardKind.HermesLite2);
+
+        Assert.False(sink.AvailableForConnectedBoard());
+    }
 }

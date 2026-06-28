@@ -3,22 +3,30 @@
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2026 Christian Suarez (N9WAR), and contributors.
 //
-// Co-located Saturn/G2 appliance speaker sink. DeskHPSDR feeds the Saturn
-// speaker/headphone path by sending compact UDP audio packets to p2app's
-// speaker port; this sink gives Zeus the same low-latency appliance route
-// without depending on Linux desktop audio devices.
+// Protocol-2 radio-side speaker sink. DeskHPSDR / Thetis feed the radio's
+// onboard codec (TLV320 → speaker / headphone / line-out jack) under
+// Protocol 2 by sending compact UDP audio packets to the firmware's speaker
+// port (1028). This sink gives Zeus the same path so a P2 operator can hear
+// RX through the radio's own speaker jack, mirroring the P1 RadioSpeakerAudioSink
+// behaviour. Works for any P2 board with an onboard codec (Hermes / ANAN-10E /
+// ANAN-100D/200D / HermesC10 / Saturn family) — the byte_to_32bits gateware
+// instance is wired identically across the lineup (issue #1122).
 
 using System.Buffers.Binary;
 using System.Net;
-using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using Zeus.Contracts;
 
 namespace Zeus.Server;
 
 /// <summary>
-/// Sends desktop-mode RX audio directly to the Saturn/G2 speaker UDP endpoint
-/// when Zeus is running on the same Linux host as the radio.
+/// Sends RX audio to the connected Protocol-2 radio's onboard codec via UDP
+/// port 1028. Gated on the operator opt-in <see cref="RadioSpeakerSettingsStore"/>
+/// (default off) so a Zeus user who already hears RX audio host-side doesn't get
+/// doubled output until they ask for it. The Protocol-1 counterpart is
+/// <see cref="RadioSpeakerAudioSink"/> (writes into the EP2 frame's L/R slots
+/// instead of opening a separate UDP socket); the two are mutually exclusive at
+/// runtime because they self-gate on which protocol is currently active.
 /// </summary>
 internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDisposable
 {
@@ -29,10 +37,10 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
     private const int TargetRefreshMs = 1_000;
 
     private readonly RadioService _radio;
+    private readonly RadioSpeakerSettingsStore _settings;
     private readonly ILogger<SaturnSpeakerAudioSink> _log;
     private readonly object _sync = new();
     private readonly byte[] _packet = new byte[PacketBytes];
-    private readonly bool _linux = OperatingSystem.IsLinux();
 
     private Socket? _socket;
     private IPEndPoint? _target;
@@ -44,17 +52,20 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
     private ConnectionStatus _lastStatus = ConnectionStatus.Disconnected;
     private string? _lastEndpoint;
 
-    public SaturnSpeakerAudioSink(RadioService radio, ILogger<SaturnSpeakerAudioSink> log)
+    public SaturnSpeakerAudioSink(
+        RadioService radio,
+        RadioSpeakerSettingsStore settings,
+        ILogger<SaturnSpeakerAudioSink> log)
     {
         _radio = radio;
+        _settings = settings;
         _log = log;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        if (!_linux) return Task.CompletedTask;
-
         _radio.StateChanged += OnRadioStateChanged;
+        _settings.Changed += OnSettingsChanged;
         lock (_sync)
         {
             RefreshTargetLocked(_radio.Snapshot(), force: true);
@@ -64,9 +75,8 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
-        if (!_linux) return Task.CompletedTask;
-
         _radio.StateChanged -= OnRadioStateChanged;
+        _settings.Changed -= OnSettingsChanged;
         lock (_sync)
         {
             CloseSocketLocked();
@@ -76,8 +86,8 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
 
     public void Publish(in AudioFrame frame)
     {
-        if (!_linux) return;
         if (frame.Channels != 1 || frame.SampleRateHz != FrameRateHz) return;
+        if (!_settings.Enabled) return;
 
         lock (_sync)
         {
@@ -102,11 +112,31 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
 
     private void OnRadioStateChanged(StateDto state)
     {
-        if (!_linux) return;
-
         lock (_sync)
         {
             RefreshTargetLocked(state, force: false);
+        }
+    }
+
+    private void OnSettingsChanged()
+    {
+        lock (_sync)
+        {
+            if (_settings.Enabled)
+            {
+                // Operator just opted in — re-evaluate the target so audio starts
+                // flowing on the next published frame rather than waiting up to a
+                // second for the lazy refresh path inside Publish.
+                RefreshTargetLocked(_radio.Snapshot(), force: true);
+            }
+            else
+            {
+                // Drop the buffered tail and close the socket so a later re-enable
+                // starts clean rather than replaying stale samples or sequence
+                // numbers that pre-date the operator's last toggle.
+                _packetFrames = 0;
+                CloseSocketLocked();
+            }
         }
     }
 
@@ -135,15 +165,23 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         var variant = _radio.EffectiveOrionMkIIVariant;
         var caps = BoardCapabilitiesTable.For(board, variant);
 
+        // P2 RX-audio over UDP 1028 reaches the radio's onboard codec on every
+        // board whose firmware instantiates byte_to_32bits(#1028) → TLV320:
+        // Hermes / ANAN-10/10E/100/100B/100D/200D / HermesC10 / Saturn family.
+        // HermesLite2 has no stream codec (HasOnboardCodec=false) and is
+        // naturally excluded; the Protocol-1 path is owned by
+        // RadioSpeakerAudioSink and self-gates on IsProtocol1Active. Also gate
+        // the actual socket open on the operator opt-in so we don't hold a UDP
+        // resource for a feature the operator never asked for.
         if (state.Status != ConnectionStatus.Connected
             || string.IsNullOrWhiteSpace(state.Endpoint)
-            || !caps.HasAudioAmplifier
-            || !RadioService.TryParseEndpoint(state.Endpoint, out var radioEndpoint)
-            || !IsLocalAddress(radioEndpoint.Address))
+            || !_settings.Enabled
+            || !caps.HasOnboardCodec
+            || !RadioService.TryParseEndpoint(state.Endpoint, out var radioEndpoint))
         {
             if (_wasEligible)
             {
-                _log.LogInformation("audio.saturn.speaker disabled");
+                _log.LogInformation("audio.radio.speaker.p2 disabled");
             }
             _wasEligible = false;
             CloseSocketLocked();
@@ -171,7 +209,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
             _wasEligible = true;
 
             _log.LogInformation(
-                "audio.saturn.speaker enabled target={Target} board={Board} variant={Variant}",
+                "audio.radio.speaker.p2 enabled target={Target} board={Board} variant={Variant}",
                 target,
                 board,
                 variant);
@@ -179,7 +217,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
         {
             CloseSocketLocked();
-            _log.LogWarning(ex, "audio.saturn.speaker open failed target={Target}", target);
+            _log.LogWarning(ex, "audio.radio.speaker.p2 open failed target={Target}", target);
         }
     }
 
@@ -207,7 +245,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
             var dropped = Interlocked.Read(ref _droppedPackets);
             CloseSocketLocked();
             _wasEligible = false;
-            _log.LogWarning(ex, "audio.saturn.speaker send failed dropped={DroppedPackets}", dropped);
+            _log.LogWarning(ex, "audio.radio.speaker.p2 send failed dropped={DroppedPackets}", dropped);
         }
         finally
         {
@@ -237,30 +275,10 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         return (short)MathF.Round(sample * scale);
     }
 
-    private static bool IsLocalAddress(IPAddress address)
-    {
-        if (IPAddress.IsLoopback(address)) return true;
-
-        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
-        {
-            if (nic.OperationalStatus != OperationalStatus.Up) continue;
-            if (nic.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
-
-            foreach (var unicast in nic.GetIPProperties().UnicastAddresses)
-            {
-                if (unicast.Address.Equals(address)) return true;
-            }
-        }
-
-        return false;
-    }
-
     public void Dispose()
     {
-        if (_linux)
-        {
-            _radio.StateChanged -= OnRadioStateChanged;
-        }
+        _radio.StateChanged -= OnRadioStateChanged;
+        _settings.Changed -= OnSettingsChanged;
 
         lock (_sync)
         {

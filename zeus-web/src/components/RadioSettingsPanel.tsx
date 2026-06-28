@@ -484,11 +484,11 @@ export function RadioSettingsPanel() {
         </div>
       ) : null}
 
-      {/* Audio Output — radio-side speaker/headphone/line-out (Protocol-1 codec
-          radios). Only shown when a P1 codec board is connected (server reports
-          `available`); the codec-less HL2 and the Protocol-2 Saturn/G2 appliance
-          path never surface here. Default OFF so an operator already hearing RX
-          audio host-side isn't surprised by doubled audio. */}
+      {/* Audio Output — radio-side speaker/headphone/line-out for any
+          codec-equipped board, P1 or P2 (issue #1122). Server reports
+          `available` whenever a codec board is connected; HL2 has no stream
+          codec and never surfaces here. Default OFF so an operator already
+          hearing RX audio host-side isn't surprised by doubled audio. */}
       {speaker.available ? (
         <div className="ps-card">
           <h4>

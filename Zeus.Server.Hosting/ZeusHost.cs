@@ -328,15 +328,15 @@ public static class ZeusHost
         builder.Services.AddSingleton<Zeus.Protocol1.TxIqRing>();
         builder.Services.AddSingleton<Zeus.Protocol1.ITxIqSource>(sp =>
             sp.GetRequiredService<Zeus.Protocol1.TxIqRing>());
-        // RX-audio → radio codec speaker path (Protocol-1). RxAudioRing is the RX
-        // counterpart of TxIqRing on the same EP2 frame: RadioSpeakerAudioSink
-        // writes demodulated RX audio into it and Protocol1Client (constructed
-        // inside RadioService) drains it into the frame's L/R slots so the radio's
-        // onboard codec drives its speaker/headphone/line-out jacks. Registered
-        // before RadioService so the latter's optional IRxAudioSource? ctor param
-        // resolves. The IRxAudioSink mapping is added unconditionally (both host
-        // modes) and self-gates per frame; the Protocol-2 Saturn/G2 appliance
-        // speaker path is separate (SaturnSpeakerAudioSink) and untouched here.
+        // RX-audio → radio codec speaker path. RxAudioRing is the RX counterpart
+        // of TxIqRing on the same EP2 frame: under Protocol 1, RadioSpeakerAudioSink
+        // writes demodulated RX audio into the ring and Protocol1Client drains it
+        // into the frame's L/R slots; under Protocol 2 the SaturnSpeakerAudioSink
+        // sends the same audio out as UDP packets on port 1028 so the radio's
+        // onboard codec drives its speaker/headphone/line-out jacks (issue #1122).
+        // Both sinks share one operator opt-in (RadioSpeakerSettingsStore, default
+        // off) and are registered unconditionally so the toggle works in every
+        // host mode; each self-gates per frame on protocol + capability + MOX.
         builder.Services.AddSingleton<Zeus.Protocol1.RxAudioRing>();
         builder.Services.AddSingleton<Zeus.Protocol1.IRxAudioSource>(sp =>
             sp.GetRequiredService<Zeus.Protocol1.RxAudioRing>());
@@ -344,6 +344,11 @@ public static class ZeusHost
         builder.Services.AddSingleton<RadioSpeakerAudioSink>();
         builder.Services.AddSingleton<IRxAudioSink>(sp =>
             sp.GetRequiredService<RadioSpeakerAudioSink>());
+        builder.Services.AddSingleton<SaturnSpeakerAudioSink>();
+        builder.Services.AddSingleton<IRxAudioSink>(sp =>
+            sp.GetRequiredService<SaturnSpeakerAudioSink>());
+        builder.Services.AddHostedService(sp =>
+            sp.GetRequiredService<SaturnSpeakerAudioSink>());
         // Global (per-radio) TX-audio source store (external-audio-jacks
         // re-port). Registered before RadioService so the latter's optional
         // AudioSettingsStore? ctor param resolves it and wires the Changed →
@@ -487,16 +492,8 @@ public static class ZeusHost
             builder.Services.AddSingleton<NativeAudioSink>();
             builder.Services.AddSingleton<IRxAudioSink>(sp =>
                 sp.GetRequiredService<NativeAudioSink>());
-            // On a Saturn/G2 appliance Linux may expose no physical ALSA
-            // playback card at all. When Zeus is connected to a radio endpoint
-            // hosted on this same machine, mirror DeskHPSDR and feed p2app's
-            // speaker/headphone path directly instead of depending on the OS
-            // desktop-audio graph.
-            builder.Services.AddSingleton<SaturnSpeakerAudioSink>();
-            builder.Services.AddSingleton<IRxAudioSink>(sp =>
-                sp.GetRequiredService<SaturnSpeakerAudioSink>());
-            builder.Services.AddHostedService(sp =>
-                sp.GetRequiredService<SaturnSpeakerAudioSink>());
+            // Protocol-2 radio-speaker sink is registered unconditionally above
+            // (shared with server mode + the RadioSpeakerSettingsStore opt-in).
             // Same singleton serves local mono side-channel playback
             // (currently WAV/local monitor paths) in the same playback path
             // the operator already hears RX audio through. Browser mode (the

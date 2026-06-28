@@ -5,14 +5,15 @@
 //                         Douglas J. Cerrato (KB2UKA),
 //                         Christian Suarez (N9WAR), and contributors.
 //
-// Radio-side speaker output (Protocol-1 codec radios). Mirrors
+// Radio-side speaker output (codec-equipped radios, both protocols). Mirrors
 // /api/radio/speaker-output: when ON, the backend sends demodulated RX audio
-// down the EP2 frame's L/R slots so the radio's onboard codec drives its
-// speaker / headphone / line-out jacks. `available` is true only while a P1
-// codec radio (not the codec-less HL2) is connected; the toggle is otherwise
-// inert. The Protocol-2 Saturn/G2 appliance speaker path is independent and is
-// NOT governed by this setting. Default is OFF (opt-in) so an operator who
-// already hears RX audio host-side isn't surprised by doubled audio.
+// to the radio's onboard codec so its speaker / headphone / line-out jacks
+// play the receive audio. Under Protocol 1 that travels in the EP2 frame's
+// L/R slots; under Protocol 2 it travels as UDP packets to port 1028 (issue
+// #1122). `available` is true while any codec-equipped radio is connected
+// (HL2 has no codec and is excluded); the toggle is otherwise inert. Default
+// is OFF (opt-in) so an operator who already hears RX audio host-side isn't
+// surprised by doubled audio.
 
 import { create } from 'zustand';
 

@@ -3029,12 +3029,11 @@ public static class ZeusEndpoints
                 resolved.LineInGain));
         });
 
-        // Radio-side speaker output (Protocol-1 codec radios). GET reports the
-        // persisted opt-in plus whether it's currently effective for the connected
-        // board (a P1 codec radio, not the codec-less HL2, and not a P2 board —
-        // the Saturn/G2 appliance speaker path is independent). The frontend
-        // refetches this on connect to hydrate the toggle without touching the
-        // StateDto wire format.
+        // Radio-side speaker output (codec-equipped radios, P1 + P2). GET reports
+        // the persisted opt-in plus whether it's currently effective for the
+        // connected board (any codec radio; HL2 has no stream codec and is
+        // excluded). The frontend refetches this on connect to hydrate the toggle
+        // without touching the StateDto wire format. Issue #1122.
         app.MapGet("/api/radio/speaker-output", (RadioSpeakerSettingsStore store, RadioSpeakerAudioSink sink) =>
             Results.Ok(new RadioSpeakerOutputDto(
                 Enabled: store.Enabled,
