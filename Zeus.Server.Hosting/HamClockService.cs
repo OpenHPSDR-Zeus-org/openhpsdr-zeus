@@ -443,16 +443,27 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
         }
     }
 
-    /// <summary>True if a "vX.Y.Z" Node version string is at least
-    /// <see cref="MinNodeVersion"/>. Tolerant of a missing 'v' prefix and any
-    /// prerelease/build suffix; an unparseable string fails closed (false).</summary>
+    // Highest system-Node MAJOR we trust to run HamClock's deps. HamClock is
+    // pinned/tested on v22 LTS; v24 is the next LTS. A newer, odd/non-LTS major
+    // (e.g. v25) regularly breaks native deps (@electron/rebuild, ERR_REQUIRE_ESM
+    // edge cases), so we fall back to the known-good bundled copy instead of using
+    // it. Without an upper bound the resolver previously accepted ANY Node >=
+    // 22.12, so a box with v25 on PATH would run HamClock on an untested runtime.
+    private const int MaxSystemNodeMajor = 24;
+
+    /// <summary>True if a "vX.Y.Z" Node version string is within the tested range
+    /// [<see cref="MinNodeVersion"/>, major &lt;= <see cref="MaxSystemNodeMajor"/>].
+    /// Tolerant of a missing 'v' prefix and any prerelease/build suffix; an
+    /// unparseable string fails closed (false) so we fall back to the bundled Node.</summary>
     internal static bool NodeMeetsMinimum(string? version)
     {
         if (string.IsNullOrWhiteSpace(version)) return false;
         var v = version.Trim().TrimStart('v', 'V');
         var cut = v.IndexOfAny(['-', '+']);
         if (cut >= 0) v = v[..cut];
-        return Version.TryParse(v, out var parsed) && parsed >= MinNodeVersion;
+        return Version.TryParse(v, out var parsed)
+            && parsed >= MinNodeVersion
+            && parsed.Major <= MaxSystemNodeMajor;
     }
 
     /// <summary>Cached Node availability for Snapshot — probes once, then reuses
@@ -498,7 +509,7 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             return true;
         }
         if (ok)
-            Append($"System Node {ver} is older than the required {MinNodeVersion} — using a private copy for HamClock.");
+            Append($"System Node {ver} is outside the tested range ({MinNodeVersion}..v{MaxSystemNodeMajor}.x) — using a private copy for HamClock.");
 
         // (2) A private Node from a previous install.
         var portable = FindPortableNodeBinDir();

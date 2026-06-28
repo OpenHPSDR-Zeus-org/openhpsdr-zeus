@@ -170,6 +170,8 @@ public sealed class HamClockServiceTests
     [InlineData("v22.12.0-nightly", true)] // suffix stripped before compare
     [InlineData("v22.11.0", false)]  // the version that throws ERR_REQUIRE_ESM
     [InlineData("v20.18.0", false)]
+    [InlineData("v25.9.0", false)]   // too new (odd/non-LTS) — fall back to the bundled v22
+    [InlineData("v26.0.0", false)]   // future major — untested, use the bundled copy
     [InlineData("", false)]
     [InlineData(null, false)]
     [InlineData("not-a-version", false)]
