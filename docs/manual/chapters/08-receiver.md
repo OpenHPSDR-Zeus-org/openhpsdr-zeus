@@ -103,8 +103,8 @@ Practical use: start with everything off, then add **NR2** for steady hiss and *
 **SQL** mutes the audio until a signal is strong enough to be worth hearing — invaluable on FM and for leaving a frequency monitored without constant hiss.
 
 - **SQL** button — turns squelch on/off.
-- **FIX / DYN** button — switches between **Fixed** squelch (you set the threshold) and **Dynamic** squelch, which tracks the band noise floor automatically.
-- **Threshold slider** (0–100) — in Fixed mode, higher = tighter (harder for a signal to open it). In DYN mode the slider is inactive and the readout shows **AUTO**.
+- **FIX / DYN** button — switches between **Fixed** squelch (you set the threshold) and **Dynamic** squelch, which tracks the band noise floor automatically. Grayed out while SQL is OFF.
+- **Threshold slider** (0–100) — in Fixed mode, higher = tighter (harder for a signal to open it). In DYN mode the slider is inactive and the readout shows **AUTO**. Also grayed out while SQL is OFF.
 
 Squelch is **mode-aware**: the radio automatically routes it to the right stage for what you're listening to — a voice/syllabic gate for SSB/CW, a carrier threshold for AM/SAM, and a noise-gate for FM. The DSP settings panel shows which stage is active and includes a separate **Sensitivity** control for the fixed-squelch path.
 
