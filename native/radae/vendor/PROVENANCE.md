@@ -32,7 +32,7 @@ preserving the directory name (drop the `Project Files/lib/` prefix):
 | `opus_dnn/`    | `Project Files/lib/opus_dnn/`              | BSD-3-Clause  |
 | `freedv_text/` | `Project Files/lib/freedv_text/`           | mixed: see below |
 
-### `radae_c/` — BSD-2-Clause (David Rowe, © 2024)
+### `radae_c/` — BSD-2-Clause (David Rowe & Jean-Marc Valin, © 2024; C port by Christos Nikolaou SV1EIA, © 2026)
 Pure-C, Python-free RADE modem. IQ → 36-float feature frames; encoder/decoder weights
 compiled in (`src/rade_enc_data.c`, `src/rade_dec_data.c`, ~24 MB each). The public API
 (`src/rade_api.h`, implemented by `src/radc_api.c`) is byte-for-byte compatible with the
@@ -74,12 +74,12 @@ codec2 sources hardcode the glibc/BSD header). Licenses within the slice:
 
 ## License roll-up
 
-| component   | license      | copyleft? |
-|-------------|--------------|-----------|
-| radae_c     | BSD-2-Clause | no |
-| opus_dnn    | BSD-3-Clause | no |
-| freedv_text/src (rade_text) | BSD | no |
-| freedv_text/codec2 (LDPC) | LGPL-2.1 | weak (dynamic-link OK) |
+| component   | license      | copyright holders | copyleft? |
+|-------------|--------------|-------------------|-----------|
+| radae_c     | BSD-2-Clause | © 2024 David Rowe & Jean-Marc Valin (RADE authors); © 2026 Christos Nikolaou SV1EIA (C port) | no |
+| opus_dnn    | BSD-3-Clause | © Xiph.Org / Skype / Jean-Marc Valin et al. | no |
+| freedv_text/src (rade_text) | BSD | © Mooneer Salem | no |
+| freedv_text/codec2 (LDPC) | LGPL-2.1 | © David Rowe / codec2 | weak (dynamic-link OK) |
 
 The audio RX/TX build (`radae_c` + `opus_dnn` + Zeus shim) is **BSD-only**. The
 LGPL-2.1 codec2 LDPC code is pulled in for the EOO-callsign path (now wired);
