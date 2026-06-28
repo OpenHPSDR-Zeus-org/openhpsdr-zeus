@@ -18,8 +18,32 @@ using Zeus.Server;
 
 namespace Zeus.Server.Tests;
 
-public class NativeAudioSinkRegistrationTests
+public class NativeAudioSinkRegistrationTests : IDisposable
 {
+    // ZeusHost.Build constructs the full host DI graph, which opens zeus-prefs.db
+    // through a dozen-plus Connection=shared LiteDB stores (WSJT-X / spotting /
+    // operator-identity / FT8-settings / HamClock / cloud-log, added with the
+    // digital suite). Isolate to a unique throw-away prefs file so those opens
+    // never contend with the shared default DB under xUnit's parallel test
+    // classes — on Windows that contention surfaced as a LiteDB exclusive-lock
+    // IOException at WsjtxConfigStore.Get(). Mirrors SavedLayoutsStoreTests.
+    private readonly string _dbPath;
+    private readonly string? _previousPrefs;
+
+    public NativeAudioSinkRegistrationTests()
+    {
+        _dbPath = Path.Combine(Path.GetTempPath(), $"zeus-prefs-nativeaudio-{Guid.NewGuid():N}.db");
+        _previousPrefs = Environment.GetEnvironmentVariable("ZEUS_PREFS_PATH");
+        Environment.SetEnvironmentVariable("ZEUS_PREFS_PATH", _dbPath);
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable("ZEUS_PREFS_PATH", _previousPrefs);
+        try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { }
+        try { if (File.Exists(_dbPath + "-log")) File.Delete(_dbPath + "-log"); } catch { }
+    }
+
     [Fact]
     public async Task ServerMode_RegistersWebSocketAudioSink_AndNoNativeServices()
     {

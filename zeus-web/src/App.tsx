@@ -47,6 +47,8 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import { ChevronLeft, ChevronRight, Download, Upload } from 'lucide-react';
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
+import { DigitalWindow } from './components/DigitalWindow';
+import { enterDigital, toggleDigital } from './state/enter-digital';
 import { WorkspaceErrorBoundary } from './layout/WorkspaceErrorBoundary';
 import { AppErrorBoundary } from './layout/AppErrorBoundary';
 import {
@@ -177,7 +179,19 @@ export default function App() {
   const preampOn = useConnectionStore((s) => s.preampOn);
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
+  // FT8/FT4/WSPR now render as a floating, on-top DigitalWindow pop-out over the
+  // operator's normal console (mounted below, next to FreeDvWindow) — the main
+  // FlexWorkspace stays mounted, so the panadapter/waterfall/VFO/QRZ/logbook
+  // remain live underneath rather than being unmounted by a full-screen overlay.
   const endpoint = useConnectionStore((s) => s.endpoint);
+  // Chrome zoom — same operator-set workspace-zoom percent that scales the
+  // panel grid (see FlexWorkspace); piped to .topbar / .transport via the
+  // --zeus-chrome-zoom CSS var so the top bar and bottom transport strip
+  // grow/shrink together with the panels (issue #1107). Falls back to 1.0
+  // before the server-persisted value arrives so chrome never collapses on
+  // first paint.
+  const workspaceZoomPct = useConnectionStore((s) => s.workspaceZoomPct);
+  const chromeZoom = (workspaceZoomPct > 0 ? workspaceZoomPct : 100) / 100;
   const connected = status === 'Connected';
   // Brand sub label reflects what discovery actually saw on the wire
   // (selection.connected), not the operator's preferred override — showing
@@ -451,6 +465,10 @@ export default function App() {
         setSettingsView(true, hash as SettingsTabId);
         // Clear the hash after handling it
         window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      } else if (hash === 'ft8' || hash === 'ft4') {
+        // Engage the native FT8/FT4 mode (closes any other digital mode first).
+        enterDigital(hash === 'ft4' ? 'FT4' : 'FT8');
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
       }
     };
 
@@ -710,13 +728,21 @@ export default function App() {
   }, [callsign]);
 
   // `/` focuses the callsign input so the operator can type a call and hit Enter.
+  // Alt+8 toggles the FT8 workspace (a desktop shortcut alongside the FT8/FT4
+  // mode-panel buttons; desktop has no URL bar for the #ft8 hash).
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
-      if (e.key === '/' && !(t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement)) {
+      const typing = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement;
+      if (e.key === '/' && !typing) {
         e.preventDefault();
         csInputRef.current?.focus();
         csInputRef.current?.select();
+      } else if (e.altKey && (e.key === '8' || e.code === 'Digit8') && !typing) {
+        e.preventDefault();
+        // Toggle FT8 (mutually exclusive with FT4/WSPR; restores the radio on
+        // un-toggle) — same contract as the mode-picker buttons.
+        toggleDigital('FT8');
       }
     };
     window.addEventListener('keydown', h);
@@ -951,6 +977,7 @@ export default function App() {
         {disconnectedOverlay}
         <FreeDvWindow />
         <ProfileOverlayHost />
+        <DigitalWindow />
       </div>
       </SpectrumWheelActionsContext.Provider>
       </WorkspaceContext.Provider>
@@ -990,7 +1017,14 @@ export default function App() {
     <SmartNrController />
     <DspSceneDiagnosticsPublisher />
     <AudioPlaybackDiagnosticsPublisher />
-    <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
+    <div
+      className="app"
+      data-screen-label="01 Main Console"
+      style={{
+        position: 'relative',
+        ['--zeus-chrome-zoom' as string]: chromeZoom,
+      }}
+    >
       {/* Left layout bar — issue #241. Spans the full app height; lists named
           layouts for the active radio with switch/add/delete/reset actions. */}
       <LeftLayoutBar />
@@ -1146,6 +1180,11 @@ export default function App() {
           unconditionally; renders null when closed, so the store's isOpen flag
           is the single source of truth. */}
       <FreeDvWindow />
+
+      {/* FT8/FT4/WSPR floating pop-out — opens off ft8-store/wspr-store `open`
+          (engaging the mode), always on top, draggable, not resizable. Renders
+          null when no digital mode is engaged. */}
+      <DigitalWindow />
 
       {/* Transport — MOX/TUN + audio + mic + macro buttons on the left,
           PA/PRE chips, then the per-radio status (radio IP, rotator, QRZ)

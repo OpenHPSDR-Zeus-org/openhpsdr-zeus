@@ -14,6 +14,9 @@ import {
   postReceiverMode,
 } from '../../state/receiver-state';
 import { saveReceiverBandModeMemory } from '../../util/band-memory';
+import { isDigitalEntryAvailable, isDigitalEntryKey, toggleDigital } from '../../state/enter-digital';
+import { useFt8Store } from '../../state/ft8-store';
+import { useWsprStore } from '../../state/wspr-store';
 import { ToolbarFavorites, type ToolbarOption } from './ToolbarFavorites';
 
 const MODE_OPTIONS: readonly ToolbarOption[] = [
@@ -28,6 +31,11 @@ const MODE_OPTIONS: readonly ToolbarOption[] = [
   { key: 'DIGL', label: 'DIGL' },
   { key: 'DIGU', label: 'DIGU' },
   { key: 'FREEDV', label: 'FreeDV' },
+  // Zeus-level digital modes — these open the FT8/FT4/WSPR workspace and
+  // auto-configure the radio (handled in onSelect, not via setReceiverMode).
+  { key: 'FT8', label: 'FT8' },
+  { key: 'FT4', label: 'FT4' },
+  { key: 'WSPR', label: 'WSPR', disabled: !isDigitalEntryAvailable('WSPR'), title: 'WSPR — coming soon (not yet available)' },
 ];
 
 export function ModeFavorites() {
@@ -36,8 +44,22 @@ export function ModeFavorites() {
   const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
   const activeMode = useConnectionStore((s) => getReceiverMode(s, focusedRxIndex));
 
+  // When a digital mode is engaged, report ITS key as current so the favorite
+  // button shows depressed; un-toggling it returns to the WDSP demod mode.
+  const ft8Open = useFt8Store((s) => s.open);
+  const ft8Protocol = useFt8Store((s) => s.protocol);
+  const wsprOpen = useWsprStore((s) => s.open);
+  const engagedDigital = wsprOpen ? 'WSPR' : ft8Open ? ft8Protocol : null;
+  const currentKey = engagedDigital ?? activeMode;
+
   const onSelect = useCallback(
     (key: string) => {
+      // FT8/FT4/WSPR are Zeus-level digital modes — toggle their pop-out instead
+      // of setting a WDSP demod mode.
+      if (isDigitalEntryKey(key)) {
+        toggleDigital(key);
+        return;
+      }
       const m = key as RxMode;
       if (m === activeMode) return;
       gangedReceiverAction({
@@ -56,7 +78,7 @@ export function ModeFavorites() {
       kind="mode"
       label="MODE"
       options={MODE_OPTIONS}
-      currentKey={activeMode}
+      currentKey={currentKey}
       onSelect={onSelect}
       minWidth={142}
     />

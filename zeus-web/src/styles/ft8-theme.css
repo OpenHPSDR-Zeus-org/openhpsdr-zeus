@@ -1,0 +1,669 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * FT8/FT4/WSPR pop-out theme — token LAYER scoped to .digital-window. The
+ * pop-out now MATCHES the global Zeus palette (tokens.css): the earlier bespoke
+ * dark-HUD cyan/teal theme (Option A) is REVERSED. The --hud-* names survive as
+ * a thin ALIAS set that points at global tokens, so components were re-skinned
+ * with zero markup/class changes and a future app-wide promotion is moot
+ * (see docs/designs/ft8-ui.md).
+ *
+ * The FT8/FT4/WSPR UI is now a floating DigitalWindow pop-out (FreeDV-style),
+ * NOT a full-screen workspace — the operator keeps their normal Zeus console
+ * underneath. This stylesheet carries only the pop-out chrome (.dw-*) plus the
+ * RE-HOUSED component styles (decode table, TX control cluster, settings, band
+ * row, colour legend).
+ *
+ * Components consume ONLY these --hud-* variables (and global tokens), never raw
+ * hex. The amber panadapter trace (#FFA028) stays signal-visualisation-only and
+ * is not repurposed here.
+ */
+
+.digital-window {
+  /* Palette re-skin: the --hud-* layer is now a thin ALIAS set that points at
+     the global Zeus tokens (tokens.css). Components still consume only --hud-*,
+     so the whole pop-out matches the global palette with zero component edits.
+     The earlier bespoke dark-HUD cyan/teal theme (Option A) is superseded —
+     see docs/designs/ft8-ui.md. */
+
+  /* Surfaces. */
+  --hud-bg:        var(--bg-app);
+  --hud-panel:     var(--bg-1);
+  --hud-panel-2:   var(--bg-2);
+  --hud-inset:     var(--bg-inset);
+
+  /* Accent + lines — global blue accent replaces the cyan/teal signature. */
+  --hud-cyan:      var(--accent-bright);
+  --hud-cyan-soft: var(--accent-soft);
+  --hud-cyan-line: var(--accent-line);
+  --hud-line:      var(--line);
+
+  /* Text. */
+  --hud-text:      var(--fg-1);
+  --hud-text-dim:  var(--fg-2);
+  --hud-ink:       var(--bg-inset);  /* dark ink on filled accent/amber/red chips — stays dark in BOTH themes (bg-inset is a display-well token, never flips to silver) so chip text keeps contrast in light theme */
+
+  /* Decode-row classes (color-coded message table). */
+  --hud-cq:        var(--ok);            /* CQ calls — green */
+  --hud-me:        var(--power);         /* directed at my call — amber */
+  --hud-worked:    var(--fg-2);          /* worked-before — muted */
+  --hud-new:       var(--accent-bright); /* new DXCC/grid — accent blue */
+
+  color: var(--hud-text);
+}
+
+/* Light theme: the pop-out is a "lit instrument" — like the panadapter / VFO /
+   S-meter / LED-meter wells (tokens.css "display surfaces stay DARK"), its
+   readout SURFACES stay dark in light theme instead of flipping to the silver
+   chassis. That keeps the decode hues (CQ green / me amber / new blue) and
+   status colours legible — they have no dark-on-silver palette variants — and
+   reads as a back-lit screen floating over the silver console. Dark theme (the
+   default) is unchanged: it keeps the layered bg-app/bg-1/bg-2 lift from the
+   base block above. Colours only — no markup/layout change. */
+:root[data-theme="light"] .digital-window {
+  --hud-bg:       var(--bg-meter);  /* deep backdrop — display-well token, never flips to silver */
+  --hud-panel:    var(--bg-inset);  /* panel lift */
+  --hud-panel-2:  var(--bg-inset);  /* control rest */
+  --hud-inset:    var(--bg-meter);  /* deepest wells */
+  /* Text flips back to light: fg-1/fg-2 go near-black in light theme and would
+     vanish on the dark screen. --btn-active-text is #fff in BOTH themes (the
+     one light-staying text token); the dim tiers mix it toward the dark-theme
+     fg-2 grey. */
+  --hud-text:      var(--btn-active-text);
+  --hud-text-dim:  color-mix(in srgb, var(--btn-active-text) 58%, transparent);
+  --hud-worked:    color-mix(in srgb, var(--btn-active-text) 42%, transparent);
+}
+/* Keep the drag-bar dark too so the title/gear read as part of the screen, not
+   the silver chassis (the base header uses the global silver panel gradient in
+   light theme). */
+:root[data-theme="light"] .dw-header {
+  background: linear-gradient(180deg, var(--bg-inset), var(--bg-meter));
+}
+
+/* ---- Pop-out chrome (DigitalWindow) ---- */
+.dw-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 12px;
+  background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
+  border-bottom: 1px solid var(--hud-cyan-line);
+  cursor: grab;
+  user-select: none;
+  flex: 0 0 auto;
+}
+.dw-header__title {
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--hud-cyan);
+  text-shadow: 0 0 8px var(--hud-cyan-soft);
+  font-size: 13px;
+}
+.dw-header__close {
+  margin-left: auto;
+  padding: 2px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--hud-cyan-line);
+  background: var(--hud-panel-2);
+  color: var(--hud-text);
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+}
+.dw-header__close:hover { background: var(--hud-cyan-soft); }
+
+.dw-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--hud-bg);
+  overflow: hidden;
+}
+
+.dw-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  font-family: var(--font-narrow, 'Archivo Narrow', sans-serif);
+}
+.dw-body--settings { overflow: hidden; }
+.dw-settings-scroll { flex: 1; min-height: 0; overflow: auto; }
+
+.dw-subhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.dw-subhead__title {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--hud-text-dim);
+}
+.dw-gear {
+  margin-left: auto;
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-cyan-line);
+  color: var(--hud-cyan);
+  border-radius: 3px;
+  padding: 2px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.2;
+}
+.dw-gear:hover { background: var(--hud-cyan-soft); }
+
+.dw-bands { padding: 0; }
+
+.dw-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--hud-cyan-soft);
+  border: 1px solid var(--hud-me);
+  border-radius: 4px;
+  color: var(--hud-text);
+  font-size: 11px;
+}
+.dw-banner strong { color: var(--hud-me); }
+.dw-banner__cta {
+  margin-left: auto;
+  background: var(--hud-me);
+  border: 1px solid var(--hud-me);
+  color: var(--hud-ink);
+  border-radius: 3px;
+  padding: 3px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.dw-banner__cta:hover { filter: brightness(1.1); }
+
+.dw-section {
+  background: var(--hud-panel);
+  border: 1px solid var(--hud-line);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 0 0 auto;
+}
+.dw-section--grow { flex: 1 1 auto; }
+.dw-section__body { padding: 8px; overflow: auto; min-height: 0; }
+.dw-section--grow .dw-section__body { flex: 1; }
+.dw-section__body--flush { padding: 0; }
+
+.dw-logbtn { margin-left: auto; }
+
+/* ---- Decode colour legend (key) ---- */
+.dw-legend {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 2px 2px 0;
+  font-size: 10px;
+  color: var(--hud-text-dim);
+  letter-spacing: 0.04em;
+}
+.dw-legend__item { display: inline-flex; align-items: center; gap: 5px; }
+.dw-legend__sw {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  border: 1px solid var(--hud-line);
+}
+.dw-legend__sw--cq     { background: var(--hud-cq); }
+.dw-legend__sw--me     { background: var(--hud-me); }
+.dw-legend__sw--new    { background: var(--hud-new); }
+.dw-legend__sw--worked { background: var(--hud-worked); }
+.dw-legend__sw--tx     { background: var(--tx); }
+
+/* Panel framing (reused by Ft8SettingsView's .ft8-set-section blocks). */
+.ft8-region {
+  background: var(--hud-panel);
+  border: 1px solid var(--hud-line);
+  border-radius: 4px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Section head label (reused by the pop-out sections). */
+.ft8-region__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--hud-text-dim);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--hud-line);
+  flex: 0 0 auto;
+}
+
+/* ---- Decode table ---- */
+.ft8-decode-table {
+  font-family: var(--font-mono, 'Archivo Narrow', monospace);
+  font-size: 12px;
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--hud-panel);
+}
+.ft8-decode-table th {
+  position: sticky;
+  top: 0;
+  text-align: left;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--hud-text-dim);
+  background: var(--hud-panel-2);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--hud-cyan-line);
+}
+.ft8-decode-table td {
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--hud-line);
+  white-space: nowrap;
+}
+.ft8-decode-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.ft8-row--cq     { color: var(--hud-cq); }
+.ft8-row--me     { color: var(--hud-me); background: var(--hud-cyan-soft); }
+.ft8-row--worked { color: var(--hud-worked); }
+.ft8-row--new    { color: var(--hud-new); }
+
+/* Our own transmissions, echoed into the decode flow (WSJT-X yellow Tx line).
+   Reads unmistakably as YOUR TX, not a received decode: --tx accent + badge. */
+.ft8-row--tx {
+  color: var(--tx);
+  background: color-mix(in srgb, var(--tx) 12%, transparent);
+}
+.ft8-row--tx td.num { color: var(--tx); }
+.ft8-row__tx-badge {
+  display: inline-block;
+  padding: 0 5px;
+  margin-right: 4px;
+  border-radius: 2px;
+  background: var(--tx);
+  color: var(--hud-ink);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  vertical-align: middle;
+}
+
+.ft8-decode-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--hud-text-dim);
+}
+
+/* ---- Header tabs + identity (reused in the pop-out sub-header) ---- */
+.ft8-ws-tabs { display: flex; gap: 2px; }
+.ft8-ws-tab {
+  background: transparent;
+  border: 1px solid var(--hud-cyan-line);
+  color: var(--hud-text-dim);
+  border-radius: 3px;
+  padding: 2px 12px;
+  cursor: pointer;
+  font: inherit;
+  letter-spacing: 0.06em;
+}
+.ft8-ws-tab.is-active { background: var(--hud-cyan); color: var(--hud-ink); font-weight: 700; }
+
+.ft8-ws-id { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--hud-text-dim); }
+.ft8-ws-id input {
+  background: var(--hud-panel);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-cyan);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font: inherit;
+  text-transform: uppercase;
+}
+
+/* Read-only identity chip (editing lives on the Settings page). */
+.ft8-ws-call {
+  background: var(--hud-panel);
+  border: 1px solid var(--hud-cyan-line);
+  color: var(--hud-cyan);
+  border-radius: 3px;
+  padding: 2px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.ft8-ws-call:hover { background: var(--hud-cyan-soft); }
+.ft8-ws-call.is-empty { color: var(--hud-me); border-color: var(--hud-me); }
+
+/* TX control cluster: live keyer message line (--tx accent). */
+.ft8-tx__live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--tx);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--tx) 12%, transparent);
+}
+.ft8-tx__live.is-tx { animation: ft8-tx-pulse 1.2s ease-in-out infinite; }
+@keyframes ft8-tx-pulse {
+  0%, 100% { background: color-mix(in srgb, var(--tx) 12%, transparent); }
+  50%      { background: color-mix(in srgb, var(--tx) 26%, transparent); }
+}
+.ft8-tx__live-tag {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: var(--tx);
+  color: var(--hud-ink);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.ft8-tx__live-msg {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--tx);
+  font-size: 13px;
+}
+.ft8-tx__live-slot { margin-left: auto; font-size: 10px; color: var(--hud-text-dim); }
+
+/* ---- Settings view ---- */
+.ft8-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+.ft8-set-section { flex: 0 0 auto; }
+.ft8-set-body { padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 2px; }
+
+.ft8-set-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--hud-line);
+}
+.ft8-set-row:last-child { border-bottom: none; }
+.ft8-set-row__text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.ft8-set-row__label { font-size: 13px; color: var(--hud-text); }
+.ft8-set-row__hint { font-size: 10px; color: var(--hud-text-dim); line-height: 1.3; }
+.ft8-set-row__resolved { font-size: 10px; color: var(--hud-text-dim); }
+.ft8-set-row__resolved strong { color: var(--hud-cyan); }
+
+/* Toggle switch. */
+.ft8-set-switch {
+  flex: 0 0 auto;
+  min-width: 52px;
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-text-dim);
+  border-radius: 3px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.ft8-set-switch.is-on { background: var(--hud-cyan); color: var(--hud-ink); border-color: var(--hud-cyan); }
+.ft8-set-switch:disabled { cursor: default; opacity: 0.4; }
+
+/* "Coming soon" rows: persisted but not yet wired — dimmed, with a small badge. */
+.ft8-set-row.is-disabled { opacity: 0.55; }
+.ft8-set-soon {
+  margin-left: 6px;
+  padding: 0 5px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--hud-text-dim);
+  border: 1px solid var(--hud-line);
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+/* Segmented control. */
+.ft8-set-seg { display: flex; gap: 4px; flex: 0 0 auto; }
+.ft8-set-seg__btn {
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-text);
+  border-radius: 3px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.ft8-set-seg__btn:hover { border-color: var(--hud-cyan-line); }
+.ft8-set-seg__btn.is-on { background: var(--hud-cyan); color: var(--hud-ink); border-color: var(--hud-cyan); font-weight: 700; }
+
+/* Inputs. */
+.ft8-set-input {
+  background: var(--hud-panel);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-cyan);
+  border-radius: 3px;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+.ft8-set-input:focus { outline: none; border-color: var(--hud-cyan-line); }
+.ft8-set-input--num { width: 6em; text-align: right; }
+.ft8-set-input:disabled { opacity: 0.5; }
+.ft8-set-num { display: inline-flex; align-items: center; gap: 5px; }
+.ft8-set-num__suffix { font-size: 10px; color: var(--hud-text-dim); }
+.ft8-set-readonly-value { font-size: 12px; color: var(--hud-text-dim); font-variant-numeric: tabular-nums; }
+
+.ft8-set-note { font-size: 10px; color: var(--hud-text-dim); line-height: 1.4; font-style: italic; margin: 6px 0 0; }
+.ft8-set-divider { height: 1px; background: var(--hud-cyan-line); margin: 8px 0; opacity: 0.5; }
+
+/* Advanced disclosure. */
+.ft8-set-advanced { margin-top: 6px; }
+.ft8-set-advanced > summary {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--hud-text-dim);
+  cursor: pointer;
+  padding: 6px 0;
+}
+
+/* Reporting chips. */
+.ft8-set-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 0 8px; }
+.ft8-set-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--hud-text-dim);
+  border: 1px solid var(--hud-line);
+  border-radius: 12px;
+  padding: 2px 10px;
+}
+.ft8-set-chip__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--hud-text-dim);
+}
+.ft8-set-chip.is-on { color: var(--hud-cq); border-color: var(--hud-cq); }
+.ft8-set-chip.is-on .ft8-set-chip__dot { background: var(--hud-cq); }
+
+.ft8-set-link {
+  align-self: flex-start;
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-cyan-line);
+  color: var(--hud-cyan);
+  border-radius: 3px;
+  padding: 5px 14px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.ft8-set-link:hover { background: var(--hud-cyan-soft); }
+
+/* ---- Band selector ---- */
+.ft8-band-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.ft8-band-btn {
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-text);
+  border-radius: 3px;
+  padding: 4px 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.ft8-band-btn:hover { border-color: var(--hud-cyan-line); }
+.ft8-band-btn.is-active { background: var(--hud-cyan); color: var(--hud-ink); font-weight: 700; }
+
+/* ---- TX control cluster ---- */
+.ft8-tx { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.ft8-tx__row { display: flex; gap: 6px; align-items: center; }
+
+/* Arm / transmit lamps — dim by default, lit by backend status. */
+.ft8-tx__lamps { display: flex; gap: 6px; align-items: center; }
+.ft8-tx__lamp {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--hud-line);
+  color: var(--hud-text-dim);
+  background: var(--hud-inset);
+}
+.ft8-tx__lamp.is-armed { color: var(--hud-ink); background: var(--hud-me); border-color: var(--hud-me); font-weight: 700; }
+.ft8-tx__lamp.is-tx { color: var(--hud-ink); background: var(--tx); border-color: var(--tx); font-weight: 700; }
+.ft8-tx__wdt { font-size: 10px; color: var(--hud-text-dim); font-variant-numeric: tabular-nums; }
+
+/* ENABLE-TX master. */
+.ft8-tx__enable {
+  flex: 1;
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-cyan-line);
+  color: var(--hud-cyan);
+  border-radius: 3px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.ft8-tx__enable.is-on { background: var(--hud-me); color: var(--hud-ink); border-color: var(--hud-me); }
+.ft8-tx__enable:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Generic toggle / segmented / macro buttons. */
+.ft8-tx__toggle,
+.ft8-tx__seg-btn,
+.ft8-tx__macro,
+.ft8-tx__tune,
+.ft8-tx__halt {
+  background: var(--hud-panel-2);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-text);
+  border-radius: 3px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.ft8-tx__toggle:not(:disabled):hover,
+.ft8-tx__macro:not(:disabled):hover,
+.ft8-tx__tune:hover { border-color: var(--hud-cyan-line); }
+.ft8-tx__toggle.is-on,
+.ft8-tx__seg-btn.is-on,
+.ft8-tx__macro.is-on { background: var(--hud-cyan); color: var(--hud-ink); border-color: var(--hud-cyan); font-weight: 700; }
+.ft8-tx__macro:disabled,
+.ft8-tx__toggle:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.ft8-tx__seg { display: flex; align-items: center; gap: 4px; }
+.ft8-tx__seg-label { font-size: 10px; color: var(--hud-text-dim); }
+.ft8-tx__seg-btn { padding: 4px 8px; }
+
+.ft8-tx__offset,
+.ft8-tx__field { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--hud-text-dim); }
+.ft8-tx__field { justify-content: space-between; }
+.ft8-tx__offset input,
+.ft8-tx__field input,
+.ft8-tx__custom input {
+  background: var(--hud-panel);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-cyan);
+  border-radius: 3px;
+  padding: 3px 6px;
+  font: inherit;
+  width: 5.5em;
+  text-align: right;
+}
+.ft8-tx__offset input:disabled { opacity: 0.5; }
+
+.ft8-tx__next { display: flex; align-items: baseline; gap: 8px; }
+.ft8-tx__next-label { font-size: 10px; color: var(--hud-text-dim); }
+.ft8-tx__next-msg { font-variant-numeric: tabular-nums; color: var(--hud-cyan); font-size: 13px; }
+.ft8-tx__dx { font-size: 11px; color: var(--hud-text); }
+.ft8-tx__dx strong { color: var(--hud-cyan); }
+
+.ft8-tx__macros { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+
+.ft8-tx__custom { display: flex; gap: 6px; }
+.ft8-tx__custom input { flex: 1; width: auto; text-align: left; text-transform: uppercase; }
+
+.ft8-tx__tune { flex: 1; }
+.ft8-tx__tune.is-on { background: var(--power); color: var(--hud-ink); border-color: var(--power); font-weight: 700; }
+.ft8-tx__halt {
+  flex: 1;
+  border-color: var(--tx);
+  color: var(--tx);
+  font-weight: 700;
+}
+.ft8-tx__halt:hover { background: var(--tx); color: var(--hud-ink); }
+
+/* ---- TX power (TX CONTROL cluster) ---- */
+.ft8-power { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 2px; }
+.ft8-power__row { display: flex; align-items: center; gap: 8px; }
+.ft8-power__label {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--hud-text-dim);
+  font-weight: 600;
+  width: 64px;
+  flex: 0 0 auto;
+}
+/* The reused DriveSlider/TunePowerSlider fill the remaining row width. */
+.ft8-power__row .knob-group { flex: 1; min-width: 0; }
+
+/* ---- Manual LOG-QSO button (reused from the old activity log) ---- */
+.ft8-log__btn {
+  background: var(--hud-panel);
+  border: 1px solid var(--hud-line);
+  color: var(--hud-text);
+  border-radius: 3px;
+  padding: 3px 9px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.ft8-log__btn:not(:disabled):hover { border-color: var(--hud-cyan-line); }
+.ft8-log__btn:disabled { opacity: 0.4; cursor: not-allowed; }

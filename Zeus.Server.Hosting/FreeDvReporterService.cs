@@ -55,6 +55,7 @@ public sealed class FreeDvReporterService : BackgroundService
     private readonly RadioService _radio;
     private readonly QrzService _qrz;
     private readonly FreeDvReporterSettingsStore _settingsStore;
+    private readonly OperatorIdentityStore _identity;
     private readonly FreeDvService _freeDv;
 
     // Last values we actually emitted in report role, so a no-op change (e.g. a
@@ -72,12 +73,14 @@ public sealed class FreeDvReporterService : BackgroundService
         RadioService radio,
         QrzService qrz,
         FreeDvReporterSettingsStore settingsStore,
+        OperatorIdentityStore identity,
         FreeDvService freeDv)
     {
         _log = log;
         _radio = radio;
         _qrz = qrz;
         _settingsStore = settingsStore;
+        _identity = identity;
         _freeDv = freeDv;
         _client = new SocketIoReporterClient(HandleEvent, ResolveIdentity, log);
     }
@@ -192,28 +195,13 @@ public sealed class FreeDvReporterService : BackgroundService
             Os: OsLabel());
     }
 
-    // Operator callsign/grid: settings first, QRZ home station as a fallback for
-    // blank fields. Returns ("","") when neither source has them.
-    private (string Call, string Grid) ResolveOperator(FreeDvReporterSettings settings)
-    {
-        var call = settings.Callsign;
-        var grid = settings.GridSquare;
-        if (string.IsNullOrWhiteSpace(call) || string.IsNullOrWhiteSpace(grid))
-        {
-            var home = _qrz.GetStatus().Home;
-            if (home is not null)
-            {
-                if (string.IsNullOrWhiteSpace(call) && !string.IsNullOrWhiteSpace(home.Callsign))
-                    call = home.Callsign.Trim().ToUpperInvariant();
-                if (string.IsNullOrWhiteSpace(grid) && !string.IsNullOrWhiteSpace(home.Grid))
-                {
-                    var g = home.Grid!.Trim();
-                    grid = g.Length > 6 ? g[..6] : g;
-                }
-            }
-        }
-        return (call ?? "", grid ?? "");
-    }
+    // Operator callsign/grid. Precedence per field: the shared OperatorIdentity
+    // override first, then this reporter's own settings (legacy/secondary, kept
+    // additively), then the QRZ home station. Returns ("","") when no source has
+    // them. Shared with SpottingManagementService and /api/operator via
+    // OperatorIdentityResolver.
+    private (string Call, string Grid) ResolveOperator(FreeDvReporterSettings settings) =>
+        OperatorIdentityResolver.Resolve(_identity, _qrz, settings.Callsign, settings.GridSquare);
 
     private static string OsLabel()
     {

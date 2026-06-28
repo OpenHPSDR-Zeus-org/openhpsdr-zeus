@@ -246,4 +246,29 @@ public enum MsgType : byte
     // ChatEvent and 0x36 is DiagnosticsHealth on this base, so PttStatus uses
     // the next free byte 0x37.
     PttStatus = 0x37,
+
+    // Server → client (FT8/FT4 decode batch). Broadcast by Ft8BroadcastService
+    // once per completed UTC slot (every 15 s FT8 / 7.5 s FT4) carrying all the
+    // decodes from that slot for one RX. JSON envelope (like ChatEvent) because
+    // it is low-rate and the per-decode shape is rich (SNR/DT/freq/text). The
+    // FT8 workspace renders these into the decode table. UI ignores unknown
+    // types so older builds tolerate it cleanly. Payload:
+    // [type:1][UTF-8 JSON Ft8DecodeBatchDto]. See Ft8DecodeFrame.cs.
+    Ft8Decode = 0x38,
+
+    // Server → client (WSPR spot batch). Broadcast by WsprBroadcastService once
+    // per completed 120 s UTC slot, carrying all decoded spots for one RX. Same
+    // low-rate JSON-envelope shape as Ft8Decode; the WSPR workspace renders them
+    // into its spot table. UI ignores unknown types so older builds tolerate it.
+    // Payload: [type:1][UTF-8 JSON WsprSpotBatchDto]. See WsprSpotFrame.cs.
+    WsprSpot = 0x39,
+
+    // Server → client (FT8/FT4/WSPR TX keyer status). Broadcast by Ft8TxService /
+    // WsprTxService on every armed/staged/transmitting edge so the UI reflects
+    // what the backend ACTUALLY keyed (authoritative), not just what the operator
+    // staged. Same low-rate JSON-envelope shape as Ft8Decode (0x38). One frame
+    // covers both the FT8/FT4 keyer (Slot = "even"/"odd") and the WSPR beacon
+    // (Slot = ""). UI ignores unknown types so older builds tolerate it.
+    // Payload: [type:1][UTF-8 JSON Ft8TxStatusDto]. See Ft8TxStatusFrame.cs.
+    Ft8TxStatus = 0x3A,
 }

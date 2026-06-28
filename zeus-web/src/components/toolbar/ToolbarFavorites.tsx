@@ -16,6 +16,7 @@ export type ToolbarOption = {
   key: string;
   label: string;
   title?: string;
+  disabled?: boolean;
 };
 
 export type ToolbarFavoritesProps = {
@@ -168,12 +169,22 @@ export function ToolbarFavorites({
             <button
               key={`fav-${idx}`}
               type="button"
-              onClick={() => opt && onSelect(opt.key)}
+              disabled={!!opt?.disabled}
+              onClick={() => {
+                if (opt?.disabled) return;
+                if (opt) onSelect(opt.key);
+              }}
               onDragOver={onFavDragOver(idx)}
               onDragLeave={() => setDragOverFav(null)}
               onDrop={onFavDrop(idx)}
-              className={`btn sm toolbar-fav__slot ${active ? 'active' : ''} ${dragOverFav === idx ? 'is-drop-target' : ''}`}
-              title={opt ? (opt.title ?? `${opt.label} — drag a different option here to replace`) : 'Empty slot — drop an option here'}
+              className={`btn sm toolbar-fav__slot ${active ? 'active' : ''} ${dragOverFav === idx ? 'is-drop-target' : ''} ${opt?.disabled ? 'is-disabled' : ''}`}
+              title={
+                opt
+                  ? opt.disabled
+                    ? (opt.title ?? `${opt.label} — coming soon`)
+                    : (opt.title ?? `${opt.label} — drag a different option here to replace`)
+                  : 'Empty slot — drop an option here'
+              }
               aria-label={`Favorite ${idx + 1}: ${opt ? opt.label : slotKey}`}
             >
               {opt ? opt.label : slotKey}
@@ -211,14 +222,20 @@ export function ToolbarFavorites({
                   key={opt.key}
                   type="button"
                   draggable
+                  disabled={!!opt.disabled}
                   onDragStart={(e) => startDrag(e, opt.key)}
                   onDragEnd={endDrag}
                   onClick={() => {
+                    if (opt.disabled) return;
                     onSelect(opt.key);
                     setOpen(false);
                   }}
-                  title={opt.title ?? `${opt.label} — drag onto a favorite slot to pin`}
-                  className={`toolbar-fav__chip ${isActive ? 'is-active' : ''} ${isFav ? 'is-pinned' : ''} ${dragKey === opt.key ? 'is-dragging' : ''}`}
+                  title={
+                    opt.disabled
+                      ? (opt.title ?? `${opt.label} — coming soon`)
+                      : (opt.title ?? `${opt.label} — drag onto a favorite slot to pin`)
+                  }
+                  className={`toolbar-fav__chip ${isActive ? 'is-active' : ''} ${isFav ? 'is-pinned' : ''} ${dragKey === opt.key ? 'is-dragging' : ''} ${opt.disabled ? 'is-disabled' : ''}`}
                 >
                   {opt.label}
                 </button>

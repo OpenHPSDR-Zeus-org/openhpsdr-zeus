@@ -15,6 +15,7 @@ using Zeus.Protocol1.Discovery;
 using Zeus.Protocol2;
 using Zeus.Server.Diagnostics;
 using Zeus.Server.Tci;
+using Zeus.Server.Wsjtx;
 
 namespace Zeus.Server;
 
@@ -144,6 +145,116 @@ public static class ZeusEndpoints
         // host="desktop" — see CapabilitiesService.Snapshot(HttpContext).
         app.MapGet("/api/capabilities",
             (HttpContext ctx, CapabilitiesService caps) => Results.Ok(caps.Snapshot(ctx)));
+
+        // FT8/FT4 native decode control. The FT8 workspace POSTs enable on
+        // entering the mode and disable on leaving; decodes arrive out-of-band as
+        // 0x38 Ft8Decode WS frames. nativeAvailable is false on a platform whose
+        // zeus_ft8 binary wasn't shipped (the workspace then shows "unavailable").
+        app.MapGet("/api/ft8",
+            (Ft8Service ft8) => Results.Ok(new
+            {
+                nativeAvailable = ft8.NativeAvailable,
+                enabled = ft8.IsEnabled,
+                receiver = ft8.ActiveReceiver,
+                protocol = ft8.ActiveProtocol == Zeus.Dsp.Ft8.Ft8Protocol.Ft4 ? "FT4" : "FT8",
+                passes = ft8.DecodePasses,
+            }));
+
+        app.MapPost("/api/ft8/enable",
+            (Zeus.Contracts.Ft8EnableRequest body, Ft8Service ft8) =>
+            {
+                var proto = string.Equals(body.Protocol, "FT4", StringComparison.OrdinalIgnoreCase)
+                    ? Zeus.Dsp.Ft8.Ft8Protocol.Ft4 : Zeus.Dsp.Ft8.Ft8Protocol.Ft8;
+                if (body.Passes is int p) ft8.DecodePasses = Math.Clamp(p, 1, 4);
+                bool ok = ft8.Enable(body.Receiver ?? 0, proto);
+                log.LogInformation("api.ft8.enable rx={Rx} proto={Proto} ok={Ok}",
+                    body.Receiver ?? 0, proto, ok);
+                return ok
+                    ? Results.Ok(new { enabled = true, nativeAvailable = true })
+                    : Results.Ok(new { enabled = false, nativeAvailable = ft8.NativeAvailable });
+            });
+
+        // FT8/FT4 + WSPR ARMED auto-sequence TX keyer control surface (arm /
+        // stage / halt / status). Kept in its own extension file so this one
+        // stays manageable.
+        app.MapFt8TxEndpoints();
+
+        app.MapPost("/api/ft8/disable", (Ft8Service ft8) =>
+        {
+            ft8.Disable();
+            log.LogInformation("api.ft8.disable");
+            return Results.Ok(new { enabled = false });
+        });
+
+        // Shared operator identity (callsign + Maidenhead grid). This is the SAME
+        // identity the spotting uploaders and FreeDV Reporter resolve from — set
+        // it once here and FT8/FT4 TX ungates everywhere. Server-persisted so the
+        // desktop webview no longer loses it on restart. GET returns both the saved
+        // override and the effective resolved value (override → QRZ home fallback),
+        // so the Settings page can grey QRZ-sourced values.
+        app.MapGet("/api/operator",
+            (OperatorIdentityStore store, QrzService qrz) =>
+                Results.Ok(OperatorIdentityResolver.Status(store, qrz)));
+
+        app.MapPost("/api/operator",
+            (Zeus.Contracts.OperatorIdentity body, OperatorIdentityStore store, QrzService qrz) =>
+            {
+                store.Set(body);
+                log.LogInformation("api.operator.set call={Call} grid={Grid}",
+                    body.Callsign, body.Grid);
+                return Results.Ok(OperatorIdentityResolver.Status(store, qrz));
+            });
+
+        // FT8/FT4/WSPR workspace behaviour + display preferences (auto-seq, decode
+        // depth, macros, logging, waterfall/display). Persisted server-side PER
+        // MODE so each digital mode remembers its own config across desktop
+        // restarts. The `mode` query param selects FT8/FT4/WSPR; omitted → FT8
+        // (back-compat with the pre-per-mode mode-less caller). Pure behaviour/UI —
+        // none of these transmit; TX still requires an explicit arm.
+        app.MapGet("/api/ft8/settings",
+            (string? mode, Ft8SettingsStore store) =>
+                Results.Ok(store.Get(Ft8SettingsStore.NormalizeMode(mode))));
+
+        app.MapPost("/api/ft8/settings",
+            (Zeus.Contracts.Ft8Settings body, string? mode, Ft8SettingsStore store) =>
+            {
+                var m = Ft8SettingsStore.NormalizeMode(mode);
+                var saved = store.Set(m, body);
+                log.LogInformation(
+                    "api.ft8.settings mode={Mode} autoseq={Auto} passes={Passes} autolog={Log}",
+                    m, saved.AutoSequence, saved.DecodePasses, saved.AutoLog);
+                return Results.Ok(saved);
+            });
+
+        // WSPR native spotting control. nativeAvailable is false where the
+        // zeus_wspr decoder isn't shipped (e.g. Windows encode-only build today).
+        app.MapGet("/api/wspr",
+            (WsprService wspr) => Results.Ok(new
+            {
+                nativeAvailable = wspr.NativeAvailable,
+                enabled = wspr.IsEnabled,
+                receiver = wspr.ActiveReceiver,
+                dialFreqMhz = wspr.DialFreqMhz,
+            }));
+
+        app.MapPost("/api/wspr/enable",
+            (Zeus.Contracts.WsprEnableRequest body, WsprService wspr) =>
+            {
+                double dial = body.DialFreqMhz ?? 14.0956; // 20 m default
+                bool ok = wspr.Enable(body.Receiver ?? 0, dial);
+                log.LogInformation("api.wspr.enable rx={Rx} dial={Dial:F4} ok={Ok}",
+                    body.Receiver ?? 0, dial, ok);
+                return ok
+                    ? Results.Ok(new { enabled = true, nativeAvailable = true })
+                    : Results.Ok(new { enabled = false, nativeAvailable = wspr.NativeAvailable });
+            });
+
+        app.MapPost("/api/wspr/disable", (WsprService wspr) =>
+        {
+            wspr.Disable();
+            log.LogInformation("api.wspr.disable");
+            return Results.Ok(new { enabled = false });
+        });
 
         // Activation spots — merged POTA + SOTA feed, polled server-side by
         // ActivationSpotsService. The Spots panel polls this and offers
@@ -3651,11 +3762,27 @@ public static class ZeusEndpoints
             return Results.Ok(response);
         });
 
-        app.MapPost("/api/log/entry", async (CreateLogEntryRequest req, LogService logService, HttpContext ctx) =>
+        app.MapPost("/api/log/entry", async (
+            CreateLogEntryRequest req,
+            LogService logService,
+            WsjtxUdpBroadcaster wsjtx,
+            Wsjtx.N1mmBroadcaster n1mm,
+            CloudLog.CloudLogService cloudLog,
+            HttpContext ctx) =>
         {
             if (string.IsNullOrWhiteSpace(req.Callsign))
                 return Results.BadRequest(new { error = "callsign required" });
             var entry = await logService.CreateLogEntryAsync(req, ctx.RequestAborted);
+            // Push the just-logged QSO to every opted-in external logger. Each
+            // target is OFF by default and no-ops when disabled; this is the only
+            // logging path that egresses (ADIF bulk import never does).
+            // Fire-and-forget so a slow/blocked target (e.g. a free-text Host whose
+            // DNS is dead) can never delay the operator's log confirmation. Each
+            // client swallows its own failures internally; use a detached token so
+            // the post-response request abort doesn't cancel them.
+            _ = wsjtx.BroadcastLoggedQsoAsync(entry, CancellationToken.None);   // Class A: WSJT-X type-12 UDP
+            _ = n1mm.BroadcastLoggedQsoAsync(entry, CancellationToken.None);    // Class B: N1MM contactinfo UDP
+            _ = cloudLog.PublishAsync(entry, CancellationToken.None);           // Class C: Wavelog/Cloudlog + Club Log HTTP
             return Results.Ok(entry);
         });
 
@@ -3718,6 +3845,60 @@ public static class ZeusEndpoints
                 SuccessCount: successCount,
                 FailedCount: failedCount,
                 Results: results));
+        });
+
+        // -- Logging v2: HTTP cloud-log uploaders (Wavelog/Cloudlog + Club Log) --
+        // Per-QSO realtime ADIF push. Egress OFF by default; fired automatically
+        // from /api/log/entry. These endpoints manage config/secrets and a manual
+        // batch re-publish. Secrets are write-only — status reports presence only.
+        app.MapGet("/api/log/cloud/config", async (CloudLog.CloudLogService cloud, HttpContext ctx) =>
+            Results.Ok(await cloud.GetStatusAsync(ctx.RequestAborted)));
+
+        app.MapPost("/api/log/cloud/config", (CloudLog.CloudLogConfig req, CloudLog.CloudLogService cloud) =>
+        {
+            log.LogInformation(
+                "api.log.cloud.config wavelog={Wl} clublog={Cl}",
+                req.Wavelog.Enabled, req.ClubLog.Enabled);
+            return Results.Ok(cloud.SetConfig(req));
+        });
+
+        app.MapPost("/api/log/cloud/credentials", async (
+            CloudLog.CloudLogCredentialsRequest req, CloudLog.CloudLogService cloud, HttpContext ctx) =>
+        {
+            // Each non-null field is applied; an empty string clears that secret.
+            if (req.WavelogApiKey is not null)
+                await cloud.SetWavelogApiKeyAsync(req.WavelogApiKey, ctx.RequestAborted);
+            if (req.ClubLogPassword is not null || req.ClubLogApiKey is not null)
+                await cloud.SetClubLogCredentialsAsync(req.ClubLogPassword, req.ClubLogApiKey, ctx.RequestAborted);
+            return Results.Ok(await cloud.GetStatusAsync(ctx.RequestAborted));
+        });
+
+        app.MapPost("/api/log/publish/cloud", async (
+            QrzPublishRequest req, CloudLog.CloudLogService cloud, LogService logService, HttpContext ctx) =>
+        {
+            if (req.LogEntryIds == null || !req.LogEntryIds.Any())
+                return Results.BadRequest(new { error = "no log entry IDs provided" });
+            var entries = await logService.GetLogEntriesByIdsAsync(req.LogEntryIds, ctx.RequestAborted);
+            var results = new List<CloudLog.CloudLogResult>();
+            foreach (var entry in entries)
+                results.AddRange(await cloud.PublishOnceAsync(entry, ctx.RequestAborted));
+            return Results.Ok(new
+            {
+                total = results.Count,
+                successCount = results.Count(r => r.Success),
+                failedCount = results.Count(r => !r.Success),
+                results,
+            });
+        });
+
+        // -- Logging v2: N1MM-format UDP broadcaster (HRD / DXKeeper gateway) -----
+        app.MapGet("/api/n1mm/config", (Wsjtx.N1mmBroadcaster n1mm) => Results.Ok(n1mm.GetConfig()));
+
+        app.MapPost("/api/n1mm/config", (Wsjtx.N1mmConfig req, Wsjtx.N1mmBroadcaster n1mm) =>
+        {
+            log.LogInformation(
+                "api.n1mm.config enabled={En} host={Host} port={Port}", req.Enabled, req.Host, req.Port);
+            return Results.Ok(n1mm.SetConfig(req));
         });
 
         app.MapGet("/api/rotator/status", (RotctldService rot) => rot.GetStatus());
@@ -3833,6 +4014,35 @@ public static class ZeusEndpoints
             if (string.IsNullOrWhiteSpace(req?.PortName))
                 return Results.BadRequest(new { error = "portName required" });
             return Results.Ok(svc.TestPort(req));
+        });
+
+        // WSJT-X logged-QSO UDP broadcaster (outbound QSO-record push to
+        // JTAlert / Log4OM / GridTracker / N1MM). Default OFF / loopback; config
+        // applies live (no restart — there is no listener, only a UDP sender).
+        app.MapGet("/api/wsjtx/status", (WsjtxManagementService wsjtx) => wsjtx.GetStatus());
+
+        app.MapPost("/api/wsjtx/config", (WsjtxRuntimeConfig req, WsjtxManagementService wsjtx, HttpContext ctx) =>
+        {
+            log.LogInformation(
+                "api.wsjtx.config enabled={En} transport={Tr} host={Host} port={Port} group={Grp} ttl={Ttl} type5={T5} live={Live}",
+                req.Enabled, req.Transport, req.Host, req.Port, req.MulticastGroup, req.MulticastTtl,
+                req.SendQsoLogged, req.SendLiveDecodes);
+            var status = wsjtx.SetConfig(req);
+            return Results.Ok(status);
+        });
+
+        // Digital-mode spotting uploaders (FT8/FT4 -> PSK Reporter, WSPR ->
+        // WSPRnet). NEW network egress, both DISABLED by default; config applies
+        // live (the uploaders only send UDP/HTTP — there is no listener).
+        app.MapGet("/api/spotting/status", (SpottingManagementService spotting) => spotting.GetStatus());
+
+        app.MapPost("/api/spotting/config", (SpottingRuntimeConfig req, SpottingManagementService spotting) =>
+        {
+            log.LogInformation(
+                "api.spotting.config psk={Psk} wsprnet={Wspr}",
+                req.PskReporterEnabled, req.WsprnetEnabled);
+            var status = spotting.SetConfig(req);
+            return Results.Ok(status);
         });
 
         app.Map("/ws", async (HttpContext ctx, StreamingHub hub) =>
@@ -3973,6 +4183,32 @@ public static class ZeusEndpoints
             ctx.Response.StatusCode = result.Status;
             ctx.Response.ContentType = result.ContentType ?? "application/octet-stream";
             await ctx.Response.Body.WriteAsync(result.Body, ct);
+        });
+
+        // HamClock DX-push config + push (Logging v2). Outbound "set the worked
+        // station on the map". Egress OFF by default; server-side forward avoids
+        // browser CORS / HTTPS-mixed-content blocking the classic-HamClock host.
+        app.MapGet("/api/hamclock/push-config", (HamClockPushManagementService push) =>
+            Results.Ok(push.GetConfig()));
+
+        app.MapPost("/api/hamclock/push-config", (HamClockPushConfig req, HamClockPushManagementService push) =>
+        {
+            log.LogInformation(
+                "api.hamclock.push-config enabled={En} trigger={Tr} target={Tg} host={Host} port={Port}",
+                req.Enabled, req.Trigger, req.Target, req.ExternalHost, req.ExternalPort);
+            return Results.Ok(push.SetConfig(req));
+        });
+
+        app.MapPost("/api/hamclock/dx", async (
+            HamClockDxRequest req, HamClockPushManagementService push, HamClockService hc) =>
+        {
+            var cfg = push.GetConfig();
+            if (!cfg.Enabled)
+                return Results.Ok(new { pushed = false, skipped = "disabled" });
+            // Fire the GET inline but tightly time-bounded inside PushDxAsync; it
+            // never throws and returns false on any skip/failure.
+            bool pushed = await hc.PushDxAsync(req.Grid, cfg.Target, cfg.ExternalHost, cfg.ExternalPort);
+            return Results.Ok(new { pushed });
         });
 
         return app;
