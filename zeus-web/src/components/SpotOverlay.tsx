@@ -86,7 +86,7 @@ export function SpotOverlay() {
             />
             {/* callsign label at top */}
             <div
-              className="absolute top-5 -translate-x-1/2 select-none whitespace-nowrap font-mono text-[9px] leading-none px-0.5"
+              className="absolute top-5 -translate-x-1/2 select-none whitespace-nowrap font-mono text-[11px] leading-none px-0.5"
               style={{
                 color,
                 textShadow: '0 0 3px rgba(0,0,0,0.8)',
