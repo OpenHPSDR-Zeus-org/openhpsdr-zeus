@@ -38,20 +38,21 @@ describe('Nr3ModelPanel', () => {
       .find((a) => a.getAttribute('aria-label') === label);
   }
 
-  it('links users to official RNNoise model sources', () => {
+  it('links users to the official Xiph RNNoise model directory', () => {
     renderPanel();
 
     const xiphModels = linkByLabel('Open the Xiph RNNoise model data directory');
-    const rnnoiseRepo = linkByLabel('Open the official RNNoise source repository');
 
-    if (!xiphModels || !rnnoiseRepo) throw new Error('NR3 model source links were not rendered');
+    if (!xiphModels) throw new Error('NR3 model source link was not rendered');
     expect(xiphModels.getAttribute('href')).toBe('https://media.xiph.org/rnnoise/models/');
     expect(xiphModels.getAttribute('target')).toBe('_blank');
-    expect(rnnoiseRepo.getAttribute('href')).toBe('https://gitlab.xiph.org/xiph/rnnoise');
-    expect(rnnoiseRepo.getAttribute('target')).toBe('_blank');
+
+    // The gitlab.xiph.org source repo hosts no loadable weights, so it must not
+    // be offered as a model source.
+    expect(linkByLabel('Open the official RNNoise source repository')).toBeUndefined();
   });
 
-  it('keeps model source links visible when NR3 is unavailable', () => {
+  it('keeps the model source link visible when NR3 is unavailable', () => {
     useConnectionStore.setState({
       wdspNr3RnnrAvailable: false,
       nr3ModelName: null,
@@ -60,6 +61,5 @@ describe('Nr3ModelPanel', () => {
     renderPanel();
 
     expect(linkByLabel('Open the Xiph RNNoise model data directory')).toBeDefined();
-    expect(linkByLabel('Open the official RNNoise source repository')).toBeDefined();
   });
 });

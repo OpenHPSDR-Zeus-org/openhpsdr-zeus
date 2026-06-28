@@ -31,7 +31,6 @@ import {
 import { useConnectionStore } from '../../state/connection-store';
 
 const RNNOISE_MODEL_DATA_URL = 'https://media.xiph.org/rnnoise/models/';
-const RNNOISE_REPO_URL = 'https://gitlab.xiph.org/xiph/rnnoise';
 
 function ModelSourceLinks() {
   return (
@@ -48,17 +47,6 @@ function ModelSourceLinks() {
         >
           <ExternalLink size={12} aria-hidden />
           Xiph models
-        </a>
-        <a
-          className="nr-settings__button"
-          href={RNNOISE_REPO_URL}
-          target="_blank"
-          rel="noreferrer"
-          title="Open the official RNNoise source repository"
-          aria-label="Open the official RNNoise source repository"
-        >
-          <ExternalLink size={12} aria-hidden />
-          RNNoise repo
         </a>
       </div>
     </div>
