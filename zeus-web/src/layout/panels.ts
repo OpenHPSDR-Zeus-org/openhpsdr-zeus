@@ -67,7 +67,6 @@ import { ModePanel } from './panels/ModePanel';
 import { StepPanel } from './panels/StepPanel';
 import { MeterGroupPanel } from '../components/meter-group/MeterGroupPanel';
 import { AnalogMeterPanel } from './panels/AnalogMeterPanel';
-import { WavRecorderPanel } from './panels/WavRecorderPanel';
 import { HamClockPanel } from './panels/HamClockPanel';
 import { SpotsPanel } from './panels/SpotsPanel';
 import { FreeDvStationsPanel } from './panels/FreeDvStationsPanel';
@@ -475,15 +474,6 @@ export const PANELS: Record<string, PanelDef> = {
     component: MeterGroupPanel,
     multiInstance: true,
     headerless: true,
-  },
-  wavrecorder: {
-    id: 'wavrecorder',
-    name: 'Wav Recorder',
-    category: 'tools',
-    tags: ['recorder', 'wav', 'record', 'playback', 'audio', 'meter', 'folder'],
-    component: WavRecorderPanel,
-    minW: 4,
-    minH: 8,
   },
   analogmeter: {
     id: 'analogmeter',

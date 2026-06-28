@@ -653,19 +653,11 @@ public static class ZeusHost
         // com.kb2uka.voyeur (openhpsdr-zeus-plugins/monitors/Voyeur). Its host
         // seams remain in core: AudioTapBridge (RX tap), RadioStateReader,
         // PluginQrzLookup, and the voyeur-engines-v1 build workflow.
-        // WAV recorder/player: taps DspPipelineService RX + TX-monitor audio to
-        // record float32 WAVs under the managed root (<Downloads>/Zeus
-        // Recordings) and plays them back either locally via the preview sink
-        // or over the air (keying MoxSource.Wav when the rig is unkeyed).
-        // Singleton resolved on first /api/wav call; its ctor wires the
-        // pipeline event subscriptions and runs the one-time loose-file
-        // migration. The optional recordingsRootOverride ctor param defaults to
-        // null here (Downloads-based) — tests inject a temp root.
-        // Persists the operator-chosen recordings root (null = platform default).
-        // Tiny single-row LiteDB store, mirrors PreferredRadioStore to stay clear
-        // of the Linux shared-mode crash (#682).
-        builder.Services.AddSingleton<Zeus.Server.Wav.WavRecorderSettingsStore>();
-        builder.Services.AddSingleton<Zeus.Server.Wav.WavRecorderService>();
+        // WAV recorder/player was extracted into the installable plugin
+        // com.kb2uka.recorder (openhpsdr-zeus-plugins/monitors/Recorder). Its
+        // host seams remain in core: AudioTapBridge (RX/TX taps),
+        // PluginPlaybackSink (local + over-air playback), RadioController
+        // (MoxSource.Plugin keying), and IPluginSettings (recordings root).
         // PS auto-attenuate timer2code-equivalent: ramps the radio's TX step
         // attenuator (Protocol2 only today) when calcc feedback level lands outside
         // the 128..181 ideal window, so PS has a recovery path on first arm. Idle

@@ -544,7 +544,8 @@ public sealed class TxAudioIngest : IDisposable
     }
 
     /// <summary>Source-tagged entry point for WAV-recording playback to the
-    /// air (from <see cref="Zeus.Server.Wav.WavRecorderService"/>). Stamps the
+    /// air (driven by the com.kb2uka.recorder plugin via
+    /// <see cref="PluginPlaybackSink"/>'s over-air path). Stamps the
     /// WAV recency timestamp so the live native mic is suppressed for the clip,
     /// then feeds the block through the same path as mic audio — so a recording
     /// is processed by the normal TX chain exactly like live speech. The caller
