@@ -141,6 +141,71 @@ describe('full caller QSO', () => {
     const r = step(s, ['W1AW G0XYZ IO91']);
     expect(r.next.progress).toBe('calling');
   });
+
+  it('defaults disableTxAfter73 on', () => {
+    expect(startCq({ myCall: 'K1ABC' }).disableTxAfter73).toBe(true);
+  });
+});
+
+describe('caller terminal RR73 — Disable Tx after sending 73', () => {
+  /** Walk a caller to the 'rogers' state, having staged its RR73 once. */
+  function toRogers(disableTxAfter73: boolean): QsoState {
+    let s = arm(
+      startCq({ myCall: 'K1ABC', myGrid4: 'FN42', txAck: 'RR73', disableTxAfter73 }),
+    );
+    s = step(s, ['K1ABC G0XYZ IO91'], { measuredSnrOfDx: -19 }).next; // -> report
+    const r = step(s, ['K1ABC G0XYZ R-22']); // -> rogers, stages RR73
+    // The report->rogers step itself must NOT disarm, so RR73 transmits this slot.
+    expect(r.next.progress).toBe('rogers');
+    expect(r.outgoing).toBe('G0XYZ K1ABC RR73');
+    expect(r.disarmTx).toBe(false);
+    expect(r.logQso).toBe(true);
+    return r.next;
+  }
+
+  it('sends RR73 exactly once then auto-disarms when ON (default)', () => {
+    let s = toRogers(true);
+    // His 73 never decodes: next window must disarm, NOT re-send RR73.
+    let r = step(s, []);
+    expect(r.outgoing).toBeNull();
+    expect(r.disarmTx).toBe(true);
+    expect(r.logQso).toBe(false); // already logged at the rogers step
+    expect(r.next.progress).toBe('done');
+    s = r.next;
+    // And it stays terminal — no further RR73, no re-log.
+    r = step(s, []);
+    expect(r.outgoing).toBeNull();
+    expect(r.logQso).toBe(false);
+  });
+
+  it('also disarms when he merely repeats his R-report (non-advancing) when ON', () => {
+    const s = toRogers(true);
+    const r = step(s, ['K1ABC G0XYZ R-22']); // repeated R-report: does not advance
+    expect(r.outgoing).toBeNull();
+    expect(r.disarmTx).toBe(true);
+    expect(r.next.progress).toBe('done');
+  });
+
+  it('still closes normally when his 73 does decode (ON)', () => {
+    const s = toRogers(true);
+    const r = step(s, ['K1ABC G0XYZ 73']);
+    expect(r.next.progress).toBe('done');
+    expect(r.disarmTx).toBe(true);
+    expect(r.logQso).toBe(false); // logged already at rogers; no double log
+  });
+
+  it('repeats RR73 forever (legacy) when OFF', () => {
+    let s = toRogers(false);
+    let r = step(s, []);
+    expect(r.outgoing).toBe('G0XYZ K1ABC RR73');
+    expect(r.disarmTx).toBe(false);
+    expect(r.next.progress).toBe('rogers');
+    s = r.next;
+    // …and again the next empty window.
+    r = step(s, []);
+    expect(r.outgoing).toBe('G0XYZ K1ABC RR73');
+    expect(r.disarmTx).toBe(false);
+  });
 });
 
 describe('repeats, no-reply, halt, arming', () => {

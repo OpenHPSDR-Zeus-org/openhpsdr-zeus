@@ -92,6 +92,7 @@ export class Ft8TxController {
       mode: opts.mode ?? 'FT8',
       txAck: this.txAck,
       noReplyLimit: this.noReplyLimit,
+      disableTxAfter73: this.disableTxAfter73,
     });
     this.audioHz = opts.audioHz ?? 1500;
     this.doFetch = opts.fetchFn ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
@@ -208,7 +209,12 @@ export class Ft8TxController {
    *  edit takes effect on the next decision, not only on the next new QSO. */
   applyBehavior(b: Ft8TxBehavior): void {
     if (b.autoSequence !== undefined) this.autoSequence = b.autoSequence;
-    if (b.disableTxAfter73 !== undefined) this.disableTxAfter73 = b.disableTxAfter73;
+    if (b.disableTxAfter73 !== undefined) {
+      this.disableTxAfter73 = b.disableTxAfter73;
+      // Keep the in-flight QSO in sync so a mid-session toggle governs the
+      // current QSO's terminal RR73, not only the next new one.
+      this.state = { ...this.state, disableTxAfter73: this.disableTxAfter73 };
+    }
     if (b.noReplyLimit !== undefined) {
       this.noReplyLimit = Math.max(0, b.noReplyLimit);
       this.state = { ...this.state, noReplyLimit: this.noReplyLimit };
@@ -317,6 +323,7 @@ export class Ft8TxController {
       mode: this.state.mode,
       txAck: this.txAck,
       noReplyLimit: this.noReplyLimit,
+      disableTxAfter73: this.disableTxAfter73,
       ...opts,
     });
   }
@@ -335,6 +342,7 @@ export class Ft8TxController {
         mode: this.state.mode,
         txAck: this.txAck,
         noReplyLimit: this.noReplyLimit,
+        disableTxAfter73: this.disableTxAfter73,
       },
       { ...parsed, kind: 'cq' },
       senderSlot,
@@ -354,6 +362,7 @@ export class Ft8TxController {
         mode: this.state.mode,
         txAck: this.txAck,
         noReplyLimit: this.noReplyLimit,
+        disableTxAfter73: this.disableTxAfter73,
       },
       msg,
       cqSenderSlot,

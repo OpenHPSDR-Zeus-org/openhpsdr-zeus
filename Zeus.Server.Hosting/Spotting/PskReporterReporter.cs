@@ -53,6 +53,12 @@ public sealed class PskReporterReporter : BackgroundService
         (uint)Random.Shared.Next(1, int.MaxValue);
     private uint _sequenceNumber;
 
+    // Test seam: redirect the UDP egress to a loopback target so the success path
+    // (and its heartbeat log) is unit-testable without real DNS/network. Defaults
+    // to the real PSK Reporter collector; production never touches these.
+    internal string TargetHost = PskReporterEncoder.Host;
+    internal int TargetPort = PskReporterEncoder.Port;
+
     public PskReporterReporter(
         ILogger<PskReporterReporter> log,
         Ft8Service ft8,
@@ -283,10 +289,16 @@ public sealed class PskReporterReporter : BackgroundService
             {
                 var datagram = PskReporterEncoder.Encode(
                     rx, chunk, exportTime, unchecked(_sequenceNumber++), _observationDomainId);
-                await udp.SendAsync(datagram, datagram.Length, PskReporterEncoder.Host, PskReporterEncoder.Port)
+                await udp.SendAsync(datagram, datagram.Length, TargetHost, TargetPort)
                     .WaitAsync(TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
             }
-            _log.LogInformation("psk-reporter uploaded {Count} spot(s)", snapshot.Count);
+            // Heartbeat: one Info line per successful flush so the operator can see
+            // in-app that spots actually went out. Each pending record is a distinct
+            // callsign (deduped per call above), so one count covers both. UDP is
+            // unacknowledged, so this means datagrams dispatched, not delivered.
+            _log.LogInformation(
+                "psk-reporter.flush spots={Count} -> {Host}:{Port}",
+                snapshot.Count, TargetHost, TargetPort);
         }
         catch (Exception ex)
         {

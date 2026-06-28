@@ -10,10 +10,10 @@
 // cross-band per-band mode recall can't clobber DIGU.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { setCtun, setMode, setRadioLo, setVfo, setZoom } from '../api/client';
+import { setCtun, setFilter, setMode, setRadioLo, setVfo, setZoom } from '../api/client';
 import { useConnectionStore } from './connection-store';
 import { useTxStore } from './tx-store';
-import { configureRadioForDigital } from './digital-mode';
+import { configureRadioForDigital, restoreRadio, type RadioModeSnapshot } from './digital-mode';
 
 vi.mock('../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/client')>();
@@ -117,5 +117,63 @@ describe('digital-mode framing gate', () => {
     });
     await configureRadioForDigital('FT8', '40m');
     expect(order).toEqual(['vfo', 'mode']);
+  });
+});
+
+describe('digital-mode exit restore (recall-proof, BUG 2)', () => {
+  const snapA: RadioModeSnapshot = {
+    mode: 'USB',
+    filterLowHz: -2700,
+    filterHighHz: -300,
+    vfoHz: 14_200_000, // band A (20 m phone), the pre-engage dial
+    ctunEnabled: false,
+    radioLoHz: 14_200_000,
+    zoomLevel: 1,
+  };
+
+  it('QSYs back FIRST, then re-asserts mode + filter LAST (wins over #974 recall)', async () => {
+    // The exact failure mode of BUG 2: on a cross-band exit, restoring the VFO
+    // crosses a band edge and trips the server's per-band mode recall
+    // (SetVfo → RestoreBandMode → SetMode). If mode/filter were restored BEFORE
+    // the VFO they'd be re-clobbered to the band's stored (DIGU) mode. Asserting
+    // them AFTER the QSY makes the snapshot win.
+    const order: string[] = [];
+    (setVfo as unknown as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push('vfo');
+      return {} as never;
+    });
+    (setMode as unknown as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push('mode');
+      return {} as never;
+    });
+    (setFilter as unknown as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push('filter');
+      return {} as never;
+    });
+
+    await restoreRadio(snapA);
+
+    expect(order).toEqual(['vfo', 'mode', 'filter']);
+    expect(setVfo).toHaveBeenCalledWith(14_200_000);
+    expect(setMode).toHaveBeenCalledWith('USB');
+    expect(setFilter).toHaveBeenCalledWith(-2700, -300);
+  });
+
+  it('never touches the radio while transmitting', async () => {
+    // Spy on getState rather than setState({moxOn}) — tx-store's persist
+    // middleware writes localStorage, which local vitest can't honour (see
+    // feedback memory); the spy keeps the txActive() gate exercised without it.
+    const real = useTxStore.getState();
+    const spy = vi
+      .spyOn(useTxStore, 'getState')
+      .mockReturnValue({ ...real, moxOn: true, tunOn: false });
+    try {
+      await restoreRadio(snapA);
+      expect(setVfo).not.toHaveBeenCalled();
+      expect(setMode).not.toHaveBeenCalled();
+      expect(setFilter).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

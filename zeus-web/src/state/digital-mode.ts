@@ -126,17 +126,28 @@ export async function configureRadioForDigital(
 export async function restoreRadio(snap: RadioModeSnapshot | null): Promise<void> {
   if (!snap || txActive()) return;
   try {
-    // Reverse the FT8 waterfall framing (CTUN / LO / zoom) FIRST, then restore
-    // mode/filter/VFO, so the dial lands on the operator's pre-FT8 frequency
-    // rather than the CTUN-frozen LO offset.
+    // Reverse the FT8 waterfall framing (CTUN / LO / zoom) FIRST so the dial can
+    // land on the operator's pre-FT8 frequency rather than the CTUN-frozen LO
+    // offset.
     await restoreFt8Framing({
       ctunEnabled: snap.ctunEnabled,
       radioLoHz: snap.radioLoHz,
       zoomLevel: snap.zoomLevel,
     });
+    // QSY BACK FIRST, then assert the snapshot's mode + filter LAST — the same
+    // ordering trick the entry path uses. If the operator changed bands while in
+    // FT8 (e.g. engaged on 20 m, QSY'd to 40 m, then exits), restoring the VFO
+    // crosses a band edge, which trips the server's per-band mode recall
+    // (SetVfo → RestoreBandMode → SetMode, PR #974). Because engaging FT8 wrote
+    // DIGU into the original band's mode memory, that recall would otherwise
+    // re-clobber the restored mode back to DIGU. Re-asserting mode/filter AFTER
+    // the QSY makes the snapshot win over the recall, so exit ALWAYS lands on the
+    // exact pre-engage freq + mode + filter, regardless of in-FT8 band changes.
+    // setMode/setFilter are idempotent on a same-band exit (no recall fires), so
+    // this is a no-op on the wire there.
+    await setVfo(snap.vfoHz);
     await setMode(snap.mode);
     await setFilter(snap.filterLowHz, snap.filterHighHz);
-    await setVfo(snap.vfoHz);
   } catch {
     // Best-effort restore.
   }
