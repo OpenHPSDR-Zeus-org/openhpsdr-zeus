@@ -44,6 +44,7 @@ import { PluginsPanel } from '../plugins/components/PluginsPanel';
 import { HamClockSettingsPanel } from './HamClockSettingsPanel';
 import { KiwiSettingsPanel } from './KiwiSettingsPanel';
 import { SpotsSettingsPanel } from './SpotsSettingsPanel';
+import { ZeusDigitalSettingsPanel } from './ZeusDigitalSettingsPanel';
 import { UpdatesPanel } from './UpdatesPanel';
 import { HardwareDiagnosticsPanel } from './HardwareDiagnosticsPanel';
 
@@ -62,6 +63,7 @@ export type SettingsTabId =
   | 'hamclock'
   | 'kiwi'
   | 'spots'
+  | 'zeus-digital'
   | 'server'
   | 'radio'
   | 'receivers'
@@ -84,6 +86,7 @@ const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
   { id: 'hamclock', label: 'HAMCLOCK' },
   { id: 'kiwi', label: 'KIWI SDR' },
   { id: 'spots', label: 'SPOTS' },
+  { id: 'zeus-digital', label: 'ZEUS DIGITAL' },
   { id: 'server', label: 'SERVER' },
   { id: 'radio', label: 'RADIO' },
   { id: 'receivers', label: 'RECEIVERS' },
@@ -214,6 +217,7 @@ export function SettingsView({ initialTab, onClose }: Props) {
           {activeTab === 'hamclock' && <HamClockSettingsPanel />}
           {activeTab === 'kiwi' && <KiwiSettingsPanel />}
           {activeTab === 'spots' && <SpotsSettingsPanel />}
+          {activeTab === 'zeus-digital' && <ZeusDigitalSettingsPanel />}
           {activeTab === 'server' && <ServerUrlPanel />}
           {activeTab === 'receivers' && <ReceiversPanel />}
           {activeTab === 'radio' && (

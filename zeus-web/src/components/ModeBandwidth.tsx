@@ -45,6 +45,9 @@
 
 import { useCallback } from 'react';
 import { type RxMode } from '../api/client';
+import { toggleDigital } from '../state/enter-digital';
+import { useFt8Store } from '../state/ft8-store';
+import { useWsprStore } from '../state/wspr-store';
 import { useConnectionStore } from '../state/connection-store';
 import {
   gangedReceiverAction,
@@ -77,6 +80,14 @@ export function ModeBandwidth() {
   // the mode row drives whichever receiver the operator is working in.
   const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
   const activeMode = useConnectionStore((s) => getReceiverMode(s, focusedRxIndex));
+
+  // Engaged-digital state so the FT8/FT4/WSPR buttons stay DEPRESSED while their
+  // pop-out is open (FT8/FT4 distinguished by the active protocol).
+  const ft8Open = useFt8Store((s) => s.open);
+  const ft8Protocol = useFt8Store((s) => s.protocol);
+  const wsprOpen = useWsprStore((s) => s.open);
+  const digitalEngaged = (p: 'FT8' | 'FT4' | 'WSPR') =>
+    p === 'WSPR' ? wsprOpen : ft8Open && ft8Protocol === p;
 
   const selectMode = useCallback(
     (m: RxMode) => {
@@ -118,6 +129,29 @@ export function ModeBandwidth() {
               {m.label}
             </button>
           ))}
+          {/* Digital modes are Zeus-level modes (like FreeDV), not WDSP demods —
+              they open the dedicated FT8/FT4/WSPR workspace and auto-configure
+              the radio (DIGU + FT8 bandwidth + band dial). Rendered inline with
+              the mode buttons so they're always visible next to DIGU/DIGL. */}
+          {(['FT8', 'FT4', 'WSPR'] as const).map((p) => {
+            const engaged = digitalEngaged(p);
+            return (
+              <button
+                key={p}
+                type="button"
+                onClick={() => toggleDigital(p)}
+                className={`btn sm ${engaged ? 'active' : ''}`}
+                style={engaged ? undefined : { borderColor: 'var(--accent)', color: 'var(--accent)' }}
+                title={
+                  engaged
+                    ? `Exit ${p} — restores the prior frequency and mode`
+                    : `Enter ${p} — QSYs the radio and opens the ${p} pop-out`
+                }
+              >
+                {p}
+              </button>
+            );
+          })}
         </div>
       </div>
 

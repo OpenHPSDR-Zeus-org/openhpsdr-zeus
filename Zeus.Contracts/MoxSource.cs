@@ -60,4 +60,14 @@ public enum MoxSource : byte
     /// auto-keys on connect — the operator (or an explicit Air playback)
     /// initiates every transmission.</summary>
     Wav = 6,
+    /// <summary>The built-in FT8/FT4/WSPR armed auto-sequence keyer
+    /// (<c>Ft8TxService</c> / <c>WsprTxService</c>) driving keying from the
+    /// digital-mode slot clock. One shared wire value covers all three digital
+    /// modes (they never key simultaneously). Same release rule as
+    /// <see cref="Tci"/> / <see cref="Cat"/>: only this source releases what it
+    /// itself claimed, and <see cref="UI"/> remains the master override. The
+    /// keyer arms ONLY on an explicit operator ENABLE-TX action and a freshly
+    /// staged message — it never arms PureSignal and never auto-keys on connect
+    /// or startup.</summary>
+    Ft8 = 7,
 }

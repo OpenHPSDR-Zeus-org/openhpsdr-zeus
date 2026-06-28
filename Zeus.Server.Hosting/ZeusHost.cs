@@ -560,6 +560,23 @@ public static class ZeusHost
         // and TxAudioIngest taps TX (pre-WDSP), both gated on FreeDV being the
         // active RX0 mode. No-op when the codec2 native library is absent.
         builder.Services.AddSingleton<FreeDvService>();
+        // Ft8Service — the built-in FT8/FT4 RX decode pipeline. Taps the same
+        // post-demod RX audio event AudioTapBridge uses (no hot-path changes),
+        // decimates 48k->12k, buffers UTC slots, and decodes on a worker. No-op
+        // (Enable() returns false) when the zeus_ft8 native library is absent.
+        builder.Services.AddSingleton<Ft8Service>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Ft8Service>());
+        // Ft8BroadcastService — pushes each decoded slot to WS clients as a 0x38
+        // Ft8Decode frame for the FT8 workspace decode table.
+        builder.Services.AddHostedService<Ft8BroadcastService>();
+        // WsprService — native WSPR spotting: same RX-audio tap, 120 s UTC slots,
+        // decoded via the vendored K1JT/K9AN decoder. No-op (Enable returns false)
+        // when zeus_wspr decode is unavailable (e.g. Windows encode-only build).
+        builder.Services.AddSingleton<WsprService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<WsprService>());
+        // WsprBroadcastService — pushes each completed 120 s slot's spots to WS
+        // clients as a 0x39 WsprSpot frame for the WSPR workspace spot table.
+        builder.Services.AddHostedService<WsprBroadcastService>();
         // FreeDvNativeInstaller — the in-app "Install FreeDV" downloader. codec2
         // can't be built on a stock operator machine, so when the bundled binary
         // is missing (older build / unshipped platform) this fetches the prebuilt
@@ -574,6 +591,20 @@ public static class ZeusHost
         builder.Services.AddSingleton<FreeDvNativeInstaller>();
         builder.Services.AddSingleton<TxService>();
         builder.Services.AddSingleton<TxAudioIngest>();
+        // Ft8TxService / WsprTxService — the ARMED FT8/FT4 + WSPR auto-sequence
+        // keyers (TX half; the RX decode/spot services above are untouched). They
+        // own the UTC slot clock, key MOX via TxService (MoxSource.Ft8) and stream
+        // synthesized tone audio through TxAudioIngest. They NEVER auto-arm (armed
+        // defaults false, operator-only) and a backend watchdog auto-disarms an
+        // unattended arm. No PureSignal / drive / power state is touched. A shared
+        // DigitalTxArbiter enforces that only ONE of FT8/FT4/WSPR is armed at a
+        // time (they share MoxSource.Ft8), so neither can drop MOX out from under
+        // the other or double-feed TXA.
+        builder.Services.AddSingleton<DigitalTxArbiter>();
+        builder.Services.AddSingleton<Ft8TxService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Ft8TxService>());
+        builder.Services.AddSingleton<WsprTxService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<WsprTxService>());
         // Resolve at startup so the MicPcmReceived subscription attaches before the
         // first client connects (lazy resolution would leave early frames unhandled).
         builder.Services.AddHostedService<TxAudioIngestStartup>();
@@ -658,6 +689,11 @@ public static class ZeusHost
         // QRZ.com XML client. HttpClient default timeout is 100 s — cap at 10 s so a
         // hung login surfaces quickly in the UI.
         builder.Services.AddHttpClient("Qrz", c => c.Timeout = TimeSpan.FromSeconds(10));
+        // Per-QSO HTTP cloud-log uploaders (Wavelog/Cloudlog + Club Log realtime).
+        // SEND-ONLY, default OFF. Tight timeouts so a slow/blocked endpoint never
+        // delays the operator's log confirmation.
+        builder.Services.AddHttpClient("Wavelog", c => c.Timeout = TimeSpan.FromSeconds(10));
+        builder.Services.AddHttpClient("ClubLog", c => c.Timeout = TimeSpan.FromSeconds(10));
         // Localhost proxy to the HamClock sidecar's propagation engine. The first
         // P.533-14 prediction for a cold path can take ~20 s upstream; allow for it.
         builder.Services.AddHttpClient("Propagation", c => c.Timeout = TimeSpan.FromSeconds(25));
@@ -923,6 +959,11 @@ public static class ZeusHost
         // only so its sidecar Node process is killed on Zeus shutdown.
         builder.Services.AddSingleton<HamClockService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<HamClockService>());
+        // HamClock DX-push config (Logging v2). Outbound "set the worked station
+        // on the map" — SEND-ONLY HTTP GET, DISABLED by default. The push itself
+        // lives on HamClockService.PushDxAsync; this owns the live config.
+        builder.Services.AddSingleton<HamClockPushConfigStore>();
+        builder.Services.AddSingleton<HamClockPushManagementService>();
         // Point-to-point propagation (proxies the HamClock sidecar's P.533-14 API).
         builder.Services.AddSingleton<PropagationService>();
         // Comprehensive solar / space-weather (proxies the sidecar's N0NBH feed).
@@ -947,6 +988,16 @@ public static class ZeusHost
         // Persists the operator's FreeDV Reporter "report mode" opt-in (default
         // OFF). Reporting only broadcasts the operator's callsign/grid/TX activity
         // to the public map after an explicit opt-in — see FreeDvReporterService.
+        // Shared operator identity (callsign + Maidenhead grid). One store, read
+        // first by every operator resolver (spotting / FreeDV Reporter / FT8-FT4
+        // TX) via OperatorIdentityResolver, with the QRZ home station as the
+        // fallback. Replaces the per-store identity duplication and the frontend's
+        // port-scoped localStorage that lost the call on every desktop restart.
+        builder.Services.AddSingleton<OperatorIdentityStore>();
+        // Persisted FT8/FT4 workspace behaviour preferences (auto-seq, decode
+        // depth, macros, logging). Behaviour/UI knobs only — none transmit.
+        builder.Services.AddSingleton<Ft8SettingsStore>();
+
         builder.Services.AddSingleton<FreeDvReporterSettingsStore>();
         builder.Services.AddSingleton<FreeDvReporterService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<FreeDvReporterService>());
@@ -1005,6 +1056,50 @@ public static class ZeusHost
         builder.Services.AddSingleton<CatSerialConfigStore>();
         builder.Services.AddSingleton<Cat.CatSerialService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<Cat.CatSerialService>());
+
+        // WSJT-X logged-QSO UDP broadcaster — outbound QSO-record push to
+        // third-party loggers (JTAlert / Log4OM / GridTracker / N1MM). DISABLED
+        // by default; this is NEW network egress, opt-in via the Network settings
+        // tab. No listener / hosted service — it only sends a datagram from the
+        // /api/log/entry path, so config applies live (no restart).
+        builder.Services.AddSingleton<WsjtxConfigStore>();
+        builder.Services.AddSingleton<WsjtxManagementService>();
+        builder.Services.AddSingleton<Wsjtx.WsjtxUdpBroadcaster>();
+        // WsjtxLiveEmitter — the optional live WSJT-X stream (Heartbeat/Status/
+        // Decode/WSPRDecode) GridTracker / JTAlert consume. Leaf subscriber to
+        // Ft8Service/WsprService/RadioService; gated on Enabled && SendLiveDecodes
+        // so the default path emits nothing. SEND-ONLY via the broadcaster.
+        builder.Services.AddSingleton<Wsjtx.WsjtxLiveEmitter>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Wsjtx.WsjtxLiveEmitter>());
+
+        // Logging v2 — N1MM-format UDP broadcaster (Class B). Sends the N1MM
+        // "contactinfo" datagram (a DIFFERENT wire format from the WSJT-X type-12
+        // path above) on a configurable port (default 2333) for HRD Logbook "QSO
+        // Forwarding" and DXKeeper via the N1MM→DXKeeper Gateway. SEND-ONLY, no
+        // listener, DISABLED by default; fired from the /api/log/entry fan-out.
+        builder.Services.AddSingleton<Wsjtx.N1mmConfigStore>();
+        builder.Services.AddSingleton<Wsjtx.N1mmBroadcaster>();
+
+        // Logging v2 — HTTP cloud-log uploaders (Class C): per-QSO realtime ADIF
+        // POST to Wavelog/Cloudlog and Club Log. NEW network egress, both DISABLED
+        // by default and additionally no-op until credentials are stored. SEND-ONLY
+        // (HttpClient POST out only). Fired from the /api/log/entry fan-out.
+        builder.Services.AddSingleton<CloudLog.CloudLogConfigStore>();
+        builder.Services.AddSingleton<CloudLog.WavelogClient>();
+        builder.Services.AddSingleton<CloudLog.ClubLogClient>();
+        builder.Services.AddSingleton<CloudLog.CloudLogService>();
+
+        // Digital-mode spotting uploaders — FT8/FT4 decodes to PSK Reporter and
+        // WSPR spots to WSPRnet. NEW network egress; both DISABLED by default and
+        // additionally no-op until operator callsign + grid are resolved. The two
+        // reporters are leaf subscribers to Ft8Service/WsprService — they enqueue/
+        // POST only and never touch the radio/DSP/TX path.
+        builder.Services.AddSingleton<SpottingSettingsStore>();
+        builder.Services.AddSingleton<SpottingManagementService>();
+        builder.Services.AddSingleton<Spotting.PskReporterReporter>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Spotting.PskReporterReporter>());
+        builder.Services.AddSingleton<Spotting.WsprnetReporter>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Spotting.WsprnetReporter>());
 
         // ZeusChat — operator-to-operator chat over the Cloudflare relay.
         // Singleton (API surface) + hosted service (relay connection lifecycle),
