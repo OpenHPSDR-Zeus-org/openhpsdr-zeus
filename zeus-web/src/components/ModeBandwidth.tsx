@@ -45,7 +45,7 @@
 
 import { useCallback } from 'react';
 import { type RxMode } from '../api/client';
-import { toggleDigital } from '../state/enter-digital';
+import { isDigitalEntryAvailable, toggleDigital } from '../state/enter-digital';
 import { useFt8Store } from '../state/ft8-store';
 import { useWsprStore } from '../state/wspr-store';
 import { useConnectionStore } from '../state/connection-store';
@@ -135,17 +135,29 @@ export function ModeBandwidth() {
               the mode buttons so they're always visible next to DIGU/DIGL. */}
           {(['FT8', 'FT4', 'WSPR'] as const).map((p) => {
             const engaged = digitalEngaged(p);
+            const available = isDigitalEntryAvailable(p);
             return (
               <button
                 key={p}
                 type="button"
-                onClick={() => toggleDigital(p)}
+                disabled={!available}
+                onClick={() => {
+                  if (available) toggleDigital(p);
+                }}
                 className={`btn sm ${engaged ? 'active' : ''}`}
-                style={engaged ? undefined : { borderColor: 'var(--accent)', color: 'var(--accent)' }}
+                style={
+                  !available
+                    ? { opacity: 0.4, cursor: 'not-allowed', borderColor: 'var(--line)', color: 'var(--fg-3)' }
+                    : engaged
+                      ? undefined
+                      : { borderColor: 'var(--accent)', color: 'var(--accent)' }
+                }
                 title={
-                  engaged
-                    ? `Exit ${p} — restores the prior frequency and mode`
-                    : `Enter ${p} — QSYs the radio and opens the ${p} pop-out`
+                  !available
+                    ? `${p} — coming soon (not yet available)`
+                    : engaged
+                      ? `Exit ${p} — restores the prior frequency and mode`
+                      : `Enter ${p} — QSYs the radio and opens the ${p} pop-out`
                 }
               >
                 {p}

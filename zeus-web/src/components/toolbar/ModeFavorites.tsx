@@ -14,7 +14,7 @@ import {
   postReceiverMode,
 } from '../../state/receiver-state';
 import { saveReceiverBandModeMemory } from '../../util/band-memory';
-import { isDigitalEntryKey, toggleDigital } from '../../state/enter-digital';
+import { isDigitalEntryAvailable, isDigitalEntryKey, toggleDigital } from '../../state/enter-digital';
 import { useFt8Store } from '../../state/ft8-store';
 import { useWsprStore } from '../../state/wspr-store';
 import { ToolbarFavorites, type ToolbarOption } from './ToolbarFavorites';
@@ -35,7 +35,7 @@ const MODE_OPTIONS: readonly ToolbarOption[] = [
   // auto-configure the radio (handled in onSelect, not via setReceiverMode).
   { key: 'FT8', label: 'FT8' },
   { key: 'FT4', label: 'FT4' },
-  { key: 'WSPR', label: 'WSPR' },
+  { key: 'WSPR', label: 'WSPR', disabled: !isDigitalEntryAvailable('WSPR'), title: 'WSPR — coming soon (not yet available)' },
 ];
 
 export function ModeFavorites() {

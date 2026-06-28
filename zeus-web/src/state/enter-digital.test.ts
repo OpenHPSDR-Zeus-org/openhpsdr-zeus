@@ -42,9 +42,11 @@ vi.mock('./wspr-store', () => ({
 }));
 
 import {
+  DIGITAL_UNAVAILABLE,
   enterDigital,
   exitDigital,
   isDigitalEngaged,
+  isDigitalEntryAvailable,
   toggleDigital,
 } from './enter-digital';
 
@@ -54,6 +56,9 @@ beforeEach(() => {
   ft8.priorRadio = null;
   wspr.open = false;
   wspr.priorRadio = null;
+  // Default ship state: WSPR is gated off (see enter-digital). Reset it here so
+  // tests that temporarily un-gate it (below) don't leak into other tests.
+  DIGITAL_UNAVAILABLE.WSPR = true;
   vi.clearAllMocks();
 });
 
@@ -65,6 +70,7 @@ describe('enterDigital', () => {
   });
 
   it('WSPR entry closes an open FT8 workspace first (mutual exclusion)', () => {
+    delete DIGITAL_UNAVAILABLE.WSPR; // un-gate WSPR to exercise its mechanics
     ft8.open = true;
     enterDigital('WSPR');
     expect(ft8.closeWorkspace).toHaveBeenCalledTimes(1);
@@ -79,6 +85,7 @@ describe('enterDigital', () => {
   });
 
   it('switching modes carries the pre-digital snapshot forward and skips restore', () => {
+    delete DIGITAL_UNAVAILABLE.WSPR; // un-gate WSPR to exercise its mechanics
     // FT8 already engaged with a captured pre-digital snapshot.
     const snap = { mode: 'USB' } as unknown;
     ft8.open = true;
@@ -89,6 +96,21 @@ describe('enterDigital', () => {
     // …and the TRUE pre-digital snapshot is carried into WSPR so its exit
     // restores the operator's real config, not the FT8 DIGU dial.
     expect(wspr.openWorkspace).toHaveBeenCalledWith({ prior: snap });
+  });
+});
+
+describe('availability gate', () => {
+  it('reports FT8/FT4 available and WSPR gated off by default', () => {
+    expect(isDigitalEntryAvailable('FT8')).toBe(true);
+    expect(isDigitalEntryAvailable('FT4')).toBe(true);
+    expect(isDigitalEntryAvailable('WSPR')).toBe(false);
+  });
+
+  it('enterDigital is a no-op for a gated mode (WSPR cannot be engaged)', () => {
+    ft8.open = true; // an open workspace must NOT be touched by a gated entry
+    enterDigital('WSPR');
+    expect(wspr.openWorkspace).not.toHaveBeenCalled();
+    expect(ft8.closeWorkspace).not.toHaveBeenCalled();
   });
 });
 

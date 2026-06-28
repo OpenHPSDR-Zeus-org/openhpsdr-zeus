@@ -21,6 +21,13 @@ export function isDigitalEntryKey(key: string): key is DigitalEntryKey {
   return (DIGITAL_ENTRY_KEYS as readonly string[]).includes(key);
 }
 
+/** WSPR is not ship-ready yet (untested; tracking map still pending). Gate it OFF
+ *  in the UI so it cannot be engaged. FT8/FT4 unaffected. Flip to enable later. */
+export const DIGITAL_UNAVAILABLE: Partial<Record<DigitalEntryKey, true>> = { WSPR: true };
+export function isDigitalEntryAvailable(key: DigitalEntryKey): boolean {
+  return !DIGITAL_UNAVAILABLE[key];
+}
+
 /**
  * Enter a digital mode, closing whichever other digital workspace is open
  * (FT8/FT4/WSPR are mutually exclusive — they all retune the radio). Entry
@@ -28,6 +35,7 @@ export function isDigitalEntryKey(key: string): key is DigitalEntryKey {
  * dial; the floating DigitalWindow pops open off the same store `open` flag.
  */
 export function enterDigital(target: DigitalEntryKey): void {
+  if (!isDigitalEntryAvailable(target)) return;
   const ft8 = useFt8Store.getState();
   const wspr = useWsprStore.getState();
   if (target === 'WSPR') {
