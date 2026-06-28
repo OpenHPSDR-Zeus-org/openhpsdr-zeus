@@ -76,6 +76,35 @@ describe('digital-mode framing gate', () => {
     expect(setZoom).toHaveBeenCalled();
   });
 
+  it('is a NO-OP when already on the target digital config (pop-out churn fix)', async () => {
+    // Radio already configured for 20 m FT8: DIGU + 150..3000 filter + on dial.
+    // The band-follow effect / redundant qsyBand must issue NOTHING — a stray
+    // setVfo would trip the server per-band mode recall and perturb decode.
+    useConnectionStore.setState({
+      vfoHz: 14_074_000,
+      mode: 'DIGU' as never,
+      filterLowHz: 150,
+      filterHighHz: 3000,
+    });
+    await configureRadioForDigital('FT8', '20m');
+    expect(setVfo).not.toHaveBeenCalled();
+    expect(setMode).not.toHaveBeenCalled();
+    expect(setCtun).not.toHaveBeenCalled();
+  });
+
+  it('STILL reconfigures when the server flipped mode off DIGU (recall recovery)', async () => {
+    // Same dial + filter, but the server's per-band recall knocked mode to USB:
+    // we must re-assert DIGU so decode survives.
+    useConnectionStore.setState({
+      vfoHz: 14_074_000,
+      mode: 'USB' as never,
+      filterLowHz: 150,
+      filterHighHz: 3000,
+    });
+    await configureRadioForDigital('FT8', '20m');
+    expect(setMode).toHaveBeenCalledWith('DIGU');
+  });
+
   it('cross-band QSY moves the VFO BEFORE asserting DIGU (recall-proof order)', async () => {
     const order: string[] = [];
     (setVfo as unknown as ReturnType<typeof vi.fn>).mockImplementation(async () => {
