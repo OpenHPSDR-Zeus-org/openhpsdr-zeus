@@ -73,6 +73,7 @@ The transport bar is pinned across the bottom and is where transmit, audio, and 
 - **PS** — the PureSignal master arm toggle. *PureSignal always starts disarmed at launch and must be armed by hand each session* — a deliberate safety measure for stations running external amplifiers.
 - **Audio toggle + mic meter** — turn receive audio on/off, with a live microphone-level meter beside it so you can see your mic is being heard.
 - **Secondary controls** — CTUN (click-tune), and SPLIT / RIT / SAVE MEM buttons (some hidden on narrow/mobile widths).
+- **ZOOM −/+ cluster** — scales the whole Zeus interface as one unit: the panel grid, the top bar, and this transport bar all grow or shrink together. Useful when you want Zeus to share screen real-estate with other apps. Click the percent readout to reset to 100 %, or hold **Ctrl** (**⌘** on macOS) and scroll the mouse wheel over the workspace.
 - **Status chips** (right side): **PA temperature**, **PRE** (preamp on/off), **RADIO** (the connected radio's address, lit when connected), and live **rotator** and **QRZ** pills. There's also a **Report a problem** button and the **⟳ Default** layout-reset button described above.
 
 The mobile view shows live **SWR** and **MIC dBfs** chips in the S-meter header while you're transmitting, so you can keep an eye on your match and mic level from a phone.

@@ -178,6 +178,14 @@ export default function App() {
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
   const endpoint = useConnectionStore((s) => s.endpoint);
+  // Chrome zoom — same operator-set workspace-zoom percent that scales the
+  // panel grid (see FlexWorkspace); piped to .topbar / .transport via the
+  // --zeus-chrome-zoom CSS var so the top bar and bottom transport strip
+  // grow/shrink together with the panels (issue #1107). Falls back to 1.0
+  // before the server-persisted value arrives so chrome never collapses on
+  // first paint.
+  const workspaceZoomPct = useConnectionStore((s) => s.workspaceZoomPct);
+  const chromeZoom = (workspaceZoomPct > 0 ? workspaceZoomPct : 100) / 100;
   const connected = status === 'Connected';
   // Brand sub label reflects what discovery actually saw on the wire
   // (selection.connected), not the operator's preferred override — showing
@@ -990,7 +998,14 @@ export default function App() {
     <SmartNrController />
     <DspSceneDiagnosticsPublisher />
     <AudioPlaybackDiagnosticsPublisher />
-    <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
+    <div
+      className="app"
+      data-screen-label="01 Main Console"
+      style={{
+        position: 'relative',
+        ['--zeus-chrome-zoom' as string]: chromeZoom,
+      }}
+    >
       {/* Left layout bar — issue #241. Spans the full app height; lists named
           layouts for the active radio with switch/add/delete/reset actions. */}
       <LeftLayoutBar />
