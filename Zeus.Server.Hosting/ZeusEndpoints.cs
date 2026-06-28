@@ -3765,6 +3765,7 @@ public static class ZeusEndpoints
         app.MapPost("/api/log/entry", async (
             CreateLogEntryRequest req,
             LogService logService,
+            QrzService qrz,
             WsjtxUdpBroadcaster wsjtx,
             Wsjtx.N1mmBroadcaster n1mm,
             CloudLog.CloudLogService cloudLog,
@@ -3772,6 +3773,20 @@ public static class ZeusEndpoints
         {
             if (string.IsNullOrWhiteSpace(req.Callsign))
                 return Results.BadRequest(new { error = "callsign required" });
+
+            // Operator name enrichment: when the caller didn't supply a name
+            // (FT8 auto-log, a spot logged without a QRZ card open, an import
+            // lacking NAME), fill it from QRZ. The QRZ feed splits the operator
+            // into <fname>+<name>, so compose the full name rather than the
+            // surname alone. Best-effort — a lookup miss or no subscription
+            // must never block logging the QSO.
+            if (string.IsNullOrWhiteSpace(req.Name))
+            {
+                var enriched = await TryQrzFullNameAsync(qrz, req.Callsign, ctx.RequestAborted);
+                if (!string.IsNullOrWhiteSpace(enriched))
+                    req = req with { Name = enriched };
+            }
+
             var entry = await logService.CreateLogEntryAsync(req, ctx.RequestAborted);
             // Push the just-logged QSO to every opted-in external logger. Each
             // target is OFF by default and no-ops when disabled; this is the only
@@ -3794,6 +3809,23 @@ public static class ZeusEndpoints
                 System.Text.Encoding.UTF8.GetBytes(adif),
                 "text/plain",
                 fileName);
+        });
+
+        // Write the logbook (or a selected subset) to an ADIF file in a
+        // directory on the machine running the backend, returning the path so
+        // the Logbook panel can confirm where it landed (a silent browser
+        // download gave the operator no feedback). Null directory => Downloads.
+        app.MapPost("/api/log/export/adif/file", async (AdifExportToFileRequest req, LogService logService, HttpContext ctx) =>
+        {
+            try
+            {
+                var result = await logService.ExportToAdifFileAsync(req.Directory, req.LogEntryIds, ctx.RequestAborted);
+                return Results.Ok(result);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                return Results.BadRequest(new { error = $"Could not write ADIF file: {ex.Message}" });
+            }
         });
 
         app.MapPost("/api/log/import/adif", async (LogService logService, HttpContext ctx) =>
@@ -4215,6 +4247,39 @@ public static class ZeusEndpoints
     }
 
     // ---------- helpers (formerly local functions in Program.cs) -------------
+
+    /// <summary>
+    /// Best-effort QRZ lookup that returns the operator's full display name
+    /// ("First Last") for a callsign, or null. The QRZ feed splits the operator
+    /// into &lt;fname&gt; (first) and &lt;name&gt; (last), so compose both —
+    /// the surname alone is what made the logbook Name column read blank for
+    /// records where QRZ only populates the first name. Never throws: a missing
+    /// subscription, a not-logged-in state, or a lookup miss simply yields null
+    /// so the QSO still logs.
+    /// </summary>
+    private static async Task<string?> TryQrzFullNameAsync(QrzService qrz, string callsign, CancellationToken ct)
+    {
+        try
+        {
+            // Bound the lookup so logging a QSO never stalls on a slow or
+            // gate-contended QRZ feed (FT8 bursts, no subscription, network
+            // blip). The QSO logs with no name rather than hanging.
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(4));
+            var station = await qrz.LookupAsync(callsign, timeout.Token).ConfigureAwait(false);
+            if (station == null) return null;
+            var full = string.Join(' ', new[] { station.FirstName, station.Name }
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s!.Trim()));
+            return string.IsNullOrWhiteSpace(full) ? null : full;
+        }
+        catch
+        {
+            // Not logged in / no subscription / network blip — logging a QSO
+            // must never depend on QRZ being reachable.
+            return null;
+        }
+    }
 
     private static IResult GetNativeAudioDevices(IServiceProvider sp)
     {

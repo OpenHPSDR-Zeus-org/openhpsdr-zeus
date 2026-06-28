@@ -77,6 +77,24 @@ export type QrzStation = {
   born: number | null;
 };
 
+/**
+ * Compose the operator's full display name from a QRZ lookup. QRZ splits the
+ * operator into `firstName` (<fname>) and `name` (<name> = surname), so logging
+ * `name` alone dropped the first name — and read blank for records where QRZ
+ * only carries the first name. Returns "First Last", a single available part,
+ * or null when neither is present.
+ */
+export function qrzFullName(
+  station: { firstName?: string | null; name?: string | null } | null | undefined,
+): string | null {
+  if (!station) return null;
+  const full = [station.firstName, station.name]
+    .map((p) => (p ?? '').trim())
+    .filter((p) => p.length > 0)
+    .join(' ');
+  return full.length > 0 ? full : null;
+}
+
 export type QrzStatus = {
   connected: boolean;
   hasXmlSubscription: boolean;

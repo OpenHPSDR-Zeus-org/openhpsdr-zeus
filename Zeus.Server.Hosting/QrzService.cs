@@ -552,7 +552,10 @@ public sealed class QrzService
     private static void AppendAdifField(System.Text.StringBuilder sb, string fieldName, string value)
     {
         if (string.IsNullOrEmpty(value)) return;
-        sb.Append($"<{fieldName}:{value.Length}>{value} ");
+        // ADIF length is a UTF-8 OCTET count, not a UTF-16 code-unit count.
+        // value.Length under-reports any non-ASCII field (accented name/QTH),
+        // so QRZ.com truncates and desyncs the record. Encode byte length.
+        sb.Append($"<{fieldName}:{System.Text.Encoding.UTF8.GetByteCount(value)}>{value} ");
     }
 }
 

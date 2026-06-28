@@ -112,3 +112,19 @@ public sealed record QrzPublishResult(
     bool Success,
     string? QrzLogId,
     string? Message);
+
+/// <summary>
+/// Write the logbook (or a selected subset) to an ADIF file in a directory on
+/// the machine running the backend. <see cref="Directory"/> is optional — null
+/// or blank writes to the operator's Downloads folder. Used by the Logbook
+/// panel's Export button so the operator gets a concrete saved path back
+/// instead of a silent browser download.
+/// </summary>
+public sealed record AdifExportToFileRequest(
+    string? Directory = null,
+    IEnumerable<string>? LogEntryIds = null);
+
+public sealed record AdifExportToFileResponse(
+    string Path,
+    int Count,
+    long Bytes);

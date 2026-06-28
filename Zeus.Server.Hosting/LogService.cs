@@ -213,6 +213,73 @@ public sealed class LogService : IDisposable
         }, ct);
     }
 
+    /// <summary>
+    /// Render the logbook (or the given subset) to ADIF and write it as a
+    /// timestamped .adi file in <paramref name="directory"/>. A null/blank
+    /// directory targets the operator's Downloads folder. Returns the absolute
+    /// path written, the QSO count, and the byte size so the UI can confirm
+    /// exactly where the file landed.
+    /// </summary>
+    public async Task<AdifExportToFileResponse> ExportToAdifFileAsync(
+        string? directory = null,
+        IEnumerable<string>? logEntryIds = null,
+        CancellationToken ct = default)
+    {
+        var ids = logEntryIds?.ToList();
+        var count = ids != null
+            ? _logs.Query().Where(x => ids.Contains(x.Id)).Count()
+            : _logs.Count();
+        var adif = await ExportToAdifAsync(ids, ct).ConfigureAwait(false);
+        var bytes = Encoding.UTF8.GetBytes(adif);
+
+        var targetDir = ResolveExportDirectory(directory);
+        Directory.CreateDirectory(targetDir);
+        var fileName = $"zeus-log-{DateTime.UtcNow:yyyyMMdd-HHmmss}.adi";
+        var fullPath = Path.Combine(targetDir, fileName);
+
+        await File.WriteAllBytesAsync(fullPath, bytes, ct).ConfigureAwait(false);
+        _log.LogInformation("Exported {Count} QSOs to ADIF file {Path} ({Bytes} bytes)",
+            count, fullPath, bytes.Length);
+
+        return new AdifExportToFileResponse(fullPath, count, bytes.Length);
+    }
+
+    /// <summary>
+    /// Resolve a writable export directory. A caller-supplied path wins (after
+    /// expanding a leading ~). Otherwise default to the operator's Downloads
+    /// folder — there is no <see cref="Environment.SpecialFolder"/> for it, so
+    /// derive it from the user-profile home and fall back to the profile root
+    /// itself if Downloads can't be created. Cross-platform: %USERPROFILE% on
+    /// Windows, $HOME on macOS/Linux.
+    /// </summary>
+    private static string ResolveExportDirectory(string? directory)
+    {
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            var trimmed = directory.Trim();
+            if (trimmed == "~" || trimmed.StartsWith("~/", StringComparison.Ordinal) ||
+                trimmed.StartsWith("~\\", StringComparison.Ordinal))
+            {
+                var rest = trimmed.Length > 1 ? trimmed[2..] : string.Empty;
+                trimmed = Path.Combine(HomeDirectory(), rest);
+            }
+            return trimmed;
+        }
+
+        var home = HomeDirectory();
+        var downloads = Path.Combine(home, "Downloads");
+        return downloads;
+    }
+
+    private static string HomeDirectory()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrEmpty(home)) return home;
+        home = Environment.GetEnvironmentVariable("HOME")
+               ?? Environment.GetEnvironmentVariable("USERPROFILE");
+        return string.IsNullOrEmpty(home) ? Directory.GetCurrentDirectory() : home;
+    }
+
     public async Task<AdifImportResponse> ImportAdifAsync(string adif, CancellationToken ct = default)
     {
         return await Task.Run(() =>
@@ -610,7 +677,12 @@ public sealed class LogService : IDisposable
     private static void AppendAdifField(StringBuilder sb, string fieldName, string value)
     {
         if (string.IsNullOrEmpty(value)) return;
-        sb.Append($"<{fieldName}:{value.Length}>{value} ");
+        // ADIF declares each field length as an OCTET count, not a UTF-16
+        // code-unit count. Using value.Length corrupts any record with a
+        // non-ASCII byte (e.g. "José" emits <NAME:4> but writes 5 bytes),
+        // desyncing byte-based importers (LoTW, ClubLog, QRZ, N1MM). Emit
+        // the UTF-8 byte length so the field is spec-correct.
+        sb.Append($"<{fieldName}:{Encoding.UTF8.GetByteCount(value)}>{value} ");
     }
 
     private static DateTime ToUtc(DateTime dt) => dt.Kind == DateTimeKind.Utc ? dt : dt.ToUniversalTime();

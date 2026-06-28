@@ -355,8 +355,10 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'log',
     tags: ['log', 'qso', 'logbook', 'adif'],
     component: LogbookPanel,
-    minW: 6,
-    minH: 8,
+    // Floor kept low so the logbook can be docked as a compact strip; the
+    // header wraps and the body scrolls, so it stays usable when small.
+    minW: 4,
+    minH: 4,
   },
   txmeters: {
     id: 'txmeters',
