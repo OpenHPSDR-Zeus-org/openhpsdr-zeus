@@ -170,4 +170,94 @@ public sealed class AdifImportTests
         Assert.Equal(14, doc.CqZone);
         Assert.Equal(27, doc.ItuZone);
     }
+
+    [Fact]
+    public void Export_DeclaresFieldLengthInUtf8BytesNotChars()
+    {
+        // "José Muñoz" is 10 UTF-16 code units but 12 UTF-8 bytes (é and ñ are
+        // two bytes each). ADIF length tags are octet counts; declaring 10
+        // would make a spec-compliant importer (LoTW/ClubLog/QRZ/N1MM) read
+        // short and desync the rest of the record.
+        var doc = new LogEntryDocument
+        {
+            Id = "id-1",
+            Callsign = "EA1ABC",
+            QsoDateTimeUtc = new DateTime(2026, 6, 28, 12, 0, 0, DateTimeKind.Utc),
+            Band = "20M",
+            Mode = "SSB",
+            RstSent = "59",
+            RstRcvd = "59",
+            Name = "José Muñoz",
+            CreatedUtc = new DateTime(2026, 6, 28, 12, 0, 0, DateTimeKind.Utc),
+        };
+
+        var sb = new StringBuilder();
+        LogService.AppendAdifRecord(sb, doc);
+        var exported = sb.ToString();
+
+        Assert.Equal(12, Encoding.UTF8.GetByteCount("José Muñoz"));
+        Assert.Contains("<NAME:12>José Muñoz", exported);
+        Assert.DoesNotContain("<NAME:10>", exported);
+        // ASCII fields keep byte==char length.
+        Assert.Contains("<CALL:6>EA1ABC", exported);
+    }
+
+    [Fact]
+    public async Task ExportToAdifFileAsync_WritesAdifToTargetDirectory()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"zeus-export-test-{Guid.NewGuid():N}.db");
+        var outDir = Path.Combine(Path.GetTempPath(), $"zeus-export-out-{Guid.NewGuid():N}");
+        try
+        {
+            using var svc = new LogService(
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<LogService>.Instance, dbPath);
+            await svc.CreateLogEntryAsync(new Zeus.Contracts.CreateLogEntryRequest(
+                Callsign: "K2ABC", Name: "Al", FrequencyMhz: 14.074, Band: "20M",
+                Mode: "FT8", RstSent: "-12", RstRcvd: "-09"));
+
+            var result = await svc.ExportToAdifFileAsync(outDir);
+
+            Assert.Equal(1, result.Count);
+            Assert.True(File.Exists(result.Path));
+            Assert.Equal(outDir, Path.GetDirectoryName(result.Path));
+            var text = await File.ReadAllTextAsync(result.Path);
+            Assert.Contains("<CALL:5>K2ABC", text);
+            Assert.Equal(new FileInfo(result.Path).Length, result.Bytes);
+        }
+        finally
+        {
+            try { File.Delete(dbPath); } catch { /* best effort */ }
+            try { Directory.Delete(outDir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void RoundTrip_NonAsciiName_PreservesNameAndFollowingFields()
+    {
+        // Export emits UTF-8 byte lengths; the parser must read by bytes too,
+        // or "José Muñoz" (12 bytes / 10 chars) over-reads into the next field.
+        var doc = new LogEntryDocument
+        {
+            Id = "id-rt",
+            Callsign = "EA1ABC",
+            QsoDateTimeUtc = new DateTime(2026, 6, 28, 12, 0, 0, DateTimeKind.Utc),
+            Band = "20M",
+            Mode = "SSB",
+            RstSent = "59",
+            RstRcvd = "59",
+            Name = "José Muñoz",
+            Grid = "IN80",
+            CreatedUtc = new DateTime(2026, 6, 28, 12, 0, 0, DateTimeKind.Utc),
+        };
+
+        var sb = new StringBuilder();
+        sb.AppendLine("<ADIF_VER:5>3.1.4<EOH>");
+        LogService.AppendAdifRecord(sb, doc);
+
+        var record = AdifParser.Parse(sb.ToString()).Single();
+
+        Assert.Equal("José Muñoz", record.Fields["NAME"]);
+        Assert.Equal("IN80", record.Fields["GRIDSQUARE"]);  // stays aligned after the multi-byte field
+        Assert.Equal("EA1ABC", record.Fields["CALL"]);
+    }
 }

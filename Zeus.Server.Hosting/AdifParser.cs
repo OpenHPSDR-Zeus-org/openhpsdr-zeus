@@ -63,11 +63,36 @@ internal static class AdifParser
             if (!int.TryParse(lengthText, out var length) || length < 0)
                 throw new FormatException($"ADIF field '{fieldName}' has an invalid length specifier.");
 
-            if (pos + length > adif.Length)
+            // ADIF declares the value length as a UTF-8 OCTET count, but a C#
+            // string is UTF-16. Consume chars until we've covered `length`
+            // bytes rather than `length` chars — otherwise any accented value
+            // (and every field after it) is mis-read. Mirrors AppendAdifField,
+            // which emits Encoding.UTF8.GetByteCount on export.
+            var valueStart = pos;
+            var bytes = 0;
+            while (pos < adif.Length && bytes < length)
+            {
+                var c = adif[pos];
+                int codepoint;
+                int step;
+                if (char.IsHighSurrogate(c) && pos + 1 < adif.Length && char.IsLowSurrogate(adif[pos + 1]))
+                {
+                    codepoint = char.ConvertToUtf32(c, adif[pos + 1]);
+                    step = 2;
+                }
+                else
+                {
+                    codepoint = c;
+                    step = 1;
+                }
+                bytes += codepoint < 0x80 ? 1 : codepoint < 0x800 ? 2 : codepoint < 0x10000 ? 3 : 4;
+                pos += step;
+            }
+
+            if (bytes < length)
                 throw new FormatException($"ADIF field '{fieldName}' length exceeds the available data.");
 
-            fields[fieldName] = adif.Substring(pos, length);
-            pos += length;
+            fields[fieldName] = adif.Substring(valueStart, pos - valueStart);
         }
 
         if (fields.Count > 0)

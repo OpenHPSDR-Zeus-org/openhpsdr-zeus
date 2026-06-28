@@ -110,6 +110,7 @@ import { getReceiverMode } from './state/receiver-state';
 import { useFreeDvWindowStore } from './state/freedv-window-store';
 import { useRadioStore } from './state/radio-store';
 import { useQrzStore } from './state/qrz-store';
+import { qrzFullName } from './api/qrz';
 import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
 import { useTxStore } from './state/tx-store';
@@ -532,6 +533,9 @@ export default function App() {
   const logSelectedIds = useLoggerStore((s) => s.selectedIds);
   const logPublishSelected = useLoggerStore((s) => s.publishSelectedToQrz);
   const logExportAdif = useLoggerStore((s) => s.exportAdif);
+  const logExportInFlight = useLoggerStore((s) => s.exportInFlight);
+  const logExportResult = useLoggerStore((s) => s.lastExportResult);
+  const logExportError = useLoggerStore((s) => s.exportError);
   const logImportAdifFile = useLoggerStore((s) => s.importAdifFile);
   const workedSummary = useLoggerStore((s) => s.workedSummary);
   const workedSummaryLoading = useLoggerStore((s) => s.workedSummaryLoading);
@@ -558,6 +562,13 @@ export default function App() {
     logbookTitle = logPublishResult.failedCount > 0
       ? `Logbook · ${logPublishResult.successCount} ok, ${logPublishResult.failedCount} failed`
       : `Logbook · Published ${logPublishResult.successCount}`;
+  } else if (logExportInFlight) {
+    logbookTitle = 'Logbook · Exporting…';
+  } else if (logExportError) {
+    logbookTitle = `Logbook · ${logExportError.length > 28 ? 'Export failed' : logExportError}`;
+  } else if (logExportResult) {
+    const dir = logExportResult.path.replace(/[/\\][^/\\]*$/, '');
+    logbookTitle = `Logbook · Exported ${logExportResult.count} → ${dir}`;
   }
 
   const logSelectedCount = logSelectedIds.size;
@@ -661,7 +672,7 @@ export default function App() {
 
     void addLogEntry({
       callsign: contact.callsign,
-      name: qrzLookup.name ?? undefined,
+      name: qrzFullName(qrzLookup) ?? undefined,
       frequencyMhz,
       band,
       mode,
