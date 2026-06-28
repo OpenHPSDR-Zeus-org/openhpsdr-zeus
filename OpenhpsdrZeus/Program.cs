@@ -352,7 +352,7 @@ public partial class Program
         // Spawn the out-of-process support sidecar now the backend is up. It runs
         // detached so it survives a backend crash and can capture the crash logs
         // the in-memory ring would lose. Best-effort — never blocks launch.
-        SupportSidecarLauncher.TryLaunch();
+        SupportSidecarLauncher.TryLaunch(app.Services);
 
         // Resolve the bound URLs after Start — Kestrel writes the OS-assigned
         // loopback port (plus the LAN HTTPS port we configured) into

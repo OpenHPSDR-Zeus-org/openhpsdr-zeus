@@ -99,6 +99,43 @@ public static class ZeusEndpoints
                 return ok ? Results.Ok(new { ok = true }) : Results.NotFound(new { ok = false });
             });
 
+        // L1 "Remote Diagnostics available" master switch + crash auto-share
+        // sub-toggle (remote-diag P5). OFF by default; while OFF the coordinator
+        // refuses inbound requests outright. The Settings → Server panel drives
+        // PUT; the in-app Allow/Deny prompt + active-session badge poll /status.
+        app.MapGet("/api/support/availability",
+            (Zeus.Server.Hosting.Support.SupportAvailabilityStore store) =>
+                Results.Ok(new { available = store.IsAvailable, autoShareCrashes = store.AutoShareOnCrash }));
+
+        app.MapPut("/api/support/availability",
+            (SupportAvailabilityRequest req, Zeus.Server.Hosting.Support.SupportAvailabilityStore store) =>
+            {
+                var available = req.Available ?? false;
+                var autoShare = req.AutoShareCrashes ?? false;
+                var (newAvailable, newAutoShare) = store.Set(available, autoShare);
+                // Push the change to the out-of-process sidecar so it can
+                // register/deregister broker presence (P3c consumes this).
+                Zeus.Server.SupportSidecar.NotifyAvailabilityChanged(newAvailable, newAutoShare, log: log);
+                log.LogInformation(
+                    "api.support.availability available={Available} autoShareCrashes={AutoShare}",
+                    newAvailable, newAutoShare);
+                return Results.Ok(new { available = newAvailable, autoShareCrashes = newAutoShare });
+            });
+
+        // Single poll surface for the operator UI: opt-in posture + live pending
+        // requests + how many maintainer sessions are currently viewing.
+        app.MapGet("/api/support/status",
+            (Zeus.Server.Hosting.Support.SupportAvailabilityStore store,
+             Zeus.Server.Hosting.Support.SupportRequestCoordinator coord,
+             Zeus.Server.Hosting.Support.SupportWebRtcService rtc) =>
+                Results.Ok(new
+                {
+                    available = store.IsAvailable,
+                    autoShareCrashes = store.AutoShareOnCrash,
+                    pending = coord.Pending(),
+                    activeSessions = rtc.ActiveSessions,
+                }));
+
         // Capabilities snapshot — host-mode + platform metadata. Frontend
         // fetches once on app mount; future feature gates will reattach as
         // the new plugin system fills the FeatureMatrix. The HttpContext-
@@ -5097,6 +5134,8 @@ public static class ZeusEndpoints
 internal sealed record NativeMuteRequest(bool Muted);
 /// <summary>Operator Allow/Deny body for a maintainer remote-support request (remote-diag P3).</summary>
 internal sealed record SupportDecisionRequest(string? RequestId);
+/// <summary>Operator opt-in body for the L1 Remote Diagnostics master switch (remote-diag P5).</summary>
+internal sealed record SupportAvailabilityRequest(bool? Available, bool? AutoShareCrashes);
 internal sealed record NativeAudioDevicesSetRequest(string? InputDeviceId, string? OutputDeviceId);
 internal sealed record NativeAudioDeviceDto(string Id, string Name, bool IsDefault);
 internal sealed record NativeAudioDevicesResponse(
