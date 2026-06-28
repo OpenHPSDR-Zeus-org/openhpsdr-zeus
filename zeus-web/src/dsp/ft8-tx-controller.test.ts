@@ -140,6 +140,114 @@ describe('Ft8TxController', () => {
     expect(logged).toEqual([]); // manual log already recorded it; no duplicate
   });
 
+  it('caller stops after one RR73 then disarms (disable-after-73 default)', () => {
+    const { fn, calls } = makeFetch();
+    const logged: string[] = [];
+    const ctrl = new Ft8TxController({
+      myCall: 'KB2UKA',
+      myGrid4: 'FN12',
+      fetchFn: fn,
+      onLogQso: (s) => logged.push(s.dxCall ?? ''),
+    });
+
+    ctrl.enableTx(); // arm + stage CQ
+    ctrl.onWindow(['KB2UKA K1ABC FN31']); // -> report
+    ctrl.onWindow(['KB2UKA K1ABC R-12']); // -> rogers, stages RR73, logs once
+    const lastBeforeEmpty = String(tx(calls).at(-1)?.body.message);
+    expect(lastBeforeEmpty).toContain('RR73');
+    const txCountAfterRr73 = tx(calls).length;
+    expect(logged).toEqual(['K1ABC']);
+
+    // His 73 never decodes: the next window must NOT re-stage RR73, and must disarm.
+    ctrl.onWindow([]);
+    expect(tx(calls).length).toBe(txCountAfterRr73); // no repeated RR73
+    expect(arm(calls).at(-1)?.body).toEqual({ enabled: false });
+
+    // Stays terminal: another empty window adds no /tx and no second log.
+    ctrl.onWindow([]);
+    expect(tx(calls).length).toBe(txCountAfterRr73);
+    expect(logged).toEqual(['K1ABC']);
+  });
+
+  it('caller repeats RR73 when disable-after-73 is off', () => {
+    const { fn, calls } = makeFetch();
+    const ctrl = new Ft8TxController({
+      myCall: 'KB2UKA',
+      myGrid4: 'FN12',
+      fetchFn: fn,
+      disableTxAfter73: false,
+    });
+
+    ctrl.enableTx();
+    ctrl.onWindow(['KB2UKA K1ABC FN31']); // -> report
+    ctrl.onWindow(['KB2UKA K1ABC R-12']); // -> rogers, stages RR73
+    const txCountAfterRr73 = tx(calls).length;
+
+    // Empty window re-stages RR73 (legacy behaviour) and does not disarm.
+    ctrl.onWindow([]);
+    expect(tx(calls).length).toBe(txCountAfterRr73 + 1);
+    expect(String(tx(calls).at(-1)?.body.message)).toContain('RR73');
+    expect(arm(calls).at(-1)?.body).toEqual({ enabled: true });
+  });
+
+  it('applyBehavior OFF→ON mid-QSO disarms the in-flight RR73', () => {
+    const { fn, calls } = makeFetch();
+    const ctrl = new Ft8TxController({
+      myCall: 'KB2UKA',
+      myGrid4: 'FN12',
+      fetchFn: fn,
+      disableTxAfter73: false,
+    });
+
+    ctrl.enableTx(); // arm + stage CQ
+    ctrl.onWindow(['KB2UKA K1ABC FN31']); // -> report
+    ctrl.onWindow(['KB2UKA K1ABC R-12']); // -> rogers, stages RR73, logs once
+    expect(String(tx(calls).at(-1)?.body.message)).toContain('RR73');
+    const txCountAfterRr73 = tx(calls).length;
+
+    // disable-after-73 OFF: an empty window re-stages RR73 and stays armed.
+    ctrl.onWindow([]);
+    expect(tx(calls).length).toBe(txCountAfterRr73 + 1);
+    expect(String(tx(calls).at(-1)?.body.message)).toContain('RR73');
+    expect(arm(calls).at(-1)?.body).toEqual({ enabled: true });
+
+    // Operator flips the preference ON mid-QSO — it must govern the CURRENT QSO's
+    // terminal RR73 (this is the applyBehavior state-sync line under test).
+    ctrl.applyBehavior({ disableTxAfter73: true });
+    const txCountBeforeToggleWindow = tx(calls).length;
+
+    // Next empty window must NOT re-stage RR73 and must disarm.
+    ctrl.onWindow([]);
+    expect(tx(calls).length).toBe(txCountBeforeToggleWindow); // no repeated RR73
+    expect(arm(calls).at(-1)?.body).toEqual({ enabled: false });
+  });
+
+  it('applyBehavior ON→OFF mid-QSO restores the RR73 repeat', () => {
+    const { fn, calls } = makeFetch();
+    const ctrl = new Ft8TxController({
+      myCall: 'KB2UKA',
+      myGrid4: 'FN12',
+      fetchFn: fn,
+      // disableTxAfter73 defaults ON
+    });
+
+    ctrl.enableTx(); // arm + stage CQ
+    ctrl.onWindow(['KB2UKA K1ABC FN31']); // -> report
+    ctrl.onWindow(['KB2UKA K1ABC R-12']); // -> rogers, stages RR73, logs once
+    expect(String(tx(calls).at(-1)?.body.message)).toContain('RR73');
+    const txCountAfterRr73 = tx(calls).length;
+
+    // Operator turns disable-after-73 OFF before the partner 73 arrives — the
+    // current QSO must revert to the legacy repeat-until-73 behaviour.
+    ctrl.applyBehavior({ disableTxAfter73: false });
+
+    // Empty window now re-stages RR73 and stays armed (no auto-disarm).
+    ctrl.onWindow([]);
+    expect(tx(calls).length).toBe(txCountAfterRr73 + 1);
+    expect(String(tx(calls).at(-1)?.body.message)).toContain('RR73');
+    expect(arm(calls).at(-1)?.body).toEqual({ enabled: true });
+  });
+
   it('posts /halt on operator Halt', () => {
     const { fn, calls } = makeFetch();
     const ctrl = new Ft8TxController({ myCall: 'KB2UKA', fetchFn: fn });

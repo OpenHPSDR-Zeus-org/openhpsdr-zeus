@@ -35,6 +35,9 @@ public sealed class WsprnetReporter : BackgroundService
     /// <summary>WSPRnet wsprd-compatible upload endpoint.</summary>
     public const string PostUrl = "http://wsprnet.org/post";
 
+    // Host portion of PostUrl, for the success heartbeat log only.
+    private static readonly string PostHost = new Uri(PostUrl).Host;
+
     private static readonly string Version = BuildSoftwareString();
     private static readonly HttpClient SharedHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
 
@@ -85,8 +88,9 @@ public sealed class WsprnetReporter : BackgroundService
     }
 
     // Applies the enable + identity gate, splits/filters each spot, and POSTs the
-    // survivors. Returns the number of spots POSTed. Internal + awaitable so the
-    // gate (disabled => 0, no-identity => 0, enabled+identity => N) can be asserted
+    // survivors. Returns the number of spots WSPRnet ACCEPTED with an HTTP success
+    // status (failed POSTs count as 0). Internal + awaitable so the gate (disabled
+    // => 0, no-identity => 0, enabled+identity => N accepted) can be asserted
     // against a recording handler. OnSpots calls this fire-and-forget, so the only
     // synchronous work on the decode thread is the cheap gate + form building.
     internal async Task<int> HandleSpotsAsync(WsprSpotBatch batch)
@@ -97,7 +101,7 @@ public sealed class WsprnetReporter : BackgroundService
         if (string.IsNullOrWhiteSpace(rcall) || string.IsNullOrWhiteSpace(rgrid))
             return 0;
 
-        var posts = new List<Task>();
+        var posts = new List<Task<bool>>();
         foreach (var spot in batch.Spots)
         {
             if (!WsprnetMessage.TrySplit(spot.Message, out var tcall, out var tgrid, out var dbm))
@@ -115,23 +119,34 @@ public sealed class WsprnetReporter : BackgroundService
         }
 
         if (posts.Count == 0) return 0;
-        await Task.WhenAll(posts).ConfigureAwait(false);
-        return posts.Count;
+        var results = await Task.WhenAll(posts).ConfigureAwait(false);
+        int sent = results.Count(ok => ok);
+        // Heartbeat: one Info line per batch that landed at least one spot, so the
+        // operator can confirm in-app that WSPR spots actually went out.
+        if (sent > 0)
+            _log.LogInformation("wsprnet.upload sent={Sent} -> {Host}", sent, PostHost);
+        return sent;
     }
 
-    private async Task PostSpotAsync(IReadOnlyList<KeyValuePair<string, string>> form)
+    // Returns true only when the POST reached WSPRnet with a success status.
+    private async Task<bool> PostSpotAsync(IReadOnlyList<KeyValuePair<string, string>> form)
     {
         try
         {
             using var content = new FormUrlEncodedContent(form);
             using var resp = await _http.PostAsync(PostUrl, content).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
+            {
                 _log.LogDebug("wsprnet upload returned {Status}", (int)resp.StatusCode);
+                return false;
+            }
+            return true;
         }
         catch (Exception ex)
         {
             // Tolerate all network failure silently — never crash the decode path.
             _log.LogWarning(ex, "wsprnet upload failed");
+            return false;
         }
     }
 

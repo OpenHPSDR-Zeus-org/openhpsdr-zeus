@@ -67,6 +67,11 @@ export interface QsoState {
   singleShot: boolean;
   /** Latches once logQso has fired, so a QSO is logged exactly once. */
   logged: boolean;
+  /** WSJT-X "Disable Tx after sending 73". When true (default), the CQ-caller
+   *  sends its terminal RR73 EXACTLY ONCE and then auto-disarms — it must not
+   *  re-send RR73 window after window waiting for a partner 73 that may never
+   *  decode. When false, the legacy behaviour (re-send until 73 is heard). */
+  disableTxAfter73: boolean;
 }
 
 export interface StepResult {
@@ -124,6 +129,8 @@ export interface NewQsoOpts {
   holdTxFreq?: boolean;
   noReplyLimit?: number;
   singleShot?: boolean;
+  /** WSJT-X "Disable Tx after sending 73" (default true). See QsoState. */
+  disableTxAfter73?: boolean;
   /** CQ directive (e.g. "DX") for the calling state; null/undefined = plain CQ. */
   cqDirective?: string | null;
 }
@@ -148,6 +155,7 @@ function baseState(opts: NewQsoOpts): QsoState {
     noReplyLimit: opts.noReplyLimit ?? 0,
     singleShot: opts.singleShot ?? false,
     logged: false,
+    disableTxAfter73: opts.disableTxAfter73 ?? true,
   };
 }
 
@@ -221,6 +229,44 @@ function impliedProgress(role: Role, m: Ft8Message): QsoProgress | null {
 
 function rankOf(role: Role, p: QsoProgress): number {
   return (role === 'answerer' ? ANSWERER_RANK[p] : CALLER_RANK[p]) ?? 0;
+}
+
+/**
+ * WSJT-X "Disable Tx after sending 73" for the CQ-caller's terminal RR73.
+ *
+ * Once the caller has staged its RR73 (progress 'rogers') and logged the QSO,
+ * any window that does NOT advance the QSO (no partner 73 decoded, or a repeated
+ * R-report) must auto-disarm rather than re-queue RR73 forever. The report→rogers
+ * step itself returns disarmTx:false, so RR73 transmits at least once; this fires
+ * on the NEXT non-advancing window. Returns null when the guard doesn't apply
+ * (wrong role/progress, ack isn't RR73, not yet logged, or the preference is off →
+ * legacy repeat).
+ *
+ * The terminal disarm is RR73-only: an RRR ack is NOT self-terminating (the caller
+ * must keep re-sending until the partner's 73 arrives), so it must fall through to
+ * the legacy repeat path. We gate on `txAck === 'RR73'` EXPLICITLY rather than rely
+ * on `logged` as a proxy. Today they coincide — report→rogers logs solely when
+ * txAck === 'RR73' (see applyEvent), so an RRR QSO stays unlogged at 'rogers' — but
+ * a future change to the logging policy (e.g. logging on RRR send) must not silently
+ * make this fire for RRR and cut the caller off before the partner's 73.
+ */
+function callerTerminalDisarm(state: QsoState): StepResult | null {
+  if (
+    state.role !== 'cq-caller' ||
+    state.progress !== 'rogers' ||
+    state.txAck !== 'RR73' ||
+    !state.logged ||
+    !state.disableTxAfter73
+  ) {
+    return null;
+  }
+  return {
+    next: { ...state, progress: 'done', enableTx: false },
+    outgoing: null,
+    logQso: false,
+    disarmTx: true,
+    halt: null,
+  };
 }
 
 export interface StepOpts {
@@ -297,6 +343,10 @@ export function step(state: QsoState, decoded: string[], opts: StepOpts = {}): S
   }
 
   if (!bestMsg) {
+    // CQ-caller terminal: RR73 already sent + logged, "Disable Tx after 73" on →
+    // disarm cleanly instead of re-sending RR73 (or counting toward no-reply).
+    const term = callerTerminalDisarm(state);
+    if (term) return term;
     // No advancing reply — re-queue current message, count the miss.
     const noReplyCount = state.noReplyCount + 1;
     if (state.noReplyLimit > 0 && noReplyCount >= state.noReplyLimit) {
@@ -374,7 +424,10 @@ function applyEvent(state: QsoState, m: Ft8Message, opts: StepOpts): StepResult 
     }
   }
 
-  // Event didn't advance us (e.g. he repeated an earlier slot): re-send current.
+  // Event didn't advance us (e.g. he repeated an earlier slot): re-send current —
+  // unless the caller's terminal RR73 is done (sent + logged, disable-after-73).
+  const term = callerTerminalDisarm(state);
+  if (term) return term;
   return {
     next: { ...state, noReplyCount: state.noReplyCount + 1 },
     outgoing: currentOutgoing(state),

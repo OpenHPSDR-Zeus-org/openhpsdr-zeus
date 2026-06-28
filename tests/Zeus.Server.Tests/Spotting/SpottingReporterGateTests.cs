@@ -13,6 +13,8 @@
 // cap, and datagram-chunk decisions.
 
 using System.Net;
+using System.Net.Sockets;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zeus.Contracts;
 using Zeus.Dsp.Ft8;
@@ -165,6 +167,33 @@ public sealed class SpottingReporterGateTests : IDisposable
         Assert.Equal(0, r.PendingCount);
     }
 
+    [Fact]
+    public async Task Psk_Flush_Logs_Heartbeat_On_Success()
+    {
+        // Redirect the UDP egress to a bound loopback socket so the success path —
+        // and its single Info heartbeat — runs without real DNS/network.
+        var spotting = NewSpotting(pskEnabled: true, call: "K1ABC", grid: "FN42");
+        var log = new CapturingLogger<PskReporterReporter>();
+        using var sink = new UdpClient(0); // bind an ephemeral loopback port
+        int port = ((IPEndPoint)sink.Client.LocalEndPoint!).Port;
+
+        using var r = new PskReporterReporter(log, spotting)
+        {
+            TargetHost = "127.0.0.1",
+            TargetPort = port,
+        };
+        r.HandleDecodes(Ft8Batch(0, "CQ W1AW FN31", "K1ABC G0XYZ IO91"), dialHz: 14_074_000);
+        Assert.Equal(2, r.PendingCount);
+
+        await r.FlushAsyncForTests();
+
+        Assert.Equal(0, r.PendingCount); // flushed
+        Assert.Contains(log.Entries, e =>
+            e.Level == LogLevel.Information &&
+            e.Message.Contains("psk-reporter.flush") &&
+            e.Message.Contains("spots=2"));
+    }
+
     // ---- PSK Reporter datagram chunking ----------------------------------------
 
     private static PskReporterEncoder.SenderRecord Rec(string call) =>
@@ -245,6 +274,84 @@ public sealed class SpottingReporterGateTests : IDisposable
         Assert.Equal(2, handler.Count);
     }
 
+    [Fact]
+    public async Task Wsprnet_Logs_Heartbeat_On_Success()
+    {
+        var handler = new RecordingHandler(); // returns 200 OK for every POST
+        var spotting = NewSpotting(wsprEnabled: true, call: "K1ABC", grid: "FN42");
+        var log = new CapturingLogger<WsprnetReporter>();
+        using var r = new WsprnetReporter(log, spotting, handler);
+
+        int sent = await r.HandleSpotsAsync(WsprBatch("W1AW FN31 37", "G0XYZ IO91 30"));
+
+        Assert.Equal(2, sent);
+        Assert.Contains(log.Entries, e =>
+            e.Level == LogLevel.Information &&
+            e.Message.Contains("wsprnet.upload") &&
+            e.Message.Contains("sent=2"));
+    }
+
+    [Fact]
+    public async Task Wsprnet_Failed_Uploads_Count_Zero_And_Log_No_Heartbeat()
+    {
+        // Every POST returns 500: the survivors are still attempted (handler sees
+        // them), but HandleSpotsAsync must report 0 accepted and emit NO Info
+        // heartbeat (the heartbeat fires only when at least one spot landed).
+        var handler = new StatusHandler(HttpStatusCode.InternalServerError);
+        var spotting = NewSpotting(wsprEnabled: true, call: "K1ABC", grid: "FN42");
+        var log = new CapturingLogger<WsprnetReporter>();
+        using var r = new WsprnetReporter(log, spotting, handler);
+
+        int sent = await r.HandleSpotsAsync(WsprBatch("W1AW FN31 37", "G0XYZ IO91 30"));
+
+        Assert.Equal(0, sent);          // none accepted
+        Assert.Equal(2, handler.Count); // but both were attempted
+        Assert.DoesNotContain(log.Entries, e =>
+            e.Level == LogLevel.Information && e.Message.Contains("wsprnet.upload"));
+    }
+
+    [Fact]
+    public async Task Wsprnet_Partial_Failure_Counts_Only_Successes()
+    {
+        // First POST 200, second 500: exactly one accepted, both attempted, and a
+        // single heartbeat for the one that landed.
+        var handler = new SequenceHandler(HttpStatusCode.OK, HttpStatusCode.InternalServerError);
+        var spotting = NewSpotting(wsprEnabled: true, call: "K1ABC", grid: "FN42");
+        var log = new CapturingLogger<WsprnetReporter>();
+        using var r = new WsprnetReporter(log, spotting, handler);
+
+        int sent = await r.HandleSpotsAsync(WsprBatch("W1AW FN31 37", "G0XYZ IO91 30"));
+
+        Assert.Equal(1, sent);
+        Assert.Equal(2, handler.Count);
+        Assert.Contains(log.Entries, e =>
+            e.Level == LogLevel.Information &&
+            e.Message.Contains("wsprnet.upload") &&
+            e.Message.Contains("sent=1"));
+    }
+
+    // Minimal capturing logger so a success heartbeat can be asserted directly.
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        private readonly object _gate = new();
+        private readonly List<(LogLevel Level, string Message)> _entries = new();
+
+        public IReadOnlyList<(LogLevel Level, string Message)> Entries
+        {
+            get { lock (_gate) return _entries.ToArray(); }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            lock (_gate) _entries.Add((logLevel, formatter(state, exception)));
+        }
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         private int _count;
@@ -255,6 +362,42 @@ public sealed class SpottingReporterGateTests : IDisposable
         {
             Interlocked.Increment(ref _count);
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        }
+    }
+
+    // Always returns a fixed status (e.g. 500) so the failure-counting path runs.
+    private sealed class StatusHandler : HttpMessageHandler
+    {
+        private readonly HttpStatusCode _status;
+        private int _count;
+        public StatusHandler(HttpStatusCode status) => _status = status;
+        public int Count => Volatile.Read(ref _count);
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _count);
+            return Task.FromResult(new HttpResponseMessage(_status));
+        }
+    }
+
+    // Returns each supplied status in turn (last one repeats once exhausted), so a
+    // mixed success/failure batch can be exercised.
+    private sealed class SequenceHandler : HttpMessageHandler
+    {
+        private readonly HttpStatusCode[] _statuses;
+        private int _index = -1;
+        private int _count;
+        public SequenceHandler(params HttpStatusCode[] statuses) => _statuses = statuses;
+        public int Count => Volatile.Read(ref _count);
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _count);
+            int i = Interlocked.Increment(ref _index);
+            var status = _statuses[Math.Min(i, _statuses.Length - 1)];
+            return Task.FromResult(new HttpResponseMessage(status));
         }
     }
 
