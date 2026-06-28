@@ -20,15 +20,21 @@ namespace Zeus.Server;
 
 /// <summary>
 /// Stores the operator-installed RNNoise (NR3) model file on disk and tracks
-/// which one is active. Zeus ships NO bundled model — NR3 stays inert until the
-/// operator installs an RNNoise weights file (upload or URL download via the DSP
-/// menu). One model at a time: installing replaces the previous one.
+/// which one is active. Zeus ships a <b>bundled default model</b>
+/// (<see cref="BundledDefaultFileName"/>, next to the app under
+/// <see cref="AppContext.BaseDirectory"/>) so NR3 works out of the box; the
+/// operator can override it by installing their own weights file (upload or URL
+/// download via the DSP menu). One operator model at a time: installing replaces
+/// the previous one; removing it reverts to the bundled default.
 ///
-/// The file lives under <c>%LOCALAPPDATA%/Zeus/nr3-models/</c>
+/// Resolution order for the active model is: operator-installed file (if any)
+/// → bundled default (if shipped) → none. The operator file lives under
+/// <c>%LOCALAPPDATA%/Zeus/nr3-models/</c>
 /// (cross-platform <see cref="Environment.SpecialFolder.LocalApplicationData"/>:
 /// <c>~/.local/share/Zeus</c> on Linux, <c>~/Library/Application Support/Zeus</c>
 /// on macOS). The file itself is the persistence — no LiteDB row — so a model
-/// survives restarts and the active model is simply "the one file in the dir".
+/// survives restarts and the active operator model is simply "the one file in
+/// the dir".
 ///
 /// The native loader (<c>RNNRloadModel</c>, native/wdsp/rnnr.c) takes a path and
 /// is process-global, so <see cref="DspPipelineService"/> calls
@@ -37,6 +43,17 @@ namespace Zeus.Server;
 /// </summary>
 public sealed class Nr3ModelStore
 {
+    /// <summary>File name of the bundled default RNNoise model, copied next to
+    /// the app at build/publish (see Zeus.Server.Hosting.csproj). A standard
+    /// xiph/rnnoise model in DNNw weights-file format (BSD-3-Clause) compatible
+    /// with the vendored rnnoise architecture — see native/rnnoise/VENDORING.md
+    /// and ATTRIBUTIONS.md.</summary>
+    public const string BundledDefaultFileName = "rnnoise-default.bin";
+
+    /// <summary>Display name surfaced to the UI when the bundled default is the
+    /// active model (no operator model installed).</summary>
+    public const string BundledDefaultDisplayName = "RNNoise (bundled default)";
+
     // RNNoise weight dumps are tiny (the stock xiph model is well under 1 MiB),
     // but custom/experimental models vary. 64 MiB is a generous ceiling that
     // still rejects an accidental upload of the wrong (huge) file.
@@ -44,11 +61,15 @@ public sealed class Nr3ModelStore
 
     private readonly ILogger<Nr3ModelStore> _log;
     private readonly string _dir;
+    // Absolute path of the shipped default model, or null when no default is
+    // present (e.g. a dev build that didn't copy the asset, or a test).
+    private readonly string? _bundledDefaultPath;
     private readonly object _gate = new();
 
     /// <summary>Raised after the active model changes (install or remove) so the
     /// DSP pipeline can re-push it to the engine. Argument is the new active
-    /// model path, or null when the model was removed.</summary>
+    /// model path (operator file, or the bundled default after a remove), or
+    /// null when neither is available.</summary>
     public event Action<string?>? Changed;
 
     public Nr3ModelStore(ILogger<Nr3ModelStore> log)
@@ -58,36 +79,71 @@ public sealed class Nr3ModelStore
             Environment.SpecialFolder.LocalApplicationData,
             Environment.SpecialFolderOption.Create);
         _dir = Path.Combine(appData, "Zeus", "nr3-models");
+        var bundled = Path.Combine(AppContext.BaseDirectory, BundledDefaultFileName);
+        _bundledDefaultPath = File.Exists(bundled) ? bundled : null;
     }
 
     // Test/host override so xUnit (parallel WebApplicationFactory) and headless
-    // runs can point at an isolated throw-away directory.
-    public Nr3ModelStore(ILogger<Nr3ModelStore> log, string directory)
+    // runs can point at an isolated throw-away directory. A test may also supply
+    // a bundled-default path to exercise the fallback; null disables it.
+    public Nr3ModelStore(ILogger<Nr3ModelStore> log, string directory, string? bundledDefaultPath = null)
     {
         _log = log;
         _dir = directory;
+        _bundledDefaultPath = bundledDefaultPath is not null && File.Exists(bundledDefaultPath)
+            ? bundledDefaultPath
+            : null;
     }
 
-    /// <summary>Absolute path of the installed model file, or null when none is
-    /// installed. The active model is the single file in the models dir.</summary>
+    // The operator-installed model path (first file in the dir), or null. Caller
+    // must hold _gate.
+    private string? GetOperatorModelPathLocked()
+    {
+        if (!Directory.Exists(_dir)) return null;
+        foreach (var path in Directory.EnumerateFiles(_dir))
+            return path;
+        return null;
+    }
+
+    /// <summary>Absolute path of the active model — the operator-installed file
+    /// if any, otherwise the bundled default, otherwise null. This is what the
+    /// DSP pipeline loads.</summary>
     public string? GetActiveModelPath()
     {
         lock (_gate)
         {
-            if (!Directory.Exists(_dir)) return null;
-            // First (and by contract only) file in the dir is the active model.
-            foreach (var path in Directory.EnumerateFiles(_dir))
-                return path;
-            return null;
+            return GetOperatorModelPathLocked() ?? _bundledDefaultPath;
         }
     }
 
-    /// <summary>File name of the installed model, or null when none is
-    /// installed. Surfaced to the UI via StateDto.Nr3ModelName.</summary>
+    /// <summary>Name shown to the operator: the installed file name, or
+    /// <see cref="BundledDefaultDisplayName"/> when the bundled default is
+    /// active, or null when neither is available. Surfaced via
+    /// StateDto.Nr3ModelName.</summary>
     public string? GetActiveModelName()
     {
-        var path = GetActiveModelPath();
-        return path is null ? null : Path.GetFileName(path);
+        lock (_gate)
+        {
+            var op = GetOperatorModelPathLocked();
+            if (op is not null) return Path.GetFileName(op);
+            return _bundledDefaultPath is not null ? BundledDefaultDisplayName : null;
+        }
+    }
+
+    /// <summary>True when an operator-installed model exists (so the UI can offer
+    /// "Remove" and label the source). False when running on the bundled default
+    /// or with no model at all. Surfaced via StateDto.Nr3UsingBundledDefault
+    /// (negated).</summary>
+    public bool HasOperatorModel()
+    {
+        lock (_gate) { return GetOperatorModelPathLocked() is not null; }
+    }
+
+    /// <summary>True when the active model is the bundled default (no operator
+    /// model installed and a default is shipped).</summary>
+    public bool UsingBundledDefault()
+    {
+        lock (_gate) { return GetOperatorModelPathLocked() is null && _bundledDefaultPath is not null; }
     }
 
     /// <summary>
@@ -127,9 +183,10 @@ public sealed class Nr3ModelStore
         return destPath;
     }
 
-    /// <summary>Remove the installed model. Returns true if a model existed and
-    /// was removed. Raises <see cref="Changed"/> (null) when something was
-    /// removed so the engine clears its loaded model.</summary>
+    /// <summary>Remove the operator-installed model. Returns true if one existed
+    /// and was removed. Raises <see cref="Changed"/> with the now-active path —
+    /// the bundled default if one is shipped, otherwise null — so the engine
+    /// reverts to the default model (or clears) rather than going inert.</summary>
     public bool Remove()
     {
         bool removed = false;
@@ -147,8 +204,9 @@ public sealed class Nr3ModelStore
 
         if (removed)
         {
-            _log.LogInformation("nr3.model.removed");
-            Changed?.Invoke(null);
+            _log.LogInformation("nr3.model.removed reverting_to={Target}",
+                _bundledDefaultPath is not null ? "bundled-default" : "none");
+            Changed?.Invoke(GetActiveModelPath());
         }
         return removed;
     }

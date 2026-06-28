@@ -56,6 +56,7 @@ function ModelSourceLinks() {
 export function Nr3ModelPanel() {
   const available = useConnectionStore((s) => s.wdspNr3RnnrAvailable);
   const modelName = useConnectionStore((s) => s.nr3ModelName);
+  const usingDefault = useConnectionStore((s) => s.nr3UsingBundledDefault);
   const applyState = useConnectionStore((s) => s.applyState);
 
   const [url, setUrl] = useState('');
@@ -125,9 +126,11 @@ export function Nr3ModelPanel() {
       <h4 className="nr-settings__subhdr">NR3 — RNNoise model</h4>
 
       <p className="nr-settings__hint">
-        {modelName
-          ? `Installed model: ${modelName}. NR3 is now in the NR cycle.`
-          : 'No model installed — NR3 is hidden until you install an RNNoise weights file. Zeus ships no model; bring your own.'}
+        {!modelName
+          ? 'No model active — NR3 is hidden until an RNNoise weights file is loaded. Install one below.'
+          : usingDefault
+            ? 'Using the bundled default RNNoise model — NR3 is in the NR cycle. Install your own weights file below to override it.'
+            : `Installed model: ${modelName}. NR3 is in the NR cycle.`}
       </p>
 
       <ModelSourceLinks />
@@ -173,14 +176,14 @@ export function Nr3ModelPanel() {
         </button>
       </div>
 
-      {modelName && (
+      {modelName && !usingDefault && (
         <div className="nr-settings__buttons">
           <button
             type="button"
             className="nr-settings__button"
             disabled={busy}
             onClick={onRemove}
-            title="Remove the installed NR3 model (NR3 reverts to off + hidden)"
+            title="Remove your installed model and revert to the bundled default"
           >
             Remove model
           </button>

@@ -600,6 +600,7 @@ public sealed class RadioService : IDisposable
             // are present (symbols available AND a model installed).
             WdspNr3RnnrAvailable: Zeus.Dsp.Wdsp.WdspDspEngine.Nr3RnnrAvailable,
             Nr3ModelName: _nr3ModelStore?.GetActiveModelName(),
+            Nr3UsingBundledDefault: _nr3ModelStore?.UsingBundledDefault() ?? false,
             ZoomLevel: rsSnap?.ZoomLevel ?? 1,
             WorkspaceZoomPct: ClampWorkspaceZoomPct(rsSnap?.WorkspaceZoomPct ?? DefaultWorkspaceZoomPct),
             AutoAttEnabled: _adcProtection.Enabled,
@@ -3452,7 +3453,7 @@ public sealed class RadioService : IDisposable
             throw new InvalidOperationException("NR3 model store is not configured.");
         _nr3ModelStore.Install(content, fileName);
         var name = _nr3ModelStore.GetActiveModelName();
-        Mutate(s => s with { Nr3ModelName = name });
+        Mutate(s => s with { Nr3ModelName = name, Nr3UsingBundledDefault = false });
         return Snapshot();
     }
 
@@ -3460,12 +3461,22 @@ public sealed class RadioService : IDisposable
     {
         if (_nr3ModelStore is null || !_nr3ModelStore.Remove())
             return Snapshot();
-        Mutate(s => s with { Nr3ModelName = null });
-        // If NR3 was the active mode, fall back to Off (persisted via SetNr) so
-        // the operator isn't stranded on a now-model-less, inert NR3.
-        var cur = Snapshot().Nr;
-        if (cur?.NrMode == NrMode.Rnnr)
-            return SetNr(cur with { NrMode = NrMode.Off });
+        // Removing the operator model reverts to the bundled default (if shipped),
+        // not to inert. Mirror the now-active model (default name, or null when no
+        // default exists) into StateDto.
+        Mutate(s => s with
+        {
+            Nr3ModelName = _nr3ModelStore.GetActiveModelName(),
+            Nr3UsingBundledDefault = _nr3ModelStore.UsingBundledDefault(),
+        });
+        // Only strand-proof the NR mode when NO model remains active (no bundled
+        // default). With a default still active, NR3 stays valid — leave it be.
+        if (!_nr3ModelStore.UsingBundledDefault())
+        {
+            var cur = Snapshot().Nr;
+            if (cur?.NrMode == NrMode.Rnnr)
+                return SetNr(cur with { NrMode = NrMode.Off });
+        }
         return Snapshot();
     }
 

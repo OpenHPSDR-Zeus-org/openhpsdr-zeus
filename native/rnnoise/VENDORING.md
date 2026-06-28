@@ -126,7 +126,24 @@ Until the per-platform `libwdsp` binaries committed under
 
 ## Models for operators
 
-Zeus links to documentation rather than hosting a model. Operators supply their
-own RNNoise weights file (a community HF-tuned model, or one trained per the
-upstream pipeline at the pinned `model_version` architecture) and install it from
-the DSP menu (upload or URL).
+Zeus ships a **bundled default model**
+(`Zeus.Server.Hosting/nr3-data/rnnoise-default.bin`, copied next to the app and
+resolved by `Nr3ModelStore` via `AppContext.BaseDirectory`) so NR3 works out of
+the box. It is a standard xiph/rnnoise model in DNNw weights-file format,
+matching the vendored architecture's `init_rnnoise()` (43 arrays: `conv1`,
+`conv2`, `gru1..3`, `dense_out`, `vad_dense`). BSD-3-Clause, attributed in
+`ATTRIBUTIONS.md`.
+
+Operators may override the default by installing their own RNNoise weights file
+(a community HF-tuned model, or one trained per the upstream pipeline at the
+same architecture) from the DSP menu (upload or URL). Removing the operator
+model reverts to the bundled default.
+
+> **Architecture note:** the model that matches Zeus's vendored
+> `src/rnnoise_data.h` is the one whose `init_rnnoise()` dimensions line up
+> (`conv1` 195→128, `conv2` 384→384, the three GRUs 384→1152, plus `dense_out`
+> and `vad_dense`). A model from a *different* upstream `model_version` can parse
+> (`rnnoise_model_from_filename` returns non-NULL) yet fail to instantiate
+> (`rnnoise_create` returns NULL) when a required array is missing or
+> differently sized — verify a candidate with a `rnnoise_create()` smoke test
+> before bundling or recommending it.

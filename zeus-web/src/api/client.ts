@@ -339,11 +339,15 @@ export type RadioStateDto = {
   preampOn: boolean;
   nr: NrConfigDto;
   // NR3 (RNNoise): native availability (libwdsp RNNR exports present) plus the
-  // operator-installed model file name (null = none installed). NR3 is revealed
-  // in the NR cycle only when available AND a model is installed — Zeus ships no
-  // model, so the operator installs one via the DSP menu.
+  // active model name (operator-installed file name, the bundled-default display
+  // name, or null when neither is available). NR3 is revealed in the NR cycle
+  // when available AND a model is active. Zeus ships a bundled default so NR3
+  // works out of the box; the operator can override it via the DSP menu.
   wdspNr3RnnrAvailable: boolean;
   nr3ModelName: string | null;
+  // True when the active model is the shipped default (no operator model). The
+  // UI labels the source and gates "Remove" (remove reverts to the default).
+  nr3UsingBundledDefault: boolean;
   zoomLevel: ZoomLevel;
   // Workspace UI zoom (whole-percent cell-pitch scale; 100 = authored size).
   // Server-persisted so it follows the radio across clients.
@@ -2440,6 +2444,7 @@ export function normalizeState(raw: unknown): RadioStateDto {
     nr: normalizeNr(r.nr),
     wdspNr3RnnrAvailable: Boolean(r.wdspNr3RnnrAvailable),
     nr3ModelName: typeof r.nr3ModelName === 'string' ? r.nr3ModelName : null,
+    nr3UsingBundledDefault: Boolean(r.nr3UsingBundledDefault),
     zoomLevel: normalizeZoomLevel(r.zoomLevel),
     workspaceZoomPct: normalizeWorkspaceZoomPct(r.workspaceZoomPct),
     // PureSignal persisted settings. Defaults match RadioService.cs init and
