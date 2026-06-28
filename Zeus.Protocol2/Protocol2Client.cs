@@ -1196,7 +1196,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // next HP frame carries the operator's new antenna. Only flush when fully
         // unkeyed (a TUNE could still be active).
         if (!on && !_tuneActive) FlushPendingAntennas();
-        if (_rxTask is not null) SendCmdHighPriority(run: true);
+        if (_rxTask is not null) PushTransmitEdge(on);
     }
 
     public void SetTune(bool on)
@@ -1204,7 +1204,51 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _tuneActive = on;
         if (!on) ResetTxIq();
         if (!on && !_moxOn) FlushPendingAntennas();
-        if (_rxTask is not null) SendCmdHighPriority(run: true);
+        if (_rxTask is not null) PushTransmitEdge(on);
+    }
+
+    /// <summary>
+    /// Common MOX/TUNE transmit-edge wire push. For every board this re-pushes
+    /// HighPriority (run + the MOX/PTT bit derived from <c>_moxOn || _tuneActive</c>).
+    ///
+    /// On the single-ADC G2E (issue #960), and ONLY while PS is armed AND the
+    /// burn-zone time-mux interlock is lifted, DDC0's descriptor depends on the
+    /// transmit-burst state, so the edge also re-emits the Receive-Specific
+    /// command to swap DDC0 between the feedback interleave and the user RX:
+    ///   - key-DOWN: SendCmdRx FIRST (arm the DDC0 feedback descriptor,
+    ///     byte 1363 = 0x02) THEN SendCmdHighPriority (assert MOX) — reconfigure
+    ///     the DDC before keying.
+    ///   - key-UP: SendCmdHighPriority FIRST (drop the wire MOX, preserving the
+    ///     #870 kill-RF-before-teardown ordering) THEN SendCmdRx (revert DDC0 to
+    ///     the user-RX descriptor) so RX audio returns promptly.
+    /// <c>_psBlockFill</c> is reset on both edges so a partial feedback block is
+    /// never stitched across a user-RX/feedback transition. The keepalive
+    /// re-emits SendCmdRx ~5 Hz, so a single dropped edge self-heals within
+    /// ~200 ms. For every other board, and on the G2E with the interlock down or
+    /// PS disarmed, this emits NO extra CmdRx — the wire is byte-identical to the
+    /// historical single <c>SendCmdHighPriority(run: true)</c>.
+    /// </summary>
+    private void PushTransmitEdge(bool keyDown)
+    {
+        bool timeMuxEdge = _psFeedbackEnabled && TimeMuxesPsFeedbackOnDdc0(_boardKind);
+        if (!timeMuxEdge)
+        {
+            SendCmdHighPriority(run: true);
+            return;
+        }
+
+        if (keyDown)
+        {
+            _psBlockFill = 0;
+            SendCmdRx();                    // arm DDC0 feedback interleave first
+            SendCmdHighPriority(run: true); // then assert MOX
+        }
+        else
+        {
+            SendCmdHighPriority(run: true); // drop wire MOX first (#870)
+            _psBlockFill = 0;
+            SendCmdRx();                    // then revert DDC0 to user RX
+        }
     }
 
     /// <summary>
@@ -1742,9 +1786,91 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// it work requires also relocating user RX to DDC1, a separate change.
     /// See <see cref="ReservesPsFeedbackDdcs"/>.
     /// </summary>
+    /// <summary>
+    /// Burn-zone interlock (PureSignal hard rule, issue #960). The G2E
+    /// single-ADC time-multiplexed PS feedback path (compose + de-interleave,
+    /// below) is fully wired but held DARK in production until BOTH coupled
+    /// pre-conditions land with KB2UKA sign-off:
+    ///   (A) the byte-59 (Angelia_atten_Tx0) protective seed is pushed to the
+    ///       wire on connect/arm in
+    ///       <c>RadioService.ApplyPsHwPeakForConnection</c>. The single shared
+    ///       LTC2208's TX-time input attenuator is muxed by transmit state in
+    ///       gateware — Hermes.v:1704
+    ///       <c>assign atten0 = FPGA_PTT ? atten0_on_Tx : Attenuator0</c>, where
+    ///       <c>atten0_on_Tx = Angelia_atten_Tx0 =</c> TxSpecific byte 59
+    ///       (Tx_specific_C&amp;C.v:182-185). Zeus never pushes byte 59 today (it
+    ///       defaults 0), so a fresh G2E first key-down with PS armed would slam
+    ///       the PA coupler into the one ADC at 0 dB. Seeding it touches a PS
+    ///       calibration default — a PS-hard-rule change, NOT done autonomously.
+    ///   (B) OK1BR bench-verifies first-key-down ADC-overload on a real G2E
+    ///       (#289) — Zeus has no G2E bench.
+    /// With this <c>false</c> the G2E path is byte-identical to the
+    /// PS-disabled-on-single-ADC behaviour shipped in commit a7fc99b: RX audio
+    /// survives, <c>ps.correcting</c> stays false. Flipping it true autonomously
+    /// is forbidden — see CLAUDE.md "Hard Rules — PureSignal".
+    /// </summary>
+    internal static bool G2ePsTimeMuxOnAir;
+
+    /// <summary>
+    /// True iff this board does Orion-style PureSignal on a SINGLE ADC by
+    /// time-multiplexing DDC0 (issue #960) — the N1GP ANAN-G2E / HermesC10
+    /// gateware. With command byte 1363 (SyncRx[0]) bit 1 (0x02) the Rx0 FIFO
+    /// controller interleaves the ADC coupler (rx_I[0] = temp_ADC, emitted
+    /// FIRST) with the hardwired internal TX-DAC reference (rx_I[NR] =
+    /// temp_DACD, emitted SECOND) onto DDC0 — Hermes.v:717-720 / :1229 / :1241,
+    /// Rx_fifo_ctrl.v (Sync data first, then data), Rx_specific_C&amp;C.v:181
+    /// maps byte 1363 -> SyncRx[0]. That coupler-first/reference-second order
+    /// matches Zeus's existing paired decoder (<see cref="DecodePsPairForTest"/>:
+    /// first slot -> rx, second slot -> tx), so the de-interleave is reused
+    /// unchanged. Unlike the dual-ADC family (<see cref="ReservesPsFeedbackDdcs"/>)
+    /// DDC0 is also the operator's only RX, so the feedback descriptor may be
+    /// armed ONLY during a TX burst and DDC0 reverts to user RX at rest. Gated by
+    /// <see cref="G2ePsTimeMuxOnAir"/> so the on-air path stays dark until the
+    /// byte-59 safety seed lands and the G2E is bench-verified. Hermes/HermesII
+    /// are deliberately excluded — their single-ADC mux is not gateware-verified
+    /// here and has no bench.
+    /// </summary>
+    public static bool TimeMuxesPsFeedbackOnDdc0(HpsdrBoardKind board)
+        => G2ePsTimeMuxOnAir && board == HpsdrBoardKind.HermesC10;
+
+    /// <summary>
+    /// RX-thread dispatch decision (issue #960) — should an inbound DDC0 packet
+    /// (UDP src port 1035) be consumed as a PureSignal paired-feedback frame
+    /// instead of a user-RX IQ frame? True when PS feedback is armed AND the
+    /// packet is on DDC0 AND either:
+    ///   - the board permanently reserves DDC0 for the feedback pair
+    ///     (<see cref="ReservesPsFeedbackDdcs"/>, dual-ADC OrionMkII/Saturn/G2 —
+    ///     <paramref name="txKeyed"/> irrelevant, the user RX is at DDC2), or
+    ///   - the board time-multiplexes feedback onto DDC0
+    ///     (<paramref name="timeMuxOnDdc0"/>, single-ADC G2E) AND transmit is
+    ///     asserted (<paramref name="txKeyed"/> = MOX || TUNE). At rest DDC0 is
+    ///     the operator's only RX, so feedback must NEVER engage off-burst.
+    ///
+    /// <paramref name="timeMuxOnDdc0"/> is passed explicitly (rather than read
+    /// inside from <see cref="TimeMuxesPsFeedbackOnDdc0"/>) so the compose and
+    /// dispatch sites share one freshly-derived value and the pure logic stays
+    /// deterministically testable; production sites pass
+    /// <c>TimeMuxesPsFeedbackOnDdc0(board)</c>, which is dark until the burn-zone
+    /// interlock lifts.
+    /// </summary>
+    public static bool RoutesDdc0ToPsFeedback(
+        bool psFeedbackEnabled, int ddcIndex, HpsdrBoardKind board,
+        bool txKeyed, bool timeMuxOnDdc0)
+        => psFeedbackEnabled && ddcIndex == 0
+           && (ReservesPsFeedbackDdcs(board)
+               || (timeMuxOnDdc0 && txKeyed));
+
+    /// <summary>
+    /// Back-compat overload (dual-ADC semantics): no time-mux, not keyed. Equal
+    /// to the historical
+    /// <c>psFeedbackEnabled &amp;&amp; ddcIndex == 0 &amp;&amp; ReservesPsFeedbackDdcs(board)</c>
+    /// for every board, so existing callers and the dual-ADC G2 path stay
+    /// byte-identical.
+    /// </summary>
     public static bool RoutesDdc0ToPsFeedback(
         bool psFeedbackEnabled, int ddcIndex, HpsdrBoardKind board)
-        => psFeedbackEnabled && ddcIndex == 0 && ReservesPsFeedbackDdcs(board);
+        => RoutesDdc0ToPsFeedback(psFeedbackEnabled, ddcIndex, board,
+            txKeyed: false, timeMuxOnDdc0: false);
 
     /// <summary>
     /// Wire-compose decision (issue #960), the compose-side twin of
@@ -1816,7 +1942,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         HpsdrBoardKind boardKind = HpsdrBoardKind.OrionMkII,
         bool adcDitherEnabled = false,
         bool adcRandomEnabled = false,
-        bool rx2Enabled = false)
+        bool rx2Enabled = false,
+        bool g2eFeedbackBurst = false)
     {
         var p = new byte[BufLen];
         WriteBeU32(p, 0, seq);
@@ -1824,6 +1951,32 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         byte adcMask = AdcOptionMask(numAdc);
         p[5] = adcDitherEnabled ? adcMask : (byte)0;
         p[6] = adcRandomEnabled ? adcMask : (byte)0;
+
+        if (g2eFeedbackBurst)
+        {
+            // G2E single-ADC time-mux PS feedback descriptor (issue #960).
+            // During a TX burst DDC0 carries the coupler(ADC)+TX-DAC-reference
+            // interleave: byte 1363 = 0x02 arms the SyncRx[0][1] mux so the Rx0
+            // FIFO controller interleaves rx_I[0]=temp_ADC (coupler, emitted
+            // first) with rx_I[NR]=temp_DACD (the hardwired reference, emitted
+            // second) — Hermes.v:717-720 / :1229 / :1241, Rx_specific_C&C.v:181.
+            // ONLY DDC0 is enabled: the reference is the internal rx_I[NR]
+            // receiver synced into Rx0, NOT a separate DDC, so no DDC1 enable
+            // (Hermes.v Rx0_fifo_ctrl_inst .Sync_data_in_I(rx_I[0])). The user
+            // RX is relinquished for the burst (we are transmitting). 192 kHz /
+            // 24-bit, ADC0 — same feedback geometry the dual-ADC family uses.
+            // Single-ADC only; never composed for boards that reserve the
+            // DDC0/DDC1 pair. Caller gates this on
+            // TimeMuxesPsFeedbackOnDdc0(board) && txKeyed, so it is dark in
+            // production until the burn-zone interlock lifts.
+            p[7] = 0x01;            // DDC0 enable only (no DDC1)
+            p[17] = 0x00;           // DDC0 source = ADC0
+            WriteBeU16(p, 18, 192); // DDC0 sample rate = 192 kHz (0x00C0 BE)
+            p[22] = 24;             // DDC0 = 24-bit IQ
+            p[1363] = 0x02;         // SyncRx[0][1] coupler/reference interleave
+            return p;
+        }
+
         int rxDdc = RxBaseDdc(boardKind);
         byte ddcEnable = (byte)(1 << rxDdc);
 
@@ -1983,8 +2136,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         //   192 kHz / 24-bit, and sets byte 1363 = 0x02 to sync DDC1→DDC0
         //   (pihpsdr new_protocol.c:1611-1630).
         int extras = Volatile.Read(ref _extraReceiverCount);
+        // G2E single-ADC time-mux PS (#960): during a TX burst with PS armed,
+        // DDC0 carries the coupler+TX-DAC-reference interleave instead of the
+        // user RX. Derived fresh, nothing persisted; dark in production until the
+        // burn-zone interlock lifts (TimeMuxesPsFeedbackOnDdc0). The keepalive
+        // re-emits this command ~5 Hz, so a dropped MOX edge self-heals from the
+        // live state. The user RX (incl. RX2/extras) is relinquished for the
+        // burst, so the feedback descriptor takes priority over the extras path.
+        bool g2eFeedbackBurst = _psFeedbackEnabled
+            && TimeMuxesPsFeedbackOnDdc0(_boardKind)
+            && (_moxOn || _tuneActive);
         byte[] p;
-        if (extras > 0)
+        if (extras > 0 && !g2eFeedbackBurst)
         {
             // Full multi-DDC: RX1 + RX2 + RX3.. as a contiguous DDC run via the
             // N-receiver composer. For the RX1(+RX2)(+PS) subset this is
@@ -2019,7 +2182,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 _boardKind,
                 _adcDitherEnabled,
                 _adcRandomEnabled,
-                Volatile.Read(ref _rx2Enabled) != 0);
+                Volatile.Read(ref _rx2Enabled) != 0,
+                g2eFeedbackBurst);
         }
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1025));
     }
@@ -2817,11 +2981,17 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 if (srcPort >= RxDataPortBase && srcPort < RxDataPortBase + MaxRxDdc && n == BufLen)
                 {
                     int ddcIndex = srcPort - RxDataPortBase;
-                    if (RoutesDdc0ToPsFeedback(_psFeedbackEnabled, ddcIndex, _boardKind))
+                    if (RoutesDdc0ToPsFeedback(_psFeedbackEnabled, ddcIndex, _boardKind,
+                            txKeyed: _moxOn || _tuneActive,
+                            timeMuxOnDdc0: TimeMuxesPsFeedbackOnDdc0(_boardKind)))
                     {
                         // PS-armed paired-DDC packet: 6B DDC0 (TX-mod-IQ) + 6B
                         // DDC1 (feedback) interleaved per sample. pihpsdr
-                        // process_ps_iq_data, new_protocol.c:2463-2510.
+                        // process_ps_iq_data, new_protocol.c:2463-2510. On the
+                        // single-ADC G2E (time-mux) the same paired layout arrives
+                        // on DDC0 ONLY during a TX burst; at rest this predicate is
+                        // false and the packet stays user RX (and the burn-zone
+                        // interlock keeps it dark in production entirely).
                         HandlePsPairedPacket(buf);
                     }
                     else

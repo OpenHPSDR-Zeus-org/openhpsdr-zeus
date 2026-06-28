@@ -294,4 +294,175 @@ public class PsFeedbackDdcRoutingTests
             board: HpsdrBoardKind.OrionMkII);
         Assert.Equal(AlexPsBit, g2 & AlexPsBit);
     }
+
+    // -----------------------------------------------------------------------
+    // G2E single-ADC time-multiplexed PS feedback (issue #960, the "make PS
+    // actually converge on the G2E" follow-up). The dead-receive fix above
+    // DISABLED PS on the single-ADC G2E. This evolves it to time-multiplex the
+    // coupler+TX-DAC-reference interleave onto DDC0 during a TX burst (and only
+    // then), reverting DDC0 to the user RX at rest.
+    //
+    // SAFETY — the on-air path is held DARK by the burn-zone interlock
+    // Protocol2Client.G2ePsTimeMuxOnAir (PureSignal hard rule): with it false
+    // (production default) the G2E behaviour is byte-identical to commit a7fc99b
+    // (PS disabled, RX survives). It must not be flipped true until the byte-59
+    // (Angelia_atten_Tx0) protective seed lands in RadioService with KB2UKA
+    // sign-off AND OK1BR bench-verifies first-key-down ADC-overload (#289).
+    //
+    // The PURE routing/compose logic below is tested by injecting the
+    // capability/txKeyed explicitly (deterministic, parallel-safe — no static
+    // mutation), independent of the production interlock.
+    // -----------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(HpsdrBoardKind.HermesC10)]
+    [InlineData(HpsdrBoardKind.OrionMkII)]
+    [InlineData(HpsdrBoardKind.Hermes)]
+    [InlineData(HpsdrBoardKind.HermesII)]
+    public void TimeMuxesPsFeedbackOnDdc0_DarkInProduction_ForEveryBoard(HpsdrBoardKind board)
+    {
+        // Burn-zone interlock: until KB2UKA signs off the byte-59 safety seed and
+        // the G2E is bench-verified, the on-air time-mux capability stays false
+        // for EVERY board — so production G2E is byte-identical to PS-disabled.
+        Assert.False(Protocol2Client.G2ePsTimeMuxOnAir);
+        Assert.False(Protocol2Client.TimeMuxesPsFeedbackOnDdc0(board));
+    }
+
+    [Fact]
+    public void Routes_G2E_TimeMux_FalseAtRest_TrueInBurst()
+    {
+        // With the time-mux capability injected (= future on-air state), DDC0 on
+        // the G2E is the user RX at rest and the PS feedback interleave only
+        // during a TX burst (txKeyed = MOX || TUNE). This is the core
+        // "feedback only during the burst, never at rest" safety property.
+        Assert.False(Protocol2Client.RoutesDdc0ToPsFeedback(
+            psFeedbackEnabled: true, ddcIndex: 0, HpsdrBoardKind.HermesC10,
+            txKeyed: false, timeMuxOnDdc0: true));   // at rest -> user RX
+        Assert.True(Protocol2Client.RoutesDdc0ToPsFeedback(
+            psFeedbackEnabled: true, ddcIndex: 0, HpsdrBoardKind.HermesC10,
+            txKeyed: true, timeMuxOnDdc0: true));    // in burst -> feedback
+    }
+
+    [Fact]
+    public void Routes_G2E_TimeMux_NeverEngagesWhenPsDisarmed()
+    {
+        // Even mid-burst with the capability on, an unarmed PS never routes DDC0
+        // to feedback — PsEnabled is the sole arm gate (no auto-arm).
+        Assert.False(Protocol2Client.RoutesDdc0ToPsFeedback(
+            psFeedbackEnabled: false, ddcIndex: 0, HpsdrBoardKind.HermesC10,
+            txKeyed: true, timeMuxOnDdc0: true));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Routes_DualAdc_IndependentOfTxKeyed_ByteIdentical(bool txKeyed)
+    {
+        // Dual-ADC G2/OrionMkII reserves DDC0 permanently (user RX at DDC2), so
+        // routing is independent of txKeyed and the time-mux term — exactly the
+        // historical _psFeedbackEnabled && ddc0 behaviour. Zero regression.
+        Assert.True(Protocol2Client.RoutesDdc0ToPsFeedback(
+            psFeedbackEnabled: true, ddcIndex: 0, HpsdrBoardKind.OrionMkII,
+            txKeyed: txKeyed, timeMuxOnDdc0: false));
+    }
+
+    [Theory]
+    [InlineData(HpsdrBoardKind.Hermes)]
+    [InlineData(HpsdrBoardKind.HermesII)]
+    public void Routes_OtherSingleAdc_NeverFeedback_EvenInBurst(HpsdrBoardKind board)
+    {
+        // Hermes/HermesII are excluded from the time-mux capability (no
+        // gateware verification, no bench), so they never route DDC0 to feedback
+        // regardless of txKeyed.
+        Assert.False(Protocol2Client.RoutesDdc0ToPsFeedback(
+            psFeedbackEnabled: true, ddcIndex: 0, board,
+            txKeyed: true, timeMuxOnDdc0: false));
+    }
+
+    [Fact]
+    public void Routes_G2E_Production_DarkEvenInBurst()
+    {
+        // End-to-end production wiring: feeding the GATED capability
+        // (TimeMuxesPsFeedbackOnDdc0, dark) into the routing predicate keeps the
+        // G2E on the user RX even mid-burst with PS armed — byte-identical to the
+        // PS-disabled fix until the interlock lifts.
+        Assert.False(Protocol2Client.RoutesDdc0ToPsFeedback(
+            psFeedbackEnabled: true, ddcIndex: 0, HpsdrBoardKind.HermesC10,
+            txKeyed: true,
+            timeMuxOnDdc0: Protocol2Client.TimeMuxesPsFeedbackOnDdc0(HpsdrBoardKind.HermesC10)));
+    }
+
+    [Fact]
+    public void Compose_G2E_FeedbackBurst_ByteExact()
+    {
+        // The G2E TX-burst feedback descriptor: DDC0 enable ONLY (no DDC1 — the
+        // TX-DAC reference is the hardwired rx_I[NR] receiver synced into Rx0,
+        // not a separate DDC; Hermes.v Rx0_fifo_ctrl_inst), ADC0, 192 kHz/24-bit,
+        // and byte 1363 = 0x02 to arm the SyncRx[0][1] coupler/reference
+        // interleave (Rx_specific_C&C.v:181, Hermes.v:717-720).
+        var p = Protocol2Client.ComposeCmdRxBuffer(
+            seq: 9, numAdc: 1, sampleRateKhz: 192, psEnabled: true,
+            boardKind: HpsdrBoardKind.HermesC10, g2eFeedbackBurst: true);
+
+        Assert.Equal((byte)1, p[4]);        // single ADC
+        Assert.Equal((byte)0x01, p[7]);     // DDC0 enable only, NO DDC1
+        Assert.Equal((byte)0x00, p[17]);    // DDC0 ADC0
+        Assert.Equal((byte)0x00, p[18]);    // DDC0 192 kHz BE high
+        Assert.Equal((byte)0xC0, p[19]);    // DDC0 192 kHz BE low (0x00C0 = 192)
+        Assert.Equal((byte)24, p[22]);      // DDC0 24-bit
+        Assert.Equal((byte)0x02, p[1363]);  // SyncRx[0][1] interleave
+    }
+
+    [Fact]
+    public void Compose_G2E_AtRest_PsArmed_NoFeedbackDescriptor()
+    {
+        // PS armed but NOT in a burst (g2eFeedbackBurst = false): the single-ADC
+        // G2E descriptor stays the plain user-RX layout — DDC0 only, no sync
+        // byte. This is the "never at rest" compose-side guarantee.
+        var p = Protocol2Client.ComposeCmdRxBuffer(
+            seq: 9, numAdc: 1, sampleRateKhz: 192, psEnabled: true,
+            boardKind: HpsdrBoardKind.HermesC10, g2eFeedbackBurst: false);
+
+        Assert.Equal((byte)0x01, p[7]);     // only DDC0 enable (user RX)
+        Assert.Equal((byte)0x00, p[1363]);  // no interleave sync
+    }
+
+    [Fact]
+    public void Compose_G2E_FeedbackBurst_DoesNotPerturb_DualAdc_Default()
+    {
+        // Regression guard: the new g2eFeedbackBurst parameter defaults false and
+        // a normal dual-ADC PS-armed compose is unchanged (DDC0|DDC2 = 0x05,
+        // sync 0x02), so adding the parameter cannot drift the bench-radio wire.
+        var p = Protocol2Client.ComposeCmdRxBuffer(
+            seq: 9, numAdc: 2, sampleRateKhz: 192, psEnabled: true,
+            boardKind: HpsdrBoardKind.OrionMkII);
+        Assert.Equal((byte)0x05, p[7]);
+        Assert.Equal((byte)0x02, p[1363]);
+    }
+
+    [Fact]
+    public void Decode_G2E_Interleave_CouplerFirstToRx_ReferenceSecondToTx()
+    {
+        // The G2E gateware emits the SyncRx[0][1] interleave coupler-FIRST
+        // (rx_I[0] = temp_ADC, the PA coupler) then reference-SECOND
+        // (rx_I[NR] = temp_DACD, the TX-DAC reference) — Rx_fifo_ctrl.v emits the
+        // Sync data before the main data, and Hermes.v:717-720 wires Sync =
+        // rx_I[0], data = rx_I[NR]. That is exactly the slot order the existing
+        // paired decoder expects (first 6B -> rx, second 6B -> tx), so calcc gets
+        // coupler -> rx ('feedback') and reference -> tx, identical to the G2.
+        var pair = new byte[12]
+        {
+            0x7F, 0xFF, 0xFF,   // slot 0 (coupler) I = +full
+            0x40, 0x00, 0x00,   // slot 0 (coupler) Q = +~0.5
+            0x80, 0x00, 0x00,   // slot 1 (reference) I = -full
+            0xC0, 0x00, 0x00,   // slot 1 (reference) Q = -~0.5
+        };
+
+        var (rxI, rxQ, txI, txQ) = Protocol2Client.DecodePsPairForTest(pair);
+
+        Assert.True(rxI > 0.99f, $"coupler I should map to rx ~+1.0, got {rxI}");
+        Assert.True(rxQ > 0.49f && rxQ < 0.51f, $"coupler Q -> rx ~+0.5, got {rxQ}");
+        Assert.True(txI < -0.99f, $"reference I should map to tx ~-1.0, got {txI}");
+        Assert.True(txQ < -0.49f && txQ > -0.51f, $"reference Q -> tx ~-0.5, got {txQ}");
+    }
 }
