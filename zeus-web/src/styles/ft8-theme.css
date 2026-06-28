@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  *
- * FT8/FT4/WSPR pop-out dark-HUD theme — KB2UKA-approved (Option A) token LAYER
- * scoped to .digital-window, extending the global tokens in tokens.css. Defined
- * as its own variable set so the look can later be promoted app-wide by
- * re-pointing root tokens, without rewriting components (see docs/designs/ft8-ui.md).
+ * FT8/FT4/WSPR pop-out theme — token LAYER scoped to .digital-window. The
+ * pop-out now MATCHES the global Zeus palette (tokens.css): the earlier bespoke
+ * dark-HUD cyan/teal theme (Option A) is REVERSED. The --hud-* names survive as
+ * a thin ALIAS set that points at global tokens, so components were re-skinned
+ * with zero markup/class changes and a future app-wide promotion is moot
+ * (see docs/designs/ft8-ui.md).
  *
  * The FT8/FT4/WSPR UI is now a floating DigitalWindow pop-out (FreeDV-style),
  * NOT a full-screen workspace — the operator keeps their normal Zeus console
@@ -17,32 +19,64 @@
  */
 
 .digital-window {
-  /* Surfaces — near-black navy with a faint cyan cast. */
-  --hud-bg:        #05080d;
-  --hud-panel:     #0a0f17;
-  --hud-panel-2:   #0e141d;
-  --hud-inset:     #04070b;
-  --hud-grid:      rgba(64, 160, 200, 0.08);
+  /* Palette re-skin: the --hud-* layer is now a thin ALIAS set that points at
+     the global Zeus tokens (tokens.css). Components still consume only --hud-*,
+     so the whole pop-out matches the global palette with zero component edits.
+     The earlier bespoke dark-HUD cyan/teal theme (Option A) is superseded —
+     see docs/designs/ft8-ui.md. */
 
-  /* Glow + lines — the cyan/teal HUD signature. */
-  --hud-cyan:      #38d6f0;
-  --hud-cyan-soft: rgba(56, 214, 240, 0.14);
-  --hud-cyan-line: rgba(56, 214, 240, 0.45);
-  --hud-line:      rgba(120, 160, 190, 0.16);
+  /* Surfaces. */
+  --hud-bg:        var(--bg-app);
+  --hud-panel:     var(--bg-1);
+  --hud-panel-2:   var(--bg-2);
+  --hud-inset:     var(--bg-inset);
+
+  /* Accent + lines — global blue accent replaces the cyan/teal signature. */
+  --hud-cyan:      var(--accent-bright);
+  --hud-cyan-soft: var(--accent-soft);
+  --hud-cyan-line: var(--accent-line);
+  --hud-line:      var(--line);
 
   /* Text. */
-  --hud-text:      #c8e4ef;
-  --hud-text-dim:  #6f8a98;
-  --hud-ink:       #06121a;  /* dark foreground on filled cyan/amber chips */
+  --hud-text:      var(--fg-1);
+  --hud-text-dim:  var(--fg-2);
+  --hud-ink:       var(--bg-inset);  /* dark ink on filled accent/amber/red chips — stays dark in BOTH themes (bg-inset is a display-well token, never flips to silver) so chip text keeps contrast in light theme */
 
   /* Decode-row classes (color-coded message table). */
-  --hud-cq:        #45e08a;  /* CQ calls — green */
-  --hud-me:        #ffd23a;  /* directed at my call — amber-gold */
-  --hud-worked:    #6f8a98;  /* worked-before — muted */
-  --hud-eu:        #d06bff;  /* EU continent tint (band-map parity) */
-  --hud-new:       #38d6f0;  /* new DXCC/grid — cyan */
+  --hud-cq:        var(--ok);            /* CQ calls — green */
+  --hud-me:        var(--power);         /* directed at my call — amber */
+  --hud-worked:    var(--fg-2);          /* worked-before — muted */
+  --hud-new:       var(--accent-bright); /* new DXCC/grid — accent blue */
 
   color: var(--hud-text);
+}
+
+/* Light theme: the pop-out is a "lit instrument" — like the panadapter / VFO /
+   S-meter / LED-meter wells (tokens.css "display surfaces stay DARK"), its
+   readout SURFACES stay dark in light theme instead of flipping to the silver
+   chassis. That keeps the decode hues (CQ green / me amber / new blue) and
+   status colours legible — they have no dark-on-silver palette variants — and
+   reads as a back-lit screen floating over the silver console. Dark theme (the
+   default) is unchanged: it keeps the layered bg-app/bg-1/bg-2 lift from the
+   base block above. Colours only — no markup/layout change. */
+:root[data-theme="light"] .digital-window {
+  --hud-bg:       var(--bg-meter);  /* deep backdrop — display-well token, never flips to silver */
+  --hud-panel:    var(--bg-inset);  /* panel lift */
+  --hud-panel-2:  var(--bg-inset);  /* control rest */
+  --hud-inset:    var(--bg-meter);  /* deepest wells */
+  /* Text flips back to light: fg-1/fg-2 go near-black in light theme and would
+     vanish on the dark screen. --btn-active-text is #fff in BOTH themes (the
+     one light-staying text token); the dim tiers mix it toward the dark-theme
+     fg-2 grey. */
+  --hud-text:      var(--btn-active-text);
+  --hud-text-dim:  color-mix(in srgb, var(--btn-active-text) 58%, transparent);
+  --hud-worked:    color-mix(in srgb, var(--btn-active-text) 42%, transparent);
+}
+/* Keep the drag-bar dark too so the title/gear read as part of the screen, not
+   the silver chassis (the base header uses the global silver panel gradient in
+   light theme). */
+:root[data-theme="light"] .dw-header {
+  background: linear-gradient(180deg, var(--bg-inset), var(--bg-meter));
 }
 
 /* ---- Pop-out chrome (DigitalWindow) ---- */
@@ -264,7 +298,7 @@
   margin-right: 4px;
   border-radius: 2px;
   background: var(--tx);
-  color: #1a0604;
+  color: var(--hud-ink);
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -338,7 +372,7 @@
   padding: 1px 6px;
   border-radius: 2px;
   background: var(--tx);
-  color: #1a0604;
+  color: var(--hud-ink);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -519,7 +553,7 @@
   background: var(--hud-inset);
 }
 .ft8-tx__lamp.is-armed { color: var(--hud-ink); background: var(--hud-me); border-color: var(--hud-me); font-weight: 700; }
-.ft8-tx__lamp.is-tx { color: #1a0604; background: var(--tx); border-color: var(--tx); font-weight: 700; }
+.ft8-tx__lamp.is-tx { color: var(--hud-ink); background: var(--tx); border-color: var(--tx); font-weight: 700; }
 .ft8-tx__wdt { font-size: 10px; color: var(--hud-text-dim); font-variant-numeric: tabular-nums; }
 
 /* ENABLE-TX master. */
@@ -602,7 +636,7 @@
   color: var(--tx);
   font-weight: 700;
 }
-.ft8-tx__halt:hover { background: var(--tx); color: #1a0604; }
+.ft8-tx__halt:hover { background: var(--tx); color: var(--hud-ink); }
 
 /* ---- TX power (TX CONTROL cluster) ---- */
 .ft8-power { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 2px; }
