@@ -396,6 +396,7 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             // We own this local copy, so disable frameguard.
             PatchHelmetFrameguard();
             PatchZeusCatBridge();
+            PatchZeusExternalLinks();
 
             lock (_gate) { _phase = HamClockPhase.Installed; _busy = false; }
             Append("HamClock installed. Click Start to launch the panel.");
@@ -451,6 +452,8 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             PatchHelmetFrameguard();
             // Covers installs that predate the Zeus CAT bridge (idempotent).
             PatchZeusCatBridge();
+            // Covers installs that predate the external-links bridge (idempotent).
+            PatchZeusExternalLinks();
 
             var psi = MakePsi("node", "server.js", InstallDir);
             // Belt-and-suspenders env (overridden by .env, but harmless).
@@ -1122,11 +1125,83 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
         """;
 
     internal static string InjectZeusCatBridgeTag(string html)
+        => InjectScriptTag(html, ZeusCatBridgeScriptName);
+
+    // -- Zeus external-links bridge --------------------------------------
+
+    internal const string ZeusExternalLinksScriptName = "zeus-external-links.js";
+
+    // Injected into HamClock's dist/. The HamClock iframe is cross-origin to the
+    // Zeus SPA, and the Photino desktop webview swallows window.open / target=_blank
+    // and has no download handler — so the Rig Bridge download buttons and the
+    // "Readme on GitHub" link do nothing when clicked in the desktop app. This
+    // capture-phase listener catches those anchor clicks before HamClock's own
+    // handlers run, and forwards the absolute URL up to the Zeus host
+    // (HamClockPanel), which opens it in the OS browser via the existing
+    // zeus.openExternal bridge. Two cases are forwarded:
+    //   - external links (origin != HamClock's own) — e.g. the GitHub readme,
+    //     and any target=_blank the webview would otherwise drop;
+    //   - same-origin downloads — any anchor carrying a `download` attribute, OR
+    //     a sidecar URL under /api/rig/download/. The `download`-attribute gate is
+    //     the robust one: it forwards whatever path OpenHamClock's Rig Bridge
+    //     buttons actually use without hinging on one literal prefix. The explicit
+    //     /api/rig/download/ prefix is kept as a belt-and-braces fallback for
+    //     download links that omit the attribute. Either way the URL resolves to
+    //     the sidecar's absolute http URL (host:port), which the OS browser
+    //     fetches and saves natively (the webview cannot).
+    //
+    // Plain left-clicks only: modifier/middle clicks and already-handled events
+    // are left alone so the script never hijacks a click the page meant to keep.
+    internal const string ZeusExternalLinksScript = """
+        (() => {
+          if (window.__zeusHamClockExternalLinksInstalled) return;
+          window.__zeusHamClockExternalLinksInstalled = true;
+
+          document.addEventListener('click', (event) => {
+            if (event.defaultPrevented) return;
+            if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+            const anchor = event.target?.closest?.('a[href]');
+            if (!anchor) return;
+
+            const href = anchor.getAttribute('href');
+            if (!href) return;
+
+            let url;
+            try {
+              url = new URL(href, document.baseURI);
+            } catch {
+              return;
+            }
+
+            if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+
+            const isExternal = url.origin !== location.origin;
+            const isSidecarDownload = url.pathname.startsWith('/api/rig/download/');
+            const hasDownloadAttr = anchor.hasAttribute('download');
+            if (!isExternal && !isSidecarDownload && !hasDownloadAttr) return;
+
+            event.preventDefault();
+            event.stopPropagation();
+            window.parent?.postMessage({ type: 'zeus.openExternal', url: url.href }, '*');
+          }, true);
+        })();
+        """;
+
+    internal static string InjectZeusExternalLinksTag(string html)
+        => InjectScriptTag(html, ZeusExternalLinksScriptName);
+
+    /// <summary>
+    /// Insert a <c>&lt;script src="/&lt;name&gt;" defer&gt;</c> tag just before
+    /// <c>&lt;/head&gt;</c> (or append it if there is no head), once. Idempotent:
+    /// returns the input unchanged when the script is already referenced.
+    /// </summary>
+    private static string InjectScriptTag(string html, string scriptName)
     {
-        if (html.Contains(ZeusCatBridgeScriptName, StringComparison.Ordinal))
+        if (html.Contains(scriptName, StringComparison.Ordinal))
             return html;
 
-        var tag = $"<script src=\"/{ZeusCatBridgeScriptName}\" defer></script>";
+        var tag = $"<script src=\"/{scriptName}\" defer></script>";
         var headEnd = html.IndexOf("</head>", StringComparison.OrdinalIgnoreCase);
         if (headEnd >= 0)
             return html.Insert(headEnd, $"  {tag}\n  ");
@@ -1173,6 +1248,40 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
     /// This avoids depending on OpenHamClock's standalone rig-bridge settings.
     /// </summary>
     private void PatchZeusCatBridge()
+        => PatchInjectedScript(
+            ZeusCatBridgeScriptName,
+            ZeusCatBridgeScript,
+            InjectZeusCatBridgeTag,
+            "Patched HamClock DX spots to notify Zeus click-to-tune.",
+            "Zeus CAT bridge");
+
+    /// <summary>
+    /// Inject a tiny client script into HamClock's built frontend that forwards
+    /// external-link / Rig-Bridge-download anchor clicks up to the Zeus host so
+    /// they open in the OS browser (the Photino webview swallows window.open and
+    /// has no download handler). Idempotent. See <see cref="ZeusExternalLinksScript"/>.
+    /// </summary>
+    private void PatchZeusExternalLinks()
+        => PatchInjectedScript(
+            ZeusExternalLinksScriptName,
+            ZeusExternalLinksScript,
+            InjectZeusExternalLinksTag,
+            "Patched HamClock external links to open in the OS browser.",
+            "Zeus external-links");
+
+    /// <summary>
+    /// Write <paramref name="scriptBody"/> into HamClock's <c>dist/</c> as
+    /// <paramref name="scriptName"/> and inject its <c>&lt;script&gt;</c> tag into
+    /// <c>dist/index.html</c> via <paramref name="injectTag"/>. Idempotent: the
+    /// script file is rewritten each call (harmless), and the tag is inserted at
+    /// most once. No-op until the build has produced <c>index.html</c>.
+    /// </summary>
+    private void PatchInjectedScript(
+        string scriptName,
+        string scriptBody,
+        Func<string, string> injectTag,
+        string successNote,
+        string label)
     {
         try
         {
@@ -1181,19 +1290,19 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             if (!File.Exists(index)) return;
 
             Directory.CreateDirectory(dist);
-            File.WriteAllText(Path.Combine(dist, ZeusCatBridgeScriptName), ZeusCatBridgeScript);
+            File.WriteAllText(Path.Combine(dist, scriptName), scriptBody);
 
             var html = File.ReadAllText(index);
-            var updated = InjectZeusCatBridgeTag(html);
-            if (!ReferenceEquals(updated, html) && updated != html)
+            var updated = injectTag(html);
+            if (updated != html)
             {
                 File.WriteAllText(index, updated);
-                Append("Patched HamClock DX spots to notify Zeus click-to-tune.");
+                Append(successNote);
             }
         }
         catch (Exception ex)
         {
-            Append($"  (Zeus CAT bridge patch skipped: {ex.Message})");
+            Append($"  ({label} patch skipped: {ex.Message})");
         }
     }
 
