@@ -160,8 +160,11 @@ export function HamClockPanel() {
         src={url}
         style={{ flex: 1, width: '100%', height: '100%', border: 'none', display: 'block', minHeight: 0 }}
         // HamClock is a trusted local sidecar; allow scripts + same-origin so
-        // its app (storage, its own /api fetches) works.
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+        // its app (storage, its own /api fetches) works. allow-downloads is
+        // REQUIRED for any in-app download (e.g. the rig-bridge component, map
+        // data) — without it a sandboxed iframe silently blocks every download,
+        // which reads to the operator as "clicking download does nothing".
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
       />
     );
   }
