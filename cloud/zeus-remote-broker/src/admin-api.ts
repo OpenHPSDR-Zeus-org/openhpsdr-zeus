@@ -51,7 +51,7 @@ export async function handleAdmin(
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> {
-  const cors = corsHeaders(env);
+  const cors = corsHeaders(env, request);
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
 
   const url = new URL(request.url);
@@ -458,20 +458,42 @@ async function loginRateLimited(env: Env, callsign: string): Promise<boolean> {
 
 /**
  * CORS for the dashboard's cross-origin /admin fetches. The admin surface fails
- * CLOSED: we name exactly the configured web-app origin and NEVER fall back to
- * '*' (unlike /turn, which is public). If WEB_APP_ORIGIN is unset, no
+ * CLOSED: an allowlist is built from `WEB_APP_ORIGIN` + `ADMIN_ORIGINS` and we
+ * echo back ONLY the exact requesting origin when it matches — never '*' (unlike
+ * /turn, which is public), and never a list (CORS permits a single origin value).
+ * The maintainer dashboard runs at a different origin than the RX SPA, so naming
+ * just `WEB_APP_ORIGIN` is not enough; `ADMIN_ORIGINS` carries the dashboard
+ * origin(s). If neither is set, or the request's Origin is not allowlisted, no
  * Allow-Origin header is emitted, so a browser cannot read /admin responses
  * cross-origin — a misconfigured deploy can't silently expose the admin API to
  * every site. Authorization + QRZ headers are allowed; no cookies, so no
  * Allow-Credentials.
  */
-function corsHeaders(env: Env): Record<string, string> {
+export function corsHeaders(env: Env, request?: Request): Record<string, string> {
   const headers: Record<string, string> = {
     'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'content-type, authorization, x-qrz-session, x-qrz-callsign',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin',
   };
-  if (env.WEB_APP_ORIGIN) headers['Access-Control-Allow-Origin'] = env.WEB_APP_ORIGIN;
+  const allowed = allowedAdminOrigins(env);
+  const requestOrigin = request?.headers.get('Origin')?.trim();
+  if (requestOrigin && allowed.has(requestOrigin)) {
+    headers['Access-Control-Allow-Origin'] = requestOrigin;
+  }
   return headers;
+}
+
+/**
+ * The set of origins permitted to call /admin cross-origin: `WEB_APP_ORIGIN`
+ * plus the comma-separated `ADMIN_ORIGINS`, trimmed and with any trailing slash
+ * stripped (browsers send Origin without one). Empty entries are dropped.
+ */
+export function allowedAdminOrigins(env: Env): Set<string> {
+  const out = new Set<string>();
+  for (const raw of [env.WEB_APP_ORIGIN ?? '', ...(env.ADMIN_ORIGINS ?? '').split(',')]) {
+    const o = raw.trim().replace(/\/+$/, '');
+    if (o) out.add(o);
+  }
+  return out;
 }

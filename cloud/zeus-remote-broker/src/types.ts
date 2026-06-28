@@ -51,6 +51,16 @@ export interface Env {
   /** Origin of the web client (Cloudflare Pages) that /go/<callsign> redirects to. */
   WEB_APP_ORIGIN?: string;
 
+  /**
+   * Extra origin(s) allowed to call the credential-gated /admin API cross-origin,
+   * comma-separated. The maintainer dashboard lives at a DIFFERENT origin than the
+   * RX SPA (`WEB_APP_ORIGIN`), so its origin is named here. The /admin CORS layer
+   * builds an allowlist from `WEB_APP_ORIGIN` + this and echoes back the exact
+   * requesting origin only when it matches — it never falls back to '*'. Leave
+   * unset if the dashboard shares `WEB_APP_ORIGIN`.
+   */
+  ADMIN_ORIGINS?: string;
+
   /** Cloudflare Realtime TURN key id (set via `wrangler secret put`). */
   TURN_KEY_ID?: string;
   /** Cloudflare Realtime TURN API token (set via `wrangler secret put`). */
