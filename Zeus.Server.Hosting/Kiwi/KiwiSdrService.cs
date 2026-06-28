@@ -733,6 +733,12 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
     // to wait the real 2..30 s. Production callers leave this null.
     internal Func<int, TimeSpan>? ReconnectDelayForTest;
 
+    // Test seam: simulate a reconnect ATTEMPT's outcome (true = the client went
+    // live) without doing real socket I/O. Lets the retry/back-off loop be tested
+    // deterministically and without leaving a runaway network loop that can crash
+    // the test host on a closed-port connect. Production callers leave this null.
+    internal Func<Task<bool>>? ReconnectConnectForTest;
+
     private TimeSpan ReconnectDelay(int attempt)
     {
         if (ReconnectDelayForTest is { } f) return f(attempt);
@@ -792,29 +798,38 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
                 var s = _store.Get();
                 if (string.IsNullOrWhiteSpace(s.Url)) return;
 
-                bool live = false;
-                await _lifecycleGate.WaitAsync(token).ConfigureAwait(false);
-                try
+                bool live;
+                if (ReconnectConnectForTest is { } connectHook)
                 {
-                    if (token.IsCancellationRequested) return;
-                    if (Interlocked.Read(ref _reconnectGen) != gen) return;
-                    await StopClientAsync().ConfigureAwait(false);
-                    lock (_sync) wantOn = _enabled && _radioConnected;
-                    if (!wantOn) return;
+                    // Unit-test path: simulate the attempt's outcome without sockets.
+                    live = await connectHook().ConfigureAwait(false);
+                }
+                else
+                {
+                    live = false;
+                    await _lifecycleGate.WaitAsync(token).ConfigureAwait(false);
                     try
                     {
-                        await StartClientAsync(s.Url!, s.Password, token).ConfigureAwait(false);
-                        live = true;   // sockets opened; the live client now drives status
+                        if (token.IsCancellationRequested) return;
+                        if (Interlocked.Read(ref _reconnectGen) != gen) return;
+                        await StopClientAsync().ConfigureAwait(false);
+                        lock (_sync) wantOn = _enabled && _radioConnected;
+                        if (!wantOn) return;
+                        try
+                        {
+                            await StartClientAsync(s.Url!, s.Password, token).ConfigureAwait(false);
+                            live = true;   // sockets opened; the live client now drives status
+                        }
+                        catch (OperationCanceledException) { throw; }  // host shutting down — don't mask as "error"
+                        catch (Exception ex)
+                        {
+                            _log.LogWarning("kiwi.reconnect attempt={Attempt} failed err={Err}", attempt, ex.Message);
+                            lock (_sync) { _status = "error"; _statusDetail = ex.Message; }
+                        }
                     }
-                    catch (OperationCanceledException) { throw; }  // host shutting down — don't mask as "error"
-                    catch (Exception ex)
-                    {
-                        _log.LogWarning("kiwi.reconnect attempt={Attempt} failed err={Err}", attempt, ex.Message);
-                        lock (_sync) { _status = "error"; _statusDetail = ex.Message; }
-                    }
+                    finally { _lifecycleGate.Release(); }
+                    RaiseChanged();
                 }
-                finally { _lifecycleGate.Release(); }
-                RaiseChanged();
 
                 // A live connection now drives status — stop looping UNLESS a fresh
                 // drop landed while we were (re)connecting. A failed attempt loops

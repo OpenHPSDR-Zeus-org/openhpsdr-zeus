@@ -429,23 +429,27 @@ public sealed class KiwiSdrTests : IDisposable
         using var svc = NewService();
         // Fixed tiny back-off so the loop iterates fast.
         svc.ReconnectDelayForTest = _ => TimeSpan.FromMilliseconds(1);
-        // Point the slice at a closed local port: every reconnect's
-        // StartClientAsync throws (connection refused) WITHOUT a live client, so
-        // no further "dropped" is ever raised. This is the persistent-outage case
-        // a one-shot reconnect would give up on after a single attempt. Radio is
-        // still down here, so SetConfig only stores the URL (no connect attempt).
-        await svc.SetConfigAsync(true, "127.0.0.1:9", null, CancellationToken.None);
-        svc.SetRadioConnectedForTest(true);
+        // Simulate a persistently-down host: every reconnect attempt fails to go
+        // live (no real socket I/O — keeps the test deterministic cross-platform
+        // and avoids a runaway network loop).
+        int connects = 0;
+        svc.ReconnectConnectForTest = () => { Interlocked.Increment(ref connects); return Task.FromResult(false); };
+
+        // Store a URL with the radio still DOWN so SetConfig only parks it (no
+        // connect attempt), then bring enabled+radio up via the seams.
+        await svc.SetConfigAsync(true, "ws://kiwi.invalid:8073", null, CancellationToken.None);
         svc.SetEnabledForTest(true);
+        svc.SetRadioConnectedForTest(true);
 
         // Mid-session drop kicks off the back-off loop.
         svc.OnClientStatusForTest("dropped", "waterfall socket closed");
 
-        // The one-shot bug stuck at attempt=1 forever; the loop must keep
-        // retrying a down host, so the attempt counter climbs well past 1.
+        // The one-shot bug stuck at attempt=1 forever; the loop must keep retrying
+        // a down host, so the attempt counter (and connect calls) climb past 1.
         await WaitForAsync(() => svc.ReconnectAttemptForTest >= 3, timeoutMs: 3000);
         Assert.True(svc.ReconnectAttemptForTest >= 3,
             $"expected escalating retries against a down host, got attempt={svc.ReconnectAttemptForTest}");
+        Assert.True(connects >= 3, $"expected >=3 reconnect attempts, got {connects}");
 
         // Operator disables the slice: the loop must observe !wantOn and stop,
         // releasing the single-in-flight guard.
@@ -459,9 +463,10 @@ public sealed class KiwiSdrTests : IDisposable
     {
         using var svc = NewService();
         svc.ReconnectDelayForTest = _ => TimeSpan.FromMilliseconds(20);
-        await svc.SetConfigAsync(true, "127.0.0.1:9", null, CancellationToken.None);
-        svc.SetRadioConnectedForTest(true);
+        svc.ReconnectConnectForTest = () => Task.FromResult(false);   // never goes live
+        await svc.SetConfigAsync(true, "ws://kiwi.invalid:8073", null, CancellationToken.None);
         svc.SetEnabledForTest(true);
+        svc.SetRadioConnectedForTest(true);
 
         svc.OnClientStatusForTest("dropped", null);
         Assert.True(svc.ReconnectBusyForTest);
