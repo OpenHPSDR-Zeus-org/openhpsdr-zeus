@@ -1763,6 +1763,9 @@ export function ChatPanel() {
   const setShowRosterOverlay = useDisplaySettingsStore((s) => s.setShowChatRosterOverlay);
 
   const [draft, setDraft] = useState('');
+  // Whether the composer field has keyboard focus — drives the accent focus
+  // ring/glow on the unified input field (inline styles can't use :focus-within).
+  const [composerFocused, setComposerFocused] = useState(false);
   // Pending inline photo: compressed and ready to send, shown as a preview chip
   // above the composer until the operator sends or removes it.
   const [pendingAttachment, setPendingAttachment] = useState<ChatAttachment | null>(null);
@@ -2044,6 +2047,20 @@ export function ChatPanel() {
       : activeTone === 'dm'
       ? '1px solid rgba(255,177,60,0.28)'
       : '1px solid var(--line-strong)';
+  // Tone-matched accent used for the composer field's focus ring/glow and the
+  // border colour it brightens to while focused.
+  const composerAccent =
+    activeTone === 'group'
+      ? '176,124,255'
+      : activeTone === 'dm'
+      ? '255,177,60'
+      : '78,166,255';
+  const composerFieldBorder = composerFocused
+    ? `1px solid rgba(${composerAccent},0.65)`
+    : composerBorder;
+  const composerFieldShadow = composerFocused
+    ? `0 0 0 3px rgba(${composerAccent},0.14), inset 0 1px 0 rgba(255,255,255,0.03)`
+    : 'inset 0 1px 0 rgba(255,255,255,0.03)';
 
   return (
     <div
@@ -2742,13 +2759,30 @@ export function ChatPanel() {
                 </button>
               </div>
             ) : (
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                {/* Left action stack: mic on top, paperclip below. */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0 }}>
+              /* Unified composer field — mic + paperclip live inline on the
+                 left, the borderless textarea fills the middle, and the Send
+                 pill caps the right. The whole row is one rounded surface that
+                 lifts on focus (tone-matched accent ring), the way a modern
+                 chat composer reads. */
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-end',
+                  gap: 4,
+                  padding: '4px 4px 4px 5px',
+                  borderRadius: 'var(--r-lg)',
+                  border: composerFieldBorder,
+                  background: connected ? '#0c0c10' : 'var(--bg-1)',
+                  boxShadow: composerFieldShadow,
+                  transition: `border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)`,
+                }}
+              >
+                {/* Left action cluster: mic + paperclip as ghost icon buttons. */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
                   {voice.supported && (
                     <button
                       type="button"
-                      className="btn sm"
+                      className="chat-composer-icon"
                       disabled={!connected || lockedActive || attaching || voice.preparing || pendingAttachment !== null}
                       onClick={() => {
                         setAttachError(null);
@@ -2765,7 +2799,7 @@ export function ChatPanel() {
                           : 'Record a voice message (max 60s)'
                       }
                       aria-label="Record a voice message"
-                      style={{ flexShrink: 0, padding: '5px 8px', color: 'var(--tx)' }}
+                      style={{ color: 'var(--tx)' }}
                     >
                       {voice.preparing ? '…' : <MicIcon />}
                     </button>
@@ -2773,12 +2807,11 @@ export function ChatPanel() {
                   {/* Paperclip — attach a photo. */}
                   <button
                     type="button"
-                    className="btn sm"
+                    className="chat-composer-icon"
                     disabled={!connected || attaching || lockedActive}
                     onClick={() => fileInputRef.current?.click()}
                     title={connected ? (lockedActive ? 'Not a member of this group' : 'Attach a photo') : 'Not connected'}
                     aria-label="Attach a photo"
-                    style={{ flexShrink: 0, padding: '5px 8px' }}
                   >
                     {attaching ? '…' : <PaperclipIcon />}
                   </button>
@@ -2788,6 +2821,8 @@ export function ChatPanel() {
                   className="mono"
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
+                  onFocus={() => setComposerFocused(true)}
+                  onBlur={() => setComposerFocused(false)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
@@ -2813,27 +2848,25 @@ export function ChatPanel() {
                     resize: 'none',
                     overflowY: 'auto',
                     maxHeight: 90,
-                    minHeight: 28,
-                    padding: '5px 8px',
+                    minHeight: 30,
+                    padding: '6px 4px',
                     boxSizing: 'border-box',
-                    borderRadius: 'var(--r-sm)',
-                    border: composerBorder,
-                    background: connected ? '#0c0c10' : 'var(--bg-1)',
-                    color: '#d8d8dc',
+                    border: 'none',
+                    background: 'transparent',
+                    color: '#e4e4e8',
                     fontSize: 12,
-                    lineHeight: 1.4,
+                    lineHeight: 1.45,
                     outline: 'none',
-                    transition: `border-color var(--dur-fast) var(--ease-out)`,
                   }}
                 />
-                {/* Send — vertically centered on the right edge. */}
+                {/* Send — pill capping the right edge, sits on the field floor. */}
                 <button
                   type="button"
                   className={`btn sm${canSend ? ' active' : ''}`}
                   disabled={!canSend}
                   onClick={() => void doSend()}
                   title={connected ? 'Send (Enter)' : 'Not connected'}
-                  style={{ flexShrink: 0, alignSelf: 'center' }}
+                  style={{ flexShrink: 0, alignSelf: 'stretch', padding: '0 12px', borderRadius: 'var(--r-md)' }}
                 >
                   Send
                 </button>

@@ -197,6 +197,265 @@ public class SupportPathsTests
     }
 }
 
+/// <summary>
+/// A scriptable <see cref="ISupportBrokerClient"/> for the presence/crash tests:
+/// records every call and lets each method's success be forced.
+/// </summary>
+internal sealed class FakeBrokerClient : ISupportBrokerClient
+{
+    public int Registers;
+    public int Heartbeats;
+    public int Drops;
+    public int Uploads;
+    public string? LastUploadedJson;
+
+    public bool RegisterResult = true;
+    public bool UploadResult = true;
+
+    public Task<bool> RegisterAsync(CancellationToken ct) { Registers++; return Task.FromResult(RegisterResult); }
+    public Task<bool> HeartbeatAsync(CancellationToken ct) { Heartbeats++; return Task.FromResult(true); }
+    public Task<bool> DropAsync(CancellationToken ct) { Drops++; return Task.FromResult(true); }
+    public Task<bool> UploadCrashAsync(string json, CancellationToken ct)
+    {
+        Uploads++;
+        LastUploadedJson = json;
+        return Task.FromResult(UploadResult);
+    }
+}
+
+public class SidecarOptionsRemoteFlagsTests
+{
+    [Fact]
+    public void Parse_RemoteFlags_PopulatesPresenceFields()
+    {
+        var ok = SidecarOptions.TryParse(
+            ["--supervise-pid", "10", "--crash-dir", "c",
+             "--broker-url", "wss://example.test/signal?role=host",
+             "--operator-callsign", "n9war", "--remote-diagnostics", "on",
+             "--auto-share-crash", "on"],
+            out var opts, out var err);
+
+        Assert.True(ok, err);
+        Assert.Equal("wss://example.test/signal?role=host", opts!.BrokerUrl);
+        Assert.Equal("n9war", opts.OperatorCallsign);
+        Assert.True(opts.RemoteDiagnosticsEnabled);
+        Assert.True(opts.AutoShareOnCrash);
+    }
+
+    [Fact]
+    public void Parse_RemoteFlags_DefaultOff()
+    {
+        Assert.True(SidecarOptions.TryParse(["--supervise-pid", "10", "--crash-dir", "c"], out var opts, out _));
+        Assert.False(opts!.RemoteDiagnosticsEnabled);
+        Assert.False(opts.AutoShareOnCrash);
+        Assert.Null(opts.BrokerUrl);
+        Assert.Null(opts.OperatorCallsign);
+    }
+
+    [Theory]
+    [InlineData("on", true)]
+    [InlineData("true", true)]
+    [InlineData("1", true)]
+    [InlineData("off", false)]
+    [InlineData("false", false)]
+    [InlineData("0", false)]
+    public void Parse_BoolFlag_AcceptsAliases(string value, bool expected)
+    {
+        Assert.True(SidecarOptions.TryParse(
+            ["--supervise-pid", "1", "--crash-dir", "c", "--auto-share-crash", value], out var opts, out _));
+        Assert.Equal(expected, opts!.AutoShareOnCrash);
+    }
+
+    [Fact]
+    public void Parse_BadBoolFlag_Fails()
+    {
+        Assert.False(SidecarOptions.TryParse(
+            ["--supervise-pid", "1", "--crash-dir", "c", "--remote-diagnostics", "maybe"], out _, out var err));
+        Assert.Contains("remote-diagnostics", err);
+    }
+}
+
+public class BrokerEndpointsTests
+{
+    [Fact]
+    public void FromBrokerUrl_DerivesHttpsOriginFromWss()
+    {
+        var ep = BrokerEndpoints.FromBrokerUrl("wss://remote.openhpsdrzeus.com/signal?role=host");
+        Assert.NotNull(ep);
+        Assert.Equal("https://remote.openhpsdrzeus.com/", ep!.Origin.ToString());
+        Assert.Equal("https://remote.openhpsdrzeus.com/presence/register", ep.PresenceRegister.ToString());
+        Assert.Equal("https://remote.openhpsdrzeus.com/presence/heartbeat", ep.PresenceHeartbeat.ToString());
+        Assert.Equal("https://remote.openhpsdrzeus.com/presence/drop", ep.PresenceDrop.ToString());
+        Assert.Equal("https://remote.openhpsdrzeus.com/crash", ep.Crash.ToString());
+    }
+
+    [Fact]
+    public void FromBrokerUrl_WsBecomesHttp_AndPreservesNonDefaultPort()
+    {
+        var ep = BrokerEndpoints.FromBrokerUrl("ws://127.0.0.1:8787/signal");
+        Assert.NotNull(ep);
+        Assert.Equal("http://127.0.0.1:8787/", ep!.Origin.ToString());
+        Assert.Equal("http://127.0.0.1:8787/crash", ep.Crash.ToString());
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not a url")]
+    [InlineData("ftp://example.test")]
+    public void FromBrokerUrl_InvalidOrUnsupported_ReturnsNull(string? url)
+        => Assert.Null(BrokerEndpoints.FromBrokerUrl(url));
+}
+
+public class PresenceClientTests
+{
+    [Fact]
+    public async Task Tick_AvailableFromStart_RegistersThenHeartbeats()
+    {
+        var broker = new FakeBrokerClient();
+        var presence = new PresenceClient(broker, initiallyAvailable: true);
+
+        await presence.TickAsync(CancellationToken.None); // registers
+        await presence.TickAsync(CancellationToken.None); // heartbeats
+        await presence.TickAsync(CancellationToken.None); // heartbeats
+
+        Assert.Equal(1, broker.Registers);
+        Assert.Equal(2, broker.Heartbeats);
+        Assert.Equal(0, broker.Drops);
+    }
+
+    [Fact]
+    public async Task Tick_NotAvailable_NeverRegisters()
+    {
+        var broker = new FakeBrokerClient();
+        var presence = new PresenceClient(broker, initiallyAvailable: false);
+
+        await presence.TickAsync(CancellationToken.None);
+        await presence.TickAsync(CancellationToken.None);
+
+        Assert.Equal(0, broker.Registers);
+        Assert.Equal(0, broker.Heartbeats);
+        Assert.Equal(0, broker.Drops);
+    }
+
+    [Fact]
+    public async Task Tick_AvailabilityGoesOff_DropsOnceThenStaysQuiet()
+    {
+        var broker = new FakeBrokerClient();
+        var presence = new PresenceClient(broker, initiallyAvailable: true);
+
+        await presence.TickAsync(CancellationToken.None); // register
+        await presence.TickAsync(CancellationToken.None); // heartbeat
+        presence.SetAvailable(false);
+        await presence.TickAsync(CancellationToken.None); // drop
+        await presence.TickAsync(CancellationToken.None); // quiet
+        await presence.TickAsync(CancellationToken.None); // quiet
+
+        Assert.Equal(1, broker.Registers);
+        Assert.Equal(1, broker.Heartbeats);
+        Assert.Equal(1, broker.Drops);
+    }
+
+    [Fact]
+    public async Task Tick_RegisterFails_RetriesRegisterUntilItSucceeds()
+    {
+        var broker = new FakeBrokerClient { RegisterResult = false };
+        var presence = new PresenceClient(broker, initiallyAvailable: true);
+
+        await presence.TickAsync(CancellationToken.None); // register fails
+        await presence.TickAsync(CancellationToken.None); // retries register (still not heartbeat)
+        Assert.Equal(2, broker.Registers);
+        Assert.Equal(0, broker.Heartbeats);
+
+        broker.RegisterResult = true;
+        await presence.TickAsync(CancellationToken.None); // register succeeds
+        await presence.TickAsync(CancellationToken.None); // now heartbeats
+        Assert.Equal(3, broker.Registers);
+        Assert.Equal(1, broker.Heartbeats);
+    }
+
+    [Fact]
+    public async Task Run_DropsOnShutdownWhenRegistered()
+    {
+        var broker = new FakeBrokerClient();
+        // Immediate, non-blocking delay so the loop spins through ticks fast.
+        var presence = new PresenceClient(
+            broker, initiallyAvailable: true, interval: TimeSpan.Zero,
+            delay: (_, ct) => Task.Delay(1, ct));
+
+        using var cts = new CancellationTokenSource();
+        var run = presence.RunAsync(cts.Token);
+        // Let it register before cancelling.
+        await Task.Delay(50);
+        cts.Cancel();
+        await run;
+
+        Assert.True(broker.Registers >= 1);
+        Assert.True(broker.Drops >= 1, "expected a best-effort drop on shutdown");
+    }
+
+    [Fact]
+    public void DefaultInterval_IsWellInsideExpiry()
+    {
+        // 30s cadence vs the broker's 90s expiry — at least a 3x safety margin.
+        Assert.True(PresenceClient.DefaultHeartbeatInterval <= TimeSpan.FromSeconds(30));
+    }
+}
+
+public class CrashAutoShareTests
+{
+    [Fact]
+    public async Task FlagOff_NeverTouchesBroker()
+    {
+        var broker = new FakeBrokerClient();
+        var outcome = await CrashAutoShare.TryShareAsync(
+            autoShareEnabled: false, crashRecordJson: "{\"x\":1}", broker, CancellationToken.None);
+
+        Assert.Equal(CrashShareOutcome.SkippedNotOptedIn, outcome);
+        Assert.Equal(0, broker.Uploads);
+    }
+
+    [Fact]
+    public async Task FlagOn_NoBroker_SkipsNoBroker()
+    {
+        var outcome = await CrashAutoShare.TryShareAsync(
+            autoShareEnabled: true, crashRecordJson: "{\"x\":1}", broker: null, CancellationToken.None);
+        Assert.Equal(CrashShareOutcome.SkippedNoBroker, outcome);
+    }
+
+    [Fact]
+    public async Task FlagOn_NoRecord_SkipsNoRecord()
+    {
+        var broker = new FakeBrokerClient();
+        var outcome = await CrashAutoShare.TryShareAsync(
+            autoShareEnabled: true, crashRecordJson: "  ", broker, CancellationToken.None);
+        Assert.Equal(CrashShareOutcome.SkippedNoRecord, outcome);
+        Assert.Equal(0, broker.Uploads);
+    }
+
+    [Fact]
+    public async Task FlagOn_WithRecord_Uploads()
+    {
+        var broker = new FakeBrokerClient();
+        var outcome = await CrashAutoShare.TryShareAsync(
+            autoShareEnabled: true, crashRecordJson: "{\"pid\":1}", broker, CancellationToken.None);
+
+        Assert.Equal(CrashShareOutcome.Uploaded, outcome);
+        Assert.Equal(1, broker.Uploads);
+        Assert.Equal("{\"pid\":1}", broker.LastUploadedJson);
+    }
+
+    [Fact]
+    public async Task FlagOn_UploadRejected_ReportsFailure()
+    {
+        var broker = new FakeBrokerClient { UploadResult = false };
+        var outcome = await CrashAutoShare.TryShareAsync(
+            autoShareEnabled: true, crashRecordJson: "{\"pid\":1}", broker, CancellationToken.None);
+        Assert.Equal(CrashShareOutcome.UploadFailed, outcome);
+    }
+}
+
 public class ProcessSupervisorTests
 {
     // A short-lived child that sleeps briefly then exits with a known code, so the

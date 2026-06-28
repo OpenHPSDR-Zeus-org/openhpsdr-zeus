@@ -62,6 +62,14 @@ public static class SupportIpc
 
     /// <summary>Environment variable the desktop host uses to hand the session token to the backend.</summary>
     public const string SessionTokenEnvVar = "ZEUS_SUPPORT_SESSION";
+
+    /// <summary>
+    /// Environment variable the desktop host uses to hand the operator's QRZ
+    /// session key to the SIDECAR (for its broker presence/crash auth). Passed via
+    /// the environment rather than a command-line argument so the short-lived
+    /// secret never appears in the process table.
+    /// </summary>
+    public const string SidecarQrzSessionEnvVar = "ZEUS_SUPPORT_QRZ_SESSION";
 }
 
 /// <summary>An operator's decision on an admin's request for a live support session.</summary>
