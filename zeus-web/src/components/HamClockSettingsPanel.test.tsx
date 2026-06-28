@@ -2,9 +2,10 @@
 //
 // HamClockSettingsPanel — "Push DX to HamClock" section test. Verifies the
 // outbound DX-push form: default OFF, opting in reveals trigger/target/host/port,
-// the bundled target is disabled (unsupported), and SAVE persists the config.
-// Harness import first installs the localStorage polyfill + act flag before any
-// store loads; store methods are stubbed so no real fetch fires.
+// selecting the bundled target surfaces a clear "map won't auto-pin" notice (the
+// bundled OpenHamClock has no set-DX web command, #1110), and SAVE persists the
+// config. Harness import first installs the localStorage polyfill + act flag
+// before any store loads; store methods are stubbed so no real fetch fires.
 
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { createElement } from 'react';
@@ -73,7 +74,7 @@ describe('HamClockSettingsPanel — Push DX', () => {
     unmount();
   });
 
-  it('opting in reveals trigger/target/host/port and marks the bundled target unsupported', () => {
+  it('opting in reveals trigger/target/host/port with both targets selectable', () => {
     const { container, unmount } = render(createElement(HamClockSettingsPanel));
     const toggle = container.querySelector(
       'button[aria-label="Push DX to HamClock"]',
@@ -81,10 +82,41 @@ describe('HamClockSettingsPanel — Push DX', () => {
     act(() => toggle.click());
     expect(container.querySelector('select[aria-label="Push trigger"]')).toBeTruthy();
     expect(container.querySelector('input[aria-label="HamClock host"]')).toBeTruthy();
-    // Bundled target option is present but disabled (no set-DX endpoint yet).
+    // Both targets are present and selectable; the bundled one is annotated, not
+    // disabled, so a persisted bundled config still surfaces its limitation.
     const targetSel = container.querySelector('select[aria-label="Push target"]') as HTMLSelectElement;
     const bundled = Array.from(targetSel.options).find((o) => o.value === 'bundled');
-    expect(bundled?.disabled).toBe(true);
+    expect(bundled).toBeTruthy();
+    expect(bundled?.disabled).toBe(false);
+    unmount();
+  });
+
+  it('shows the "map won\'t auto-pin" notice only when the bundled target is selected', () => {
+    const { container, unmount } = render(createElement(HamClockSettingsPanel));
+    const toggle = container.querySelector(
+      'button[aria-label="Push DX to HamClock"]',
+    ) as HTMLButtonElement;
+    act(() => toggle.click());
+
+    // External (default) target: no limitation notice.
+    expect(container.querySelector('[data-testid="bundled-dx-notice"]')).toBeNull();
+
+    setSelectValue(
+      container.querySelector('select[aria-label="Push target"]') as HTMLSelectElement,
+      'bundled',
+    );
+    const notice = container.querySelector('[data-testid="bundled-dx-notice"]');
+    expect(notice).toBeTruthy();
+    expect(notice?.textContent).toContain("can't receive auto-pins");
+    // The bundled target hides the external host/port inputs.
+    expect(container.querySelector('input[aria-label="HamClock host"]')).toBeNull();
+
+    // Switching back to external removes the notice again.
+    setSelectValue(
+      container.querySelector('select[aria-label="Push target"]') as HTMLSelectElement,
+      'external',
+    );
+    expect(container.querySelector('[data-testid="bundled-dx-notice"]')).toBeNull();
     unmount();
   });
 

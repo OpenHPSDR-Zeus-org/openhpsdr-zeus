@@ -239,8 +239,10 @@ export function HamClockSettingsPanel() {
 // the backend issues a single HTTP GET to the HamClock REST API (set_newdx?grid=)
 // when a QSO partner is clicked or goes active in the FT8 pop-out. Egress is OFF
 // by default; the server-side forward avoids browser CORS / HTTPS mixed-content.
-// The bundled OpenHamClock sidecar has no set-DX endpoint yet, so that target is
-// surfaced as unsupported (an upstream PR is needed).
+// The bundled OpenHamClock sidecar has no set-DX web command, so a push to it is
+// a backend no-op. The target stays selectable but, when chosen, surfaces a clear
+// "map won't auto-pin" notice so auto-pins never fail silently (#1110); live
+// auto-pins require an external classic HamClock.
 function PushDxSection() {
   const pushConfig = useHamClockStore((s) => s.pushConfig);
   const loadPushConfig = useHamClockStore((s) => s.loadPushConfig);
@@ -334,11 +336,37 @@ function PushDxSection() {
               onChange={(e) => patch({ target: e.target.value as HamClockPushConfig['target'] })}
             >
               <option value="external">External HamClock (host : port)</option>
-              <option value="bundled" disabled>
-                Bundled OpenHamClock (set-DX not supported yet)
-              </option>
+              <option value="bundled">Bundled OpenHamClock (map won't auto-pin)</option>
             </select>
           </div>
+
+          {/* The bundled OpenHamClock sidecar has no set-DX web command, so a
+              push to it is a no-op on the backend. Make that unmistakable rather
+              than letting auto-pins fail silently. */}
+          {form.target === 'bundled' && (
+            <div
+              role="alert"
+              data-testid="bundled-dx-notice"
+              style={{
+                padding: 10,
+                marginBottom: 10,
+                borderRadius: 'var(--r-sm, 4px)',
+                background: 'rgba(230, 58, 43, 0.1)',
+                border: '1px solid rgba(230, 58, 43, 0.3)',
+                color: 'var(--fg-1)',
+                fontSize: 12,
+                lineHeight: 1.5,
+              }}
+            >
+              <strong style={{ color: 'var(--tx)' }}>
+                The bundled OpenHamClock map can't receive auto-pins.
+              </strong>{' '}
+              It has no set-DX web command, so worked stations will not appear on
+              it — the push does nothing. To get live DX auto-pins, set Target to{' '}
+              <strong>External HamClock</strong> and point Zeus at a classic
+              HamClock's REST host and port (default {HAMCLOCK_PUSH_DEFAULT_PORT}).
+            </div>
+          )}
 
           {form.target === 'external' && (
             <>
