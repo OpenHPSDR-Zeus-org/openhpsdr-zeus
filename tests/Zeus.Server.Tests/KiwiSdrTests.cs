@@ -446,7 +446,12 @@ public sealed class KiwiSdrTests : IDisposable
 
         // The one-shot bug stuck at attempt=1 forever; the loop must keep retrying
         // a down host, so the attempt counter (and connect calls) climb past 1.
-        await WaitForAsync(() => svc.ReconnectAttemptForTest >= 3, timeoutMs: 3000);
+        // Wait on the connect count itself, not the attempt counter: the attempt
+        // counter is bumped at the TOP of each loop pass (before the delay+connect),
+        // so attempt can read 3 while only 2 connects have actually fired. On a
+        // loaded macOS CI runner the poll can land in that window and trip the
+        // assertion — gating on the asserted quantity removes the race.
+        await WaitForAsync(() => Volatile.Read(ref connects) >= 3, timeoutMs: 3000);
         Assert.True(svc.ReconnectAttemptForTest >= 3,
             $"expected escalating retries against a down host, got attempt={svc.ReconnectAttemptForTest}");
         Assert.True(connects >= 3, $"expected >=3 reconnect attempts, got {connects}");

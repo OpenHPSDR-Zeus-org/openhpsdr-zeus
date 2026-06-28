@@ -13,15 +13,16 @@ using LiteDB;
 namespace Zeus.Server;
 
 // Persists the single "send RX audio to the radio's onboard speaker/headphone
-// jacks" toggle for Protocol-1 codec radios (Hermes, ANAN-10/10E/100/100B,
-// ANAN-100D/200D, Orion). The Saturn/G2 appliance speaker path (Protocol-2,
-// SaturnSpeakerAudioSink) is independent and is NOT governed by this setting.
+// jacks" toggle for any codec-equipped radio (Hermes, ANAN-10/10E/100/100B,
+// ANAN-100D/200D, HermesC10, Saturn family). One opt-in covers both protocols:
+// RadioSpeakerAudioSink owns the P1 path (EP2 L/R slots) and
+// SaturnSpeakerAudioSink owns the P2 path (UDP port 1028) — issue #1122.
 //
 // Default is OFF (opt-in). Zeus already plays RX audio host-side (browser /
-// native sink); auto-enabling the radio-side codec output would make every P1
-// operator hear doubled audio on connect. Operators who want the radio's own
-// speaker turn it on explicitly, and the choice survives a backend restart.
-// Lives in the same zeus-prefs.db as the other settings stores.
+// native sink); auto-enabling the radio-side codec output would make operators
+// hear doubled audio on connect. Operators who want the radio's own speaker
+// turn it on explicitly, and the choice survives a backend restart. Lives in
+// the same zeus-prefs.db as the other settings stores.
 public sealed class RadioSpeakerSettingsStore : IDisposable
 {
     public const bool DefaultEnabled = false;

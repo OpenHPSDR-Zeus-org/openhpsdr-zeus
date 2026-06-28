@@ -43,7 +43,10 @@ export function SquelchSlider() {
   // state updates don't yank the thumb back (same pattern as AgcSlider).
   const [dragValue, setDragValue] = useState<number | null>(null);
   const sliderValue = dragValue ?? squelch.level;
-  const levelDisabled = !connected || squelch.adaptive;
+  // FIX/DYN and the threshold are meaningless while SQL is OFF; gray them out
+  // so the operator can't dial a phantom setting that won't affect audio.
+  const modeDisabled = !connected || !squelch.enabled;
+  const levelDisabled = modeDisabled || squelch.adaptive;
 
   const toggleAbort = useRef<AbortController | null>(null);
 
@@ -83,7 +86,7 @@ export function SquelchSlider() {
   }, [squelch, connected, setLocalSquelch, applyState]);
 
   const toggleAdaptive = useCallback(() => {
-    if (!connected) return;
+    if (!connected || !squelch.enabled) return;
     toggleAbort.current?.abort();
     const ac = new AbortController();
     toggleAbort.current = ac;
@@ -126,13 +129,15 @@ export function SquelchSlider() {
       <button
         type="button"
         onClick={toggleAdaptive}
-        disabled={!connected}
+        disabled={modeDisabled}
         aria-pressed={squelch.adaptive}
         aria-label={squelch.adaptive ? 'Adaptive squelch' : 'Fixed squelch'}
         title={
-          squelch.adaptive
-            ? 'Adaptive squelch tracks the noise floor'
-            : 'Fixed WDSP squelch threshold'
+          !squelch.enabled
+            ? 'Enable SQL to switch between FIX and DYN'
+            : squelch.adaptive
+              ? 'Adaptive squelch tracks the noise floor'
+              : 'Fixed WDSP squelch threshold'
         }
         className={`btn sm ${squelch.adaptive ? 'active' : ''}`}
         style={{ whiteSpace: 'nowrap', minWidth: 42 }}
