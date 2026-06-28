@@ -262,7 +262,27 @@ public partial class Program
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"VST bridge verification failed: {ex.GetBaseException().Message}");
+            // Print the full exception chain + native-resolution context. The
+            // distinction between DllNotFound (resolver couldn't locate the
+            // file) and EntryPointNotFound (DLL loaded but export missing) is
+            // exactly what's needed to fix a win-x64 publish-payload failure,
+            // and the bare base message hid it.
+            Console.Error.WriteLine("VST bridge verification failed.");
+            for (var e = ex; e is not null; e = e.InnerException)
+                Console.Error.WriteLine($"  {e.GetType().FullName}: {e.Message}");
+            Console.Error.WriteLine($"  ProcessArchitecture: {System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}");
+            Console.Error.WriteLine($"  RuntimeIdentifier:   {System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier}");
+            Console.Error.WriteLine($"  AppContext.BaseDirectory: {AppContext.BaseDirectory}");
+            try
+            {
+                var nativeRoot = Path.Combine(AppContext.BaseDirectory, "runtimes");
+                if (Directory.Exists(nativeRoot))
+                    foreach (var dll in Directory.EnumerateFiles(nativeRoot, "*vst-bridge*", SearchOption.AllDirectories))
+                        Console.Error.WriteLine($"  found bridge: {dll}");
+                else
+                    Console.Error.WriteLine($"  (no runtimes/ dir under BaseDirectory)");
+            }
+            catch (Exception probe) { Console.Error.WriteLine($"  (native enumerate failed: {probe.Message})"); }
             return 1;
         }
     }

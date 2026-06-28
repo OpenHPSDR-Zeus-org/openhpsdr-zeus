@@ -61,15 +61,21 @@ foreach ($nativeName in @("wdsp.dll", "miniaudio.dll", "zeus-vst-bridge.dll")) {
 # running the published app itself. Loading the net10.0 host assembly inside
 # PowerShell uses PowerShell's runtime context instead of the publish payload's
 # runtime context, which can fail before the VST resolver is exercised.
-try {
-    $probeOutput = & (Join-Path $publishPath "OpenhpsdrZeus.exe") --verify-vst-bridge 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw ($probeOutput -join [Environment]::NewLine)
-    }
+$probeOutput = & (Join-Path $publishPath "OpenhpsdrZeus.exe") --verify-vst-bridge 2>&1
+$probeExit = $LASTEXITCODE
+
+# Always echo the probe's own output verbatim. PowerShell's `throw` renders a
+# truncated single-line view of the message, which previously swallowed the one
+# diagnostic that matters (the managed exception type + message the published
+# exe writes to stderr). Print it plainly so CI logs show the real cause.
+if ($probeOutput) {
+    Write-Host "--- OpenhpsdrZeus --verify-vst-bridge output (exit $probeExit) ---"
+    $probeOutput | ForEach-Object { Write-Host $_ }
+    Write-Host "--- end probe output ---"
 }
-catch {
-    $ex = $_.Exception
-    throw "Managed VST bridge failed to load from installer payload: $($ex.Message)"
+
+if ($probeExit -ne 0) {
+    throw "Managed VST bridge failed to load from installer payload (probe exit $probeExit; see probe output above)."
 }
 
 Write-Host "Windows installer payload verified: $publishPath"
