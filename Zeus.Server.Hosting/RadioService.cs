@@ -848,6 +848,16 @@ public sealed class RadioService : IDisposable
         get { lock (_sync) return _activeClient is not null; }
     }
 
+    /// <summary>True while a Protocol-2 connection owns the radio — the symmetric
+    /// counterpart to <see cref="IsProtocol1Active"/>. SaturnSpeakerAudioSink
+    /// gates on this so the P2 UDP speaker path (port 1028) only opens under a
+    /// real P2 connection, never cross-firing at a P1 radio (which doesn't bind
+    /// 1028) when a dual-protocol codec board is on P1.</summary>
+    internal bool IsProtocol2Active
+    {
+        get { lock (_sync) return _p2Active; }
+    }
+
     /// <summary>Cheap MOX accessor (no Receivers projection, unlike Snapshot).
     /// Used on the per-AudioFrame path to skip feeding RX audio to the radio
     /// codec while transmitting.</summary>
@@ -4193,6 +4203,14 @@ public sealed class RadioService : IDisposable
         // fully-coherent RadioService when they read board kind / snapshot.
         if (client is not null) P2Connected?.Invoke(client);
     }
+
+    /// <summary>Test seam: mark a non-Protocol-2 (P1-style) connection — Status
+    /// Connected with <c>_p2Active</c> left false — so the P2 speaker sink's
+    /// protocol gate can be exercised without a live Protocol1Client. This is
+    /// the issue-#1122 cross-fire case: a connected codec radio that is NOT on
+    /// Protocol 2 must not open the UDP→1028 path.</summary>
+    internal void MarkConnectedNonP2ForTest(string endpoint) =>
+        Mutate(s => s with { Status = ConnectionStatus.Connected, Endpoint = endpoint });
 
     public void MarkProtocol2Disconnected()
     {

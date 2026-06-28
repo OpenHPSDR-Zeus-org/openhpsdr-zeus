@@ -88,9 +88,24 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
     {
         if (frame.Channels != 1 || frame.SampleRateHz != FrameRateHz) return;
         if (!_settings.Enabled) return;
+        // Protocol gate: this UDP→1028 path is Protocol-2 only. The same RX
+        // AudioFrame is fanned to every IRxAudioSink regardless of protocol, so
+        // without this a dual-protocol codec board (e.g. ANAN-10E) connected over
+        // P1 would also blast packets at the radio's P2 speaker port — which P1
+        // firmware doesn't bind — causing pointless traffic + a per-second
+        // socket re-flap. RadioSpeakerAudioSink owns P1 via IsProtocol1Active.
+        if (!_radio.IsProtocol2Active) return;
 
         lock (_sync)
         {
+            // Mirror the P1 sink's MOX mute: while transmitting, don't carry the
+            // operator's TX-monitor / CW sidetone out to the radio's speaker jack.
+            // Drop the buffered partial packet so RX resumes clean on unkey.
+            if (_radio.IsMox)
+            {
+                _packetFrames = 0;
+                return;
+            }
             if (_socket is null) RefreshTargetIfDueLocked();
             if (_socket is null) return;
 
@@ -174,6 +189,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         // the actual socket open on the operator opt-in so we don't hold a UDP
         // resource for a feature the operator never asked for.
         if (state.Status != ConnectionStatus.Connected
+            || !_radio.IsProtocol2Active
             || string.IsNullOrWhiteSpace(state.Endpoint)
             || !_settings.Enabled
             || !caps.HasOnboardCodec

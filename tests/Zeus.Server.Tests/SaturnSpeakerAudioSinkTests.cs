@@ -90,6 +90,93 @@ public sealed class SaturnSpeakerAudioSinkTests : IDisposable
         sink.Dispose();
     }
 
+    // Issue #1122 audit — protocol cross-fire. The P2 UDP→1028 path must NOT
+    // open under a non-Protocol-2 (P1) connection, even with the opt-in on and a
+    // codec board: P1 firmware doesn't bind port 1028, and the P1 EP2 path
+    // (RadioSpeakerAudioSink) already handles that connection.
+    [Fact]
+    public async Task NotProtocol2_DoesNotOpenSocket_EvenWhenEnabledAndCodecBoard()
+    {
+        using var radio = NewRadio();
+        using var settings = new RadioSpeakerSettingsStore(
+            NullLogger<RadioSpeakerSettingsStore>.Instance, _dbPath + ".spk");
+        var sink = new SaturnSpeakerAudioSink(radio, settings, NullLogger<SaturnSpeakerAudioSink>.Instance);
+
+        await sink.StartAsync(default);
+        settings.Set(true);
+        // Connected to a codec radio, but NOT via Protocol 2.
+        radio.MarkConnectedNonP2ForTest("127.0.0.1:1024");
+        Assert.False(radio.IsProtocol2Active);
+
+        sink.Publish(MakeMonoFrame(64));
+        Assert.False(IsSocketOpen(sink));
+
+        await sink.StopAsync(default);
+        sink.Dispose();
+    }
+
+    // HasOnboardCodec gate — HL2 has no stream codec, so the P2 speaker path
+    // must stay closed for it even on P2 with the opt-in on.
+    [Fact]
+    public async Task HermesLite2_DoesNotOpenSocket_EvenWhenEnabled()
+    {
+        using var radio = NewRadio();
+        using var settings = new RadioSpeakerSettingsStore(
+            NullLogger<RadioSpeakerSettingsStore>.Instance, _dbPath + ".spk");
+        var sink = new SaturnSpeakerAudioSink(radio, settings, NullLogger<SaturnSpeakerAudioSink>.Instance);
+
+        await sink.StartAsync(default);
+        settings.Set(true);
+        radio.MarkProtocol2Connected("127.0.0.1:1024", 192_000, client: null, boardKind: HpsdrBoardKind.HermesLite2);
+
+        sink.Publish(MakeMonoFrame(64));
+        Assert.False(IsSocketOpen(sink));
+
+        await sink.StopAsync(default);
+        sink.Dispose();
+    }
+
+    // MOX mute — while transmitting, the P2 sink must not forward TX-monitor /
+    // sidetone to the radio speaker (mirrors the P1 sink). The socket stays open
+    // (opened on connect), but no packets are sent while keyed.
+    [Fact]
+    public async Task Mox_SendsNoPackets_WhileKeyed()
+    {
+        using var radio = NewRadio();
+        using var settings = new RadioSpeakerSettingsStore(
+            NullLogger<RadioSpeakerSettingsStore>.Instance, _dbPath + ".spk");
+        var sink = new SaturnSpeakerAudioSink(radio, settings, NullLogger<SaturnSpeakerAudioSink>.Instance);
+
+        await sink.StartAsync(default);
+        settings.Set(true);
+        radio.MarkProtocol2Connected("127.0.0.1:1024", 192_000, client: null, boardKind: HpsdrBoardKind.HermesII);
+
+        radio.SetMox(true);
+        // Keyed: a full packet's worth of frames must produce no outgoing packet.
+        sink.Publish(MakeMonoFrame(64));
+        Assert.Equal(0u, SequenceOf(sink));
+
+        radio.SetMox(false);
+        // Unkey: RX audio flows out again (the 4-byte sequence advances).
+        sink.Publish(MakeMonoFrame(64));
+        Assert.True(SequenceOf(sink) >= 1u, "expected at least one packet sent after unkey");
+
+        await sink.StopAsync(default);
+        sink.Dispose();
+    }
+
+    private static uint SequenceOf(SaturnSpeakerAudioSink sink)
+    {
+        var f = typeof(SaturnSpeakerAudioSink)
+            .GetField("_sequence", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        return f?.GetValue(sink) is uint v ? v : 0u;
+    }
+
+    private RadioService NewRadio() => new(
+        NullLoggerFactory.Instance,
+        new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath + ".dsp"),
+        new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, _dbPath + ".pa"));
+
     private static AudioFrame MakeMonoFrame(int samples)
     {
         var buf = new float[samples];
