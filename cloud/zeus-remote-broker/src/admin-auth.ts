@@ -3,9 +3,11 @@
  * or native deps). Pure functions so they're unit-testable under `node --test`.
  *
  * Two secret kinds:
- *  - Passwords: PBKDF2-HMAC-SHA256, 210k iters, 16-byte salt, 32-byte key. We
+ *  - Passwords: PBKDF2-HMAC-SHA256, 100k iters, 16-byte salt, 32-byte key. We
  *    store base64(hash)/base64(salt)/iter and verify with a constant-time
- *    compare of the derived bytes.
+ *    compare of the derived bytes. (Cloudflare Workers' WebCrypto rejects
+ *    PBKDF2 iteration counts above 100000 — exceeding it throws at runtime, so
+ *    100k is the hard ceiling here, not a tuning choice.)
  *  - API/session tokens: 32 random bytes → base64url, presented once as
  *    `zsa_<...>`. We persist only SHA-256(token) hex and verify by hashing the
  *    presented token and constant-time-comparing to the stored hash.
@@ -13,8 +15,13 @@
  * Never log or return secrets; only hashes leave this module.
  */
 
-/** PBKDF2 cost. Stored per-row (pw_iter) so it can be bumped without a flag-day. */
-export const PBKDF2_ITER = 210_000;
+/**
+ * PBKDF2 cost. Stored per-row (pw_iter) so it can be bumped without a flag-day.
+ * Capped at 100000: Cloudflare Workers' WebCrypto throws "iteration counts above
+ * 100000 are not supported" for anything higher, which would break hash + verify
+ * at runtime (Node has no such cap, so unit tests don't catch it).
+ */
+export const PBKDF2_ITER = 100_000;
 const SALT_BYTES = 16;
 const KEY_BYTES = 32;
 const TOKEN_BYTES = 32;
