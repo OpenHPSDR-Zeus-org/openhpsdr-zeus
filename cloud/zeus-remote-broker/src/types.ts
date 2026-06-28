@@ -1,6 +1,7 @@
 import type { SignalRoom } from './signal-room';
 import type { RateLimiter } from './rate-limiter';
 import type { PresenceRoom } from './presence';
+import type { CrashStore } from './crash-store';
 
 /** Worker environment bindings (see wrangler.toml). */
 export interface Env {
@@ -22,6 +23,13 @@ export interface Env {
    * as support-available (heartbeats, ~90s expiry). Listed via /admin/presence.
    */
   PRESENCE: DurableObjectNamespace<PresenceRoom>;
+
+  /**
+   * Crash-share store DO: a single object holding the most-recent auto-shared
+   * crash records per operator callsign. Written by /crash (operator, QRZ-gated),
+   * read by /admin/crashes (maintainer, Bearer-gated). See crash-store.ts.
+   */
+  CRASH_STORE: DurableObjectNamespace<CrashStore>;
 
   /**
    * Bootstrap admin seeded on first /admin request when `admins` is empty
