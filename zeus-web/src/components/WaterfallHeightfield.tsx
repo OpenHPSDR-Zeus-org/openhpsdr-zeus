@@ -30,7 +30,8 @@ import { probeWebGpu, resetWebGpuProbe } from '../gl/webgpu/caps';
 import { createHeightfieldRenderer, type HeightfieldRenderer } from '../gl/webgpu/heightfield';
 import { registerFrameConsumer, selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { enhanceInto, registerEstimatorConsumer, useSignalEnhanceStore } from '../dsp/signal-estimator';
-import { normalizeStitchedBins, stitchFloorShiftDb } from '../dsp/stitch-normalizer';
+import { estimateRowFloorDb, forgetReceiverFloor, reportReceiverFloorDb } from '../dsp/floor-normalization';
+import { effectiveRxWfWindow, useRxDbWindowStore } from '../state/rx-db-window-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
@@ -106,8 +107,6 @@ export function WaterfallHeightfield({
     // Signal-Pop enhance scratch (floor-subtracted 0..1 row + terrain evidence).
     let enhBuf: Float32Array | null = null;
     let terrainScratch: Float32Array | null = null;
-    // Stitched dual-RX per-half floor-normalisation scratch.
-    let stitchBuf: Float32Array | null = null;
     // Tracks the value domain ('pop' = 0..1, 'rx-db', 'tx-db') so a wholesale
     // domain change clears the history instead of rendering a clipped band.
     let valueDomain = '';
@@ -128,18 +127,20 @@ export function WaterfallHeightfield({
     const pushFrame = (wfDb: Float32Array, centerHz: bigint, hzPerPixel: number) => {
       if (!renderer) return;
       const dom = domainNow();
+      // Report this pane's noise floor for cross-band normalization (RX domain,
+      // i.e. not keyed). Cheap downsampled percentile, EMA-smoothed in the
+      // registry; consumed by draw() via effectiveRxWfWindow so every band's
+      // floor lands at the same colour and one dB slider fits them all. Measured
+      // on the RAW dB row, before any Pop floor-subtraction.
+      if (dom !== 'tx-db') {
+        const floorDb = estimateRowFloorDb(wfDb);
+        if (floorDb != null) reportReceiverFloorDb(rxIndex, floorDb);
+      }
       if (dom !== valueDomain) {
         valueDomain = dom;
         renderer.clearHistory();
       }
       let row = wfDb;
-      // Stitched dual-RX: normalise this half's floor so the two panels join
-      // seamlessly (parity with the WebGL waterfall). Skip while keyed (TX).
-      if (stitched && dom !== 'tx-db') {
-        const normalized = normalizeStitchedBins(row, stitchBuf, stitchFloorShiftDb(receiver, 'waterfall'));
-        if (normalized !== row) stitchBuf = normalized;
-        row = normalized;
-      }
       if (dom === 'pop') {
         if (!enhBuf || !terrainScratch || enhBuf.length !== row.length) {
           enhBuf = new Float32Array(row.length);
@@ -200,14 +201,19 @@ export function WaterfallHeightfield({
     const draw = () => {
       if (!renderer || lost) return;
       // Read settings LIVE every draw so the sliders take effect immediately.
-      const { wfDbMin, wfDbMax, wfTxDbMin, wfTxDbMax, waterfallScrollSpeed } =
+      const { wfTxDbMin, wfTxDbMax, waterfallScrollSpeed } =
         useDisplaySettingsStore.getState();
       const enhance = useSignalEnhanceStore.getState();
       const dom = domainNow();
       // Pop rows are normalised 0..1; RX/TX keep their dB windows. Mirrors the
-      // WebGL waterfall's redraw() window selection.
-      const dbMin = dom === 'pop' ? 0 : dom === 'tx-db' ? wfTxDbMin : wfDbMin;
-      const dbMax = dom === 'pop' ? 1 : dom === 'tx-db' ? wfTxDbMax : wfDbMax;
+      // WebGL waterfall's redraw() window selection. For the RX domain the window
+      // is the per-receiver one: RX1 uses the global window; every other RX uses
+      // its own measured floor offset (median-anchored across all panes) or an
+      // operator override, so each band's noise floor lands at the same colour and
+      // the single dB slider evens them all out. Keyed/Pop are absolute.
+      const rxWin = dom === 'rx-db' ? effectiveRxWfWindow(rxIndex) : null;
+      const dbMin = dom === 'pop' ? 0 : dom === 'tx-db' ? wfTxDbMin : rxWin!.wfDbMin;
+      const dbMax = dom === 'pop' ? 1 : dom === 'tx-db' ? wfTxDbMax : rxWin!.wfDbMax;
       renderer.setScrollSpeed(waterfallScrollSpeed);
       renderer.setReliefDepth(Math.max(0, Math.min(1, enhance.waterfallReliefDepth / 100)));
       // Temporal de-speckle only in Pop (where floor subtraction creates speckle);
@@ -263,6 +269,7 @@ export function WaterfallHeightfield({
     let unsubViewZoom: (() => void) | null = null;
     let unsubTx: (() => void) | null = null;
     let unsubEnhance: (() => void) | null = null;
+    let unsubRxWin: (() => void) | null = null;
 
     const fail = (reason: string) => {
       setStatus('unsupported');
@@ -370,6 +377,13 @@ export function WaterfallHeightfield({
           requestRedraw();
         }
       });
+
+      // Repaint when this receiver's per-RX dB window override changes (operator
+      // dragged the WfDbScale while this RX was focused). The median-anchored
+      // floor offset itself is picked up live each frame via effectiveRxWfWindow.
+      unsubRxWin = useRxDbWindowStore.subscribe((state, prev) => {
+        if (state.overrides[rxIndex] !== prev.overrides[rxIndex]) requestRedraw();
+      });
     });
 
     return () => {
@@ -380,12 +394,16 @@ export function WaterfallHeightfield({
       unsubViewZoom?.();
       unsubTx?.();
       unsubEnhance?.();
+      unsubRxWin?.();
       cancelDrawBusFrame(draw);
       ro.disconnect();
       io.disconnect();
       document.removeEventListener('visibilitychange', onVisibilityChange);
       releaseFrameConsumer();
       releaseEstimatorConsumer();
+      // Drop this pane's floor from the median anchor — a removed band shouldn't
+      // keep skewing the cross-RX normalization with its last reading.
+      forgetReceiverFloor(rxIndex);
       renderer?.dispose();
     };
   }, [receiver, showStats, stitched]);

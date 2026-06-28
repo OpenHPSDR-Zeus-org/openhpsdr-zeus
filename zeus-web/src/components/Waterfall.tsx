@@ -56,7 +56,6 @@ import {
   registerEstimatorConsumer,
   useSignalEnhanceStore,
 } from '../dsp/signal-estimator';
-import { normalizeStitchedBins, stitchFloorShiftDb } from '../dsp/stitch-normalizer';
 import { getReceiverVfoHz, KIWI_RECEIVER_INDEX, rxIndexOf, type ReceiverKey } from '../state/receiver-state';
 import { estimateRowFloorDb, forgetReceiverFloor, reportReceiverFloorDb } from '../dsp/floor-normalization';
 import { effectiveRxWfWindow, useRxDbWindowStore } from '../state/rx-db-window-store';
@@ -232,7 +231,6 @@ export function Waterfall({
     // is safe — there's no deferred reference-identity dirty check here.
     let enhBuf: Float32Array | null = null;
     let terrainBuf: Float32Array | null = null;
-    let stitchBuf: Float32Array | null = null;
     // Scroll speed is a rare toggle; cache the last value pushed to the renderer
     // so a steady redraw loop skips the store read + GL uniform update per frame.
     let lastScrollSpeed = -1;
@@ -446,14 +444,6 @@ export function Waterfall({
       if (wfDb) {
         const { moxOn, tunOn } = useTxStore.getState();
         let rowForPush = wfDb;
-        if (stitched && !moxOn && !tunOn) {
-          rowForPush = normalizeStitchedBins(
-            wfDb,
-            stitchBuf,
-            stitchFloorShiftDb(receiver, 'waterfall'),
-          );
-          if (rowForPush !== wfDb) stitchBuf = rowForPush;
-        }
         if (!moxOn && !tunOn) {
           if (!enhBuf || enhBuf.length !== rowForPush.length) enhBuf = new Float32Array(rowForPush.length);
           if (!terrainBuf || terrainBuf.length !== rowForPush.length) terrainBuf = new Float32Array(rowForPush.length);
