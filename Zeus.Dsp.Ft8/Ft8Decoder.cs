@@ -32,10 +32,24 @@ public readonly record struct Ft8DecodeResult(
     string Text);
 
 /// <summary>
+/// Per-RX FT8/FT4 decode seam. Lets the RX service inject a fake decoder in
+/// tests (the live pipeline always uses <see cref="Ft8Decoder"/>).
+/// </summary>
+public interface IFt8Decoder : IDisposable
+{
+    /// <summary>Decode one UTC-aligned slot of 12 kHz mono audio.</summary>
+    IReadOnlyList<Ft8DecodeResult> Decode(
+        float[] samples, Ft8Protocol protocol = Ft8Protocol.Ft8, int passes = 1, int maxResults = 64);
+
+    /// <summary>Clear accumulated decoder state (e.g. callsign hash table).</summary>
+    void Reset();
+}
+
+/// <summary>
 /// Per-RX FT8/FT4 decoder. Wraps a native zeus_ft8 context. Decode one
 /// UTC-aligned slot of 12 kHz mono audio at a time. Dispose to free the context.
 /// </summary>
-public sealed class Ft8Decoder : IDisposable
+public sealed class Ft8Decoder : IFt8Decoder, IDisposable
 {
     private IntPtr _ctx;
     private readonly object _gate = new();

@@ -74,12 +74,32 @@ export async function configureRadioForDigital(
   bandName?: string,
 ): Promise<void> {
   if (txActive()) return;
-  const vfoHz = useConnectionStore.getState().vfoHz;
+  const cs = useConnectionStore.getState();
+  const vfoHz = cs.vfoHz;
   const near = nearestDigitalBand(vfoHz);
   const band = bandName ?? near.name;
   // Fall back to the nearest band's FT8 dial if this protocol has no sub-band on
   // the requested band (e.g. FT4 on 160 m).
   const dial = dialHzFor(protocol, band) ?? near.ft8Hz;
+  // Idempotency guard (pop-out regression fix): when the radio is ALREADY in the
+  // target digital config — DIGU, the flat decode filter, and on the band dial —
+  // issue NOTHING. The band-follow effect and redundant qsyBand calls would
+  // otherwise re-fire setVfo/setMode/setFilter on every benign VFO update; each
+  // SetVfo trips the server's per-band mode recall (PR #974), momentarily
+  // flipping RXA off DIGU and perturbing the decode audio stream. A true no-op
+  // here keeps the decode tap's input continuous.
+  // Use a small Hz tolerance on the filter edges (matching the VFO's ±1 Hz),
+  // so a server round-trip that quantizes the filter Hz can't defeat the guard
+  // and silently re-fire reconfigure on every update.
+  if (
+    cs.mode === 'DIGU' &&
+    Math.abs(cs.filterLowHz - DIGITAL_RX_FILTER_LOW_HZ) <= 1 &&
+    Math.abs(cs.filterHighHz - DIGITAL_RX_FILTER_HIGH_HZ) <= 1 &&
+    dial != null &&
+    Math.abs(cs.vfoHz - dial) <= 1
+  ) {
+    return;
+  }
   try {
     // QSY FIRST, then assert DIGU + the wide flat filter. A cross-band VFO move
     // triggers the server's per-band mode recall (RestoreBandMode → SetMode,
