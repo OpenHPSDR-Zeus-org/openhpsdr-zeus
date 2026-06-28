@@ -1681,6 +1681,99 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _                        => G2RxDdc,
     };
 
+    /// <summary>
+    /// True iff <b>Zeus</b> reserves the front DDC slots (DDC0/DDC1) for the
+    /// PureSignal feedback pair on this board — i.e. the dual-ADC
+    /// OrionMkII/Saturn/G2 family, where the user-visible RX lives at DDC2
+    /// (<see cref="RxBaseDdc"/> == 2). False for the single-ADC Hermes-class
+    /// radios (Hermes/0x01, HermesII/0x02, ANAN-G2E·HermesC10/0x14) where Zeus
+    /// maps the operator's only RX to DDC0 (<see cref="RxBaseDdc"/> == 0).
+    ///
+    /// This is the single board predicate that decides whether Zeus may put PS
+    /// feedback on DDC0 — both when composing the wire (compose side) and when
+    /// demuxing inbound IQ (receive side). Deriving it from
+    /// <see cref="RxBaseDdc"/> keeps the two sides from ever drifting: if a
+    /// board's RX base is DDC0, Zeus must not also treat that DDC as a feedback
+    /// slot. Issue #960 — on the single-ADC G2E the board-agnostic
+    /// "DDC0 == PS feedback" assumption diverted the operator's only RX stream
+    /// into the PS path the moment PS armed, killing RX audio.
+    ///
+    /// IMPORTANT — what this predicate does and does NOT mean: it does NOT mean
+    /// the G2E hardware is incapable of PureSignal. The N1GP G2E gateware
+    /// genuinely supports Orion-style PS on its single LTC2208 (Hermes.v: NR=2,
+    /// no DDC2): with command byte 1363 (SyncRx[0]) set to 0x02 — the exact
+    /// byte Zeus already writes to arm the Orion feedback pair — Rx_fifo_ctrl0
+    /// (Hermes.v:717-720) muxes the TX-DAC reference (rx_I[NR]) and the ADC
+    /// feedback (rx_I[0]) into DDC0 as the identical Orion interleaved pair, and
+    /// the firmware comments record "PS works" (Hermes.v:139, ported from
+    /// Angelia P2 v11.6, N1GP/Phil PS work at :174). The reason Zeus returns
+    /// <c>false</c> here for the G2E is a SOFTWARE choice, not a hardware limit:
+    /// because the G2E has only one ADC, arming that interleaved pair consumes
+    /// DDC0 and the operator's user RX would have to relocate to DDC1
+    /// (receiver_inst1, also fed from temp_ADC). Zeus does not yet implement
+    /// that single-ADC relocation, so this predicate DISABLES PS on the G2E to
+    /// protect RX audio — it does not make PS work. Making PS actually function
+    /// on the G2E (keep writing byte 1363 = 0x02 AND move user RX to DDC1 while
+    /// PS is armed) is a larger, G2E-bench-gated change tracked in #960.
+    /// </summary>
+    public static bool ReservesPsFeedbackDdcs(HpsdrBoardKind board)
+        => RxBaseDdc(board) != 0;
+
+    /// <summary>
+    /// RX-thread dispatch decision (issue #960): should an inbound DDC0 packet
+    /// (UDP src port 1035) be consumed as a PureSignal paired-feedback frame
+    /// instead of a user-RX IQ frame? True only when PS feedback is armed AND
+    /// the packet is on DDC0 AND the board actually reserves DDC0 for the PS
+    /// feedback pair (<see cref="ReservesPsFeedbackDdcs"/>).
+    ///
+    /// On the dual-ADC OrionMkII/Saturn/G2 family DDC0 is a genuine reserved
+    /// feedback slot (user RX lives at DDC2), so the board term is a constant
+    /// <c>true</c> and this is bit-for-bit the historical
+    /// <c>_psFeedbackEnabled &amp;&amp; ddcIndex == 0</c> behaviour. On the
+    /// single-ADC Hermes-class boards (HermesC10/ANAN-G2E, Hermes, HermesII)
+    /// Zeus maps DDC0 to the operator's only RX, so this returns <c>false</c>
+    /// and the packet stays on the user-RX audio path — without the gate,
+    /// arming PS diverted every RX0 packet into the feedback path and the WDSP
+    /// RX0 audio channel starved (1.4M-sample underrun, dead receive).
+    ///
+    /// Note (#960): returning <c>false</c> on the G2E DISABLES PureSignal there
+    /// to keep RX audio alive — it does NOT implement PS. The G2E gateware can
+    /// do Orion-style PS on DDC0 (byte 1363 SyncRx[0]=0x02 interleave); making
+    /// it work requires also relocating user RX to DDC1, a separate change.
+    /// See <see cref="ReservesPsFeedbackDdcs"/>.
+    /// </summary>
+    public static bool RoutesDdc0ToPsFeedback(
+        bool psFeedbackEnabled, int ddcIndex, HpsdrBoardKind board)
+        => psFeedbackEnabled && ddcIndex == 0 && ReservesPsFeedbackDdcs(board);
+
+    /// <summary>
+    /// Wire-compose decision (issue #960), the compose-side twin of
+    /// <see cref="RoutesDdc0ToPsFeedback"/>: may Zeus place PureSignal feedback
+    /// bytes on ANY outbound command for this board when PS feedback is armed?
+    /// True only when PS feedback is armed AND the board reserves the DDC0/DDC1
+    /// feedback pair (<see cref="ReservesPsFeedbackDdcs"/>).
+    ///
+    /// This is the single predicate every PS wire-compose site funnels through —
+    /// the RxSpecific DDC-enable/sync block, the TxSpecific PA-protection bytes
+    /// (p[57..59]), and the HighPriority DDC0/DDC1 phase mirror + ALEX_PS /
+    /// ALEX_RX_ANTENNA_BYPASS coupler bits. Routing them all through one board
+    /// predicate keeps them consistent: on the single-ADC Hermes-class boards
+    /// (incl. ANAN-G2E·HermesC10) NONE of those bytes ever reach the wire, so an
+    /// "armed" PS state can no longer flip the RX front-end onto the feedback
+    /// coupler (external K36 tap) during a TX burst for no benefit. On the
+    /// dual-ADC OrionMkII/Saturn/G2 family this equals the bare
+    /// <c>_psFeedbackEnabled</c> it replaces, so every wire command is
+    /// byte-for-byte unchanged there.
+    ///
+    /// NB: this gates only the WIRE bytes — it does not change PS arm/disarm
+    /// state, persistence, or the WDSP engine, all of which remain owned by the
+    /// burn-zone PS path. On the G2E it therefore DISABLES PS (protecting RX
+    /// audio); it does not implement it. See <see cref="ReservesPsFeedbackDdcs"/>.
+    /// </summary>
+    public static bool ComposesPsFeedbackWire(
+        bool psFeedbackEnabled, HpsdrBoardKind board)
+        => psFeedbackEnabled && ReservesPsFeedbackDdcs(board);
+
     internal static byte AdcOptionMask(byte numAdc)
     {
         // Thetis SetADCDither/SetADCRandom writes ADC0, ADC1, and ADC2
@@ -1736,16 +1829,17 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
         if (psEnabled)
         {
-            // PS feedback layout is OrionMkII/Saturn-specific (DDC0+DDC1
-            // paired with bit 1363 sync). Single-ADC Hermes-class radios
-            // (Hermes/0x01, HermesII/0x02, HermesC10/0x14) don't have this
-            // hardware — leave the PS block alone. psEnabled should never
-            // be set true for these boards upstream, but if it ever is we'd
-            // rather silently no-op than scribble bytes the radio will
-            // reject.
-            if (boardKind != HpsdrBoardKind.Hermes &&
-                boardKind != HpsdrBoardKind.HermesII &&
-                boardKind != HpsdrBoardKind.HermesC10)
+            // Zeus only composes the DDC0+DDC1 paired feedback layout (bit 1363
+            // sync) for boards where it reserves the front DDCs for feedback —
+            // the dual-ADC OrionMkII/Saturn/G2 family. On single-ADC Hermes-class
+            // radios (Hermes/0x01, HermesII/0x02, HermesC10/0x14) Zeus DISABLES
+            // PS (DDC0 is the operator's only RX), so leave the PS block alone.
+            // This is a Zeus software choice for the G2E, not a hardware limit —
+            // the G2E gateware can do Orion-style PS on DDC0 (byte 1363
+            // SyncRx[0]=0x02 interleave); see ReservesPsFeedbackDdcs. The same
+            // board set as the old `!= Hermes && != HermesII && != HermesC10`
+            // test (issue #960).
+            if (ReservesPsFeedbackDdcs(boardKind))
             {
                 ddcEnable |= 0x01;
                 p[17] = 0x00;
@@ -1832,11 +1926,17 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         int baseDdc = RxBaseDdc(boardKind);
         byte ddcEnable = 0;
 
-        // PS feedback pair is Orion-family-only (DDC0+DDC1, byte 1363 sync) —
-        // mirror the legacy composer exactly; no-op on single-ADC Hermes-class.
-        bool psHardware = boardKind != HpsdrBoardKind.Hermes &&
-                          boardKind != HpsdrBoardKind.HermesII &&
-                          boardKind != HpsdrBoardKind.HermesC10;
+        // PS feedback pair (DDC0+DDC1, byte 1363 sync) — Zeus only composes it
+        // for boards where it reserves the front DDCs for feedback (the dual-ADC
+        // OrionMkII/Saturn/G2 family). Mirror the legacy composer exactly there;
+        // no PS block on single-ADC Hermes-class. ReservesPsFeedbackDdcs is the
+        // same board set as the old explicit `!= Hermes && != HermesII &&
+        // != HermesC10` test (issue #960). NB: skipping the block on the G2E
+        // DISABLES PS to protect its single-ADC RX — it is not a hardware limit
+        // (the G2E gateware can do Orion-style PS on DDC0; see
+        // ReservesPsFeedbackDdcs). Implementing it needs user RX relocated off
+        // DDC0, a separate G2E-bench-gated change.
+        bool psHardware = ReservesPsFeedbackDdcs(boardKind);
         if (psEnabled && psHardware)
         {
             ddcEnable |= 0x01;
@@ -1934,7 +2034,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             SidetoneHz = _cwSidetoneHz,
             SidetoneLevel = _cwSidetoneLevel,
         };
-        var p = ComposeCmdTxBuffer(_seqCmdTx++, (ushort)_sampleRateKhz, _txStepAttnDb, _paEnabled, _psFeedbackEnabled, _micControl, _lineInGain, cw);
+        // Board-gate the PS-armed TxSpecific shape (p[57..59] PA-protection /
+        // step-att for the TX-DAC reference) the same way every other PS wire
+        // site is gated (#960): only boards that reserve the feedback DDCs emit
+        // it. On the single-ADC G2E this keeps the TX command byte-identical to
+        // the non-PS path even when PS is "armed" upstream. Byte-for-byte
+        // unchanged on the dual-ADC OrionMkII/Saturn/G2 family.
+        bool psWire = ComposesPsFeedbackWire(_psFeedbackEnabled, _boardKind);
+        var p = ComposeCmdTxBuffer(_seqCmdTx++, (ushort)_sampleRateKhz, _txStepAttnDb, _paEnabled, psWire, _micControl, _lineInGain, cw);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1026));
     }
 
@@ -2119,6 +2226,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     {
         var p = new byte[BufLen];
         WriteBeU32(p, 0, _seqCmdHp++);
+        // PureSignal feedback bytes (DDC0/DDC1 phase mirror + ALEX_PS / bypass
+        // coupler bits) may go on the wire ONLY when Zeus reserves the front
+        // DDCs for feedback on this board (issue #960). On the single-ADC
+        // Hermes-class boards (incl. ANAN-G2E·HermesC10) DDC0 is the operator's
+        // only RX and Zeus disables PS, so this is false and NO PS bytes are
+        // composed — even if the engine/state "armed" PS upstream. Without this
+        // the ALEX_PS / bypass bits flipped the RX front-end onto the feedback
+        // coupler during every TX burst (external K36 tap) for no benefit. On
+        // the dual-ADC OrionMkII/Saturn/G2 family this is identical to the bare
+        // `_psFeedbackEnabled` it replaces, so the wire is byte-for-byte
+        // unchanged there.
+        bool psWire = ComposesPsFeedbackWire(_psFeedbackEnabled, _boardKind);
         // Byte 4 bit 0 = run, bit 1 = PTT. Thetis network.c:924-925 and
         // pihpsdr new_protocol.c:746-757 both set bit 1 whenever the radio
         // should key — covers both mic-MOX and TUN. Without this bit the
@@ -2173,7 +2292,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // PureSignal — when armed, DDC0 + DDC1 phase words also need to
         // track the TX frequency during xmit so the feedback DDC samples
         // the actual TX coupler signal. pihpsdr new_protocol.c:827-839.
-        if (_psFeedbackEnabled && _moxOn)
+        // Board-gated via psWire so DDC0's phase is never overwritten on a
+        // single-ADC board where DDC0 carries the operator's RX (#960).
+        if (psWire && _moxOn)
         {
             // For now mirror the RX freq onto the TX side — the radio's
             // single-VFO assumption today means TX = RX. Multi-VFO support
@@ -2273,7 +2394,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             txLpfFreqHz,
             rx2Enabled,
             xmit,
-            _psFeedbackEnabled,
+            psWire,          // board-gated PS arm (#960): no ALEX_PS on single-ADC
             _boardKind,
             txAntWire);
         // RX auxiliary input select (external-ports plan — antenna slice, #804).
@@ -2291,12 +2412,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // into alex0 (during xmit) and alex1 (always-on while PS armed).
         // ComposeAlex1Word owns the alex1 side because it also owns ADC1/RX2
         // filter-bank selection.
-        if (_psFeedbackEnabled && xmit) alex0 |= AlexPsBit;
+        if (psWire && xmit) alex0 |= AlexPsBit;
         // External (Bypass) feedback antenna — pihpsdr new_protocol.c:1284-
         // 1296 ORs ALEX_RX_ANTENNA_BYPASS into alex0 only during xmit when
         // PS is armed and the operator selected the external path. Internal
         // coupler leaves this bit clear.
-        if (_psFeedbackEnabled && _psFeedbackExternal && xmit)
+        if (psWire && _psFeedbackExternal && xmit)
         {
             alex0 |= AlexRxAntennaBypass;
         }
@@ -2696,7 +2817,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 if (srcPort >= RxDataPortBase && srcPort < RxDataPortBase + MaxRxDdc && n == BufLen)
                 {
                     int ddcIndex = srcPort - RxDataPortBase;
-                    if (_psFeedbackEnabled && ddcIndex == 0)
+                    if (RoutesDdc0ToPsFeedback(_psFeedbackEnabled, ddcIndex, _boardKind))
                     {
                         // PS-armed paired-DDC packet: 6B DDC0 (TX-mod-IQ) + 6B
                         // DDC1 (feedback) interleaved per sample. pihpsdr
