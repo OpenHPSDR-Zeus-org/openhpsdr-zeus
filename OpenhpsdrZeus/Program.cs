@@ -617,6 +617,19 @@ public partial class Program
                 // console (GUI-subsystem binary), so this is best-effort.
                 Console.Error.WriteLine($"window.geometry.save failed: {ex.Message}");
             }
+            // Snapshot the still-open detached pop-out windows while the native
+            // window is alive. On macOS the post-WaitForClose persistence below
+            // never runs (AppKit's terminate: → _exit preempts it), so capture it
+            // here. Idempotent with the post-close save on Windows/Linux.
+            try
+            {
+                openWindowsStore.Replace(detachedWorkspaceWindows
+                    .Select(d => new OpenWorkspaceWindowDto(d.LayoutId, d.Title)));
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"workspace.windows.save failed: {ex.Message}");
+            }
             return false; // allow the window to close
         });
 
@@ -632,6 +645,12 @@ public partial class Program
         // — which is the "process lingers after window close" symptom users see in
         // Task Manager.
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; window.Close(); };
+
+        // Make every macOS quit path skip exit()'s C++ static-destructor sweep
+        // (see InstallMacSafeTerminate). Installed AFTER the PhotinoWindow forces
+        // AppKit to load, and BEFORE the runloop where AppKit's auto-terminate can
+        // fire on last-window-close. No-op on Windows/Linux.
+        InstallMacSafeTerminate();
 
         // WaitForClose blocks the main thread until the user closes the window. On
         // macOS this satisfies Cocoa's "UI on main thread" requirement; Kestrel
@@ -676,6 +695,79 @@ public partial class Program
     // handlers or C-runtime static destructors. Present on macOS and Linux.
     [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "_exit")]
     private static extern void LibcImmediateExit(int status);
+
+    // --- macOS: route every Cocoa quit through _exit(2) ----------------------
+    //
+    // ROOT CAUSE (proven from an OpenhpsdrZeus .ips, issue #1065): closing the
+    // last window makes AppKit auto-fire -[NSApplication terminate:] from inside
+    // the CFRunLoop ("terminate after last window closed"). terminate: calls libc
+    // exit(), which runs __cxa_finalize_ranges — the C++ static-destructor sweep
+    // across EVERY loaded module, including in-process JUCE audio plugins (Waves,
+    // Supertone "Clear", …). Those destructors tear down a plugin's
+    // juce::MessageManager while its OWN background juce::Timer thread is still
+    // live, so the Timer's MessageQueue::post() locks a freed mutex → SIGSEGV
+    // (exit 139). Crash-thread proof: juce::Timer::TimerThread::run ->
+    // MessageQueue::post -> pthread_mutex_lock at NULL; main-thread proof:
+    // -[NSApplication terminate:] -> exit -> __cxa_finalize_ranges ->
+    // ~WCBIClientWithWLSThread (the Waves variant). Because terminate: preempts
+    // the runloop, WaitForClose() never returns and the _exit(0) in
+    // ShutdownDesktopHost is never reached on the quit path. The vendor-agnostic
+    // cure is to stop exit() from ever running: replace -[NSApplication
+    // terminate:] so it calls _exit(2) directly. _exit skips __cxa_finalize, so
+    // no plugin static destructor can run under a live plugin thread — closing
+    // both the Timer and Waves-WLS faces of the crash for ANY plugin the operator
+    // loads. Window geometry + open detached windows are already committed
+    // synchronously by the window-closing handler before this fires.
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib")]
+    private static extern IntPtr objc_getClass(string name);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib")]
+    private static extern IntPtr sel_registerName(string name);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib")]
+    private static extern IntPtr class_getInstanceMethod(IntPtr cls, IntPtr sel);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib")]
+    private static extern IntPtr method_setImplementation(IntPtr method, IntPtr imp);
+
+    [System.Runtime.InteropServices.UnmanagedFunctionPointer(
+        System.Runtime.InteropServices.CallingConvention.Cdecl)]
+    private delegate void ObjcTerminateImp(IntPtr self, IntPtr sel, IntPtr sender);
+
+    // Held for the process lifetime: the GC must never collect the delegate that
+    // backs the swizzled IMP, or terminate: would jump into freed memory.
+    private static ObjcTerminateImp? _safeTerminateImp;
+
+    private static void InstallMacSafeTerminate()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        try
+        {
+            var cls = objc_getClass("NSApplication");
+            if (cls == IntPtr.Zero) return;
+            var sel = sel_registerName("terminate:");
+            var method = class_getInstanceMethod(cls, sel);
+            if (method == IntPtr.Zero) return;
+            _safeTerminateImp = static (_, _, _) => LibcImmediateExit(0);
+            var imp = System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(_safeTerminateImp);
+            method_setImplementation(method, imp);
+            StartupDiagnostics.Log("[shutdown] macOS: -[NSApplication terminate:] routed to _exit(2) (skips plugin static-dtor race)");
+        }
+        catch (Exception ex)
+        {
+            // Non-fatal: worst case we retain the pre-existing crash-on-close risk.
+            StartupDiagnostics.Log($"[shutdown] macOS safe-terminate install failed: {ex.Message}");
+        }
+    }
+
+    // Windows: terminate immediately, skipping CLR finalizers, CRT static
+    // destructors and DLL_PROCESS_DETACH. zeus-vst-bridge loads VST3 (.dll)
+    // in-process on Windows too, so the same JUCE MessageManager-vs-Timer
+    // destructor race exists at normal CLR/CRT shutdown; TerminateProcess(self)
+    // runs none of those. Unlike Environment.Exit/quick_exit it fires no managed
+    // ProcessExit handler, so it also avoids the WebView2/Photino teardown
+    // deadlock noted in RunDesktop.
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern bool TerminateProcess(IntPtr hProcess, uint uExitCode);
 
     // Shutdown for the Photino desktop / status-window paths, which drive the host
     // lifecycle by hand (Photino owns the main thread, so we can't use app.Run()).
@@ -724,7 +816,13 @@ public partial class Program
         Console.Out.Flush();
         Console.Error.Flush();
         if (OperatingSystem.IsWindows())
-            return; // no in-process AU bridge on Windows desktop; return normally
+        {
+            // Skip CLR/CRT shutdown + DLL detach: the in-process VST3 bridge has
+            // the same plugin-thread teardown race as macOS (see
+            // InstallMacSafeTerminate). TerminateProcess runs no destructor.
+            try { TerminateProcess(GetCurrentProcess(), 0); } catch { /* fall through */ }
+            return;
+        }
         try { LibcImmediateExit(0); } catch { /* fall through to a normal return */ }
     }
 
