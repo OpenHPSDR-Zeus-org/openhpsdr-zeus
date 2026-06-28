@@ -434,6 +434,19 @@ public static class ZeusHost
                 sp.GetService<DiagnosticLogBuffer>(),
                 sp.GetService<IHttpClientFactory>(),
                 options.HttpPort != 0 ? $"http://127.0.0.1:{options.HttpPort}" : null));
+
+        // Backend→sidecar IPC bridge (remote-diag P3c). Only the desktop host
+        // launches the out-of-process sidecar (SupportSidecarLauncher), so the
+        // bridge — the pipe CLIENT that pushes identity + opt-in posture so the
+        // sidecar can register broker presence — only runs in Desktop mode. The
+        // launcher reads its SessionToken to point the sidecar at the same pipe.
+        if (options.HostMode == ZeusHostMode.Desktop)
+        {
+            builder.Services.AddSingleton<Zeus.Server.Hosting.Support.SupportSidecarBridge>();
+            builder.Services.AddHostedService(sp =>
+                sp.GetRequiredService<Zeus.Server.Hosting.Support.SupportSidecarBridge>());
+        }
+
         // LAN Browser proxy: fetches private-LAN device web UIs on behalf of the
         // panel (esp. for remote operators whose browser can't reach the radio's
         // LAN). No auto-redirect — LanProxyService follows + re-validates each hop

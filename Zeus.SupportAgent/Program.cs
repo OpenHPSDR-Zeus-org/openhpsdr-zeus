@@ -42,48 +42,44 @@ using var sigterm = SafeSignal(PosixSignal.SIGTERM, cts);
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
 // --- Remote presence wiring -------------------------------------------------
-// Build the broker client from the launch identity (callsign + QRZ session env)
-// and the broker URL. Null when any piece is missing → remote stays inert and the
-// sidecar behaves exactly as the Phase-1 local-only crash capturer.
+// The broker URL alone decides whether remote presence/crash is even possible;
+// the OPERATOR IDENTITY arrives lazily over the IPC pipe (callsign + QRZ session
+// key in a SupportHello/SupportStateChanged), NOT from a launch-time env var that
+// races QRZ silent-login. So the broker client is created up front with whatever
+// seed the launcher passed (often blank) and its identity is refreshed as the
+// backend pushes it; the IPC listener and presence loop ALWAYS run when a broker
+// URL is configured. Null endpoints → the Phase-1 local-only crash capturer.
 var endpoints = BrokerEndpoints.FromBrokerUrl(opts.BrokerUrl);
 var qrzSession = Environment.GetEnvironmentVariable(HttpSupportBrokerClient.QrzSessionEnvVar) ?? "";
 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
 
 HttpSupportBrokerClient? broker = null;
-if (endpoints is not null && !string.IsNullOrWhiteSpace(opts.OperatorCallsign) && !string.IsNullOrWhiteSpace(qrzSession))
-{
-    broker = new HttpSupportBrokerClient(http, endpoints, opts.OperatorCallsign!, qrzSession);
-}
-
-// Live posture, seeded from launch args and updated by the backend over IPC. The
-// crash path reads autoShare at the end, so keep the latest value here.
-var autoShareEnabled = opts.AutoShareOnCrash;
-
-PresenceClient? presence = null;
+PresenceCoordinator? coordinator = null;
 Task presenceTask = Task.CompletedTask;
 Task ipcTask = Task.CompletedTask;
 
-if (broker is not null)
+if (endpoints is not null)
 {
-    // Presence is gated on remote diagnostics being on AND a callsign being set;
-    // the IPC listener flips availability live.
-    presence = new PresenceClient(
+    // Seed identity from the launch env (best-effort; usually blank because QRZ
+    // login hadn't settled at launch). The IPC SupportHello/SupportStateChanged
+    // refresh it the moment the operator's QRZ identity is known.
+    broker = new HttpSupportBrokerClient(http, endpoints, opts.OperatorCallsign ?? "", qrzSession);
+
+    // initiallyAvailable is false: presence only advertises once the backend
+    // confirms BOTH the L1 switch on and a usable identity over IPC.
+    var presence = new PresenceClient(
         broker,
-        initiallyAvailable: opts.RemoteDiagnosticsEnabled,
+        initiallyAvailable: false,
+        log: msg => Breadcrumb(opts, msg));
+    coordinator = new PresenceCoordinator(
+        broker, presence,
+        initialAutoShare: opts.AutoShareOnCrash,
         log: msg => Breadcrumb(opts, msg));
     presenceTask = presence.RunAsync(cts.Token);
 
     var listener = new SupportIpcListener(
         opts.SessionToken,
-        onState: state =>
-        {
-            autoShareEnabled = state.AutoShareOnCrash;
-            // Available only when the master switch is on AND a callsign is present.
-            var available = state.RemoteDiagnosticsEnabled && !string.IsNullOrWhiteSpace(state.QrzCallsign);
-            presence!.SetAvailable(available);
-            Breadcrumb(opts, $"ipc: state remoteDiag={state.RemoteDiagnosticsEnabled} " +
-                             $"autoShare={state.AutoShareOnCrash} callsign={(string.IsNullOrWhiteSpace(state.QrzCallsign) ? "-" : "set")}");
-        },
+        onState: coordinator.Apply,
         log: msg => Breadcrumb(opts, msg));
     ipcTask = listener.RunAsync(cts.Token);
 }
@@ -119,11 +115,17 @@ Breadcrumb(opts,
         : $"crash detected: pid={opts.SupervisePid} exitCode={Fmt(result.ExitCode)} -> {Path.GetFileName(written)}");
 
 // Crash auto-share: strictly gated on the operator's opt-in (default OFF). With
-// the flag off this never reads the record back or touches the broker.
+// the flag off this never reads the record back or touches the broker. The
+// authoritative posture is whatever the operator last pushed over IPC (held by
+// the coordinator), falling back to the launch-time seed if no IPC ever arrived.
+// Pass the broker only when it carries a usable identity so the outcome logging
+// distinguishes "not opted in" from "no broker identity".
 try
 {
+    var autoShareEnabled = coordinator?.AutoShareOnCrash ?? opts.AutoShareOnCrash;
+    var shareBroker = broker is { IsConfigured: true } ? broker : null;
     string? recordJson = written is not null ? TryReadAllText(written) : null;
-    var outcome = await CrashAutoShare.TryShareAsync(autoShareEnabled, recordJson, broker, CancellationToken.None)
+    var outcome = await CrashAutoShare.TryShareAsync(autoShareEnabled, recordJson, shareBroker, CancellationToken.None)
         .ConfigureAwait(false);
     Breadcrumb(opts, $"crash auto-share: {outcome}");
 }

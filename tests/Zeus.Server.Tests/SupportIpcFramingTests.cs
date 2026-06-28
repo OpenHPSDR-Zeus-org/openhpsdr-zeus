@@ -48,6 +48,44 @@ public class SupportIpcFramingTests
     }
 
     [Fact]
+    public async Task Hello_WithQrzSessionKey_RoundTrips()
+    {
+        // v2 identity payload: the session key must survive the round-trip so the
+        // sidecar can build its broker client from IPC-delivered identity.
+        var hello = new SupportHello(
+            ProtocolVersion: SupportIpc.ProtocolVersion,
+            BackendPid: 1, AppVersion: "v", Platform: "p",
+            QrzCallsign: "N9WAR",
+            RemoteDiagnosticsEnabled: true,
+            AutoShareOnCrash: false,
+            AppLogPath: "a", StartupLogPath: "s",
+            QrzSessionKey: "sess-abc-123");
+
+        var result = Assert.IsType<SupportHello>(await RoundTripAsync(hello));
+        Assert.Equal(hello, result);
+        Assert.Equal("sess-abc-123", result.QrzSessionKey);
+    }
+
+    [Fact]
+    public async Task StateChanged_WithQrzSessionKey_RoundTrips()
+    {
+        var state = new SupportStateChanged(
+            QrzCallsign: "N9WAR",
+            RemoteDiagnosticsEnabled: true,
+            AutoShareOnCrash: true,
+            QrzSessionKey: "sess-xyz");
+
+        var result = Assert.IsType<SupportStateChanged>(await RoundTripAsync(state));
+        Assert.Equal(state, result);
+        Assert.Equal("sess-xyz", result.QrzSessionKey);
+    }
+
+    [Fact]
+    public void ProtocolVersion_IsAtLeastV2_ForIdentityOverIpc()
+        => Assert.True(SupportIpc.ProtocolVersion >= 2,
+            "v2 added QrzSessionKey to the identity messages; version must not regress.");
+
+    [Fact]
     public async Task PromptResult_PreservesEnumDecision()
     {
         var msg = new SupportPromptResult("req-1", SupportPromptDecision.Timeout);
