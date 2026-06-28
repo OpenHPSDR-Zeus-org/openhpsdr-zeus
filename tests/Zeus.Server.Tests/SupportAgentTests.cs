@@ -615,10 +615,21 @@ public class SupportIpcPipeHandshakeTests
         }
     }
 
+    /// <summary>
+    /// A short, per-test-unique session token. macOS caps a Unix-domain-socket
+    /// path at 104 chars, and .NET realises a named pipe as
+    /// "{TMPDIR}/CoreFxPipe_{pipeName}". On CI the agent TMPDIR
+    /// ("/var/folders/../T/") is already ~49 chars, so a full 32-hex GUID token
+    /// (pipe name "zeus-support-{32 hex}") tips the total past 104 and throws
+    /// ArgumentOutOfRangeException. 8 hex chars keep the path comfortably under
+    /// the limit while staying unique across the handful of concurrent pipe tests.
+    /// </summary>
+    private static string ShortSessionToken() => Guid.NewGuid().ToString("N").Substring(0, 8);
+
     [Fact]
     public async Task BackendHello_OnPlusIdentity_RegistersPresenceOverRealPipe()
     {
-        var token = Guid.NewGuid().ToString("N");
+        var token = ShortSessionToken();
         var pipeName = SupportIpc.PipeNameForSession(token);
         var broker = new FakeMutableBroker();
         // Fast, non-blocking cadence so the presence loop ticks promptly after the
@@ -657,7 +668,7 @@ public class SupportIpcPipeHandshakeTests
     [Fact]
     public async Task BackendHello_OnButNoIdentity_DoesNotRegister()
     {
-        var token = Guid.NewGuid().ToString("N");
+        var token = ShortSessionToken();
         var pipeName = SupportIpc.PipeNameForSession(token);
         var broker = new FakeMutableBroker();
         var presence = new PresenceClient(
