@@ -427,6 +427,15 @@ public partial class Program
         var initialWidth = savedGeometry.Width;
         var initialHeight = savedGeometry.Height;
 
+        // On the G2's internal Pi, Zeus runs as the radio's built-in front-panel
+        // display — an appliance, not a windowed app. Drop the title bar and frame
+        // (Photino chromeless) and fill the screen so the SPA owns the whole DSI
+        // panel with no window-manager furniture. Detection mirrors how the
+        // hardware front-panel bridge identifies "this is the G2 Pi" (the udev
+        // g2-front-* symlink); see ShouldRunChromelessKiosk. Linux-only, no-op on
+        // ordinary desktops.
+        var kioskChrome = ShouldRunChromelessKiosk();
+
         // Photino's window/dock icon is set per-OS. Windows expects .ico (Photino's
         // SetIconFile binds it to the NSWindow / HWND), Linux GTK expects PNG, and
         // macOS draws the dock icon from CFBundleIconFile in Info.plist — so during
@@ -472,6 +481,10 @@ public partial class Program
         StartupDiagnostics.Phase("desktop: creating Photino window (needs WebView2)");
         var window = new PhotinoWindow()
             .SetTitle("Zeus")
+            // Appliance mode on the G2 Pi: no titlebar, no border. Chromeless is a
+            // startup parameter, so it must be set here in the builder chain before
+            // the native window is created; toggling it later is a no-op.
+            .SetChromeless(kioskChrome)
             .SetUseOsDefaultLocation(false)
             .SetMinWidth(MinWidth)
             .SetMinHeight(MinHeight)
@@ -528,8 +541,9 @@ public partial class Program
         // Reopen maximized if that's how it was left. Setting the property before
         // WaitForClose stores it as a startup parameter (the native window doesn't
         // exist yet), so the frame opens maximized; we still seeded SetSize above
-        // so a later un-maximize restores to the saved normal size.
-        if (savedGeometry.Maximized)
+        // so a later un-maximize restores to the saved normal size. Kiosk mode
+        // always opens filled — a frameless appliance owns the whole DSI panel.
+        if (savedGeometry.Maximized || kioskChrome)
             window.Maximized = true;
 
         // Reliably apply the restored size AFTER the native window exists. The
@@ -565,7 +579,7 @@ public partial class Program
                 // when restoring maximized — so un-maximizing later lands on the
                 // visible desktop rather than wherever the saved bytes pointed.
                 PlaceWindowOnVisibleWorkArea(window, initialWidth, initialHeight);
-                if (savedGeometry.Maximized)
+                if (savedGeometry.Maximized || kioskChrome)
                     window.Maximized = true;
 
                 // A frame that comes up minimized is indistinguishable from "no
@@ -844,6 +858,44 @@ public partial class Program
             return;
         }
         try { LibcImmediateExit(0); } catch { /* fall through to a normal return */ }
+    }
+
+    // True when the desktop should run as a frameless, fullscreen appliance —
+    // the case on the G2's internal Raspberry Pi, where Zeus IS the radio's
+    // built-in front-panel display and window-manager chrome (title bar, border)
+    // is just visual noise on the fixed DSI screen.
+    //
+    // Detection reuses the same signal the hardware front-panel bridge uses to
+    // recognise "this is the G2 Pi": the udev-published g2-front-* by-id serial
+    // symlink (see G2PanelOptions.KnownSymlinks and G2FrontPanelService). That
+    // keeps the two definitions of "native G2" in lock-step and means an ordinary
+    // shack PC — which has no such symlink — keeps its normal decorated window.
+    //
+    // ZEUS_KIOSK=1/0 (or true/false) is an explicit override for benches and dev
+    // boxes that aren't a stock G2. Auto-detection is Linux-only; Windows/macOS
+    // desktops are never made chromeless on hardware presence alone.
+    private static bool ShouldRunChromelessKiosk()
+    {
+        var force = Environment.GetEnvironmentVariable("ZEUS_KIOSK");
+        if (!string.IsNullOrWhiteSpace(force))
+        {
+            if (force == "1" || string.Equals(force, "true", StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (force == "0" || string.Equals(force, "false", StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+
+        if (!OperatingSystem.IsLinux())
+            return false;
+
+        foreach (var (path, _) in Zeus.Server.FrontPanel.G2PanelOptions.KnownSymlinks)
+        {
+            // File.Exists follows the symlink to the tty target, matching how
+            // G2FrontPanelService.ResolveDevice probes for the panel.
+            try { if (File.Exists(path)) return true; }
+            catch { /* probing is best-effort; a denied path just means "no panel" */ }
+        }
+        return false;
     }
 
     // Photino occasionally opens the frame off the visible desktop on
