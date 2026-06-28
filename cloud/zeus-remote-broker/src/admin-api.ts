@@ -9,7 +9,6 @@
  */
 
 import type { Env } from './types';
-import { verifyQrzSessionCached } from './qrz';
 import {
   hashPassword,
   verifyPassword,
@@ -64,7 +63,7 @@ export async function handleAdmin(
   try {
     // --- public: interactive login (mints a session token) -------------------
     if (path === '/admin/login' && request.method === 'POST') {
-      return await handleLogin(request, env, ctx, cors);
+      return await handleLogin(request, env, cors);
     }
 
     // --- everything else is Bearer-token protected ---------------------------
@@ -132,19 +131,22 @@ export async function handleAdmin(
 async function handleLogin(
   request: Request,
   env: Env,
-  ctx: ExecutionContext,
   cors: Record<string, string>,
 ): Promise<Response> {
   const body = await safeJson(request);
   const password = typeof body.password === 'string' ? body.password : '';
-  const callsign = norm(request.headers.get('X-QRZ-Callsign') ?? '');
-  const sessionKey = request.headers.get('X-QRZ-Session') ?? '';
+  // Callsign comes from the body; the legacy X-QRZ-Callsign header is still
+  // accepted as a fallback so older clients keep working.
+  const callsign = norm(
+    (typeof body.callsign === 'string' ? body.callsign : '') ||
+      (request.headers.get('X-QRZ-Callsign') ?? ''),
+  );
 
-  // Generic failure for ALL of: missing inputs, bad QRZ, unknown/disabled admin,
+  // Generic failure for ALL of: missing inputs, unknown/disabled admin,
   // wrong/absent password. No oracle on which factor failed.
   const fail = () => json({ error: 'unauthorized' }, 401, cors);
 
-  if (!password || !callsign || !sessionKey) return fail();
+  if (!password || !callsign) return fail();
 
   // Per-callsign throttle on top of the per-IP gate in index.ts, so a botnet
   // spread across many IPs still can't brute-force one admin's password (each
@@ -153,11 +155,9 @@ async function handleLogin(
     return json({ error: 'rate limited' }, 429, cors);
   }
 
-  // 1) QRZ: caller owns the callsign.
-  const verify = (env.QRZ_VERIFY ?? 'on').toLowerCase() !== 'off';
-  if (verify && !(await verifyQrzSessionCached(sessionKey, callsign, ctx))) return fail();
-
-  // 2) Admin store: callsign is an enabled admin with a password set, and it matches.
+  // Admin store: callsign is an enabled admin with a password set, and it
+  // matches. The admin password is the sole secret — callsigns are public, so
+  // the strong password + rate limiting are what gate access here.
   const admin = await getAdmin(env.ADMIN_DB, callsign);
   if (!admin || admin.disabled === 1 || !admin.pw_hash || !admin.pw_salt || admin.pw_iter == null) {
     return fail();

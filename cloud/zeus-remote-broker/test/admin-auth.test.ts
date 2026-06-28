@@ -27,6 +27,13 @@ test('password hash + verify round-trip', async () => {
   assert.equal(await verifyPassword('correct horse battery staple', rec), true);
 });
 
+test('PBKDF2_ITER stays within the Cloudflare Workers cap (100000)', () => {
+  // Workers' WebCrypto throws "iteration counts above 100000 are not supported"
+  // at runtime; Node has no such cap, so this guard is the only thing that
+  // catches a too-high value before it ships and breaks every hash + verify.
+  assert.ok(PBKDF2_ITER <= 100_000, `PBKDF2_ITER ${PBKDF2_ITER} exceeds the Workers limit`);
+});
+
 test('wrong password fails', async () => {
   const rec = await hashPassword('s3cret-password');
   assert.equal(await verifyPassword('s3cret-passwor', rec), false);
