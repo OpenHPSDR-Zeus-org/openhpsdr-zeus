@@ -178,6 +178,16 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
         return FullSpanHz / z;
     }
 
+    // Auto-reconnect (issue #1114). The KiwiSDR's W/F socket can close mid-session
+    // while the SND socket stays up; without recovery the operator's panadapter
+    // goes blank until they toggle the slice. KiwiSdrClient now reports
+    // unsolicited socket closes as status="dropped", and OnClientStatus schedules
+    // a back-off reconnect from here. Single-in-flight; _reconnectGen invalidates
+    // any pending attempt when the operator/radio explicitly changes state.
+    private int _reconnectAttempt;   // resets on a fresh "connected" handshake
+    private int _reconnectBusy;      // 0/1 — a reconnect is scheduled in flight
+    private long _reconnectGen;      // bumped on operator/radio state changes
+
     // Frame sequencing + audio resampling (48 kHz output from the ~12 kHz Kiwi).
     private uint _displaySeq;
     // 1 Hz rate instrumentation (bring-up): WF frames/s, audio frames/s, audio
@@ -289,6 +299,16 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
     // entry point so "Kiwi mutes on TX" is unit-testable without a live client.
     internal void SetTxActiveForTest(bool active) { lock (_sync) _txActive = active; }
     internal void OnAudioForTest(float[] samples, int inRateHz) => OnAudio(samples, inRateHz);
+
+    // Test seams for the issue-#1114 auto-reconnect path. The drop->reconnect
+    // schedule needs to be exercisable without a live KiwiSdrClient: drive the
+    // enable / radio-up gating, route a synthetic status event, and observe the
+    // attempt counter + busy flag the schedule sets.
+    internal void SetEnabledForTest(bool v) { lock (_sync) _enabled = v; }
+    internal void SetRadioConnectedForTest(bool v) { lock (_sync) _radioConnected = v; }
+    internal void OnClientStatusForTest(string status, string? detail) => OnClientStatus(status, detail);
+    internal int ReconnectAttemptForTest => Volatile.Read(ref _reconnectAttempt);
+    internal bool ReconnectBusyForTest => Volatile.Read(ref _reconnectBusy) == 1;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -406,6 +426,10 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
         lock (_sync) { wasConnected = _radioConnected; _radioConnected = false; }
         if (!wasConnected) return;
         _log.LogInformation("kiwi.radio disconnected -> stopping slice");
+        // Radio went down -> any pending reconnect should NOT fire (no mix-bus
+        // clock to feed). Invalidate it; the next OnRadioConnected will reseed.
+        Interlocked.Increment(ref _reconnectGen);
+        Interlocked.Exchange(ref _reconnectAttempt, 0);
         _ = StopOnRadioDownAsync();
     }
 
@@ -440,6 +464,10 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
         var s = _store.Set(enabled, url, password);
         lock (_sync) { _enabled = s.Enabled; }
         bool wantOn = s.Enabled && !string.IsNullOrWhiteSpace(s.Url);
+        // The operator just changed state — invalidate any pending auto-reconnect
+        // so a queued attempt can't race the manual restart below.
+        Interlocked.Increment(ref _reconnectGen);
+        Interlocked.Exchange(ref _reconnectAttempt, 0);
 
         // Tear down any existing connection, then reconnect ONLY if a radio is up.
         // If the operator enables the Kiwi with no radio connected, park it at
@@ -650,8 +678,91 @@ public sealed class KiwiSdrService : BackgroundService, IKiwiReceiverProvider, I
 
     private void OnClientStatus(string status, string? detail)
     {
-        lock (_sync) { _status = status; _statusDetail = detail; }
+        // KiwiSdrClient signals an unsolicited socket close as "dropped"; surface
+        // it as "error" on the wire (existing pill set: connecting/connected/
+        // error/closed/disabled) so the operator sees ERROR in Settings while
+        // the background reconnect runs.
+        string stored = status == "dropped" ? "error" : status;
+        string? storedDetail = status == "dropped" && string.IsNullOrEmpty(detail)
+            ? "connection dropped"
+            : detail;
+
+        lock (_sync) { _status = stored; _statusDetail = storedDetail; }
         RaiseChanged();
+
+        if (status == "connected")
+        {
+            Interlocked.Exchange(ref _reconnectAttempt, 0);
+            return;
+        }
+        if (status == "dropped")
+        {
+            bool wantOn; lock (_sync) wantOn = _enabled && _radioConnected;
+            if (wantOn) _ = ScheduleReconnectAsync();
+        }
+    }
+
+    // Test seam: override the back-off delay so reconnect unit tests don't have
+    // to wait the real 2..30 s. Production callers leave this null.
+    internal Func<int, TimeSpan>? ReconnectDelayForTest;
+
+    private TimeSpan ReconnectDelay(int attempt)
+    {
+        if (ReconnectDelayForTest is { } f) return f(attempt);
+        // 2, 4, 8, 16, 32→30 (capped). The hardware RX keeps streaming the
+        // whole time; this is just the remote Kiwi half.
+        int delaySec = Math.Min(2 << Math.Min(Math.Max(attempt - 1, 0), 4), 30);
+        return TimeSpan.FromSeconds(delaySec);
+    }
+
+    // Single-in-flight back-off reconnect. Triggered by OnClientStatus("dropped"),
+    // serialised against config/radio lifecycle changes by _lifecycleGate, and
+    // aborted if the operator or radio state changes (via _reconnectGen).
+    private async Task ScheduleReconnectAsync()
+    {
+        if (Interlocked.CompareExchange(ref _reconnectBusy, 1, 0) != 0) return;
+        try
+        {
+            long gen = Interlocked.Read(ref _reconnectGen);
+            int attempt = Interlocked.Increment(ref _reconnectAttempt);
+            var delay = ReconnectDelay(attempt);
+
+            string? url = _store.Get().Url;
+            _log.LogInformation(
+                "kiwi.reconnect scheduled attempt={Attempt} in={DelaySec}s url={Url}",
+                attempt, delay.TotalSeconds, url);
+
+            try { await Task.Delay(delay).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
+
+            if (Interlocked.Read(ref _reconnectGen) != gen) return;
+            bool wantOn; lock (_sync) wantOn = _enabled && _radioConnected;
+            if (!wantOn) return;
+            var s = _store.Get();
+            if (string.IsNullOrWhiteSpace(s.Url)) return;
+
+            await _lifecycleGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (Interlocked.Read(ref _reconnectGen) != gen) return;
+                await StopClientAsync().ConfigureAwait(false);
+                lock (_sync) wantOn = _enabled && _radioConnected;
+                if (!wantOn) return;
+                try { await StartClientAsync(s.Url!, s.Password, CancellationToken.None).ConfigureAwait(false); }
+                catch (Exception ex)
+                {
+                    _log.LogWarning("kiwi.reconnect attempt={Attempt} failed err={Err}", attempt, ex.Message);
+                    lock (_sync) { _status = "error"; _statusDetail = ex.Message; }
+                }
+            }
+            finally { _lifecycleGate.Release(); }
+            RaiseChanged();
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug("kiwi.reconnect loop err={Err}", ex.Message);
+        }
+        finally { Interlocked.Exchange(ref _reconnectBusy, 0); }
     }
 
     private void OnWaterfall(float[] binsDb, long centerHz, double hzPerBin)

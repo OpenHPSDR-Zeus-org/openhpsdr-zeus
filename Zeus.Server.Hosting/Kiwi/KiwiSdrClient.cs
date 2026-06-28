@@ -154,6 +154,7 @@ public sealed class KiwiSdrClient : IAsyncDisposable
     private async Task SndLoopAsync(CancellationToken ct)
     {
         var buf = new byte[64 * 1024];
+        string? error = null;
         try
         {
             while (!ct.IsCancellationRequested && _snd is { State: WebSocketState.Open })
@@ -172,9 +173,14 @@ public sealed class KiwiSdrClient : IAsyncDisposable
         catch (OperationCanceledException) { /* shutting down */ }
         catch (Exception ex)
         {
-            _log.LogWarning("kiwi.snd.loop ended host={Host} err={Err}", _host, ex.Message);
-            StatusChanged?.Invoke("error", ex.Message);
+            error = ex.Message;
+            _log.LogWarning("kiwi.snd.loop ended host={Host} err={Err}", _host, error);
         }
+        // Issue #1114 (SND twin): a server-side close (graceful WebSocket close,
+        // proxy idle timeout, server restart) returns count<0 with no exception —
+        // surface every unsolicited exit so KiwiSdrService can reconnect.
+        if (!ct.IsCancellationRequested)
+            StatusChanged?.Invoke("dropped", error ?? "audio socket closed");
     }
 
     // SND binary frame layout (compression=0):
@@ -215,6 +221,7 @@ public sealed class KiwiSdrClient : IAsyncDisposable
     private async Task WfLoopAsync(CancellationToken ct)
     {
         var buf = new byte[64 * 1024];
+        string? error = null;
         try
         {
             while (!ct.IsCancellationRequested && _wf is { State: WebSocketState.Open })
@@ -230,8 +237,15 @@ public sealed class KiwiSdrClient : IAsyncDisposable
         catch (OperationCanceledException) { /* shutting down */ }
         catch (Exception ex)
         {
-            _log.LogWarning("kiwi.wf.loop ended host={Host} err={Err}", _host, ex.Message);
+            error = ex.Message;
+            _log.LogWarning("kiwi.wf.loop ended host={Host} err={Err}", _host, error);
         }
+        // Issue #1114: the KiwiSDR's wide-FFT (/W/F) socket closes mid-session
+        // (server bug / proxy timeout / channel limit) while the audio (/SND)
+        // socket stays up. Without this signal the pan/waterfall went blank and
+        // Zeus never reconnected — the operator had to toggle the slice manually.
+        if (!ct.IsCancellationRequested)
+            StatusChanged?.Invoke("dropped", error ?? "waterfall socket closed");
     }
 
     // W/F binary frame layout (wf_comp=0):

@@ -311,6 +311,118 @@ public sealed class KiwiSdrTests : IDisposable
         Assert.True(sig[^1] > 0.99f, $"expected open on strong signal, got {sig[^1]}");
     }
 
+    // ---- Auto-reconnect when the W/F (or SND) socket drops mid-session ------
+    // Issue #1114: the operator's panadapter/waterfall went blank while audio
+    // kept playing because the W/F WebSocket closed silently and Zeus never
+    // reconnected. The slice now schedules a back-off reconnect on any
+    // unsolicited socket close, but only when the slice is enabled AND a radio
+    // is connected (the Kiwi rides the radio-clocked mix bus).
+
+    private static async Task WaitForAsync(Func<bool> pred, int timeoutMs = 1000)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            if (pred()) return;
+            await Task.Delay(5);
+        }
+    }
+
+    [Fact]
+    public async Task Drop_while_enabled_and_radio_up_schedules_reconnect()
+    {
+        using var svc = NewService();
+        // Test-seam: skip the real 2..30s back-off so the reconnect completes
+        // (and fails on the unreachable URL) quickly.
+        svc.ReconnectDelayForTest = _ => TimeSpan.FromMilliseconds(1);
+        svc.SetEnabledForTest(true);
+        svc.SetRadioConnectedForTest(true);
+
+        // The W/F (or SND) socket just closed unexpectedly mid-session.
+        svc.OnClientStatusForTest("dropped", "waterfall socket closed");
+
+        // The reconnect path runs fire-and-forget; observe the synchronous
+        // bookkeeping it sets BEFORE the back-off delay.
+        Assert.True(svc.ReconnectBusyForTest, "expected a reconnect to be in flight");
+        Assert.Equal(1, svc.ReconnectAttemptForTest);
+
+        // Let the (1 ms) delay + reconnect attempt run to completion. The fake
+        // URL is unset so the attempt is a no-op, but the busy flag must clear.
+        await WaitForAsync(() => !svc.ReconnectBusyForTest);
+        Assert.False(svc.ReconnectBusyForTest, "reconnect should release the busy flag");
+    }
+
+    [Fact]
+    public void Drop_while_disabled_does_not_reconnect()
+    {
+        using var svc = NewService();
+        svc.ReconnectDelayForTest = _ => TimeSpan.FromMilliseconds(1);
+        // Slice OFF (operator never enabled it).
+        svc.SetEnabledForTest(false);
+        svc.SetRadioConnectedForTest(true);
+
+        svc.OnClientStatusForTest("dropped", "waterfall socket closed");
+
+        Assert.False(svc.ReconnectBusyForTest);
+        Assert.Equal(0, svc.ReconnectAttemptForTest);
+    }
+
+    [Fact]
+    public void Drop_while_radio_down_does_not_reconnect()
+    {
+        using var svc = NewService();
+        svc.ReconnectDelayForTest = _ => TimeSpan.FromMilliseconds(1);
+        // Slice enabled but radio link is down: there is no mix-bus clock to
+        // feed, so reconnect must NOT run. OnRadioConnected reseeds the slice.
+        svc.SetEnabledForTest(true);
+        svc.SetRadioConnectedForTest(false);
+
+        svc.OnClientStatusForTest("dropped", "waterfall socket closed");
+
+        Assert.False(svc.ReconnectBusyForTest);
+        Assert.Equal(0, svc.ReconnectAttemptForTest);
+    }
+
+    [Fact]
+    public async Task Connected_resets_the_reconnect_attempt_counter()
+    {
+        using var svc = NewService();
+        svc.ReconnectDelayForTest = _ => TimeSpan.FromMilliseconds(1);
+        svc.SetEnabledForTest(true);
+        svc.SetRadioConnectedForTest(true);
+
+        // Two drops in quick succession: the second short-circuits on the
+        // single-in-flight guard, but the first leaves attempt=1.
+        svc.OnClientStatusForTest("dropped", null);
+        Assert.Equal(1, svc.ReconnectAttemptForTest);
+
+        // A successful handshake on the freshly-opened client clears the
+        // counter so the next mid-session drop restarts back-off at attempt 1.
+        svc.OnClientStatusForTest("connected", null);
+        Assert.Equal(0, svc.ReconnectAttemptForTest);
+
+        // Let the in-flight task drain so the test cleanly disposes.
+        await WaitForAsync(() => !svc.ReconnectBusyForTest);
+    }
+
+    [Fact]
+    public void Drop_surfaces_as_error_on_the_status_pill()
+    {
+        using var svc = NewService();
+        // Even with no radio (no reconnect scheduled), a "dropped" event must
+        // still flip the visible status to "error" so the operator sees
+        // something is wrong in Settings — the existing pill set has no
+        // "dropped" entry.
+        svc.SetEnabledForTest(true);
+        svc.SetRadioConnectedForTest(false);
+
+        svc.OnClientStatusForTest("dropped", "waterfall socket closed");
+
+        var cfg = svc.GetConfig();
+        Assert.Equal("error", cfg.Status);
+        Assert.Equal("waterfall socket closed", cfg.StatusDetail);
+    }
+
     // ---- KiwiDirectoryService: parse the public receiver list ---------------
 
     [Theory]
