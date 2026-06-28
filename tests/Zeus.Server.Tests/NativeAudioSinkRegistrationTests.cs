@@ -61,22 +61,24 @@ public class NativeAudioSinkRegistrationTests : IDisposable
         // Server mode keeps the WS sink — bit-for-bit equivalent of the
         // pre-seam direct hub broadcast.
         Assert.Contains(sinks, s => s.GetType().Name == "WebSocketAudioSink");
-        // Plus the Protocol-1 radio-speaker sink, registered in BOTH host modes
-        // (a headless Zeus next to a P1 radio can drive its codec speaker). It's
-        // a managed ring-feeder, not a native audio device, and self-gates to
-        // off-by-default, so it never opens hardware on its own.
+        // Plus both radio-speaker sinks (issue #1122). P1 RadioSpeakerAudioSink
+        // is a managed ring-feeder, P2 SaturnSpeakerAudioSink opens a UDP socket
+        // only after the operator opts in (default off). Registering in BOTH
+        // host modes lets a headless Zeus next to a codec radio drive its own
+        // speaker jack regardless of protocol.
         Assert.Contains(sinks, s => s.GetType().Name == "RadioSpeakerAudioSink");
+        Assert.Contains(sinks, s => s.GetType().Name == "SaturnSpeakerAudioSink");
         Assert.DoesNotContain(sinks, s => s.GetType().Name == "NativeAudioSink");
-        Assert.DoesNotContain(sinks, s => s.GetType().Name == "SaturnSpeakerAudioSink");
 
         // Native capture / device-owning services must never be registered in
-        // server mode. RadioSpeakerAudioSink is NOT among them — it owns no
-        // device and is not a hosted service.
+        // server mode. RadioSpeakerAudioSink owns no device. SaturnSpeakerAudioSink
+        // IS a hosted service (lifecycle for the UDP socket) in both host modes
+        // since issue #1122 — it only opens the socket once the operator opts in.
         var hosted = app.Services.GetServices<IHostedService>().ToArray();
         Assert.DoesNotContain(hosted, h => h.GetType().Name == "NativeAudioSink");
-        Assert.DoesNotContain(hosted, h => h.GetType().Name == "SaturnSpeakerAudioSink");
         Assert.DoesNotContain(hosted, h => h.GetType().Name == "RadioSpeakerAudioSink");
         Assert.DoesNotContain(hosted, h => h.GetType().Name == "NativeMicCapture");
+        Assert.Contains(hosted, h => h.GetType().Name == "SaturnSpeakerAudioSink");
 
         await app.DisposeAsync();
     }

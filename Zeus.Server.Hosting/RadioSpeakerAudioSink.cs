@@ -21,9 +21,13 @@ namespace Zeus.Server;
 /// socket, no platform gate. Works in every host mode and on every OS.
 ///
 /// This is the Protocol-1 counterpart to <see cref="SaturnSpeakerAudioSink"/>,
-/// which owns the Protocol-2 (Saturn/G2 appliance) speaker path. The two are
-/// mutually exclusive at runtime: a P1 radio has no Saturn endpoint, and a P2
-/// radio has no <c>RxAudioRing</c> consumer. This sink never touches P2.
+/// which owns the Protocol-2 speaker path (UDP 1028 → radio codec). The two are
+/// mutually exclusive at runtime: this sink no-ops when P1 isn't active, and the
+/// P2 sink no-ops when P2 isn't connected. They share the same operator opt-in
+/// (<see cref="RadioSpeakerSettingsStore"/>) so the single Settings → Radio
+/// toggle governs the radio-speaker output regardless of protocol — the
+/// <see cref="AvailableForConnectedBoard"/> surface reports True whenever any
+/// codec board is connected (issue #1122).
 ///
 /// Gating (all must hold, re-checked per frame so a mid-session toggle or MOX
 /// transition takes effect immediately):
@@ -53,12 +57,14 @@ public sealed class RadioSpeakerAudioSink : IRxAudioSink, IDisposable
         _settings.Changed += OnSettingsChanged;
     }
 
-    /// <summary>True when this sink would currently forward RX audio to the
-    /// radio codec for the connected board. Surfaced via /api/radio/speaker-output
-    /// so the UI can show the toggle only where it does something.</summary>
+    /// <summary>True when a codec-equipped radio is currently connected (P1 or P2),
+    /// so the <c>/api/radio/speaker-output</c> endpoint can surface the toggle and
+    /// the UI shows it whenever it does something. The actual audio routing is
+    /// split: this sink handles P1, <see cref="SaturnSpeakerAudioSink"/> handles
+    /// P2 — both share the same opt-in.</summary>
     public bool AvailableForConnectedBoard()
     {
-        if (!_radio.IsProtocol1Active) return false;
+        if (!_radio.IsConnected) return false;
         var board = _radio.ConnectedBoardKind;
         if (board == HpsdrBoardKind.HermesLite2) return false;
         return BoardCapabilitiesTable.For(board, _radio.EffectiveOrionMkIIVariant).HasOnboardCodec;
@@ -68,6 +74,10 @@ public sealed class RadioSpeakerAudioSink : IRxAudioSink, IDisposable
     {
         if (frame.Channels != 1 || frame.SampleRateHz != ExpectedSampleRateHz) return;
         if (!_settings.Enabled) return;
+        // The P1 ring is consumed by Protocol1Client's EP2 TX loop; under P2 the
+        // ring has no consumer and SaturnSpeakerAudioSink handles the wire
+        // instead, so don't write here.
+        if (!_radio.IsProtocol1Active) return;
         if (_radio.IsMox)
         {
             // While transmitting, the EP2 L/R slots carry no audio (WriteUsbFrame
@@ -77,7 +87,9 @@ public sealed class RadioSpeakerAudioSink : IRxAudioSink, IDisposable
             _ring.Clear();
             return;
         }
-        if (!AvailableForConnectedBoard()) return;
+        var board = _radio.ConnectedBoardKind;
+        if (board == HpsdrBoardKind.HermesLite2) return;
+        if (!BoardCapabilitiesTable.For(board, _radio.EffectiveOrionMkIIVariant).HasOnboardCodec) return;
 
         _ring.Write(frame.Samples.Span);
     }
