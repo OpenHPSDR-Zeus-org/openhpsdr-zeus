@@ -146,6 +146,19 @@ public sealed class Nr3ModelStore
         lock (_gate) { return GetOperatorModelPathLocked() is null && _bundledDefaultPath is not null; }
     }
 
+    /// <summary>Result of the most recent attempt by the DSP pipeline to load the
+    /// active model into the engine, or null when no load has been attempted yet
+    /// (e.g. no engine is live). The DSP pipeline reports it via
+    /// <see cref="ReportLoadStatus"/> from the synchronous <see cref="Changed"/>
+    /// handler, so <see cref="Install"/> callers can read it immediately after
+    /// installing to reject a model the native loader couldn't parse.</summary>
+    public Zeus.Dsp.Nr3ModelLoadResult? LastLoadResult { get; private set; }
+
+    /// <summary>Records the engine's load outcome for the active model. Called by
+    /// the DSP pipeline after each (re)load. enum-sized field; a benign
+    /// last-writer-wins race between the install thread and a connect thread.</summary>
+    public void ReportLoadStatus(Zeus.Dsp.Nr3ModelLoadResult result) => LastLoadResult = result;
+
     /// <summary>
     /// Install (replacing any prior model) the given bytes under a sanitized
     /// copy of <paramref name="originalName"/>. Returns the absolute path the
@@ -179,6 +192,10 @@ public sealed class Nr3ModelStore
         _log.LogInformation(
             "nr3.model.installed name=\"{Name}\" bytes={Bytes} path=\"{Path}\"",
             safeName, content.Length, destPath);
+        // Clear the prior outcome so a synchronous Changed handler (the DSP
+        // pipeline reloading into a live engine) leaves a fresh result the
+        // caller can inspect; null afterwards means "no engine verified it yet".
+        LastLoadResult = null;
         Changed?.Invoke(destPath);
         return destPath;
     }

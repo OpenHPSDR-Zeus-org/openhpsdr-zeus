@@ -492,6 +492,14 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void RNNRloadModel(string filePath);
 
+    // Additive query (paired with RNNRloadModel): returns 1 when a custom RNNR
+    // model is currently loaded, 0 otherwise. Absent on older libwdsp builds, so
+    // callers must guard EntryPointNotFoundException and fall back. Lets the
+    // managed side tell a successful model load from a parse/architecture failure.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int RNNRmodelLoaded();
+
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXASNBARun(int channel, int run);

@@ -863,7 +863,8 @@ extern void* create_rmatchLegacyV(int in_size, int out_size, int nom_inrate, int
 //
 
 extern void SetRXARNNRRun (int channel, int run);
-extern void RNNRloadModel(const char* file_path);
+extern int RNNRloadModel(const char* file_path);
+extern int RNNRmodelLoaded(void);
 extern void SetRXARNNRPosition(int channel, int position);
 
 //

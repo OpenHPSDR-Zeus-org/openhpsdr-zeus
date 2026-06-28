@@ -3451,7 +3451,20 @@ public sealed class RadioService : IDisposable
         ArgumentNullException.ThrowIfNull(content);
         if (_nr3ModelStore is null)
             throw new InvalidOperationException("NR3 model store is not configured.");
+        // Install writes the file and synchronously fires Changed, which the DSP
+        // pipeline observes to (re)load it into a live engine. After that returns,
+        // the store carries the load outcome — reject a model the native RNNoise
+        // loader couldn't parse instead of silently leaving NR3 inert. When no
+        // engine is live the result is null (unverified) and we accept it; the
+        // load is re-attempted on the next connect.
         _nr3ModelStore.Install(content, fileName);
+        if (_nr3ModelStore.LastLoadResult == Zeus.Dsp.Nr3ModelLoadResult.LoadFailed)
+        {
+            _nr3ModelStore.Remove(); // drop the bad file — reverts to the bundled default
+            throw new ArgumentException(
+                "That file isn't a compatible RNNoise model — it failed to load. " +
+                "Use an RNNoise weights file (DNNw format) matching the bundled model's architecture.");
+        }
         var name = _nr3ModelStore.GetActiveModelName();
         Mutate(s => s with { Nr3ModelName = name, Nr3UsingBundledDefault = false });
         return Snapshot();

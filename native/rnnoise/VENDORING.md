@@ -116,9 +116,13 @@ and `release.yml` for every `libwdsp` job (macOS arm64, Linux x64/arm64, Windows
 x64/arm64), alongside `WDSP_WITH_NR4=ON`. Each job has a **Verify RNNR exports**
 step asserting the 3 exports (`SetRXARNNRRun`, `SetRXARNNRPosition`,
 `RNNRloadModel`) — the analogue of the existing SBNR-export check — so a silently
-stub-based build fails CI. The managed side detects these via
-`WdspDspEngine.Nr3RnnrAvailable` and reveals NR3 in the UI once a model is also
-installed.
+stub-based build fails CI. A 4th export, `RNNRmodelLoaded` (added alongside the
+`int`-returning `RNNRloadModel`), reports whether a custom model is currently
+loaded so the managed side can reject a model the native loader couldn't parse;
+the export checks expect **4** RNNR symbols. The managed side detects NR3 via
+`WdspDspEngine.Nr3RnnrAvailable` (the original 3 symbols — `RNNRmodelLoaded` is
+treated as optional so older libwdsp builds still surface NR3) and reveals it in
+the UI once a model is active.
 
 Until the per-platform `libwdsp` binaries committed under
 `Zeus.Dsp/runtimes/<rid>/native/` are rebuilt by these workflows and committed,

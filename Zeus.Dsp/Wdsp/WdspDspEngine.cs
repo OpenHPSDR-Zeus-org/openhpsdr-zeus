@@ -1253,23 +1253,44 @@ public sealed class WdspDspEngine : IDspEngine
     // "NR3 unavailable on this build" instead of silently succeeding. Zeus
     // builds rnnoise without a baked-in model, so clearing the path leaves NR3
     // inert (audio passes through) rather than falling back to a stock model.
-    public bool LoadNr3Model(string? modelFilePath)
+    public Nr3ModelLoadResult LoadNr3Model(string? modelFilePath)
     {
         try
         {
             NativeMethods.RNNRloadModel(modelFilePath ?? string.Empty);
-            _log.LogInformation(
-                "wdsp.rnnr.loadModel path=\"{Path}\"",
-                string.IsNullOrEmpty(modelFilePath) ? "(none — NR3 inert)" : modelFilePath);
-            return true;
         }
         catch (EntryPointNotFoundException ex)
         {
             _log.LogWarning(
                 "wdsp.rnnr.unavailable reason=\"libwdsp build does not export RNNR symbols (WDSP_WITH_NR3=OFF — xiph/rnnoise not vendored)\" detail={Msg}",
                 ex.Message);
-            return false;
+            return Nr3ModelLoadResult.Unavailable;
         }
+
+        if (string.IsNullOrEmpty(modelFilePath))
+        {
+            _log.LogInformation("wdsp.rnnr.loadModel path=\"(none — NR3 inert)\"");
+            return Nr3ModelLoadResult.Cleared;
+        }
+
+        // Verify the model actually parsed. RNNRmodelLoaded is an additive export;
+        // older libwdsp builds lack it, in which case we can't verify and assume
+        // success (the prior behaviour — no regression).
+        bool? loaded = null;
+        try { loaded = NativeMethods.RNNRmodelLoaded() != 0; }
+        catch (EntryPointNotFoundException) { /* old libwdsp — can't verify */ }
+
+        if (loaded == false)
+        {
+            _log.LogWarning(
+                "wdsp.rnnr.loadModel.failed path=\"{Path}\" reason=\"rnnoise_model_from_filename returned NULL (incompatible/corrupt weights)\"",
+                modelFilePath);
+            return Nr3ModelLoadResult.LoadFailed;
+        }
+
+        _log.LogInformation("wdsp.rnnr.loadModel path=\"{Path}\" verified={Verified}",
+            modelFilePath, loaded.HasValue);
+        return Nr3ModelLoadResult.Loaded;
     }
 
     // Post-RXA NR defaults — sourced from Thetis setup.designer.cs + radio.cs.
