@@ -72,7 +72,13 @@ internal static class SupportSidecarLauncher
             }
 
             Add("--supervise-pid", Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
-            Add("--session", Guid.NewGuid().ToString("N"));
+            // Use the IPC bridge's session token so the sidecar listens on the SAME
+            // pipe the backend bridge connects to (remote-diag P3c). Falls back to a
+            // fresh token when no bridge is registered (non-desktop host) — the
+            // sidecar then runs without live posture updates, local crash-capture
+            // only, exactly as before P3c.
+            var bridge = services?.GetService<Zeus.Server.Hosting.Support.SupportSidecarBridge>();
+            Add("--session", bridge?.SessionToken ?? Guid.NewGuid().ToString("N"));
             Add("--app-log", PrefsDbPath.AppLogPath());
             Add("--startup-log", StartupDiagnostics.LogPath);
             Add("--crash-dir", PrefsDbPath.CrashDir());

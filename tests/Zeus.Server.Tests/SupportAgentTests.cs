@@ -9,6 +9,7 @@
 // statement and per-component attribution.
 
 using System.Diagnostics;
+using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Zeus.Support.Contracts;
@@ -453,6 +454,241 @@ public class CrashAutoShareTests
         var outcome = await CrashAutoShare.TryShareAsync(
             autoShareEnabled: true, crashRecordJson: "{\"pid\":1}", broker, CancellationToken.None);
         Assert.Equal(CrashShareOutcome.UploadFailed, outcome);
+    }
+}
+
+public class HttpSupportBrokerClientIdentityTests
+{
+    private static BrokerEndpoints Endpoints() =>
+        BrokerEndpoints.FromBrokerUrl("wss://remote.openhpsdrzeus.com/signal?role=host")!;
+
+    [Fact]
+    public void BlankSeed_IsNotConfigured()
+    {
+        using var http = new HttpClient();
+        var broker = new HttpSupportBrokerClient(http, Endpoints(), "", "");
+        Assert.False(broker.IsConfigured);
+    }
+
+    [Fact]
+    public void UpdateIdentity_RequiresBothCallsignAndKey()
+    {
+        using var http = new HttpClient();
+        var broker = new HttpSupportBrokerClient(http, Endpoints(), "", "");
+
+        broker.UpdateIdentity("N9WAR", null);
+        Assert.False(broker.IsConfigured); // callsign without key
+
+        broker.UpdateIdentity(null, "KEY");
+        Assert.False(broker.IsConfigured); // key without callsign
+
+        broker.UpdateIdentity("N9WAR", "KEY");
+        Assert.True(broker.IsConfigured); // both present
+
+        broker.UpdateIdentity("N9WAR", "");
+        Assert.False(broker.IsConfigured); // key cleared (sign-out)
+    }
+}
+
+/// <summary>
+/// The lazy-identity gating that fixes the P3c presence bug: a "remote diagnostics
+/// on" posture must NOT advertise until a usable QRZ identity (callsign + session
+/// key) has arrived over IPC; once it has, presence comes online without a restart.
+/// </summary>
+public class PresenceCoordinatorTests
+{
+    private static (HttpSupportBrokerClient Broker, PresenceClient Presence, PresenceCoordinator Coord) Build(
+        bool initialAutoShare = false)
+    {
+        var http = new HttpClient();
+        var broker = new HttpSupportBrokerClient(
+            http, BrokerEndpoints.FromBrokerUrl("wss://remote.openhpsdrzeus.com/signal")!, "", "");
+        var presence = new PresenceClient(broker, initiallyAvailable: false);
+        var coord = new PresenceCoordinator(broker, presence, initialAutoShare);
+        return (broker, presence, coord);
+    }
+
+    private static SupportIpcListener.SupportState State(
+        bool remoteDiag, string? callsign, string? key, bool autoShare = false) =>
+        new(callsign, remoteDiag, autoShare, key);
+
+    [Fact]
+    public void RemoteDiagOn_ButNoIdentity_StaysUnavailable()
+    {
+        var (_, presence, coord) = Build();
+        coord.Apply(State(remoteDiag: true, callsign: "N9WAR", key: null)); // no session key yet
+        Assert.False(presence.IsAvailable);
+    }
+
+    [Fact]
+    public void IdentityArrivesWhileOn_BringsPresenceOnline()
+    {
+        var (_, presence, coord) = Build();
+
+        // Switch is on but QRZ identity hasn't landed → not advertising (the exact
+        // bug: operator toggled on, but presence never registered).
+        coord.Apply(State(remoteDiag: true, callsign: "N9WAR", key: null));
+        Assert.False(presence.IsAvailable);
+
+        // QRZ login completes → identity pushed over IPC → presence comes online,
+        // no restart.
+        coord.Apply(State(remoteDiag: true, callsign: "N9WAR", key: "SESSION"));
+        Assert.True(presence.IsAvailable);
+    }
+
+    [Fact]
+    public void SwitchOff_WithIdentity_StaysUnavailable()
+    {
+        var (_, presence, coord) = Build();
+        coord.Apply(State(remoteDiag: false, callsign: "N9WAR", key: "SESSION"));
+        Assert.False(presence.IsAvailable);
+    }
+
+    [Fact]
+    public void SignOut_DropsAvailability()
+    {
+        var (_, presence, coord) = Build();
+        coord.Apply(State(remoteDiag: true, callsign: "N9WAR", key: "SESSION"));
+        Assert.True(presence.IsAvailable);
+
+        // QRZ logout → identity cleared → presence drops even though the switch is on.
+        coord.Apply(State(remoteDiag: true, callsign: null, key: null));
+        Assert.False(presence.IsAvailable);
+    }
+
+    [Fact]
+    public void AutoShare_TracksLatestState_AndSeedsFromLaunch()
+    {
+        var (_, _, coord) = Build(initialAutoShare: true);
+        Assert.True(coord.AutoShareOnCrash); // launch-time seed
+
+        coord.Apply(State(remoteDiag: false, callsign: null, key: null, autoShare: false));
+        Assert.False(coord.AutoShareOnCrash);
+
+        coord.Apply(State(remoteDiag: true, callsign: "N9WAR", key: "K", autoShare: true));
+        Assert.True(coord.AutoShareOnCrash);
+    }
+}
+
+/// <summary>A mutable-identity fake broker for coordinator/pipe tests; counts calls thread-safely.</summary>
+internal sealed class FakeMutableBroker : IMutableSupportBrokerClient
+{
+    private string _callsign = "";
+    private string _sessionKey = "";
+    private int _registers;
+    private int _drops;
+
+    public int Registers => Volatile.Read(ref _registers);
+    public int Drops => Volatile.Read(ref _drops);
+
+    public bool IsConfigured =>
+        !string.IsNullOrWhiteSpace(_callsign) && !string.IsNullOrWhiteSpace(_sessionKey);
+
+    public void UpdateIdentity(string? callsign, string? sessionKey)
+    {
+        _callsign = callsign ?? "";
+        _sessionKey = sessionKey ?? "";
+    }
+
+    public Task<bool> RegisterAsync(CancellationToken ct) { Interlocked.Increment(ref _registers); return Task.FromResult(true); }
+    public Task<bool> HeartbeatAsync(CancellationToken ct) => Task.FromResult(true);
+    public Task<bool> DropAsync(CancellationToken ct) { Interlocked.Increment(ref _drops); return Task.FromResult(true); }
+    public Task<bool> UploadCrashAsync(string json, CancellationToken ct) => Task.FromResult(true);
+}
+
+/// <summary>
+/// End-to-end over a REAL OS named pipe: the backend (client) connecting to the
+/// sidecar's <see cref="SupportIpcListener"/> (server) and pushing a SupportHello
+/// must drive the <see cref="PresenceCoordinator"/> to register broker presence —
+/// the exact path that was missing before P3c. Proves the wire transport + framing
+/// + listener dispatch + lazy-identity gating + presence loop together.
+/// </summary>
+public class SupportIpcPipeHandshakeTests
+{
+    private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (predicate()) return;
+            await Task.Delay(20);
+        }
+    }
+
+    [Fact]
+    public async Task BackendHello_OnPlusIdentity_RegistersPresenceOverRealPipe()
+    {
+        var token = Guid.NewGuid().ToString("N");
+        var pipeName = SupportIpc.PipeNameForSession(token);
+        var broker = new FakeMutableBroker();
+        // Fast, non-blocking cadence so the presence loop ticks promptly after the
+        // coordinator flips availability.
+        var presence = new PresenceClient(
+            broker, initiallyAvailable: false,
+            interval: TimeSpan.FromMilliseconds(20), delay: (_, ct) => Task.Delay(10, ct));
+        var coord = new PresenceCoordinator(broker, presence);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var presenceTask = presence.RunAsync(cts.Token);
+        var listener = new SupportIpcListener(token, coord.Apply);
+        var listenerTask = listener.RunAsync(cts.Token);
+
+        // Act as the backend bridge: connect to the sidecar's pipe and push a
+        // SupportHello with the switch ON and a full QRZ identity.
+        await using (var client = new NamedPipeClientStream(
+            ".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous))
+        {
+            await client.ConnectAsync(10_000, cts.Token);
+            await SupportIpcFraming.WriteAsync(client, new SupportHello(
+                ProtocolVersion: SupportIpc.ProtocolVersion, BackendPid: 1,
+                AppVersion: "v", Platform: "p", QrzCallsign: "N9WAR",
+                RemoteDiagnosticsEnabled: true, AutoShareOnCrash: false,
+                AppLogPath: "a", StartupLogPath: "s", QrzSessionKey: "SESSION"), cts.Token);
+
+            await WaitUntilAsync(() => broker.Registers >= 1, TimeSpan.FromSeconds(10));
+        }
+
+        Assert.True(broker.Registers >= 1, "presence should register once on+identity arrives over the pipe");
+
+        cts.Cancel();
+        await Task.WhenAny(Task.WhenAll(presenceTask, listenerTask), Task.Delay(2000));
+    }
+
+    [Fact]
+    public async Task BackendHello_OnButNoIdentity_DoesNotRegister()
+    {
+        var token = Guid.NewGuid().ToString("N");
+        var pipeName = SupportIpc.PipeNameForSession(token);
+        var broker = new FakeMutableBroker();
+        var presence = new PresenceClient(
+            broker, initiallyAvailable: false,
+            interval: TimeSpan.FromMilliseconds(20), delay: (_, ct) => Task.Delay(10, ct));
+        var coord = new PresenceCoordinator(broker, presence);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var presenceTask = presence.RunAsync(cts.Token);
+        var listener = new SupportIpcListener(token, coord.Apply);
+        var listenerTask = listener.RunAsync(cts.Token);
+
+        await using (var client = new NamedPipeClientStream(
+            ".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous))
+        {
+            await client.ConnectAsync(10_000, cts.Token);
+            // Switch ON but NO session key — must stay silent (the safety property).
+            await SupportIpcFraming.WriteAsync(client, new SupportHello(
+                ProtocolVersion: SupportIpc.ProtocolVersion, BackendPid: 1,
+                AppVersion: "v", Platform: "p", QrzCallsign: "N9WAR",
+                RemoteDiagnosticsEnabled: true, AutoShareOnCrash: false,
+                AppLogPath: "a", StartupLogPath: "s", QrzSessionKey: null), cts.Token);
+
+            // Give the loop ample time to (wrongly) register if the gate were broken.
+            await Task.Delay(400);
+        }
+
+        Assert.Equal(0, broker.Registers);
+
+        cts.Cancel();
+        await Task.WhenAny(Task.WhenAll(presenceTask, listenerTask), Task.Delay(2000));
     }
 }
 

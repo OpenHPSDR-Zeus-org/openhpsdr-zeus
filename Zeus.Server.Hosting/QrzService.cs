@@ -77,6 +77,21 @@ public sealed class QrzService
         _credStore = credStore;
     }
 
+    /// <summary>
+    /// Raised after a successful login or a logout — i.e. whenever the operator's
+    /// identity (callsign + session key) may have changed. The support sidecar
+    /// bridge subscribes so broker presence can come online (or drop) without a
+    /// restart. Always raised OUTSIDE the QRZ gate; handlers must be cheap and
+    /// non-throwing and must not synchronously re-enter this service.
+    /// </summary>
+    public event Action? IdentityChanged;
+
+    private void RaiseIdentityChanged()
+    {
+        try { IdentityChanged?.Invoke(); }
+        catch (Exception ex) { _log.LogDebug(ex, "QRZ IdentityChanged handler threw (ignored)"); }
+    }
+
     public async Task InitializeAsync(CancellationToken ct)
     {
         // Attempt silent re-login from stored credentials
@@ -113,6 +128,16 @@ public sealed class QrzService
         HasApiKey: !string.IsNullOrWhiteSpace(_apiKey));
 
     public async Task<QrzStatus> LoginAsync(string username, string password, CancellationToken ct)
+    {
+        // Run the gated login, then signal identity-changed OUTSIDE the gate so a
+        // subscriber (e.g. the support sidecar bridge) can re-resolve identity
+        // without deadlocking on the QRZ gate this method holds.
+        var status = await LoginCoreAsync(username, password, ct);
+        RaiseIdentityChanged();
+        return status;
+    }
+
+    private async Task<QrzStatus> LoginCoreAsync(string username, string password, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
         try
@@ -220,6 +245,10 @@ public sealed class QrzService
 
         // Delete stored credentials
         await _credStore.DeleteAsync(ServiceName, ct);
+
+        // Identity is now gone — let dependents (support sidecar bridge) drop any
+        // identity-derived state (e.g. broker presence).
+        RaiseIdentityChanged();
     }
 
     // Assumes _gate is held.

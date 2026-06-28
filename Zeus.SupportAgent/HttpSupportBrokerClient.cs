@@ -27,22 +27,40 @@ namespace Zeus.SupportAgent;
 /// the operator callsign. A blank session key disables remote calls (all methods
 /// return false) rather than sending an unauthenticated request.
 /// </summary>
-public sealed class HttpSupportBrokerClient : ISupportBrokerClient
+public sealed class HttpSupportBrokerClient : IMutableSupportBrokerClient
 {
     /// <summary>Env var the host uses to hand the QRZ session key to the sidecar (kept off the command line).</summary>
     public const string QrzSessionEnvVar = SupportIpc.SidecarQrzSessionEnvVar;
 
     private readonly HttpClient _http;
     private readonly BrokerEndpoints _endpoints;
-    private readonly string _callsign;
-    private readonly string _sessionKey;
+
+    // Identity is mutable: the host hands the sidecar a launch-time seed (often
+    // blank, because QRZ silent-login races process launch) and then refreshes it
+    // over the IPC pipe once QRZ identity is available. Each is a lone reference
+    // write, published with volatile semantics; a request that briefly observes a
+    // new callsign with the previous key just earns one retried 401, never a crash.
+    private volatile string _callsign;
+    private volatile string _sessionKey;
 
     public HttpSupportBrokerClient(HttpClient http, BrokerEndpoints endpoints, string callsign, string sessionKey)
     {
         _http = http;
         _endpoints = endpoints;
-        _callsign = callsign;
-        _sessionKey = sessionKey;
+        _callsign = callsign ?? "";
+        _sessionKey = sessionKey ?? "";
+    }
+
+    /// <summary>
+    /// Swap the operator identity used to authenticate broker calls. Called as
+    /// QRZ identity arrives/changes over IPC. Blank callsign or key leaves the
+    /// client <see cref="IsConfigured"/>=false (a no-op rather than an
+    /// unauthenticated request).
+    /// </summary>
+    public void UpdateIdentity(string? callsign, string? sessionKey)
+    {
+        _callsign = callsign ?? "";
+        _sessionKey = sessionKey ?? "";
     }
 
     /// <summary>True only when we have the identity needed to make an authenticated call.</summary>

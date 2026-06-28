@@ -37,10 +37,12 @@ public sealed class SupportIpcListener
     /// <param name="QrzCallsign">Operator callsign, or null when signed out.</param>
     /// <param name="RemoteDiagnosticsEnabled">L1 master switch.</param>
     /// <param name="AutoShareOnCrash">Crash auto-share sub-toggle.</param>
+    /// <param name="QrzSessionKey">QRZ session key for broker auth (v2+), or null when signed out.</param>
     public readonly record struct SupportState(
         string? QrzCallsign,
         bool RemoteDiagnosticsEnabled,
-        bool AutoShareOnCrash);
+        bool AutoShareOnCrash,
+        string? QrzSessionKey = null);
 
     private readonly string _pipeName;
     private readonly Action<SupportState> _onState;
@@ -120,11 +122,13 @@ public sealed class SupportIpcListener
             {
                 case SupportHello hello:
                     _onState(new SupportState(
-                        hello.QrzCallsign, hello.RemoteDiagnosticsEnabled, hello.AutoShareOnCrash));
+                        hello.QrzCallsign, hello.RemoteDiagnosticsEnabled, hello.AutoShareOnCrash,
+                        hello.QrzSessionKey));
                     break;
                 case SupportStateChanged state:
                     _onState(new SupportState(
-                        state.QrzCallsign, state.RemoteDiagnosticsEnabled, state.AutoShareOnCrash));
+                        state.QrzCallsign, state.RemoteDiagnosticsEnabled, state.AutoShareOnCrash,
+                        state.QrzSessionKey));
                     break;
                 // Heartbeats and other kinds are not needed by the presence/crash
                 // subsystem; ignore them so the contract can grow without breaking us.

@@ -46,17 +46,24 @@ public static class SupportSidecar
     }
 
     /// <summary>
-    /// Tell the out-of-process sidecar that the operator changed an opt-in
-    /// setting (the L1 "Remote Diagnostics available" master switch and/or the
-    /// crash auto-share sub-toggle). The sidecar owns the broker presence, so it
-    /// uses this to register/deregister the radio's availability and to gate
-    /// crash sharing — see <see cref="SupportStateChanged"/>.
+    /// The live backend→sidecar IPC bridge (remote-diag P3c), set by
+    /// <see cref="Hosting.Support.SupportSidecarBridge"/> when it starts. Null in
+    /// host modes that don't launch a sidecar (e.g. headless server / tests), in
+    /// which case <see cref="NotifyAvailabilityChanged"/> is a no-op.
+    /// </summary>
+    internal static Hosting.Support.SupportSidecarBridge? Bridge { get; set; }
+
+    /// <summary>
+    /// Tell the out-of-process sidecar that the operator changed an opt-in setting
+    /// (the L1 "Remote Diagnostics available" master switch and/or the crash
+    /// auto-share sub-toggle). The sidecar owns the broker presence, so it uses
+    /// this to register/deregister the radio's availability and to gate crash
+    /// sharing — see <see cref="SupportStateChanged"/>.
     ///
-    /// <para>TODO (remote-diag P3c): the backend→sidecar IPC pipe client is not
-    /// wired in-process yet (today the host only launches the sidecar detached,
-    /// see SupportSidecarLauncher). This is the minimal seam the toggle endpoint
-    /// calls; P3c finishes the sidecar receive side and the persistent pipe. The
-    /// call is best-effort and MUST never throw into the request path.</para>
+    /// <para>The bridge re-reads the authoritative posture (persisted store +
+    /// current QRZ identity) when it sends, so the arguments here are advisory for
+    /// logging only — there is no stale-snapshot risk. Best-effort and MUST never
+    /// throw into the request path.</para>
     /// </summary>
     public static void NotifyAvailabilityChanged(
         bool remoteDiagnosticsEnabled,
@@ -66,14 +73,10 @@ public static class SupportSidecar
     {
         try
         {
-            // The IPC channel is established by P3c. Until then we only record
-            // the intent locally; the next SupportHello the sidecar receives
-            // after P3c lands will carry the current persisted posture, so no
-            // state is lost — this is purely the push-on-change fast path.
-            _ = new SupportStateChanged(qrzCallsign, remoteDiagnosticsEnabled, autoShareOnCrash);
+            Bridge?.NotifyStateChanged();
             log?.LogInformation(
-                "support.sidecar availability change queued: remoteDiagnostics={Enabled} autoShareOnCrash={AutoShare}",
-                remoteDiagnosticsEnabled, autoShareOnCrash);
+                "support.sidecar availability change pushed: remoteDiagnostics={Enabled} autoShareOnCrash={AutoShare} bridge={Bridge}",
+                remoteDiagnosticsEnabled, autoShareOnCrash, Bridge is null ? "absent" : "live");
         }
         catch
         {
