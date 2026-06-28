@@ -41,12 +41,14 @@ public sealed record ClubLogConfig(
     string Email = "",
     string Callsign = "");
 
-// Single-row LiteDB collection. Mirrors WsjtxConfigStore — same Connection=shared
-// pattern + Directory guard (no new exposure to the Linux LiteDB shared-mode
-// caveat, GH #682). Returns null when nothing is persisted so the caller falls
-// back to the default (egress OFF) config.
+// Single-row LiteDB collection. Mirrors CatConfigStore — shares the single
+// LiteDatabase via SharedLiteDatabase.Acquire + Directory guard (one engine per
+// prefs file; avoids the Windows exclusive-lock IOException a second handle hits,
+// and the Linux LiteDB shared-mode caveat, GH #682). Returns null when nothing is
+// persisted so the caller falls back to the default (egress OFF) config.
 public sealed class CloudLogConfigStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<CloudLogConfigEntry> _entries;
     private readonly ILogger<CloudLogConfigStore> _log;
@@ -60,7 +62,8 @@ public sealed class CloudLogConfigStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _entries = _db.GetCollection<CloudLogConfigEntry>("cloudlog_config");
 
         _log.LogInformation("CloudLogConfigStore initialized at {Path}", dbPath);
@@ -101,7 +104,7 @@ public sealed class CloudLogConfigStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class CloudLogConfigEntry

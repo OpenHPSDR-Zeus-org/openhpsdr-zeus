@@ -23,6 +23,7 @@ namespace Zeus.Server;
 /// </summary>
 public sealed class OperatorIdentityStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<OperatorIdentityEntry> _entries;
     private readonly ILogger<OperatorIdentityStore> _log;
@@ -36,7 +37,8 @@ public sealed class OperatorIdentityStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _entries = _db.GetCollection<OperatorIdentityEntry>("operator_identity");
 
         _log.LogInformation("OperatorIdentityStore initialized at {Path}", dbPath);
@@ -83,7 +85,7 @@ public sealed class OperatorIdentityStore : IDisposable
         return id;
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class OperatorIdentityEntry

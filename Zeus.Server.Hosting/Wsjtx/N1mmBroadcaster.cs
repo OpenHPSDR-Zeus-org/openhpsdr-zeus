@@ -123,10 +123,13 @@ public sealed record N1mmConfig(
     string Host = "127.0.0.1",
     int Port = 2333);
 
-// Single-row LiteDB collection. Same Connection=shared pattern + Directory guard
-// as WsjtxConfigStore (GH #682 caveat).
+// Single-row LiteDB collection. Shares the single LiteDatabase via
+// SharedLiteDatabase.Acquire + Directory guard as CatConfigStore does (one engine
+// per prefs file avoids the Windows exclusive-lock IOException a second handle
+// hits, and the Linux LiteDB shared-mode caveat, GH #682).
 public sealed class N1mmConfigStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<N1mmConfigEntry> _entries;
     private readonly object _sync = new();
@@ -138,7 +141,8 @@ public sealed class N1mmConfigStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _entries = _db.GetCollection<N1mmConfigEntry>("n1mm_config");
         log.LogInformation("N1mmConfigStore initialized at {Path}", dbPath);
     }
@@ -170,7 +174,7 @@ public sealed class N1mmConfigStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class N1mmConfigEntry

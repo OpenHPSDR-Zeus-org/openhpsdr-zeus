@@ -35,6 +35,7 @@ public sealed class Ft8SettingsStore : IDisposable
 
     private static readonly string[] ValidModes = { "FT8", "FT4", "WSPR" };
 
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<Ft8SettingsEntry> _entries;
     private readonly ILogger<Ft8SettingsStore> _log;
@@ -48,7 +49,8 @@ public sealed class Ft8SettingsStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _entries = _db.GetCollection<Ft8SettingsEntry>("ft8_settings");
 
         _log.LogInformation("Ft8SettingsStore initialized at {Path}", dbPath);
@@ -185,7 +187,7 @@ public sealed class Ft8SettingsStore : IDisposable
         return e;
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class Ft8SettingsEntry

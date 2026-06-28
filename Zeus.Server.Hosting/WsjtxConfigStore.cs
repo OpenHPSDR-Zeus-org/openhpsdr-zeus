@@ -14,10 +14,13 @@ using Zeus.Contracts;
 namespace Zeus.Server;
 
 // Single-row collection for the WSJT-X logged-QSO broadcaster config. Mirrors
-// CatConfigStore — same Connection=shared pattern and Directory guard (no new
-// exposure to the Linux LiteDB shared-mode caveat, GH #682).
+// CatConfigStore — shares the single LiteDatabase via SharedLiteDatabase.Acquire
+// and Directory guard (one engine per prefs file; avoids the Windows
+// exclusive-lock IOException a second handle hits, and the Linux LiteDB
+// shared-mode caveat, GH #682).
 public sealed class WsjtxConfigStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<WsjtxConfigEntry> _entries;
     private readonly ILogger<WsjtxConfigStore> _log;
@@ -31,7 +34,8 @@ public sealed class WsjtxConfigStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _entries = _db.GetCollection<WsjtxConfigEntry>("wsjtx_config");
 
         _log.LogInformation("WsjtxConfigStore initialized at {Path}", dbPath);
@@ -98,7 +102,7 @@ public sealed class WsjtxConfigStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class WsjtxConfigEntry
