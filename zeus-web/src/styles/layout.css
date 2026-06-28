@@ -22,7 +22,10 @@
 .app {
   display: grid;
   grid-template-columns: 56px minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr) 38px;
+  /* Transport row is `auto` (was fixed 38px) so it tracks the zoomed content
+     height when --zeus-chrome-zoom shrinks .transport below 38px (issue
+     #1107 — top bar + transport scale together with the workspace zoom). */
+  grid-template-rows: auto minmax(0, 1fr) auto;
   height: 100dvh;
   width: 100vw;
   background: var(--bg-0);
@@ -489,6 +492,11 @@
     inset 0 -1px 0 rgba(0,0,0,0.5);
   height: 60px;
   overflow: hidden;
+  /* Issue #1107 — operator zoom (the ZOOM cluster in the transport bar) also
+     scales the top bar so the whole UI grows/shrinks as a unit and Zeus can
+     share a wide monitor with other apps. The CSS var is set by App.tsx from
+     the same connection-store value that drives FlexWorkspace's cell pitch. */
+  zoom: var(--zeus-chrome-zoom, 1);
 }
 .topbar .topbar-controls {
   display: flex;
@@ -3940,6 +3948,13 @@
   border-radius: 0;
   box-shadow: none;
   height: 38px;
+  /* Issue #1107 — scaled together with .topbar by the operator's workspace
+     zoom (set on .app via --zeus-chrome-zoom). The .app grid row this lives
+     in is `auto` so the row tracks the zoomed height instead of pinning at
+     38 px. The ZOOM cluster lives inside this bar; zooming below 100% shrinks
+     the cluster itself, but the readout stays click-to-reset-to-100 % so the
+     operator can always return to the default. */
+  zoom: var(--zeus-chrome-zoom, 1);
 }
 /* Transport buttons read as flat clickable regions of the toolbar, not raised
    chiclets. TX (MOX-on) is excluded — it keeps its red bevel/pulse for safety. */
