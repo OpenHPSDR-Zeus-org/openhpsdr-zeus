@@ -35,7 +35,7 @@ class_name = "RateLimiter"
 [[d1_databases]]
 binding = "ADMIN_DB"
 database_name = "zeus-admin"
-database_id = "REPLACE_WITH_d1_create_OUTPUT"
+database_id = "7a25a1a9-7b4a-474f-93ae-fdf9b003da55"
 
 # SQLite-backed DO namespaces (free-plan compatible).
 [[migrations]]
