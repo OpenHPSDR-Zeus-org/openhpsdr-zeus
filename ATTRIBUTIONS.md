@@ -276,6 +276,92 @@ Upstream:
 - <https://github.com/pavel-demin/wsprd>
 - WSJT-X (decoder lineage) — <https://wsjt.sourceforge.io/>
 
+## RADE V1 (Radio Autoencoder — radae_c, opus_dnn, freedv_text)
+
+Zeus's RADE V1 (Radio Autoencoder) digital-voice mode builds a single shared
+library, `libzeus_rade.{so,dll,dylib}`, from three upstream C slices. The
+slices are vendored at build time into
+[`native/radae/vendor/`](native/radae/vendor/) by CI and are **not** committed
+to the Zeus tree (~95 MB, almost all of it compiled-in neural-network weight
+tables). All three slices are taken from a single upstream composition:
+
+| field | value |
+|---|---|
+| Upstream | <https://github.com/sv1eia/Thetis-RADE> |
+| Pinned SHA | `f7605a46bd21275ab8b9edd00d4a1b6fae6eabe8` |
+
+The composition itself — selecting `radae_c` as the Python-free RADE modem,
+pairing it with the `opus_dnn` FARGAN vocoder, and wiring the FreeDV-GUI
+`freedv_text` LDPC path for the on-air EOO callsign frame so RADE stations
+interoperate — is the work of **Christos Nikolaou (SV1EIA)** in the
+[`sv1eia/Thetis-RADE`](https://github.com/sv1eia/Thetis-RADE) project. Zeus
+gratefully acknowledges that adaptation; the build recipe, slice layout, and
+SHA pin in [`native/radae/vendor/PROVENANCE.md`](native/radae/vendor/PROVENANCE.md)
+trace directly to it.
+
+### `radae_c` — BSD-2-Clause
+
+The pure-C, Python-free RADE modem (IQ → 36-float feature frames; encoder /
+decoder weights compiled in). **Copyright © 2024 David Rowe (VK5DGR,
+[drowe67](https://github.com/drowe67))** and distributed under the **BSD
+2-Clause License**. Zeus uses the decode path on RX and the encode path on
+TX; the source tree is vendored unmodified except for compilation flags set
+in [`native/radae/CMakeLists.txt`](native/radae/CMakeLists.txt). Upstream
+reference: <https://github.com/drowe67/radae>.
+
+### `opus_dnn` — BSD-3-Clause
+
+The Xiph Opus tree pinned at upstream `xiph/opus` commit
+`940d4e5af64351ca8ba8390df3f555484c567fbb`, built with `OPUS_DEEP_PLC=ON` to
+provide the FARGAN deep neural vocoder (`fargan_synthesize()` — 36-float
+feature frame → 160-sample @ 16 kHz speech) that the RADE shim calls on
+decode, and the LPCNet feature analyzer (`lpcnet_compute_single_frame_features()`)
+used on encode. **Copyright © Xiph.Org Foundation, Jean-Marc Valin and the
+Opus contributors** (with FARGAN/LPCNet contributions also under Skype/Microsoft
+attribution as carried in the upstream source headers) and distributed under
+the **BSD 3-Clause License**. The vendored copy preserves the upstream
+per-file headers. Upstream: <https://github.com/xiph/opus>.
+
+### `freedv_text/src/rade_text.{c,h}` — BSD
+
+The FreeDV-GUI reliable-text codec used by Zeus for the RADE EOO callsign
+frame (CRC8 + 6-bit packing + LDPC HRA_56_56 + gp_interleaver). This replaces
+`radae_c`'s built-in 7-bit-MSB packing so Zeus interoperates with FreeDV-GUI
+RADE stations on the air. **Copyright © Mooneer Salem** and distributed
+under a permissive **BSD** licence. Upstream reference:
+<https://github.com/drowe67/freedv-gui>.
+
+### `freedv_text/codec2/*` (LDPC primitives) — LGPL-2.1-or-later
+
+The LDPC primitives the reliable-text path links against
+(`mpdecode_core.c`, `gp_interleaver.c`, `ldpc_codes.c`, `HRA_56_56.c`,
+`phi0.c`) come from the **codec2** project. **Copyright © David Rowe and
+the codec2 contributors** and distributed under the **GNU Lesser General
+Public License, version 2.1 or (at your option) any later version**
+(LGPL-2.1-or-later). Upstream: <https://github.com/drowe67/codec2>.
+
+`libzeus_rade` is a shared library; Zeus's managed code reaches it through
+P/Invoke. Dynamic linking against LGPL-2.1-or-later code from Zeus's
+GPL-2.0-or-later distribution is consistent with both licences (LGPL §6's
+permissive linking clause is preserved, and the combined work remains
+distributable under Zeus's licence terms).
+
+### License roll-up
+
+| component | license | copyleft? |
+|---|---|---|
+| `radae_c` | BSD-2-Clause | no |
+| `opus_dnn` | BSD-3-Clause | no |
+| `freedv_text/src` (rade_text) | BSD | no |
+| `freedv_text/codec2` (LDPC) | LGPL-2.1-or-later | weak (dynamic-link OK) |
+
+BSD-2-Clause, BSD-3-Clause, and LGPL-2.1-or-later are all one-way
+licence-compatible with Zeus's GPL-2.0-or-later distribution. The vendored
+sources retain their upstream per-file headers and copyright notices as
+received and must remain so on re-vendor. The `shim/` and `CMakeLists.txt`
+glue under [`native/radae/`](native/radae/) is original Zeus work and is
+GPL-2.0-or-later under the Zeus copyright.
+
 ## Relationship to pihpsdr
 
 Zeus is independent of pihpsdr but **routinely consulted pihpsdr source as
