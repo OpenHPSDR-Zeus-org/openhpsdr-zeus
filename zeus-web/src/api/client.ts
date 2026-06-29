@@ -5522,6 +5522,22 @@ export function disconnectP2(signal?: AbortSignal): Promise<unknown> {
 // the panadapter pan gesture (use-pan-tune-gesture.ts) when a drag releases
 // past the edge of the current IQ capture window. Server returns the full
 // updated StateDto; 400 if hz is out of range for the connected radio.
+// LO frequencies cross the wire as a 64-bit integer (`RadioLoSetRequest.Hz` /
+// `ReceiverLoSetRequest.Hz` are `long`). Several callers — chiefly the CTUN
+// zoom/recenter and keep-in-view autopan paths — compute the LO from
+// floating-point view-center math and can hand us a FRACTIONAL Hz (e.g.
+// 3_853_999.9999). System.Text.Json cannot parse a decimal into an Int64 and
+// rejects the whole request with HTTP 400, so the hardware LO never moves; under
+// CTUN that leaves the frozen DDC window pointed at the wrong place and the
+// panadapter/waterfall blank out (issue #1191). Round + clamp at this single
+// wire seam so NO caller can emit a non-integer or out-of-range LO. Rounding is
+// sub-Hz on the LO — far below the radio's tuning resolution, no audible effect.
+const MAX_LO_HZ = 60_000_000;
+export function toWireHz(hz: number): number {
+  if (!Number.isFinite(hz)) return 0;
+  return Math.min(MAX_LO_HZ, Math.max(0, Math.round(hz)));
+}
+
 export function setRadioLo(
   hz: number,
   signal?: AbortSignal,
@@ -5531,7 +5547,7 @@ export function setRadioLo(
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ hz }),
+      body: JSON.stringify({ hz: toWireHz(hz) }),
       signal,
     },
     normalizeState,
@@ -5553,7 +5569,7 @@ export function setReceiverLo(
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ hz }),
+      body: JSON.stringify({ hz: toWireHz(hz) }),
       signal,
     },
     normalizeState,
