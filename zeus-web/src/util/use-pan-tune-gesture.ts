@@ -58,6 +58,15 @@ import {
   type ReceiverKey,
 } from '../state/receiver-state';
 import { computeSnapToLineHz, getSnapHistorySpectrum, useSignalEnhanceStore } from '../dsp/signal-estimator';
+import { useVfoLockStore } from '../state/vfo-lock-store';
+
+// VFO lock — when the operator pins the dial, every gesture that would move the
+// operating frequency is suppressed at the SOURCE (no optimistic store write,
+// no POST), so the dial can't even twitch. The api/client gates on
+// setVfo/setReceiver remain as a backstop for non-gesture callers. Display-only
+// actions (zoom, and a pan that moves the IQ window without moving the dial —
+// i.e. CTUN-on on a real receiver, or a Kiwi slice) stay live.
+const vfoLocked = () => useVfoLockStore.getState().locked;
 import { armSnapLock } from './snap-lock';
 import { useNotchStore } from '../state/notch-store';
 import * as viewCenter from '../state/view-center';
@@ -287,6 +296,7 @@ export function createVfoNudgeController(receiver: SpectrumReceiver = 'A'): VfoN
   };
 
   const nudgeVfo = (deltaHz: number) => {
+    if (vfoLocked()) return;
     const cur = commandedHz();
     const next = clampHz(cur + deltaHz);
     if (tunesOffCenter()) {
@@ -463,6 +473,13 @@ export function usePanTuneGesture(
     // via the WDSP shift, so the B panel holds still and the dial slides. With
     // CTUN off, both receivers pan with a relative drag (the DDC recentres).
     const ctunSweep = () => useConnectionStore.getState().ctunEnabled;
+    // A pan (LO/centre move) changes the operating frequency unless the dial is
+    // decoupled from the window: secondary RX always retunes its VFO; RX1 only
+    // moves the dial with CTUN off (CTUN on freezes the NCO and roams the dial
+    // via the shift); a Kiwi slice has no dial to pin. So "pan moves the dial"
+    // is what the VFO lock must block; a pure display pan stays live.
+    const panMovesDial = () =>
+      panIsSecondary || (!panIsKiwi && !useConnectionStore.getState().ctunEnabled);
 
     const commandedHz = () => pendingHz ?? readVfo();
     // Secondary receivers (RX2 / RX3+) have no separate "radio LO": their DDC
@@ -557,6 +574,7 @@ export function usePanTuneGesture(
     const idleCursor = () => (dragMode === 'ruler-pan' ? 'grab' : SPECTRUM_TUNE_CURSOR);
 
     const queuePanCenter = (nextHz: number) => {
+      if (vfoLocked() && panMovesDial()) return;
       const hz = clampHz(nextHz);
       if (hz === pendingPanHz) return;
       panVc.nudgeTargetHz(hz - commandedPanHz());
@@ -568,6 +586,7 @@ export function usePanTuneGesture(
     // `exact` skips the PAN_STEP_HZ grid — used by snap-to-signal so the dial
     // lands on the measured carrier, not the nearest round 500 Hz.
     const commitFinal = (hz: number, exact = false) => {
+      if (vfoLocked()) return;
       const snapped = exact ? clampHz(hz) : snapHz(hz);
       // CTUN: tune the dial off-centre without moving the view. The hardware
       // NCO stays frozen on the backend, so the frame center doesn't move and
@@ -598,6 +617,7 @@ export function usePanTuneGesture(
     // Wheel-driven VFO nudge: fine-tune step, no snap to PAN_STEP_HZ. Coalesces
     // to one POST per rAF via the same pending pipeline as drag-to-pan.
     const nudgeVfo = (deltaHz: number) => {
+      if (vfoLocked()) return;
       const cur = commandedHz();
       const next = clampHz(cur + deltaHz);
       // CTUN: wheel-tune the dial off-centre with the view frozen (same model
@@ -784,6 +804,9 @@ export function usePanTuneGesture(
         queuePanCenter(rulerDragTargetHz(drag.startHz, drag.startX, e.clientX, rect.width, drag.spanHz));
         return;
       }
+      // VFO lock: a body drag (either CTUN sweep or relative pan below) always
+      // moves the dial — swallow it so the frequency can't be dragged.
+      if (vfoLocked()) return;
       // RX1 CTUN: drag sweeps the dial across the frozen spectrum. The frame
       // center doesn't move (NCO frozen on the backend), so drag.startHz — the
       // view center captured at grab — is stationary; resolve the live pointer X
@@ -890,6 +913,9 @@ export function usePanTuneGesture(
         }
       } else {
         // click-to-tune: resolve the clicked frequency against the live view.
+        // VFO lock swallows the click outright so neither the dial nor the
+        // self-correcting snap-lock can be armed onto a new carrier.
+        if (vfoLocked()) return;
         const view = readView(receiver);
         if (!view) return;
         const frac = (e.clientX - rect.left) / rect.width;

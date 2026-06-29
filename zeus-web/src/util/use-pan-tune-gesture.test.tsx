@@ -34,6 +34,7 @@ import {
   usePanTuneGesture,
   type PanTuneGestureOptions,
 } from './use-pan-tune-gesture';
+import { useVfoLockStore } from '../state/vfo-lock-store';
 import type { RadioStateDto, RxMode } from '../api/client';
 
 const SNAP_WIDTH = 256;
@@ -242,6 +243,7 @@ describe('usePanTuneGesture mobile touch mode', () => {
   });
 
   afterEach(() => {
+    useVfoLockStore.setState({ locked: false });
     viewCenter._resetForTest();
     resetEstimator();
     _resetPanSnapStickyForTest();
@@ -651,5 +653,125 @@ describe('usePanTuneGesture mobile touch mode', () => {
 
     pointer(canvas, 'pointerup', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
     unmount();
+  });
+
+  // VFO lock — issue #644 / Doug's report: a locked dial must block EVERY way to
+  // change the operating frequency, not just the digit display. These prove the
+  // gesture is swallowed at the source (no setVfo/setRadioLo POST AND no
+  // optimistic store write), while display-only zoom/pan stay live.
+  describe('with the VFO lock engaged', () => {
+    beforeEach(() => {
+      useVfoLockStore.setState({ locked: true });
+    });
+
+    it('swallows panadapter click-to-tune', async () => {
+      useConnectionStore.setState({ ctunEnabled: false, vfoHz: 14_200_000 });
+      const { container, unmount } = render(createElement(GestureProbe, { touchMode: 'normal' }));
+      const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+      await act(async () => {
+        pointer(canvas, 'pointerdown', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
+        pointer(canvas, 'pointerup', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
+        await flush();
+      });
+
+      expect(setVfoMock).not.toHaveBeenCalled();
+      expect(useConnectionStore.getState().vfoHz).toBe(14_200_000);
+      unmount();
+    });
+
+    it('swallows a panadapter drag-to-tune', async () => {
+      useConnectionStore.setState({ ctunEnabled: false, vfoHz: 14_200_000 });
+      const { container, unmount } = render(createElement(GestureProbe, { touchMode: 'normal' }));
+      const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+      await act(async () => {
+        pointer(canvas, 'pointerdown', { pointerId: 1, clientX: 100, pointerType: 'mouse' });
+        pointer(canvas, 'pointermove', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
+        pointer(canvas, 'pointerup', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
+        await flush();
+      });
+
+      expect(setVfoMock).not.toHaveBeenCalled();
+      expect(useConnectionStore.getState().vfoHz).toBe(14_200_000);
+      unmount();
+    });
+
+    it('swallows wheel-tune but still allows shift-wheel zoom', async () => {
+      useConnectionStore.setState({ ctunEnabled: false, vfoHz: 14_200_000, zoomLevel: 4 });
+      useToolbarFavoritesStore.setState({ stepHz: 1000 });
+      const { container, unmount } = render(createElement(GestureProbe, { touchMode: 'normal' }));
+      const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+      await act(async () => {
+        wheel(canvas, { deltaY: 120 });
+        await flush();
+      });
+      expect(setVfoMock).not.toHaveBeenCalled();
+      expect(useConnectionStore.getState().vfoHz).toBe(14_200_000);
+
+      // Zoom is display-only — the lock must not freeze it.
+      await act(async () => {
+        wheel(canvas, { deltaY: 120, shiftKey: true });
+        await flush();
+      });
+      expect(setZoomMock).toHaveBeenCalled();
+      unmount();
+    });
+
+    it('swallows a CTUN-off ruler pan that would move the dial (radio LO)', async () => {
+      useConnectionStore.setState({ ctunEnabled: false, vfoHz: 14_205_000, radioLoHz: 14_200_000 });
+      const { container, unmount } = render(
+        createElement(GestureProbe, { touchMode: 'normal', dragMode: 'ruler-pan' }),
+      );
+      const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+      await act(async () => {
+        pointer(canvas, 'pointerdown', { pointerId: 1, clientX: 100, pointerType: 'mouse' });
+        pointer(canvas, 'pointermove', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
+        pointer(canvas, 'pointerup', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
+        await flush();
+      });
+
+      expect(setRadioLoMock).not.toHaveBeenCalled();
+      expect(useConnectionStore.getState().radioLoHz).toBe(14_200_000);
+      unmount();
+    });
+
+    it('still allows a CTUN-on ruler pan (window moves, dial stays pinned)', async () => {
+      // CTUN on decouples the dial from the window, so panning the view does not
+      // change the operating frequency — the lock must leave it live.
+      useConnectionStore.setState({ ctunEnabled: true, vfoHz: 14_205_000, radioLoHz: 14_200_000 });
+      const { container, unmount } = render(
+        createElement(GestureProbe, { touchMode: 'normal', dragMode: 'ruler-pan' }),
+      );
+      const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+      await act(async () => {
+        pointer(canvas, 'pointerdown', { pointerId: 1, clientX: 100, pointerType: 'mouse' });
+        pointer(canvas, 'pointermove', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
+        pointer(canvas, 'pointerup', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
+        await flush();
+      });
+
+      expect(setRadioLoMock).toHaveBeenCalled();
+      unmount();
+    });
+
+    it('resumes tuning the moment the lock is released', async () => {
+      useConnectionStore.setState({ ctunEnabled: false, vfoHz: 14_200_000 });
+      const { container, unmount } = render(createElement(GestureProbe, { touchMode: 'normal' }));
+      const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+
+      useVfoLockStore.setState({ locked: false });
+      await act(async () => {
+        pointer(canvas, 'pointerdown', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
+        pointer(canvas, 'pointerup', { pointerId: 1, clientX: 150, pointerType: 'mouse' });
+        await flush();
+      });
+
+      expect(setVfoMock).toHaveBeenCalled();
+      unmount();
+    });
   });
 });

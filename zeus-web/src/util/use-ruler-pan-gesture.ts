@@ -15,6 +15,7 @@ import { useEffect, type RefObject } from 'react';
 import { setRadioLo } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
+import { useVfoLockStore } from '../state/vfo-lock-store';
 import {
   getReceiverVfoFromState,
   getReceiverVfoHz,
@@ -134,7 +135,14 @@ export function useRulerPanGesture(
       if (pendingRaf === 0) pendingRaf = requestAnimationFrame(flushPending);
     };
 
+    // A ruler drag retunes the operating frequency unless the dial is decoupled
+    // from the window: secondary RX moves its VFO; RX1 only moves the dial with
+    // CTUN off (CTUN on freezes the NCO and roams the dial via the shift). The
+    // VFO lock blocks the dial-moving cases and leaves a pure display pan live.
+    const rulerMovesDial = () => secondary || !useConnectionStore.getState().ctunEnabled;
+
     const queueLo = (nextLoHz: number) => {
+      if (useVfoLockStore.getState().locked && rulerMovesDial()) return;
       const loHz = clampHz(nextLoHz);
       if (loHz === pendingLoHz) return;
       vc.nudgeTargetHz(loHz - commandedLoHz());
