@@ -17,9 +17,14 @@ using Zeus.Contracts;
 namespace Zeus.Midi;
 
 /// <summary>
-/// Real cross-platform MIDI input engine backed by Melanchall.DryWetMidi's
-/// Multimedia API (pure-managed; Win/macOS/Linux/Pi). Opens every present input
-/// device, listens, and normalizes raw MIDI into <see cref="MidiInputMessage"/>.
+/// Real MIDI input engine backed by Melanchall.DryWetMidi's Multimedia API.
+/// DryWetMidi ships a native device-I/O engine for <b>Windows and macOS only</b>
+/// (no Linux .so in the package), so this engine is functional on Win/macOS and
+/// reports <see cref="IsAvailable"/> = false on Linux x64/arm64 and the
+/// Raspberry Pi (the native call throws <see cref="DllNotFoundException"/>,
+/// which is caught below). Opens every present input device, listens, and
+/// normalizes raw MIDI into <see cref="MidiInputMessage"/>. The Stream Deck
+/// path (HidSharp) is separate and DOES work on Linux/Pi.
 ///
 /// Every CC event carries BOTH an absolute <see cref="MidiInputMessage.Value"/>
 /// (0..127) AND a relative <see cref="MidiInputMessage.Delta"/> (two's-complement

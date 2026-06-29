@@ -246,6 +246,9 @@ public sealed class MidiService : IHostedService, IDisposable
 
             case MidiControlType.KnobOrSlider:
             {
+                // A continuous control must never key the transmitter — every
+                // tick would toggle MOX/TUN/2-Tone. Ignore such a binding.
+                if (MidiCommandCatalog.IsTxKeying(map.Command)) return;
                 // Remap the control's usable [Min,Max] travel onto the full
                 // 0..127 the dispatch scalers expect, so a partial-throw fader
                 // still reaches both extremes.
@@ -256,6 +259,7 @@ public sealed class MidiService : IHostedService, IDisposable
 
             case MidiControlType.Wheel:
                 if (msg.Delta == 0) return;
+                if (MidiCommandCatalog.IsTxKeying(map.Command)) return;
                 _dispatcher.Dispatch(map.Command, value: 0, delta: msg.Delta);
                 break;
         }

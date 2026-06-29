@@ -110,6 +110,34 @@ describe('MidiSettingsPanel', () => {
     unmount();
   });
 
+  it('typing in the filter box narrows the command picker', () => {
+    act(() =>
+      useMidiStore.setState({
+        status: { ...STATUS, learning: true },
+        lastLearn: { deviceName: 'DJ2GO2', controlId: 'cc:0:7', controlType: 'KnobOrSlider', value: 80, delta: 0 },
+      } as never),
+    );
+    const { container, unmount } = render(createElement(MidiSettingsPanel));
+    const select = container.querySelector('select') as HTMLSelectElement;
+    // Placeholder + the empty "— select command —" sentinel option.
+    const optionCount = () => select.querySelectorAll('option').length;
+    expect(optionCount()).toBe(COMMANDS.length + 1);
+
+    const search = container.querySelector('input[type="text"]') as HTMLInputElement;
+    const proto = window.HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')!.set!;
+    act(() => {
+      setter.call(search, 'af gain');
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    // Only "AF Gain" survives the filter (plus the sentinel option).
+    expect(optionCount()).toBe(2);
+    const opts = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
+    expect(opts.some((t) => t?.includes('AF Gain'))).toBe(true);
+    expect(opts.some((t) => t?.includes('Band 40m'))).toBe(false);
+    unmount();
+  });
+
   it('renders parity commands flagged in the picker', () => {
     act(() =>
       useMidiStore.setState({

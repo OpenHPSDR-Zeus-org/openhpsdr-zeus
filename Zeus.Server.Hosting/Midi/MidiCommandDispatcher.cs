@@ -539,17 +539,17 @@ public sealed class MidiCommandDispatcher
             }
             case ZeusMidiCommand.MuteOnOff:
             {
-                r.SetReceiverMuted(0, st.Toggle(cmd));
+                if (value > 0) r.SetReceiverMuted(0, !st.Snapshot().Rx1Muted);
                 break;
             }
             case ZeusMidiCommand.Rx2MuteOnOff:
             {
-                r.SetReceiverMuted(1, st.Toggle(cmd));
+                if (value > 0) r.SetReceiverMuted(1, !st.Snapshot().Rx2Muted);
                 break;
             }
             case ZeusMidiCommand.MonOnOff:
             {
-                r.SetTxMonitor(new TxMonitorSetRequest(st.Toggle(cmd)));
+                if (value > 0) r.SetTxMonitor(new TxMonitorSetRequest(!st.Snapshot().TxMonitorEnabled));
                 break;
             }
             case ZeusMidiCommand.MicGain:
@@ -564,14 +564,20 @@ public sealed class MidiCommandDispatcher
             }
             case ZeusMidiCommand.MoxOnOff:
             {
-                bool on = st.Toggle(cmd);
-                if (!tx.TrySetMox(on, MoxSource.Midi, out var err)) st.Toggle(cmd);
+                // TX keying only ever fires on a discrete button press (value > 0).
+                // A continuous knob/wheel binding must never key the transmitter;
+                // the live MoxOn state is the toggle source so a non-MIDI unkey
+                // can't desync this.
+                if (value <= 0) break;
+                if (!tx.TrySetMox(!tx.IsMoxOn, MoxSource.Midi, out var err))
+                    _log.LogDebug("midi.mox failed: {Err}", err);
                 break;
             }
             case ZeusMidiCommand.TunOnOff:
             {
-                bool on = st.Toggle(cmd);
-                if (!tx.TrySetTun(on, out var err)) st.Toggle(cmd);
+                if (value <= 0) break;
+                if (!tx.TrySetTun(!tx.IsTunOn, out var err))
+                    _log.LogDebug("midi.tun failed: {Err}", err);
                 break;
             }
             case ZeusMidiCommand.DriveLevel:
@@ -591,20 +597,27 @@ public sealed class MidiCommandDispatcher
             }
             case ZeusMidiCommand.CompanderOnOff:
             {
-                var lv = st.Snapshot().TxLeveling ?? new Zeus.Contracts.TxLevelingConfig();
-                r.SetTxLeveling(lv with { CompressorEnabled = st.Toggle(cmd) });
+                if (value > 0)
+                {
+                    var lv = st.Snapshot().TxLeveling ?? new Zeus.Contracts.TxLevelingConfig();
+                    r.SetTxLeveling(lv with { CompressorEnabled = !lv.CompressorEnabled });
+                }
                 break;
             }
             case ZeusMidiCommand.TwoToneOnOff:
             {
-                bool on = st.Toggle(cmd);
-                if (!tx.TrySetTwoTone(new Zeus.Contracts.TwoToneSetRequest(on), out var err)) st.Toggle(cmd);
+                if (value <= 0) break;
+                if (!tx.TrySetTwoTone(new Zeus.Contracts.TwoToneSetRequest(!tx.IsTwoToneOn), out var err))
+                    _log.LogDebug("midi.twotone failed: {Err}", err);
                 break;
             }
             case ZeusMidiCommand.SplitOnOff:
             {
-                bool on = st.Toggle(cmd);
-                r.SetTxVfo(on ? Zeus.Contracts.TxVfo.B : Zeus.Contracts.TxVfo.A);
+                // Split = TX on VFO-B. Derive the next state from the live TxVfo
+                // so a UI/CAT split change can't invert the MIDI toggle.
+                if (value > 0)
+                    r.SetTxVfo(st.Snapshot().TxVfo == Zeus.Contracts.TxVfo.A
+                        ? Zeus.Contracts.TxVfo.B : Zeus.Contracts.TxVfo.A);
                 break;
             }
             case ZeusMidiCommand.ToggleTx:
@@ -669,21 +682,10 @@ public sealed class MidiCommandDispatcher
                 if (value > 0) r.SetDiversity(null, null, null, (st.Snapshot().Diversity?.SourceRx ?? 1) >= 2 ? 1 : 2);
                 break;
             }
-            case ZeusMidiCommand.MidiMessagesPerTuneStepUp:
-            {
-                if (value > 0) st.MessagesPerTuneStep = Math.Min(st.MessagesPerTuneStep + 1, 32);
-                break;
-            }
-            case ZeusMidiCommand.MidiMessagesPerTuneStepDown:
-            {
-                if (value > 0) st.MessagesPerTuneStep = Math.Max(st.MessagesPerTuneStep - 1, 1);
-                break;
-            }
-            case ZeusMidiCommand.MidiMessagesPerTuneStepToggle:
-            {
-                if (value > 0) st.Toggle(cmd);
-                break;
-            }
+            // MidiMessagesPerTuneStep* (VFO wheel sensitivity) is not wired to any
+            // tune path — the wheel cases apply a fixed Hz-per-detent — so these
+            // are catalogued Supported=false and fall through to the parity no-op
+            // below rather than mutating an engine-local counter nothing reads.
                 default:
                     _log.LogDebug("midi.command.noop cmd={Cmd} value={Value} delta={Delta} (parity-only / unsupported seam)",
                         cmd, value, delta);

@@ -137,15 +137,44 @@ public sealed class MidiCommandDispatcherTests : IDisposable
     }
 
     [Fact]
-    public void EngineLocalWheelSensitivity_AdjustsWithoutRadioEffect()
+    public void WheelSensitivityCommands_AreParityNoOps()
     {
+        // VFO wheel sensitivity is not wired to any tune path (catalogued
+        // Supported=false), so these must be safe no-ops — no throw, no tuning.
         var (d, radio, _) = Build();
+        radio.SetVfo(14_200_000);
         var before = radio.Snapshot().VfoHz;
-        Assert.Equal(1, d.DispatchState.MessagesPerTuneStep);
         d.Dispatch(ZeusMidiCommand.MidiMessagesPerTuneStepUp, value: 127, delta: 0);
-        Assert.Equal(2, d.DispatchState.MessagesPerTuneStep);
         d.Dispatch(ZeusMidiCommand.MidiMessagesPerTuneStepDown, value: 127, delta: 0);
-        Assert.Equal(1, d.DispatchState.MessagesPerTuneStep);
+        d.Dispatch(ZeusMidiCommand.MidiMessagesPerTuneStepToggle, value: 127, delta: 0);
         Assert.Equal(before, radio.Snapshot().VfoHz);
+    }
+
+    [Fact]
+    public void MuteOnOff_TogglesFromLiveSnapshotState()
+    {
+        // A non-MIDI mute change (here: direct seam call) must not desync the
+        // MIDI toggle — the next press reads live state and flips it correctly.
+        var (d, radio, _) = Build();
+        Assert.False(radio.Snapshot().Rx1Muted);
+        d.Dispatch(ZeusMidiCommand.MuteOnOff, value: 127, delta: 0);
+        Assert.True(radio.Snapshot().Rx1Muted);
+
+        // External unmute (web UI / CAT), then a MIDI press must mute again —
+        // not no-op (which a shadow latch would have done).
+        radio.SetReceiverMuted(0, false);
+        Assert.False(radio.Snapshot().Rx1Muted);
+        d.Dispatch(ZeusMidiCommand.MuteOnOff, value: 127, delta: 0);
+        Assert.True(radio.Snapshot().Rx1Muted);
+    }
+
+    [Fact]
+    public void MoxOnOff_DoesNotKeyOnButtonRelease()
+    {
+        var (d, _, tx) = Build();
+        Assert.False(tx.IsMoxOn);
+        // A release (value <= 0) must never key TX.
+        d.Dispatch(ZeusMidiCommand.MoxOnOff, value: 0, delta: 0);
+        Assert.False(tx.IsMoxOn);
     }
 }

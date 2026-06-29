@@ -251,9 +251,21 @@ public static class MidiCommandCatalog
         new(ZeusMidiCommand.QuickRecOnOff, "Quick Rec Wave File", MidiControlType.Button, true, false),
         new(ZeusMidiCommand.ZoomToBandStore, "Zoom To Band Store", MidiControlType.Button, false, false),
         new(ZeusMidiCommand.ZoomToBandRecall, "Zoom To Band Recall", MidiControlType.Button, false, false),
-        new(ZeusMidiCommand.MidiMessagesPerTuneStepUp, "Increase wheel rotation per VFO tune step", MidiControlType.Button, false, true),
-        new(ZeusMidiCommand.MidiMessagesPerTuneStepDown, "Decrease wheel rotation per VFO tune step", MidiControlType.Button, false, true),
-        new(ZeusMidiCommand.MidiMessagesPerTuneStepToggle, "VFO Wheel Sensitivity High/Low Toggle", MidiControlType.Button, true, true),
+        // VFO wheel sensitivity is not wired to a tune path (no divisor is read);
+        // parity-only until that scaling exists, so the UI does not advertise a
+        // live control that does nothing.
+        new(ZeusMidiCommand.MidiMessagesPerTuneStepUp, "Increase wheel rotation per VFO tune step", MidiControlType.Button, false, false),
+        new(ZeusMidiCommand.MidiMessagesPerTuneStepDown, "Decrease wheel rotation per VFO tune step", MidiControlType.Button, false, false),
+        new(ZeusMidiCommand.MidiMessagesPerTuneStepToggle, "VFO Wheel Sensitivity High/Low Toggle", MidiControlType.Button, true, false),
         new(ZeusMidiCommand.ESCFormOnOff, "ESC Form On Off", MidiControlType.Button, true, false),
     };
+
+    /// <summary>Commands that key the transmitter. These may only be driven by a
+    /// discrete button press — a continuous knob/wheel binding would dispatch on
+    /// every tick and thrash the PA on/off, so the routing layer refuses to send
+    /// a non-button control to one of these.</summary>
+    public static bool IsTxKeying(ZeusMidiCommand cmd) => cmd is
+        ZeusMidiCommand.MoxOnOff or
+        ZeusMidiCommand.TunOnOff or
+        ZeusMidiCommand.TwoToneOnOff;
 }

@@ -181,7 +181,9 @@ export function MidiSettingsPanel() {
         </div>
         {!midiAvailable && (
           <div style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-            No MIDI backend available on this platform / no device attached.
+            No MIDI backend available on this platform, or no device attached. MIDI controller input
+            is supported on Windows and macOS only — there is no Linux/Raspberry&nbsp;Pi MIDI backend.
+            (Stream Deck control below works on Linux too.)
           </div>
         )}
         {midiAvailable && midiDevices.length === 0 && (
@@ -237,7 +239,7 @@ export function MidiSettingsPanel() {
               on {lastLearn.deviceName} ({lastLearn.controlType}, val {lastLearn.value}
               {lastLearn.delta !== 0 ? `, Δ${lastLearn.delta}` : ''})
             </span>
-            <CommandSelect commands={commands} value={learnCommand} onChange={setLearnCommand} />
+            <CommandSelect commands={filteredCommands} value={learnCommand} onChange={setLearnCommand} />
             <button type="button" className="btn sm active" disabled={!learnCommand} onClick={() => void bindLearned()}>
               BIND
             </button>
@@ -356,7 +358,7 @@ export function MidiSettingsPanel() {
             <span style={{ fontSize: 11, color: 'var(--fg-2)' }}>
               Key {selectedKey.index + 1} →
             </span>
-            <CommandSelect commands={commands} value={sdCommand} onChange={setSdCommand} />
+            <CommandSelect commands={filteredCommands} value={sdCommand} onChange={setSdCommand} />
             <button type="button" className="btn sm active" disabled={!sdCommand} onClick={() => void bindStreamDeckKey()}>
               BIND
             </button>

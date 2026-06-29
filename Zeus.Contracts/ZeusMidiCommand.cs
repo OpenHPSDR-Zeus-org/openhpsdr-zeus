@@ -15,11 +15,17 @@
 namespace Zeus.Contracts;
 
 /// <summary>Every Thetis MIDI/controller command Zeus exposes for mapping.
-/// Append-only: never reorder or remove a value — names are persisted by
-/// string in <see cref="MidiMappingDto"/>, but the byte order is also wire-
-/// stable. <c>Supported</c> commands route to a real Zeus seam; the rest are
-/// parity-only placeholders selectable in the UI that log a Debug no-op.
-/// PureSignal arm is intentionally absent from this surface.</summary>
+/// Append-only: never reorder or remove a value. Saved bindings persist the
+/// command as this enum's <b>numeric ordinal</b> — <c>MidiConfigStore</c>
+/// serializes the binding document with default System.Text.Json (no
+/// <c>JsonStringEnumConverter</c>), which writes enums as their integer index.
+/// Reordering or removing a value therefore silently remaps every operator's
+/// stored bindings to the wrong command, so ordinal stability is load-bearing.
+/// (The REST/learn pipeline does add the string-enum converter, so on-the-wire
+/// DTOs use names; only the LiteDB blob is ordinal-keyed.) <c>Supported</c>
+/// commands route to a real Zeus seam; the rest are parity-only placeholders
+/// selectable in the UI that log a Debug no-op. PureSignal arm is intentionally
+/// absent from this surface.</summary>
 public enum ZeusMidiCommand
 {
     VfoAtoB,

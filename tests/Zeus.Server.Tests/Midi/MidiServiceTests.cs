@@ -31,9 +31,18 @@ public sealed class MidiServiceTests : IDisposable
         NullMidiEngine Midi,
         NullStreamDeckEngine StreamDeck,
         RadioService Radio,
-        TxService Tx) : IDisposable
+        TxService Tx,
+        MidiConfigStore Store) : IDisposable
     {
-        public void Dispose() => Service.Dispose();
+        // MidiService does not own the injected store, so the harness must
+        // release the SharedLiteDatabase lease — otherwise the open handle
+        // blocks the temp .midi db delete on Windows (the lock class the store
+        // header warns about). Mirrors CatSerialServiceIntegrationTests.
+        public void Dispose()
+        {
+            Service.Dispose();
+            Store.Dispose();
+        }
     }
 
     private Harness Build()
@@ -51,7 +60,7 @@ public sealed class MidiServiceTests : IDisposable
         var sd = new NullStreamDeckEngine();
         var service = new MidiService(midi, sd, store, radio, tx, hub, lf);
         service.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
-        return new Harness(service, midi, sd, radio, tx);
+        return new Harness(service, midi, sd, radio, tx, store);
     }
 
     private static MidiConfigDto ConfigWith(params MidiMappingDto[] mappings) =>
@@ -156,6 +165,20 @@ public sealed class MidiServiceTests : IDisposable
         h.Radio.SetVfo(7_100_000);
         h.StreamDeck.Inject(new StreamDeckInput("Stream Deck", "SD1", 3, Pressed: false));
         Assert.Equal(7_100_000, h.Radio.Snapshot().VfoHz);
+    }
+
+    [Fact]
+    public void KnobMappedToMox_DoesNotKeyTransmitter()
+    {
+        using var h = Build();
+        // A misguided Learn-mode binding of a fader to MOX must never key TX:
+        // the routing layer refuses continuous controls for TX-keying commands.
+        h.Service.SetConfig(ConfigWith(
+            new MidiMappingDto("DJ", "cc:0:7", MidiControlType.KnobOrSlider, ZeusMidiCommand.MoxOnOff)));
+        Assert.False(h.Tx.IsMoxOn);
+        h.Midi.Inject(new MidiInputMessage("DJ", MidiControlType.KnobOrSlider, "cc:0:7", 100, 0));
+        h.Midi.Inject(new MidiInputMessage("DJ", MidiControlType.KnobOrSlider, "cc:0:7", 64, 0));
+        Assert.False(h.Tx.IsMoxOn);
     }
 
     [Fact]
