@@ -142,6 +142,11 @@ export function getReceiverFilterHighHz(state: ConnState, key: ReceiverKey): num
 // and is a no-op for every non-FreeDV mode (whose stored width is already
 // correctly signed for its sideband).
 export const FREEDV_USB_THRESHOLD_HZ = 10_000_000;
+// 60 m is the regulatory exception to the < 10 MHz → LSB rule: every regulator
+// that permits 60 m amateur operation mandates USB only. Window covers all
+// 60 m amateur allocations (IARU R1, FCC US channels, Ofcom UK) with a cushion.
+export const FREEDV_60M_LOW_HZ = 5_250_000;
+export const FREEDV_60M_HIGH_HZ = 5_450_000;
 export function displayFilterEdgesHz(
   mode: RxMode,
   vfoHz: number,
@@ -151,7 +156,9 @@ export function displayFilterEdgesHz(
   if (mode !== 'FREEDV') return { lowHz, highHz };
   const loAbs = Math.min(Math.abs(lowHz), Math.abs(highHz));
   const hiAbs = Math.max(Math.abs(lowHz), Math.abs(highHz));
-  return vfoHz < FREEDV_USB_THRESHOLD_HZ
+  const isSixtyMeters =
+    vfoHz >= FREEDV_60M_LOW_HZ && vfoHz <= FREEDV_60M_HIGH_HZ;
+  return !isSixtyMeters && vfoHz < FREEDV_USB_THRESHOLD_HZ
     ? { lowHz: -hiAbs, highHz: -loAbs } // LSB: negative-frequency passband
     : { lowHz: loAbs, highHz: hiAbs }; // USB: positive-frequency passband
 }

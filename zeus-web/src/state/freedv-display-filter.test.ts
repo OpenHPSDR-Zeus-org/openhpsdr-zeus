@@ -38,6 +38,31 @@ describe('displayFilterEdgesHz — FreeDV band-convention sideband', () => {
     });
   });
 
+  // 60 m is the regulatory exception: FCC §97.305, Ofcom IR 2002 and every
+  // other regulator that permits 60 m amateur operation mandate USB-only, and
+  // the FreeDV community follows. The overlay must draw on the USB side even
+  // though the dial is below 10 MHz.
+  it.each([
+    ['60m FCC channel 1', 5_330_500],
+    ['60m IARU R1 FreeDV calling', 5_357_000],
+    ['60m FCC channel 5', 5_403_500],
+  ])('signs FreeDV USB on 60 m (%s)', (_label, vfoHz) => {
+    expect(displayFilterEdgesHz('FREEDV', vfoHz, LO, HI)).toEqual({
+      lowHz: LO,
+      highHz: HI,
+    });
+  });
+
+  it.each([
+    ['just below 60 m window', 5_249_999],
+    ['just above 60 m window', 5_450_001],
+  ])('falls back to the 10 MHz rule outside the 60 m window (%s)', (_label, vfoHz) => {
+    expect(displayFilterEdgesHz('FREEDV', vfoHz, LO, HI)).toEqual({
+      lowHz: -HI,
+      highHz: -LO,
+    });
+  });
+
   it('is sign-agnostic about the stored edges (uses magnitudes)', () => {
     // Even if state ever carried a negative-signed pair, the magnitudes decide.
     expect(displayFilterEdgesHz('FREEDV', 7_177_000, -HI, -LO)).toEqual({
