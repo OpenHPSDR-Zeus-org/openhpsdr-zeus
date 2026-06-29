@@ -184,6 +184,8 @@ export function ChatRosterOverlay() {
   const connected = useChatStore((s) => s.connected);
   const roster = useChatStore((s) => s.roster);
   const openDm = useChatStore((s) => s.openDm);
+  const freqPublic = useChatStore((s) => s.freqPublic);
+  const myCallsign = useChatStore((s) => s.callsign);
   const show = useDisplaySettingsStore((s) => s.showChatRosterOverlay);
 
   const centerHz = useDisplayStore((s) => s.centerHz);
@@ -213,8 +215,16 @@ export function ChatRosterOverlay() {
     }
     const spanHz = width * hzPerPixel;
     const startHz = Number(centerHz) - spanHz / 2;
+    // Respect the eye toggle for your OWN marker. The relay strips your freq
+    // from every other operator's roster the moment you hide it, so they stop
+    // seeing your callsign here — but it always sends you your own freq (so the
+    // rest of the UI can use it), which would otherwise leave your callsign
+    // pinned to your own panadapter after you've hidden. Drop it so "hidden"
+    // means hidden everywhere, including your own view.
+    const mine = (myCallsign ?? '').toUpperCase();
     const inView = roster
       .filter((op) => typeof op.freqHz === 'number' && Number.isFinite(op.freqHz))
+      .filter((op) => freqPublic || !mine || op.callsign.toUpperCase() !== mine)
       .map((op) => ({ op, pct: ((op.freqHz! - startHz) / spanHz) * 100 }))
       .filter(({ pct }) => pct >= -2 && pct <= 102)
       .sort((a, b) => a.pct - b.pct);
@@ -233,7 +243,7 @@ export function ChatRosterOverlay() {
       laneLastPct[lane] = pct;
       return { op, pct, lane };
     });
-  }, [show, enabled, connected, roster, centerHz, hzPerPixel, width]);
+  }, [show, enabled, connected, roster, centerHz, hzPerPixel, width, freqPublic, myCallsign]);
 
   if (placed.length === 0) return null;
 
