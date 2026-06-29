@@ -21,6 +21,7 @@ public class FreeDvSidebandConventionTests
     [Theory]
     [InlineData(1_800_000, RxMode.LSB)]    // 160 m
     [InlineData(3_573_000, RxMode.LSB)]    // 80 m
+    [InlineData(5_357_000, RxMode.USB)]    // 60 m — channelised USB band, below 10 MHz but still USB
     [InlineData(7_177_000, RxMode.LSB)]    // 40 m — the band that bit us
     [InlineData(9_999_999, RxMode.LSB)]    // just below the threshold
     [InlineData(10_000_000, RxMode.USB)]   // exactly 10 MHz → USB

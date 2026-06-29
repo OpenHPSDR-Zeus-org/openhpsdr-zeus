@@ -2181,11 +2181,22 @@ public sealed class RadioService : IDisposable
     // and filter are pushed. RxMode.FreeDv stays the radio's mode everywhere else;
     // only the WDSP RXA/TXA orientation + bandpass sign follow this. Non-FreeDv
     // modes pass through unchanged.
+    //
+    // 60 m is the exception to the <10 MHz→LSB rule: although it sits at ~5.3 MHz,
+    // the band is channelised and operated USB by convention (no automatic
+    // sideband flip on a SSB-only band), so FreeDV stations there use USB too.
+    // Resolve 60 m to USB explicitly before the threshold test.
     internal const long FreeDvUsbThresholdHz = 10_000_000;
+    internal const long Band60mLowHz = 5_250_000;
+    internal const long Band60mHighHz = 5_450_000;
     internal static RxMode EffectiveEngineMode(RxMode mode, long dialHz)
-        => mode == RxMode.FreeDv
-            ? (dialHz < FreeDvUsbThresholdHz ? RxMode.LSB : RxMode.USB)
-            : mode;
+    {
+        if (mode != RxMode.FreeDv)
+            return mode;
+        if (dialHz is >= Band60mLowHz and <= Band60mHighHz)
+            return RxMode.USB;
+        return dialHz < FreeDvUsbThresholdHz ? RxMode.LSB : RxMode.USB;
+    }
 
     internal static (int low, int high) SignedFilterForMode(RxMode mode, int loAbs, int hiAbs)
     {
