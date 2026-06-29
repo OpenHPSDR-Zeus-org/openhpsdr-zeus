@@ -14,8 +14,15 @@
 import { useCallback } from 'react';
 import { setVfo } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useDisplayStore } from '../state/display-store';
 import { useSpotStore } from '../state/spot-store';
+
+// Top inset for the callsign label. The licence-class band chips painted by
+// BandOverlay sit at top=24 with ~16 px of chip height, so their bottom edge
+// lands at ~40 px. 44 px keeps the spot label clear of the chip row with a
+// couple of pixels of breathing room (issue #1175).
+const SPOT_LABEL_TOP_PX = 44;
 
 // Convert a packed ARGB uint32 to a CSS rgba() string.
 // TCI clients commonly send A=0 meaning "default/opaque" rather than
@@ -38,6 +45,7 @@ export function SpotOverlay() {
   const width = useDisplayStore((s) => s.panDb?.length ?? 0);
   const spots = useSpotStore((s) => s.spots);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
+  const fontPx = useDisplaySettingsStore((s) => s.spotLabelFontPx);
 
   const handleSpotClick = useCallback(
     (freqHz: number) => {
@@ -84,10 +92,12 @@ export function SpotOverlay() {
                 opacity: isNearVfo ? 1 : 0.75,
               }}
             />
-            {/* callsign label at top */}
+            {/* callsign label at top, below the licence-class band chip row */}
             <div
-              className="absolute top-5 -translate-x-1/2 select-none whitespace-nowrap font-mono text-[11px] leading-none px-0.5"
+              className="absolute -translate-x-1/2 select-none whitespace-nowrap font-mono leading-none px-0.5"
               style={{
+                top: SPOT_LABEL_TOP_PX,
+                fontSize: `${fontPx}px`,
                 color,
                 textShadow: '0 0 3px rgba(0,0,0,0.8)',
               }}
