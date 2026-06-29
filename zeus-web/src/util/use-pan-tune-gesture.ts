@@ -60,12 +60,13 @@ import {
 import { computeSnapToLineHz, getSnapHistorySpectrum, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { useVfoLockStore } from '../state/vfo-lock-store';
 
-// VFO lock — when the operator pins the dial, every gesture that would move the
-// operating frequency is suppressed at the SOURCE (no optimistic store write,
-// no POST), so the dial can't even twitch. The api/client gates on
-// setVfo/setReceiver remain as a backstop for non-gesture callers. Display-only
-// actions (zoom, and a pan that moves the IQ window without moving the dial —
-// i.e. CTUN-on on a real receiver, or a Kiwi slice) stay live.
+// VFO lock — when the operator pins the dial, every tune and every pan freezes
+// (KB2UKA's call): all dial moves AND all pans — even a display-only CTUN-on /
+// Kiwi pan that wouldn't move the dial — are suppressed at the SOURCE (no
+// optimistic store write, no POST), so the operating frequency can't move and
+// the view can't drift. Zoom (wheel-shift / pinch) is deliberately LEFT LIVE:
+// it changes magnification, never the dial. The api/client gates on
+// setVfo/setReceiver remain as a backstop for non-gesture callers.
 const vfoLocked = () => useVfoLockStore.getState().locked;
 import { armSnapLock } from './snap-lock';
 import { useNotchStore } from '../state/notch-store';
@@ -473,13 +474,6 @@ export function usePanTuneGesture(
     // via the WDSP shift, so the B panel holds still and the dial slides. With
     // CTUN off, both receivers pan with a relative drag (the DDC recentres).
     const ctunSweep = () => useConnectionStore.getState().ctunEnabled;
-    // A pan (LO/centre move) changes the operating frequency unless the dial is
-    // decoupled from the window: secondary RX always retunes its VFO; RX1 only
-    // moves the dial with CTUN off (CTUN on freezes the NCO and roams the dial
-    // via the shift); a Kiwi slice has no dial to pin. So "pan moves the dial"
-    // is what the VFO lock must block; a pure display pan stays live.
-    const panMovesDial = () =>
-      panIsSecondary || (!panIsKiwi && !useConnectionStore.getState().ctunEnabled);
 
     const commandedHz = () => pendingHz ?? readVfo();
     // Secondary receivers (RX2 / RX3+) have no separate "radio LO": their DDC
@@ -574,7 +568,8 @@ export function usePanTuneGesture(
     const idleCursor = () => (dragMode === 'ruler-pan' ? 'grab' : SPECTRUM_TUNE_CURSOR);
 
     const queuePanCenter = (nextHz: number) => {
-      if (vfoLocked() && panMovesDial()) return;
+      // Locked → the whole view is frozen, so no pan (even a display-only one).
+      if (vfoLocked()) return;
       const hz = clampHz(nextHz);
       if (hz === pendingPanHz) return;
       panVc.nudgeTargetHz(hz - commandedPanHz());

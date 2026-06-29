@@ -738,9 +738,9 @@ describe('usePanTuneGesture mobile touch mode', () => {
       unmount();
     });
 
-    it('still allows a CTUN-on ruler pan (window moves, dial stays pinned)', async () => {
-      // CTUN on decouples the dial from the window, so panning the view does not
-      // change the operating frequency — the lock must leave it live.
+    it('freezes even a CTUN-on display pan (whole view is locked)', async () => {
+      // KB2UKA's call: a lock freezes the panadapter entirely, so a CTUN-on
+      // ruler pan that only moves the window (not the dial) is blocked too.
       useConnectionStore.setState({ ctunEnabled: true, vfoHz: 14_205_000, radioLoHz: 14_200_000 });
       const { container, unmount } = render(
         createElement(GestureProbe, { touchMode: 'normal', dragMode: 'ruler-pan' }),
@@ -754,7 +754,8 @@ describe('usePanTuneGesture mobile touch mode', () => {
         await flush();
       });
 
-      expect(setRadioLoMock).toHaveBeenCalled();
+      expect(setRadioLoMock).not.toHaveBeenCalled();
+      expect(useConnectionStore.getState().radioLoHz).toBe(14_200_000);
       unmount();
     });
 
