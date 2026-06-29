@@ -158,9 +158,26 @@ public static class PluginEndpoints
         }
     }
 
+    /// <summary>
+    /// True when a plugin id was minted by the VST3 / AU directory scanners
+    /// (the <c>com.openhpsdr.zeus.{vst,rxvst,au,rxau}.*</c> namespaces). These
+    /// are operator-scanned audio plugins that live ONLY in the Audio Suite
+    /// rack — they are not Zeus plugin-repo plugins, so the Settings ▸ Plugins
+    /// list filters them out. Native Zeus audio plugins (e.g. the
+    /// <c>com.openhpsdr.zeus.samples.*</c> chain) are NOT scanned and stay in
+    /// the list. Reuses the scanners' own id-prefix predicates so the
+    /// classification has a single source of truth.
+    /// </summary>
+    internal static bool IsScannedAudioPlugin(string id) =>
+        VstDirectoryScanService.IsTxPluginId(id) ||
+        VstDirectoryScanService.IsRxPluginId(id) ||
+        AuComponentScanService.IsTxPluginId(id) ||
+        AuComponentScanService.IsRxPluginId(id);
+
     internal static PluginDto ToDto(ActivatedPlugin p) => new()
     {
         Id = p.Loaded.Manifest.Id,
+        Scanned = IsScannedAudioPlugin(p.Loaded.Manifest.Id),
         Name = p.Loaded.Manifest.Name,
         Version = p.Loaded.Manifest.Version,
         Author = p.Loaded.Manifest.Author,
@@ -200,6 +217,15 @@ public sealed record PluginListResponse
 public sealed record PluginDto
 {
     public string Id { get; init; } = "";
+
+    /// <summary>
+    /// True for operator-scanned VST3 / Audio Unit plugins (the
+    /// <c>com.openhpsdr.zeus.{vst,rxvst,au,rxau}.*</c> namespaces). These belong
+    /// to the Audio Suite rack only; the Settings ▸ Plugins list hides them so
+    /// it shows just Zeus plugin-repo plugins. Defaults false.
+    /// </summary>
+    public bool Scanned { get; init; }
+
     public string Name { get; init; } = "";
     public string Version { get; init; } = "";
     public string Author { get; init; } = "";

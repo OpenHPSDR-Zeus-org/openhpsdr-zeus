@@ -45,6 +45,13 @@ export type PluginAudioDto = {
 
 export type PluginDto = {
   id: string;
+  /**
+   * True for operator-scanned VST3 / Audio Unit plugins (server id
+   * namespaces `com.openhpsdr.zeus.{vst,rxvst,au,rxau}.*`). These live only in
+   * the Audio Suite rack; the Settings ▸ Plugins list filters them out so it
+   * shows just Zeus plugin-repo plugins. Defaults false for older servers.
+   */
+  scanned: boolean;
   name: string;
   version: string;
   author: string;
@@ -162,6 +169,7 @@ export function parsePluginDto(raw: unknown): PluginDto {
   const o = (raw ?? {}) as Record<string, unknown>;
   return {
     id: asString(o.id),
+    scanned: asBool(o.scanned),
     name: asString(o.name),
     version: asString(o.version),
     author: asString(o.author),
