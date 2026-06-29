@@ -196,6 +196,12 @@ interface LayoutState {
   ) => void;
   /** Toggle whether every tile in a layout is pinned in place. */
   setWorkspaceLockedInLayout: (layoutId: string, locked: boolean) => void;
+  /** Mark one layout as the TX auto-switch target (issue #1164). When
+   *  `autoSwitchOnTx` is true, the radio flips to this layout on MOX/TUN and
+   *  back on un-key. The flag is mutually exclusive across the radio's
+   *  layouts — setting it on one clears it on every other. Passing false
+   *  simply clears the flag on the named layout. */
+  setLayoutAutoSwitchOnTx: (layoutId: string, autoSwitchOnTx: boolean) => void;
   /** Toggle whether one tile is pinned to its current grid space. When locking,
    *  `lockedHeightPx` is the tile's current on-screen pixel height, captured so
    *  the tile can be held at exactly that size while the workspace reflows. */
@@ -677,6 +683,31 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     applyWorkspaceMutationForLayout(set, get, layoutId, withWorkspaceLocked(workspace, locked));
   },
 
+  setLayoutAutoSwitchOnTx: (layoutId, autoSwitchOnTx) => {
+    const state = get();
+    const target = findActive(state.layouts, layoutId);
+    if (!target && layoutId !== state.activeLayoutId) return;
+    // Enforce mutual exclusion across the radio's layouts: only ONE may be
+    // marked as the TX-switch target at a time. Walking the list once and
+    // applying per-layout mutations keeps the persisted JSON in step with
+    // the in-memory workspace for both the target and any layout that loses
+    // the flag.
+    for (const l of state.layouts) {
+      const ws = l.id === state.activeLayoutId
+        ? state.workspace
+        : parseLayoutOrDefault(l.layoutJson);
+      const wantFlag = autoSwitchOnTx && l.id === layoutId;
+      const hasFlag = ws.autoSwitchOnTx === true;
+      if (wantFlag === hasFlag) continue;
+      applyWorkspaceMutationForLayout(
+        set,
+        get,
+        l.id,
+        withWorkspaceAutoSwitchOnTx(ws, wantFlag),
+      );
+    }
+  },
+
   setTileLockedInLayout: (layoutId, uid, locked, lockedHeightPx) => {
     const target = findActive(get().layouts, layoutId);
     if (!target && layoutId !== get().activeLayoutId) return;
@@ -746,6 +777,16 @@ function withWorkspaceLocked(
   if (locked) return { ...workspace, locked: true };
   const next = { ...workspace };
   delete next.locked;
+  return next;
+}
+
+function withWorkspaceAutoSwitchOnTx(
+  workspace: WorkspaceLayout,
+  on: boolean,
+): WorkspaceLayout {
+  if (on) return { ...workspace, autoSwitchOnTx: true };
+  const next = { ...workspace };
+  delete next.autoSwitchOnTx;
   return next;
 }
 

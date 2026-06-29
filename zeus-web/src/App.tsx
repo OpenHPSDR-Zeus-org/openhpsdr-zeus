@@ -119,6 +119,7 @@ import { useSavedLayoutsStore } from './state/saved-layouts-store';
 import { useDisplaySettingsStore } from './state/display-settings-store';
 import { useCapabilitiesStore } from './state/capabilities-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
+import { useTxLayoutAutoSwitch } from './hooks/useTxLayoutAutoSwitch';
 import { useFilterAutopan } from './util/filter-autopan';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
 import { BandPlanProvider } from './context/BandPlanContext';
@@ -244,6 +245,7 @@ export default function App() {
 
   useKeyboardShortcuts();
   useMicUplink();
+  useTxLayoutAutoSwitch();
   useFilterRibbonOpenSync();
   // Keep the RX filter + dial crosshair inside the spectrum view under CTUN.
   useFilterAutopan();

@@ -40,6 +40,10 @@ export interface LayoutSettingsValue {
   icon: string;
   description: string;
   locked: boolean;
+  /** When true, the operator wants this workspace to take over the screen
+   *  while MOX/TUN is keyed and revert on un-key. Only one workspace per
+   *  radio holds this flag — the layout-store enforces uniqueness on save. */
+  autoSwitchOnTx: boolean;
 }
 
 /** One workspace tab in the manager dropdown. */
@@ -48,6 +52,7 @@ export interface LayoutManagerEntry {
   name: string;
   icon?: string;
   locked: boolean;
+  autoSwitchOnTx: boolean;
 }
 
 /** One reusable preset in the saved-layouts library. */
@@ -123,6 +128,7 @@ export function LayoutSettingsModal({
   const [icon, setIcon] = useState(initial.icon);
   const [description, setDescription] = useState(initial.description);
   const [locked, setLocked] = useState(initial.locked);
+  const [autoSwitchOnTx, setAutoSwitchOnTx] = useState(initial.autoSwitchOnTx);
   // Manager-only transient state.
   const [confirmDelete, setConfirmDelete] = useState(false);
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -143,6 +149,7 @@ export function LayoutSettingsModal({
     setIcon(initial.icon);
     setDescription(initial.description);
     setLocked(initial.locked);
+    setAutoSwitchOnTx(initial.autoSwitchOnTx);
     setConfirmDelete(false);
     // Resync only when the managed selection changes, not on every keystroke.
   }, [manager?.selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -155,6 +162,7 @@ export function LayoutSettingsModal({
       icon: icon.trim(),
       description: description.trim(),
       locked,
+      autoSwitchOnTx,
     });
   };
 
@@ -375,6 +383,18 @@ export function LayoutSettingsModal({
             </span>
           </label>
 
+          <AutoSwitchOnTxRow
+            checked={autoSwitchOnTx}
+            onChange={setAutoSwitchOnTx}
+            currentHolder={
+              manager && !autoSwitchOnTx
+                ? manager.workspaces.find(
+                    (w) => w.autoSwitchOnTx && w.id !== manager.selectedId,
+                  )
+                : undefined
+            }
+          />
+
           {manager && <SavedLayoutsLibrary manager={manager} />}
         </div>
 
@@ -578,6 +598,37 @@ function SavedLayoutsLibrary({ manager }: { manager: LayoutManagerControls }) {
         </ul>
       )}
     </div>
+  );
+}
+
+function AutoSwitchOnTxRow({
+  checked,
+  onChange,
+  currentHolder,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  currentHolder?: LayoutManagerEntry;
+}) {
+  return (
+    <label className="layout-settings-lock-row">
+      <input
+        type="checkbox"
+        checked={checked}
+        aria-label="Auto-switch to this workspace when transmitting"
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span className="layout-settings-lock-copy">
+        <span className="layout-settings-field-label">
+          Auto-switch to this workspace when transmitting
+        </span>
+        <span className="layout-settings-field-hint">
+          {currentHolder
+            ? `Currently set on "${currentHolder.name}" — ticking this will move it here.`
+            : 'On MOX/TUN/PTT, Zeus shows this workspace; on release it returns to whatever you were on.'}
+        </span>
+      </span>
+    </label>
   );
 }
 

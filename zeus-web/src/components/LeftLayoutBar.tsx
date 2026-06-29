@@ -61,6 +61,9 @@ export function LeftLayoutBar() {
   const setWorkspaceLockedInLayout = useLayoutStore(
     (s) => s.setWorkspaceLockedInLayout,
   );
+  const setLayoutAutoSwitchOnTx = useLayoutStore(
+    (s) => s.setLayoutAutoSwitchOnTx,
+  );
   // Saved-layouts library (reusable presets, separate from the tabs).
   const savedLayouts = useSavedLayoutsStore((s) => s.savedLayouts);
   const saveWorkspaceToLibrary = useSavedLayoutsStore((s) => s.saveWorkspaceAs);
@@ -109,6 +112,18 @@ export function LeftLayoutBar() {
       ),
     [layouts],
   );
+  const autoSwitchOnTxLayoutIds = useMemo(
+    () =>
+      new Set(
+        layouts
+          .filter(
+            (layout) =>
+              parseLayoutOrDefault(layout.layoutJson).autoSwitchOnTx === true,
+          )
+          .map((layout) => layout.id),
+      ),
+    [layouts],
+  );
 
   const handleAdd = () => {
     setCreateSourceId('');
@@ -153,6 +168,7 @@ export function LeftLayoutBar() {
         description: value.description,
       });
       setWorkspaceLockedInLayout(modal.id, value.locked);
+      setLayoutAutoSwitchOnTx(modal.id, value.autoSwitchOnTx);
     }
     setModal({ kind: 'closed' });
   };
@@ -337,6 +353,7 @@ export function LeftLayoutBar() {
             icon: '',
             description: '',
             locked: false,
+            autoSwitchOnTx: false,
           }}
           createSource={{
             savedLayouts,
@@ -355,6 +372,7 @@ export function LeftLayoutBar() {
             icon: editingLayout.icon ?? '',
             description: editingLayout.description ?? '',
             locked: parseLayoutOrDefault(editingLayout.layoutJson).locked === true,
+            autoSwitchOnTx: autoSwitchOnTxLayoutIds.has(editingLayout.id),
           }}
           manager={{
             workspaces: layouts.map((l) => ({
@@ -362,6 +380,7 @@ export function LeftLayoutBar() {
               name: l.name,
               ...(l.icon ? { icon: l.icon } : {}),
               locked: lockedLayoutIds.has(l.id),
+              autoSwitchOnTx: autoSwitchOnTxLayoutIds.has(l.id),
             })),
             selectedId: modal.id,
             onSelectWorkspace: openManage,

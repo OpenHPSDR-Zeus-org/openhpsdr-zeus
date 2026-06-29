@@ -466,6 +466,67 @@ describe('layout-store / workspace tile mutators', () => {
     expect(useLayoutStore.getState().workspace.tiles).toHaveLength(1);
   });
 
+  describe('setLayoutAutoSwitchOnTx (issue #1164)', () => {
+    it('flags exactly one layout and clears the flag on the others when set', () => {
+      const layoutA: WorkspaceLayout = {
+        schemaVersion: 8,
+        tiles: [],
+        autoSwitchOnTx: true,
+      };
+      const layoutB: WorkspaceLayout = { schemaVersion: 8, tiles: [] };
+      useLayoutStore.setState({
+        radioKey: 'radio-1',
+        layouts: [
+          { id: 'a', name: 'A', layoutJson: JSON.stringify(layoutA) },
+          { id: 'b', name: 'B', layoutJson: JSON.stringify(layoutB) },
+        ],
+        activeLayoutId: 'a',
+        workspace: layoutA,
+        isLoaded: true,
+      });
+
+      useLayoutStore.getState().setLayoutAutoSwitchOnTx('b', true);
+
+      const state = useLayoutStore.getState();
+      const parsedA = JSON.parse(
+        state.layouts.find((l) => l.id === 'a')!.layoutJson,
+      ) as WorkspaceLayout;
+      const parsedB = JSON.parse(
+        state.layouts.find((l) => l.id === 'b')!.layoutJson,
+      ) as WorkspaceLayout;
+      expect(parsedA.autoSwitchOnTx).toBeUndefined();
+      expect(parsedB.autoSwitchOnTx).toBe(true);
+      // Active layout's mirrored workspace is in step with its layoutJson.
+      expect(state.workspace.autoSwitchOnTx).toBeUndefined();
+    });
+
+    it('passing false simply clears the flag on the named layout', () => {
+      const layoutA: WorkspaceLayout = {
+        schemaVersion: 8,
+        tiles: [],
+        autoSwitchOnTx: true,
+      };
+      useLayoutStore.setState({
+        radioKey: 'radio-1',
+        layouts: [
+          { id: 'a', name: 'A', layoutJson: JSON.stringify(layoutA) },
+        ],
+        activeLayoutId: 'a',
+        workspace: layoutA,
+        isLoaded: true,
+      });
+
+      useLayoutStore.getState().setLayoutAutoSwitchOnTx('a', false);
+
+      const state = useLayoutStore.getState();
+      const parsedA = JSON.parse(
+        state.layouts.find((l) => l.id === 'a')!.layoutJson,
+      ) as WorkspaceLayout;
+      expect(parsedA.autoSwitchOnTx).toBeUndefined();
+      expect(state.workspace.autoSwitchOnTx).toBeUndefined();
+    });
+  });
+
   it('debounced save persists the mutated layout after a quick layout switch', async () => {
     vi.useFakeTimers();
     const fetchMock = vi

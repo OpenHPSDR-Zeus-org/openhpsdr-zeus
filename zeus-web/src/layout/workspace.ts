@@ -85,6 +85,11 @@ export interface WorkspaceLayout {
   tiles: WorkspaceTile[];
   /** When true, every tile in this workspace is pinned in place. */
   locked?: boolean;
+  /** When true, the radio auto-switches TO this workspace whenever MOX/TUN is
+   *  keyed and switches BACK to the prior workspace on un-key (issue #1164).
+   *  At most one workspace per radio carries this flag — the layout-store
+   *  mutator that sets it clears the flag on the other workspaces. */
+  autoSwitchOnTx?: boolean;
 }
 
 export const EMPTY_WORKSPACE_LAYOUT: WorkspaceLayout = {
@@ -232,7 +237,12 @@ export function parseWorkspaceLayout(raw: unknown): WorkspaceLayout {
   if (!raw || typeof raw !== 'object') return EMPTY_WORKSPACE_LAYOUT;
   // Read schemaVersion as a plain number (not the literal-8 type that
   // Partial<WorkspaceLayout> would impose) so the v7/v8 comparison typechecks.
-  const obj = raw as { schemaVersion?: unknown; tiles?: unknown; locked?: unknown };
+  const obj = raw as {
+    schemaVersion?: unknown;
+    tiles?: unknown;
+    locked?: unknown;
+    autoSwitchOnTx?: unknown;
+  };
   const version =
     typeof obj.schemaVersion === 'number' ? obj.schemaVersion : undefined;
   // v8 is the current 24×48 grid; v7 is the legacy 12×24 grid, migrated
@@ -279,6 +289,7 @@ export function parseWorkspaceLayout(raw: unknown): WorkspaceLayout {
     schemaVersion: 8,
     tiles: normalizeOversizedRows(tiles),
     ...(obj.locked === true ? { locked: true } : {}),
+    ...(obj.autoSwitchOnTx === true ? { autoSwitchOnTx: true } : {}),
   };
 }
 
