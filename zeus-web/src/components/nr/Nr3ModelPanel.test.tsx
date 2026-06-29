@@ -14,11 +14,21 @@ describe('Nr3ModelPanel', () => {
     useConnectionStore.setState({
       wdspNr3RnnrAvailable: true,
       nr3ModelName: null,
+      nr3UsingBundledDefault: false,
     });
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
   });
+
+  function hintText(): string {
+    return container.querySelector('.nr-settings__hint')?.textContent ?? '';
+  }
+
+  function removeButton(): HTMLButtonElement | undefined {
+    return Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((b) => b.textContent?.trim() === 'Remove model');
+  }
 
   afterEach(() => {
     act(() => {
@@ -61,5 +71,34 @@ describe('Nr3ModelPanel', () => {
     renderPanel();
 
     expect(linkByLabel('Open the Xiph RNNoise model data directory')).toBeDefined();
+  });
+
+  it('shows the bundled-default state and hides Remove when no operator model is installed', () => {
+    useConnectionStore.setState({
+      wdspNr3RnnrAvailable: true,
+      nr3ModelName: 'RNNoise (bundled default)',
+      nr3UsingBundledDefault: true,
+    });
+
+    renderPanel();
+
+    expect(hintText()).toContain('bundled default');
+    // Nothing to remove when running on the shipped default.
+    expect(removeButton()).toBeUndefined();
+  });
+
+  it('shows the installed model name and a Remove action for an operator model', () => {
+    useConnectionStore.setState({
+      wdspNr3RnnrAvailable: true,
+      nr3ModelName: 'hf-voice.rnnn',
+      nr3UsingBundledDefault: false,
+    });
+
+    renderPanel();
+
+    expect(hintText()).toContain('hf-voice.rnnn');
+    const btn = removeButton();
+    if (!btn) throw new Error('Remove button not rendered for an operator model');
+    expect(btn.getAttribute('title')).toContain('revert to the bundled default');
   });
 });

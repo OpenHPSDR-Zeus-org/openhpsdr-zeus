@@ -110,6 +110,7 @@ function mockState(nr: NrConfigDto): RadioStateDto {
     nr,
     wdspNr3RnnrAvailable: false,
     nr3ModelName: null,
+    nr3UsingBundledDefault: false,
     zoomLevel: 1,
     workspaceZoomPct: conn.workspaceZoomPct,
     psEnabled: false,

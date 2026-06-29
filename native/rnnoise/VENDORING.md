@@ -116,9 +116,13 @@ and `release.yml` for every `libwdsp` job (macOS arm64, Linux x64/arm64, Windows
 x64/arm64), alongside `WDSP_WITH_NR4=ON`. Each job has a **Verify RNNR exports**
 step asserting the 3 exports (`SetRXARNNRRun`, `SetRXARNNRPosition`,
 `RNNRloadModel`) — the analogue of the existing SBNR-export check — so a silently
-stub-based build fails CI. The managed side detects these via
-`WdspDspEngine.Nr3RnnrAvailable` and reveals NR3 in the UI once a model is also
-installed.
+stub-based build fails CI. A 4th export, `RNNRmodelLoaded` (added alongside the
+`int`-returning `RNNRloadModel`), reports whether a custom model is currently
+loaded so the managed side can reject a model the native loader couldn't parse;
+the export checks expect **4** RNNR symbols. The managed side detects NR3 via
+`WdspDspEngine.Nr3RnnrAvailable` (the original 3 symbols — `RNNRmodelLoaded` is
+treated as optional so older libwdsp builds still surface NR3) and reveals it in
+the UI once a model is active.
 
 Until the per-platform `libwdsp` binaries committed under
 `Zeus.Dsp/runtimes/<rid>/native/` are rebuilt by these workflows and committed,
@@ -126,7 +130,24 @@ Until the per-platform `libwdsp` binaries committed under
 
 ## Models for operators
 
-Zeus links to documentation rather than hosting a model. Operators supply their
-own RNNoise weights file (a community HF-tuned model, or one trained per the
-upstream pipeline at the pinned `model_version` architecture) and install it from
-the DSP menu (upload or URL).
+Zeus ships a **bundled default model**
+(`Zeus.Server.Hosting/nr3-data/rnnoise-default.bin`, copied next to the app and
+resolved by `Nr3ModelStore` via `AppContext.BaseDirectory`) so NR3 works out of
+the box. It is a standard xiph/rnnoise model in DNNw weights-file format,
+matching the vendored architecture's `init_rnnoise()` (43 arrays: `conv1`,
+`conv2`, `gru1..3`, `dense_out`, `vad_dense`). BSD-3-Clause, attributed in
+`ATTRIBUTIONS.md`.
+
+Operators may override the default by installing their own RNNoise weights file
+(a community HF-tuned model, or one trained per the upstream pipeline at the
+same architecture) from the DSP menu (upload or URL). Removing the operator
+model reverts to the bundled default.
+
+> **Architecture note:** the model that matches Zeus's vendored
+> `src/rnnoise_data.h` is the one whose `init_rnnoise()` dimensions line up
+> (`conv1` 195→128, `conv2` 384→384, the three GRUs 384→1152, plus `dense_out`
+> and `vad_dense`). A model from a *different* upstream `model_version` can parse
+> (`rnnoise_model_from_filename` returns non-NULL) yet fail to instantiate
+> (`rnnoise_create` returns NULL) when a required array is missing or
+> differently sized — verify a candidate with a `rnnoise_create()` smoke test
+> before bundling or recommending it.

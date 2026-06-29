@@ -68,6 +68,15 @@
     <Content Include="wdsp-data\calculus" Link="calculus" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- Bundled default NR3 (RNNoise) model. Resolved at runtime by Nr3ModelStore
+       via AppContext.BaseDirectory so NR3 works out of the box; the operator can
+       still override it by installing their own weights file. Standard
+       xiph/rnnoise model, DNNw weights-file format, BSD-3-Clause — see
+       native/rnnoise/VENDORING.md and ATTRIBUTIONS.md. -->
+  <ItemGroup>
+    <Content Include="nr3-data\rnnoise-default.bin" Link="rnnoise-default.bin" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- appsettings flow to consumers — preserves the existing 'next to the
        executable' lookup that WebApplication.CreateBuilder does by default. -->
   <ItemGroup>

@@ -193,14 +193,25 @@ provenance, the pinned upstream commit, and a re-vendor recipe are in
 
 The vendored copy is the upstream xiph `main`-branch architecture (the
 weights-file / DNN variant whose `rnnoise_model_from_filename` API
-`native/wdsp/rnnr.c` calls). Zeus ships **no** RNNoise model: the library is
-built with `USE_WEIGHTS_FILE` and a minimal `rnnoise_data.c` (the
-`init_rnnoise()` function only, no default weights), so NR3 is a clean
-pass-through until the operator installs a weights file at runtime. See
-`native/rnnoise/VENDORING.md` for the no-bundled-model details.
+`native/wdsp/rnnr.c` calls). The library is built with `USE_WEIGHTS_FILE` and a
+minimal `rnnoise_data.c` (the `init_rnnoise()` function only, no default weights
+compiled in), so NR3 loads its model at runtime rather than baking one into
+`libwdsp`. See `native/rnnoise/VENDORING.md` for details.
+
+### Bundled default model
+
+Zeus ships a **default RNNoise model** so NR3 works out of the box:
+[`Zeus.Server.Hosting/nr3-data/rnnoise-default.bin`](Zeus.Server.Hosting/nr3-data/rnnoise-default.bin).
+It is a standard xiph/rnnoise model in the DNNw weights-file format, compatible
+with the vendored RNNoise architecture (43 weight arrays: `conv1`/`conv2`, three
+GRU layers, `dense_out`, `vad_dense`). The model weights carry the same
+**BSD-3-Clause** licence as RNNoise itself (`native/rnnoise/COPYING`). The
+operator may override it at runtime by installing their own weights file via the
+DSP menu (upload or URL); removing that reverts to this bundled default.
 
 Upstream:
 - <https://github.com/xiph/rnnoise> (mirror of <https://gitlab.xiph.org/xiph/rnnoise>)
+- Models: <https://media.xiph.org/rnnoise/models/>
 
 BSD-3-Clause → GPL-2.0-or-later is one-way licence-compatible, so linking
 RNNoise into Zeus's GPL-2-or-later distribution is consistent with both

@@ -60,6 +60,8 @@ You don't have to save manually — **layout changes persist automatically.** As
 
 To start a layout over, use the **⟳ Default** button at the right end of the bottom transport bar. It resets the *active* layout's panel arrangement to its default while keeping the layout tab itself (and its name and icon). You'll be asked to confirm. This is also the recover action if a layout ever renders badly — resetting clears whatever state caused it.
 
+**The saved-layouts library.** Beyond the tabs on the layout bar, Zeus keeps a **library of named layouts** you can save, recall, rename, and delete independently of your active workspace tabs. Capture an arrangement you like into the library and pull it back later without disturbing the tab you're working in — useful for keeping a "contest," "ragchew," and "digital" setup on hand. You can also **transfer panels between layouts**, and panels you've detached into their own windows are remembered and restored with the layout.
+
 ### Detaching a panel layout into its own window
 
 You can pop a whole layout out into a **separate window** — useful for a second monitor. Grab a layout tab in the left bar and **drag it off the bar**, then release. The layout opens in its own window (a native window in the desktop app, or a browser popup window in a browser). The detached window shows just that layout's panels, live with the same radio data as the main window. This is a desktop/browser feature; it isn't available on mobile.

@@ -84,11 +84,11 @@ public enum ConnectionStatus { Disconnected, Connecting, Connected, Error }
 
 // Thetis NR-button state: Off = no NR, Anr = NR1 (time-domain LMS),
 // Emnr = NR2 (Ephraim-Malah), Sbnr = NR4 (libspecbleach, issue #79),
-// Rnnr = NR3 (RNNoise). NR3 ships with NO bundled model — the operator
-// installs an RNNoise weights file via the DSP menu, and NR3 only becomes
-// selectable once a model is present (Zeus serves no default model; the
-// stock RNNoise voice corpus underperforms on HF, so bring-your-own). All
-// modes are mutually exclusive in WDSP, so the button carries them in one
+// Rnnr = NR3 (RNNoise). Zeus ships a bundled default RNNoise model so NR3 is
+// selectable out of the box; the operator can override it by installing their
+// own weights file via the DSP menu. NR3 is selectable whenever the loaded
+// libwdsp exports the RNNR symbols and a model (default or operator) is active.
+// All modes are mutually exclusive in WDSP, so the button carries them in one
 // enum. Byte order is fixed — appending only — because persisted
 // DspSettingsStore rows would mis-deserialize on a reorder.
 [JsonConverter(typeof(NrModeJsonConverter))]
@@ -1281,15 +1281,20 @@ public sealed record StateDto(
     // never auto-armed on restart.
     DiversityConfig? Diversity = null,
 
-    // ---- NR3 (RNNoise) availability + installed model ----
+    // ---- NR3 (RNNoise) availability + active model ----
     // WdspNr3RnnrAvailable: the loaded libwdsp exports the RNNR symbols
     // (SetRXARNNRRun / SetRXARNNRPosition / RNNRloadModel). False on builds
     // compiled with WDSP_WITH_NR3=OFF — NR3 is then hidden in the UI.
-    // Nr3ModelName: file name of the operator-installed RNNoise weights file,
-    // or null when none is installed. NR3 only becomes selectable when the
-    // native symbols are present AND a model is installed (Zeus ships none).
+    // Nr3ModelName: name of the ACTIVE model — the operator-installed file name,
+    // or the bundled-default display name, or null when neither is available.
+    // NR3 becomes selectable when the native symbols are present AND a model
+    // (default or operator) is active.
+    // Nr3UsingBundledDefault: true when the active model is the shipped default
+    // (no operator model installed). The UI uses this to label the source and
+    // gate the "Remove" action (remove reverts to the default, not to inert).
     bool WdspNr3RnnrAvailable = false,
-    string? Nr3ModelName = null);
+    string? Nr3ModelName = null,
+    bool Nr3UsingBundledDefault = false);
 
 /// <summary>Canonical CW constants shared between backend and wire DTOs.
 /// Single source of truth — CwOffset (server-side) and StateDto both

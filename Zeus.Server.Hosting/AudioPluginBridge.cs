@@ -1484,6 +1484,28 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
             if (_txInitializedIds.Contains(id)) return true;
         }
 
+        // VST mode (out-of-process engine selected): the external engine hosts the
+        // VST3 plugins, so DON'T load them in the in-process VST bridge — mirror the
+        // receive path's EnsureRxPluginInitialized reservation. This is essential for
+        // plugins the in-process host can't load (e.g. Waves shells, which fail with
+        // VST3 load status=5): without it InitializeAudioAsync throws here and the
+        // caller DETACHES the plugin, so it can never be added to the chain even
+        // though the engine could host it. Gated on State (not IsActive) so it also
+        // covers the startup window before the engine finishes its handshake, plus a
+        // crash-looping / backoff engine — all cases where VST is the chosen route.
+        // Native mode leaves the controller Inactive, so the in-process load below
+        // still runs unchanged.
+        if (audioPlugin is VstHostAudioPlugin
+            && _vstEngine is not null
+            && _vstEngine.State != VstEngineState.Inactive)
+        {
+            lock (_lock) _txInitializedIds.Add(id);
+            _log.LogInformation(
+                "TX VST plugin {Id} reserved for the out-of-process VST engine; in-process VST bridge not loaded",
+                id);
+            return true;
+        }
+
         try
         {
             audioPlugin.InitializeAudioAsync(

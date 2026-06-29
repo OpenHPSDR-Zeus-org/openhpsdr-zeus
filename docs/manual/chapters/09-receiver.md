@@ -125,3 +125,20 @@ Toggles let you allow it to drive the **Blanker** and the **Notch Helpers**, and
 **Signal Intelligence** is a visualization-and-enhancement layer. It offers profiles (**Balanced, DX, CW, Digital, Voice, Contest**) plus an **Auto Profile** that picks one to match the band. Its switches include **Signal Pop** (lifts real signals out of the display noise), **Snap** (snaps your tuning to a nearby signal), **Visual AGC** (steadies the display), and **Spike Reject** (suppresses display spikes). A large set of fine-tuning sliders lets you shape the panadapter/waterfall look. These controls affect detection, tuning aids, and how signals are *displayed* — they make weak signals easier to see and click, on top of the audio-path tools above.
 
 Safe default: leave Smart NR on **Suggest** and Signal Intelligence on a **Balanced** profile until you're comfortable, then experiment. Nothing here changes your transmit; it's all about hearing and seeing the band more clearly.
+
+### Multiple receivers — running RX1 through RX8
+
+A second receiver (RX2) has long been part of Zeus. On **Protocol-2 radios** (ANAN-G2 class) Zeus now goes much further: it can run **up to eight genuine hardware receivers — RX1 through RX8** — at the same time. Each is a real, independent receiver with its own band, tuning, filter, and audio — not just another view of the same signal. You might park RX1 on a 20 m phone net, hunt DX on RX2, watch a 40 m FT8 sub-band on RX3, and so on.
+
+How many you can run depends on your radio and the sample rate (wider spectrum costs receiver slots), so Zeus offers the receiver count your board actually supports.
+
+**Turning receivers on.** The **MULTI RX** control adds and removes receivers. Each one you enable gets its own panadapter/waterfall pane and its own slot in the controls. Turning MULTI RX off collapses cleanly back to a single RX1 — nothing is left stranded.
+
+**Focus.** The receiver controls (AF, AGC, mode, filter, and so on) act on whichever receiver currently has **focus**. Click into a pane to give it focus; the strip then drives that receiver. This is how each receiver keeps its own volume, mode, and filter independently.
+
+**Ganged band selection.** When you want several receivers to move together — say, to sweep a contest across three panes — **gang** them: select the receivers you want linked and a band change moves all of them at once. Leave a receiver out of the gang to let it sit on its own band.
+
+**A consistent picture across panes.** With many waterfalls stacked, Zeus keeps them readable: each receiver carries its own **dB scale** with **noise-floor normalization**, so a quiet pane and a busy pane line up visually instead of one washing out. Per-receiver **filter splits and colors** keep it clear which controls and which trace belong to which receiver.
+
+**Transmit.** You can transmit on any receiver, not just RX1 — the focused receiver's VFO is what goes out when you key up. As always, confirm which receiver has focus before you transmit so you key up on the frequency you intend.
+

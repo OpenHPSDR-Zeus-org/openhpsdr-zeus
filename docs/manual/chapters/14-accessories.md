@@ -105,6 +105,19 @@ quiet/good, amber for unsettled/fair, red for storm/poor — so you can read
 band health at a glance. It refreshes itself every few minutes; the ↻ button
 forces an update. No setup is required.
 
+### Lightning Map
+
+The **Lightning Map** panel plots **real-time lightning strikes** from the
+Blitzortung community detection network on a world map, so you can watch
+storms develop and move. Strikes fade as they age, giving you a live sense of
+where the activity is.
+
+The headline feature is the **proximity strike alert**: set an alert radius
+around your station and Zeus warns you when strikes land inside it — your cue
+to think about disconnecting antennas before a storm reaches you. A **reset**
+clears the current alert state. Zoom and pan the map to focus on your region.
+No setup is required beyond an internet connection.
+
 ### Rotator Control
 
 Zeus talks to any Hamlib-compatible rotator server. That includes
@@ -159,19 +172,26 @@ to the left layout bar. The panel starts the HamClock server on its own when
 you open it. This is a **desktop** feature — it runs on the same machine as
 the backend.
 
-### WAV Recorder (the Tape Deck)
+### Recorder (plugin)
 
-The **WAV Recorder** is a reel-to-reel tape deck for your audio. Pick **RX**
-(received audio) or **TX** (your processed transmit audio) and press **●
-REC**; the reels spin and a counter runs. Recordings save to your **Downloads
-folder** as float-32 WAV files and appear in the list below, where you can
-play or delete them.
+The RX/TX **recorder** — a reel-to-reel tape deck for your audio — is now an
+**installable plugin** rather than part of the core download, so operators who
+never record carry none of its weight. Install it from **Settings → Plugins →
+Browse** ("Recorder"); the panel then appears under **Add Panel**. Your
+existing recordings and settings are picked up automatically if you ran an
+earlier in-core build.
+
+Once installed, it works as a folder-organized deck: pick **RX** (received
+audio) or **TX** (your processed transmit audio) and press **● REC**; the
+reels spin, level meters move, and a counter runs. Recordings save to disk as
+float-32 WAV files and appear in the list, organized into **folders** you can
+create, rename, and delete, with full control over the individual takes.
 
 Playback has a clever twist tied to your transmit state:
 
 - **MOX off** → **▶** plays the file locally through your speakers.
-- **MOX on** → the play button becomes **📡** and the recording is
-  transmitted **on the air**. An **ON AIR** indicator warns you.
+- **MOX on** → the play button transmits the recording **on the air** with a
+  single click. An **ON AIR** indicator warns you.
 
 That makes the deck a built-in voice-keyer: record a CQ call once, then play
 it out with MOX up whenever you want to send it. Because the files are
@@ -190,10 +210,24 @@ The left sidebar lists who's online, grouped by friends and by band, with a
 colored dot showing whether each operator is receiving, transmitting, or
 away. Star an operator to send a friend request; click any callsign to pop
 their QRZ profile card. Across the top are room tabs: **Public** for everyone,
-private **Groups**, and one-to-one **DMs** (private rooms glow gold). Type in
-the composer and press Enter to send (Shift+Enter for a newline). Messages up
-to 2000 characters are kept in a recent history so you see context when you
-join.
+private **Groups** you can organize, and one-to-one **DMs** (private rooms
+glow gold). Type in the composer and press Enter to send (Shift+Enter for a
+newline). Messages up to 2000 characters are kept in a recent history so you
+see context when you join.
+
+Chat carries more than text. You can **share a photo inline** — attach an
+image the way you'd send a message — and record and send a **voice message**
+(up to 60 seconds) right in the composer. A **roster overlay** can sit
+directly on the panadapter so you can keep an eye on who's around without
+giving up screen space to the full panel, and Chat is part of the default
+workspace layout so it's there from the first launch.
+
+**Moderation.** Community admins have a console for keeping the public rooms
+healthy: post a global announcement, clear the public chat, and manage a
+persistent **ban list** with live ban and unban. Admin callsigns show in
+**gold**, group rooms get distinct colors, and an admin can opt to see all
+operators' frequencies. These tools are visible only to admins; for everyone
+else chat just works.
 
 ### TCI — Third-Party Software Integration
 
@@ -282,6 +316,22 @@ external amplifiers — across both Protocol-1 and Protocol-2 boards. Because
 these lines are board-specific, what you see depends on the radio you're
 connected to; consult your radio's chapter for the exact controls available
 on your hardware.
+
+This external-port control was temporarily absent in the 0.10.0 release and is
+**back and expanded** here:
+
+- **Antenna selection** and **open-collector outputs** for switching antennas,
+  amplifiers, tuners, and other accessories by band.
+- **PTT-out** for sequencing an external amplifier's transmit/receive relay,
+  and **hardware PTT-in** so a footswitch on the radio keys Zeus — on by
+  default, so the footswitch works out of the box.
+- The **CW key jack** on Protocol-2 radios, for a paddle or straight key wired
+  to the radio rather than to your computer.
+- **External TX audio source** selection, to feed transmit audio from a line
+  input on the radio instead of the computer microphone (handy on boards with
+  a rear line-in, such as the ANAN-10E).
+- **RX audio to the radio's speaker/headphone jack**, on both Protocol-1 and
+  Protocol-2 radios, so you can listen at the rig.
 
 > **Antenna foot-gun worth knowing:** if one band suddenly goes dead with an
 > unusually low noise floor, check the per-band **RX-aux** routing. Setting a
