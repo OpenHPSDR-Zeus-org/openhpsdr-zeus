@@ -10,6 +10,39 @@ see the corresponding GitHub Release page.
 
 ---
 
+## [0.10.6] — 2026-06-29
+
+> **🔧 Hotfix on 0.10.5.** The headline is an audio-device fix for Windows: operators who couldn't select a Windows sound device for receive audio can now switch output devices freely again. This release also folds in every fix — and the one new feature — that landed since 0.10.5: a built-in **DX-cluster client**, HamClock link handling, audio-suite / VST robustness, and a round of web-UI polish.
+
+### 🔊 Audio
+
+- **Windows sound devices are selectable again.** Changing your **output** device no longer fails when the saved **input** (microphone) device is missing or stale — a carried-over device id can no longer block a change to the other side, and re-selecting the same device is now a no-op instead of a glitchy reopen. This fixes the "Zeus won't let me use any of the Windows sound devices for RX audio" reports. *(#1128)*
+- **Smoother radio-speaker audio (Protocol 2).** The radio-speaker UDP send is decoupled from the DSP tick, so speaker output no longer rides on DSP timing. *(#1148)*
+
+### 🛰️ New — DX Cluster (direct Telnet)
+
+- **Connect straight to a DX cluster.** A native Telnet DX-cluster client logs in to a DXSpider / AR-Cluster / CC-Cluster node with your callsign (and a password if the node needs one), runs any post-login commands you set, and drops the received spots straight onto the panadapter — no third-party bridge in between. Configure it under **Settings → Network**, beside TCI, with a live connection status and spot count. *(#1140)*
+
+### 🗺️ HamClock
+
+- External links and rig-bridge downloads inside the HamClock panel now hand off to your OS web browser instead of dead-ending in the embedded webview. *(#1112)*
+- The bundled map now states plainly that it cannot receive live DX auto-pins. *(#1110)*
+
+### 🎚️ Audio suite & VST
+
+- Editing the VST engine chain is now incremental — adding or removing one effect no longer reloads the entire chain. *(#1153)*
+- TX VST plugins are reserved for the out-of-process engine, and a TX VST that fails to load in-process is no longer detached when the engine is installed. *(#1157, #1159)*
+
+### 💬 Chat & 🖥️ Web UI
+
+- The chat relay self-heals a stale QRZ session instead of looping on 403s, and the chat composer no longer starts as a tall multi-row box. *(#1149, #1152)*
+- Panadapter callsigns render above the frequency line, honor friend-only gating, and hide together with your own frequency when you choose to hide it. *(#1151, #1155, #1158)*
+- Workspace column pitch re-latches if an early width was a transient; the Meter Group tile size survives a Settings round-trip; **Settings → Zeus Digital** now matches the house settings style; and operator-scanned VST3 / AU effects are hidden from the **Settings ▸ Plugins** list. *(#1146, #1160, #1166, #1168)*
+
+**Credits.** The Windows audio-device fix, the audio-suite / VST robustness work, the chat/QRZ self-heal, and the panadapter-callsign handling are by **Christian Suarez (N9WAR)**. The DX-cluster client, the HamClock link/download fixes, the Protocol-2 radio-speaker decoupling, the Zeus Digital settings styling, and the workspace / meter-layout fixes are by **Douglas Cerrato (KB2UKA)**.
+
+---
+
 ## [0.10.5] — 2026-06-28
 
 > **🎙️ The digital-modes release.** More than 200 pull requests land here, and the headline is that Zeus now does the digital modes natively: **FreeDV digital voice** (including the new neural **RADE** codec) as a first-class transmit/receive mode, and a built-in **FT8 / FT4** suite — decode, click-to-tune, armed auto-sequencing, an integrated logbook, and spotting — with no external software. Alongside the digital work this cycle brings **up to eight independent hardware receivers**, **full remote operation over the internet**, a **KiwiSDR** slice receiver, a real-time **Lightning Map**, serial **CAT** control, and the **return of external accessory-port switching** that was temporarily out in 0.10.0. The WAV recorder is now an installable plugin rather than core.

@@ -90,7 +90,11 @@ function RosterMarker({
 
   return (
     <div
-      className="pointer-events-none absolute inset-y-0 z-[9] -translate-x-1/2"
+      // z-[16] keeps the callsign pill ABOVE the frequency-scale chrome — the
+      // ruler (z-10), band overlay (z-11), and especially the green VFO dial
+      // marker / frequency line (z-15) — so the line never draws across a
+      // callsign. Stays below the VFO readout box (z-25), which owns the corner.
+      className="pointer-events-none absolute inset-y-0 z-[16] -translate-x-1/2"
       style={{ left: `${pct}%` }}
     >
       {/* vertical tick — non-interactive so it never blocks click-to-tune */}
@@ -184,6 +188,10 @@ export function ChatRosterOverlay() {
   const connected = useChatStore((s) => s.connected);
   const roster = useChatStore((s) => s.roster);
   const openDm = useChatStore((s) => s.openDm);
+  const freqPublic = useChatStore((s) => s.freqPublic);
+  const myCallsign = useChatStore((s) => s.callsign);
+  const acceptedFriends = useChatStore((s) => s.acceptedFriends);
+  const seeAllFreq = useChatStore((s) => s.seeAllFreq);
   const show = useDisplaySettingsStore((s) => s.showChatRosterOverlay);
 
   const centerHz = useDisplayStore((s) => s.centerHz);
@@ -213,8 +221,30 @@ export function ChatRosterOverlay() {
     }
     const spanHz = width * hzPerPixel;
     const startHz = Number(centerHz) - spanHz / 2;
+    // Respect the eye toggle for your OWN marker. The relay strips your freq
+    // from every other operator's roster the moment you hide it, so they stop
+    // seeing your callsign here — but it always sends you your own freq (so the
+    // rest of the UI can use it), which would otherwise leave your callsign
+    // pinned to your own panadapter after you've hidden. Drop it so "hidden"
+    // means hidden everywhere, including your own view.
+    const mine = (myCallsign ?? '').toUpperCase();
+    // Friend gate — mirror the chat roster's rule: you only see a friend's
+    // callsign on the panadapter, never a stranger's. The relay already enforces
+    // this (it strips freqHz from every non-friend before the roster leaves the
+    // server, so a stranger arrives unplaceable), but assert it here too so the
+    // intent is explicit and a future relay change can't silently leak callsigns.
+    // Yourself and the admin "see all" override are the deliberate exceptions:
+    // see-all is meant to reveal every operator on the panadapter regardless of
+    // friendship, so it bypasses the gate exactly as it does on the relay.
+    const friendSet = new Set(acceptedFriends.map((c) => c.toUpperCase()));
+    const canPlace = (op: ChatOperator) => {
+      const call = op.callsign.toUpperCase();
+      return call === mine || seeAllFreq || friendSet.has(call);
+    };
     const inView = roster
       .filter((op) => typeof op.freqHz === 'number' && Number.isFinite(op.freqHz))
+      .filter(canPlace)
+      .filter((op) => freqPublic || !mine || op.callsign.toUpperCase() !== mine)
       .map((op) => ({ op, pct: ((op.freqHz! - startHz) / spanHz) * 100 }))
       .filter(({ pct }) => pct >= -2 && pct <= 102)
       .sort((a, b) => a.pct - b.pct);
@@ -233,7 +263,7 @@ export function ChatRosterOverlay() {
       laneLastPct[lane] = pct;
       return { op, pct, lane };
     });
-  }, [show, enabled, connected, roster, centerHz, hzPerPixel, width]);
+  }, [show, enabled, connected, roster, centerHz, hzPerPixel, width, freqPublic, myCallsign, acceptedFriends, seeAllFreq]);
 
   if (placed.length === 0) return null;
 

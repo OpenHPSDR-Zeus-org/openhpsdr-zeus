@@ -28,6 +28,7 @@ describe('parsePluginDto', () => {
   it('coerces a complete payload', () => {
     const dto = parsePluginDto({
       id: 'hello',
+      scanned: true,
       name: 'Hello World',
       version: '1.2.3',
       author: 'EI6LF',
@@ -47,6 +48,7 @@ describe('parsePluginDto', () => {
       },
     });
     expect(dto.id).toBe('hello');
+    expect(dto.scanned).toBe(true);
     expect(dto.capabilities).toEqual(['hub:emit', 'storage']);
     expect(dto.ui?.panels[0]?.slot).toBe('workspace');
     expect(dto.audio?.sampleRate).toBe(48000);
@@ -55,6 +57,7 @@ describe('parsePluginDto', () => {
   it('falls back to safe defaults on garbage input', () => {
     const dto = parsePluginDto({});
     expect(dto.id).toBe('');
+    expect(dto.scanned).toBe(false);
     expect(dto.capabilities).toEqual([]);
     expect(dto.ui).toBeNull();
     expect(dto.audio).toBeNull();

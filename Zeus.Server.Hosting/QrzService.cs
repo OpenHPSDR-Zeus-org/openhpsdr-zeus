@@ -234,6 +234,30 @@ public sealed class QrzService
         }
     }
 
+    /// <summary>
+    /// Drops the cached QRZ session key (keeping stored credentials and home
+    /// station) so the next <see cref="GetChatIdentityAsync"/> / lookup forces a
+    /// fresh login. Used when an out-of-band consumer of the session — the
+    /// ZeusChat relay validating the key on the WS upgrade — reports it invalid.
+    /// The inline "Invalid session" self-heal in <see cref="LookupInternalAsync"/>
+    /// only fires for direct lookups; a relay 401/403 has no other way to evict
+    /// the optimistically-cached key, which otherwise replays for up to an hour
+    /// and loops the chat connection on a dead session.
+    /// </summary>
+    public async Task InvalidateSessionAsync(CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            _sessionKey = null;
+            _sessionExpiry = default;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task LogoutAsync(CancellationToken ct = default)
     {
         _username = null;

@@ -1029,6 +1029,17 @@ public static class ZeusHost
         builder.Services.AddHostedService(sp => sp.GetRequiredService<SpotBroadcastService>());
         builder.Services.AddSingleton<TciManagementService>();
 
+        // Native Telnet DX-cluster client — connects OUT to a DX cluster, logs in
+        // with the operator's callsign (+ optional password), and feeds received
+        // spots into the SAME SpotManager ingest path TCI spots use (→
+        // SpotBroadcastService → SpotOverlay). Disabled by default; never reaches
+        // the network until the operator enables + connects. Auto-connects at
+        // startup only when both Enabled and AutoConnect are persisted.
+        builder.Services.AddSingleton<DxClusterConfigStore>();
+        builder.Services.AddSingleton<Zeus.Server.DxCluster.DxClusterClient>();
+        builder.Services.AddSingleton<DxClusterManagementService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<DxClusterManagementService>());
+
         // CAT (Kenwood TS-2000 over TCP) server — control-only sibling of TCI for
         // loggers / digital-mode apps (WSJT-X, N1MM+, fldigi, Hamlib net rigctl).
         // Disabled by default; enable via appsettings.json Cat:Enabled=true or the
