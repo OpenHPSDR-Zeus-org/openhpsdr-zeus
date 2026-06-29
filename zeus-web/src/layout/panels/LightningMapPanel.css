@@ -314,14 +314,30 @@
 
 .lightning-map .lm-set-unit-sel {
   flex: 0 0 auto;
-  width: 44px;
-  padding: 3px 4px;
-  font-family: inherit;
-  font-size: 10px;
-  color: var(--fg-0, #fff);
+  display: flex;
+  gap: 2px;
+  padding: 2px;
   background: rgba(255, 255, 255, 0.07);
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 3px;
+}
+.lightning-map .lm-unit-opt {
+  padding: 2px 7px;
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--fg-2);
+  background: transparent;
+  border: none;
+  border-radius: 2px;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.lightning-map .lm-unit-opt:hover { color: var(--fg-1); }
+.lightning-map .lm-unit-opt.is-on {
+  color: var(--fg-0, #fff);
+  background: var(--accent, #4a9eff);
 }
 
 .lightning-map .lm-set-toggle {
