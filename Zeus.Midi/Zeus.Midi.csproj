@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Zeus.Contracts\Zeus.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+    <!-- Pure-managed MIDI I/O (Multimedia API) — cross-platform (Win/macOS/
+         Linux/Pi). No native build step; the package ships its own interop. -->
+    <PackageReference Include="Melanchall.DryWetMidi" Version="7.2.0" />
+    <!-- Pure-managed cross-platform HID for the Elgato Stream Deck. Degrades
+         to "no devices" when the platform/permissions deny HID enumeration
+         (e.g. Linux/Pi without a udev rule) rather than throwing. -->
+    <PackageReference Include="HidSharp" Version="2.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Zeus.Server.Tests" />
+  </ItemGroup>
+
+</Project>

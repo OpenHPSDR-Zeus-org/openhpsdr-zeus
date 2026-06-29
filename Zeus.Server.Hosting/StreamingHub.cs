@@ -922,6 +922,24 @@ public sealed class StreamingHub
         }
     }
 
+    /// <summary>
+    /// Broadcasts a pre-encoded MidiLearn (0x3B) frame ([type][UTF-8 JSON of
+    /// <see cref="Zeus.Contracts.MidiLearnFrame"/>]) to every connected client.
+    /// Emitted by MidiService ONLY while the operator has the MIDI settings
+    /// panel in Learn mode — one frame per inbound control event so the panel
+    /// can highlight the live control. Same fan-out shape as
+    /// <see cref="BroadcastDiagnostics"/> but not cached (learn frames are
+    /// transient and meaningless on a later attach).
+    /// </summary>
+    public void BroadcastMidiLearn(byte[] payload)
+    {
+        if (_clients.IsEmpty) return;
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
+    }
+
     private sealed class ClientSession : IClientSink
     {
         public Guid Id { get; }
