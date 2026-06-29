@@ -72,6 +72,16 @@ public sealed class AudioProcessingModeService : IHostedService
     // Refreshed from every chain event, and re-applied on each load_chain so a
     // plugin's voicing survives chain edits; profiles snapshot/restore this map.
     private Dictionary<string, string> _pluginStates = new(StringComparer.Ordinal);
+    // Serializes chain pushes (full load_chain + incremental diffs) so two
+    // back-to-back operator edits can't each diff against the same stale slot map
+    // and double-apply. Control-thread only; never held across a realtime op. Lock
+    // order: _chainSyncLock THEN _editorLock, never the reverse.
+    private readonly object _chainSyncLock = new();
+    // One-shot "the next chain push must be a full reload" flag, guarded by
+    // _editorLock. Set when plugin states are replaced wholesale (profile apply /
+    // startup replay) so the new voicing reaches the engine even when the chain
+    // ORDER is unchanged — an incremental diff would be empty and push nothing.
+    private bool _forceFullReload;
 
     public AudioProcessingModeService(
         AudioProcessingModeStore store,
@@ -117,7 +127,7 @@ public sealed class AudioProcessingModeService : IHostedService
     /// </summary>
     private void OnChainOrderChanged(IReadOnlyList<string> _)
     {
-        if (_engine.IsActive) LoadChainIntoEngine();
+        if (_engine.IsActive) SyncChainToEngine();
     }
 
     /// <summary>
@@ -502,7 +512,13 @@ public sealed class AudioProcessingModeService : IHostedService
     public void SetPluginStates(IReadOnlyDictionary<string, string> states)
     {
         lock (_editorLock)
+        {
             _pluginStates = new Dictionary<string, string>(states, StringComparer.Ordinal);
+            // Wholesale state replacement (profile apply / startup replay): force the
+            // next sync to be a full load_chain so the new voicing is pushed even if
+            // the chain order didn't change (an incremental diff would be a no-op).
+            _forceFullReload = true;
+        }
     }
 
     /// <summary>
@@ -521,47 +537,83 @@ public sealed class AudioProcessingModeService : IHostedService
     /// </summary>
     private void LoadChainIntoEngine()
     {
+        lock (_chainSyncLock) LoadChainCore(BuildDesiredSlots());
+    }
+
+    /// <summary>
+    /// Build the desired engine chain: the active Audio Suite VST3 plugins in chain
+    /// order, each with its absolute path, descriptor uid ("" selects the single /
+    /// first plugin in the file), and last-known opaque state ("" loads defaults).
+    /// Non-VST (native DSP) plugins are skipped — they never reach the engine.
+    /// </summary>
+    private List<VstChainDiff.DesiredSlot> BuildDesiredSlots()
+    {
+        var byId = new Dictionary<string, ActivatedPlugin>(StringComparer.Ordinal);
+        foreach (var p in _manager.Active) byId[p.Loaded.Manifest.Id] = p;
+
+        Dictionary<string, string> savedStates;
+        lock (_editorLock) savedStates = new(_pluginStates, StringComparer.Ordinal);
+
+        var desired = new List<VstChainDiff.DesiredSlot>();
+        foreach (var id in _chainOrder.CurrentOrder) // ordered, parked excluded
+        {
+            if (!byId.TryGetValue(id, out var p)) continue;
+            var vst3 = p.Loaded.Manifest.Audio?.Vst3Path;
+            if (string.IsNullOrEmpty(vst3)) continue; // non-VST (native DSP) plugin
+
+            var abs = Path.IsPathRooted(vst3) ? vst3 : Path.Combine(p.Loaded.PluginDir, vst3);
+            var uid = p.Loaded.Manifest.Audio?.Vst3Uid ?? string.Empty;
+            var state = savedStates.GetValueOrDefault(id, string.Empty);
+            desired.Add(new VstChainDiff.DesiredSlot(id, abs, uid, state));
+        }
+        return desired;
+    }
+
+    /// <summary>
+    /// Rebuild the id→slot / file→id / uid→id maps from the desired chain's final
+    /// post-push shape under <see cref="_editorLock"/>. A full reload clears the
+    /// optimistic open-editor set (the engine closes all editors on load_chain); an
+    /// incremental push keeps editors for the plugins that survive the edit.
+    /// </summary>
+    private void RebuildEngineMaps(IReadOnlyList<VstChainDiff.DesiredSlot> desired, bool full)
+    {
+        var map = new Dictionary<string, int>(StringComparer.Ordinal);
+        var fileToId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var uidToId = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (int i = 0; i < desired.Count; i++)
+        {
+            var d = desired[i];
+            map[d.Id] = i;
+            var key = NormalizePath(d.File);
+            if (key is not null) fileToId[key] = d.Id;
+            if (d.Uid.Length > 0) uidToId[d.Uid] = d.Id;
+        }
+        lock (_editorLock)
+        {
+            _idToEngineSlot = map;
+            _fileToId = fileToId;
+            _uidToId = uidToId;
+            if (full) _openEditors.Clear();
+            else _openEditors.IntersectWith(map.Keys);
+        }
+    }
+
+    /// <summary>
+    /// Full chain (re)load: clears the engine and parallel-loads every active VST3
+    /// plugin via one <c>load_chain</c>, restoring each plugin's saved state. Used
+    /// for engine activation, supervisor reconnect, and TX-dead recovery — the
+    /// cases where the engine is (or must be treated as) empty. Assumes
+    /// <see cref="_chainSyncLock"/> is held.
+    /// </summary>
+    private void LoadChainCore(List<VstChainDiff.DesiredSlot> desired)
+    {
         try
         {
-            var byId = new Dictionary<string, ActivatedPlugin>(StringComparer.Ordinal);
-            foreach (var p in _manager.Active) byId[p.Loaded.Manifest.Id] = p;
-
-            Dictionary<string, string> savedStates;
-            lock (_editorLock) savedStates = new(_pluginStates, StringComparer.Ordinal);
-
-            var slots = new List<object>();
-            var map = new Dictionary<string, int>(StringComparer.Ordinal);
-            var fileToId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var uidToId = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var id in _chainOrder.CurrentOrder) // ordered, parked excluded
-            {
-                if (!byId.TryGetValue(id, out var p)) continue;
-                var vst3 = p.Loaded.Manifest.Audio?.Vst3Path;
-                if (string.IsNullOrEmpty(vst3)) continue; // non-VST (native DSP) plugin
-
-                var abs = Path.IsPathRooted(vst3)
-                    ? vst3
-                    : Path.Combine(p.Loaded.PluginDir, vst3);
-                // uid selects ONE plugin from a shell file; "" => engine loads the
-                // single/first plugin in the file (describeFile fallback).
-                var uid = p.Loaded.Manifest.Audio?.Vst3Uid ?? string.Empty;
-                map[id] = slots.Count; // provisional: engine slot == load_chain position
-                var key = NormalizePath(abs);
-                if (key is not null) fileToId[key] = id;
-                if (uid.Length > 0) uidToId[uid] = id;
-                // Restore the plugin's saved voicing. "" => engine loads defaults.
-                var state = savedStates.GetValueOrDefault(id, string.Empty);
-                slots.Add(new { file = abs, identifier = uid, state });
-            }
-
-            lock (_editorLock)
-            {
-                _idToEngineSlot = map;
-                _fileToId = fileToId;
-                _uidToId = uidToId;
-                _openEditors.Clear(); // the engine closes all editors on load_chain
-            }
-
+            lock (_editorLock) _forceFullReload = false;
+            RebuildEngineMaps(desired, full: true);
+            var slots = desired
+                .Select(d => (object)new { file = d.File, identifier = d.Uid, state = d.State })
+                .ToList();
             _engine.SendCommand(new { cmd = "load_chain", chain = slots });
             _log.LogInformation(
                 "VST mode: loaded {Count} VST3 plugin(s) into the engine via load_chain.",
@@ -570,6 +622,47 @@ public sealed class AudioProcessingModeService : IHostedService
         catch (Exception ex)
         {
             _log.LogWarning(ex, "VST mode chain load threw; engine runs with whatever loaded.");
+        }
+    }
+
+    /// <summary>
+    /// Reconcile the engine's loaded chain with the operator's current chain after a
+    /// LIVE edit (add / remove / reorder / park). Diffs the desired chain against the
+    /// engine's current slots and emits only the needed incremental commands, so an
+    /// edit no longer re-instantiates the whole rack — the cause of multi-second
+    /// stalls and audible glitches on every edit. Falls back to a full
+    /// <see cref="LoadChainCore"/> when there's no current chain to diff against or a
+    /// wholesale state replacement is pending (profile apply / startup replay).
+    /// </summary>
+    private void SyncChainToEngine()
+    {
+        lock (_chainSyncLock)
+        {
+            try
+            {
+                bool forceFull;
+                lock (_editorLock) forceFull = _forceFullReload;
+
+                var desired = BuildDesiredSlots();
+
+                List<string> current;
+                lock (_editorLock)
+                    current = _idToEngineSlot.OrderBy(kv => kv.Value).Select(kv => kv.Key).ToList();
+
+                var cmds = forceFull ? null : VstChainDiff.Compute(current, desired);
+                if (cmds is null) { LoadChainCore(desired); return; }
+                if (cmds.Count == 0) return; // chains already match — skip a redundant reload
+
+                RebuildEngineMaps(desired, full: false);
+                foreach (var cmd in cmds) _engine.SendCommand(cmd);
+                _log.LogInformation(
+                    "VST mode: incremental chain update — {Ops} op(s), {Count} plugin(s).",
+                    cmds.Count, desired.Count);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "VST mode incremental chain sync threw; engine left as-is.");
+            }
         }
     }
 }
