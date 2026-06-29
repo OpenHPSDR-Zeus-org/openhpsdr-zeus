@@ -1,0 +1,134 @@
+# -------------------------------------------------------------------------- #
+#
+# Copyright (C) 1991-2010 Altera Corporation
+# Your use of Altera Corporation's design tools, logic functions 
+# and other software and tools, and its AMPP partner logic 
+# functions, and any output files from any of the foregoing 
+# (including device programming or simulation files), and any 
+# associated documentation or information are expressly subject 
+# to the terms and conditions of the Altera Program License 
+# Subscription Agreement, Altera MegaCore Function License 
+# Agreement, or other applicable license agreement, including, 
+# without limitation, that your use is for the sole purpose of 
+# programming logic devices manufactured by Altera and sold by 
+# Altera or its authorized distributors.  Please refer to the 
+# applicable agreement for further details.
+#
+# -------------------------------------------------------------------------- #
+#
+# Quartus II
+# Version 9.1 Build 350 03/24/2010 Service Pack 2 SJ Web Edition
+# Date created = 16:08:58  November 09, 2010
+#
+# -------------------------------------------------------------------------- #
+#
+# Notes:
+#
+# 1) The default values for assignments are stored in the file:
+#		Bootloader_assignment_defaults.qdf
+#    If this file doesn't exist, see file:
+#		assignment_defaults.qdf
+#
+# 2) Altera recommends that you do not modify this file. This
+#    file is updated automatically by the Quartus II software
+#    and any changes you make may be lost or overwritten.
+#
+# -------------------------------------------------------------------------- #
+
+
+set_global_assignment -name FAMILY "Cyclone IV GX"
+set_global_assignment -name DEVICE EP4CGX150DF31C7
+set_global_assignment -name TOP_LEVEL_ENTITY Bootloader
+set_global_assignment -name ORIGINAL_QUARTUS_VERSION "9.1 SP2"
+set_global_assignment -name PROJECT_CREATION_TIME_DATE "16:08:58  NOVEMBER 09, 2010"
+set_global_assignment -name LAST_QUARTUS_VERSION 13.1
+set_global_assignment -name USE_GENERATED_PHYSICAL_CONSTRAINTS OFF -section_id eda_blast_fpga
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 85
+set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -entity OzyII -section_id Top
+set_global_assignment -name PARTITION_COLOR 16764057 -entity OzyII -section_id Top
+set_global_assignment -name LL_ROOT_REGION ON -entity OzyII -section_id "Root Region"
+set_global_assignment -name LL_MEMBER_STATE LOCKED -entity OzyII -section_id "Root Region"
+set_location_assignment PIN_A7 -to PHY_MDIO
+set_location_assignment PIN_A5 -to PHY_RESET_N
+set_location_assignment PIN_A8 -to PHY_MDC
+set_location_assignment PIN_AE6 -to PHY_TX_CLOCK
+set_location_assignment PIN_L15 -to PHY_CLK125
+set_location_assignment PIN_B15 -to PHY_RX_CLOCK
+set_location_assignment PIN_AH6 -to PHY_TX_EN
+set_location_assignment PIN_AJ7 -to PHY_TX[0]
+set_location_assignment PIN_AJ6 -to PHY_TX[1]
+set_location_assignment PIN_AJ4 -to PHY_TX[2]
+set_location_assignment PIN_AJ3 -to PHY_TX[3]
+set_location_assignment PIN_AH2 -to PHY_RX[0]
+set_location_assignment PIN_AH3 -to PHY_RX[1]
+set_location_assignment PIN_AH4 -to PHY_RX[2]
+set_location_assignment PIN_AH5 -to PHY_RX[3]
+set_location_assignment PIN_A9 -to PHY_DV
+set_instance_assignment -name CLOCK_SETTINGS IF_clk -to IF_clk -entity OzyII
+set_instance_assignment -name CLOCK_SETTINGS Tx_clock_2 -to Tx_clock_2 -entity OzyII
+set_location_assignment PIN_AK3 -to SCK
+set_location_assignment PIN_AK4 -to SI
+set_location_assignment PIN_AK17 -to NCONFIG
+set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -entity OzyII -section_id Top
+set_global_assignment -name USE_CONFIGURATION_DEVICE ON
+set_global_assignment -name ALLOW_POWER_UP_DONT_CARE OFF
+set_global_assignment -name STRATIXIII_UPDATE_MODE REMOTE
+set_global_assignment -name FORCE_CONFIGURATION_VCCIO ON
+set_global_assignment -name CYCLONEIII_CONFIGURATION_DEVICE EPCS128
+set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -section_id Top
+set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
+set_global_assignment -name LL_ROOT_REGION ON -section_id "Root Region"
+set_global_assignment -name LL_MEMBER_STATE LOCKED -section_id "Root Region"
+set_global_assignment -name STRATIX_DEVICE_IO_STANDARD "3.3-V LVCMOS"
+set_location_assignment PIN_AK5 -to CONFIG
+set_location_assignment PIN_AK6 -to NODE_ADDR_CS
+set_global_assignment -name ON_CHIP_BITSTREAM_DECOMPRESSION ON
+set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -section_id Top
+set_global_assignment -name OUTPUT_IO_TIMING_NEAR_END_VMEAS "HALF VCCIO" -rise
+set_global_assignment -name OUTPUT_IO_TIMING_NEAR_END_VMEAS "HALF VCCIO" -fall
+set_global_assignment -name OUTPUT_IO_TIMING_FAR_END_VMEAS "HALF SIGNAL SWING" -rise
+set_global_assignment -name OUTPUT_IO_TIMING_FAR_END_VMEAS "HALF SIGNAL SWING" -fall
+set_location_assignment PIN_AE20 -to DEBUG_LED1
+set_location_assignment PIN_AE19 -to DEBUG_LED2
+set_location_assignment PIN_AE18 -to DEBUG_LED3
+set_location_assignment PIN_AE17 -to DEBUG_LED4
+set_location_assignment PIN_AE16 -to DEBUG_LED5
+set_location_assignment PIN_AD23 -to DEBUG_LED6
+set_location_assignment PIN_AD16 -to DEBUG_LED7
+set_location_assignment PIN_AA21 -to DEBUG_LED8
+set_location_assignment PIN_AA20 -to DEBUG_LED9
+set_location_assignment PIN_AA18 -to DEBUG_LED10
+set_location_assignment PIN_AK9 -to STATUS_LED
+set_global_assignment -name DEVICE_FILTER_PACKAGE FBGA
+set_global_assignment -name DEVICE_FILTER_PIN_COUNT 896
+set_global_assignment -name DEVICE_FILTER_SPEED_GRADE 7
+set_global_assignment -name LL_ROOT_REGION ON -entity Mercury -section_id "Root Region"
+set_global_assignment -name LL_MEMBER_STATE LOCKED -entity Mercury -section_id "Root Region"
+set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -entity Angelia -section_id Top
+set_global_assignment -name PARTITION_COLOR 16764057 -entity Angelia -section_id Top
+set_global_assignment -name LL_ROOT_REGION ON -entity Angelia -section_id "Root Region"
+set_global_assignment -name LL_MEMBER_STATE LOCKED -entity Angelia -section_id "Root Region"
+set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -entity Angelia -section_id Top
+set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -entity Angelia -section_id Top
+set_global_assignment -name ACTIVE_SERIAL_CLOCK FREQ_40MHZ
+set_global_assignment -name VERILOG_FILE Rx_fifo.v
+set_global_assignment -name VERILOG_FILE EEPROM.v
+set_global_assignment -name VERILOG_FILE Bootloader.v
+set_global_assignment -name VERILOG_FILE CRC32.v
+set_global_assignment -name VERILOG_FILE Led_control.v
+set_global_assignment -name VERILOG_FILE Led_flash.v
+set_global_assignment -name VERILOG_FILE MDIO.v
+set_global_assignment -name VERILOG_FILE PHY_fifo.v
+set_global_assignment -name VERILOG_FILE PLL_clocks.v
+set_global_assignment -name VERILOG_FILE Reconfigure.v
+set_global_assignment -name VERILOG_FILE Remote.v
+set_global_assignment -name QIP_FILE Remote.qip
+set_global_assignment -name QIP_FILE PHY_fifo.qip
+set_global_assignment -name QIP_FILE PLL_clocks.qip
+set_global_assignment -name QIP_FILE Rx_fifo.qip
+set_global_assignment -name QIP_FILE ASMI2.qip
+set_global_assignment -name GENERATE_RBF_FILE ON
+set_location_assignment PIN_AK8 -to SW17
+set_location_assignment PIN_Y17 -to SW18
+set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top

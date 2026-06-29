@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -76,19 +77,23 @@ public class DiscoveryTests
     }
 
     [Fact]
-    public void Parses_Orion_Reply()
+    public void Parses_Anan200D_Orion_Reply()
     {
+        // ANAN-200D on Protocol 2 sends device byte 0x04 (NOT 0x05 — that is
+        // OrionMkII on the P2 wire). Regression guard for issue #780, where the
+        // P1 numbering (Orion=0x05) was wrongly applied to P2 and a real 200D
+        // mis-detected as Angelia (ANAN-100D).
         var reply = BuildReply(new ReplyFields(
             Status: 0x02,
             Mac: new byte[] { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66 },
-            BoardId: 0x05,
+            BoardId: 0x04,
             ProtocolSupported: 36,
             CodeVersion: 19,
             NumReceivers: 1));
 
         Assert.True(ReplyParser.TryParse(reply, FromIp, out var radio));
         Assert.Equal(HpsdrBoardKind.Orion, radio.Board);
-        Assert.Equal((byte)0x05, radio.Details.RawBoardId);
+        Assert.Equal((byte)0x04, radio.Details.RawBoardId);
     }
 
     [Fact]
@@ -109,17 +114,19 @@ public class DiscoveryTests
     [InlineData((byte)0x00, HpsdrBoardKind.Metis)]
     [InlineData((byte)0x01, HpsdrBoardKind.Hermes)]
     [InlineData((byte)0x02, HpsdrBoardKind.HermesII)]
-    [InlineData((byte)0x04, HpsdrBoardKind.Angelia)]
-    [InlineData((byte)0x05, HpsdrBoardKind.Orion)]
+    [InlineData((byte)0x03, HpsdrBoardKind.Angelia)]     // ANAN-100D (P2 wire — issue #780)
+    [InlineData((byte)0x04, HpsdrBoardKind.Orion)]       // ANAN-200D (P2 wire — issue #780)
+    [InlineData((byte)0x05, HpsdrBoardKind.OrionMkII)]   // ANAN-7000DLE/8000DLE (P2 wire)
     [InlineData((byte)0x06, HpsdrBoardKind.HermesLite2)]
-    [InlineData((byte)0x0A, HpsdrBoardKind.OrionMkII)]
+    [InlineData((byte)0x0A, HpsdrBoardKind.OrionMkII)]   // Saturn / ANAN-G2
     [InlineData((byte)0x14, HpsdrBoardKind.HermesC10)]
     public void Maps_Every_Recognised_WireByte_To_BoardKind(byte boardId, HpsdrBoardKind expected)
     {
-        // P2 counterpart to the P1 exhaustive-mapping test. Note 0x00
-        // names "Atlas" on P2 vs "Metis" on P1 — same wire byte, different
-        // historical labelling. Issue #218's enum unification will pick a
-        // canonical name; this test pins the current dispatch.
+        // P2 counterpart to the P1 exhaustive-mapping test. The dual-ADC family
+        // uses DIFFERENT wire bytes on P2 vs P1 (issue #780): on P2,
+        // 0x03=Angelia(100D), 0x04=Orion(200D), 0x05=OrionMkII; on P1 those are
+        // 0x04/0x05/0x0A. 0x00 names "Atlas" on P2 vs "Metis" on P1 — same wire
+        // byte, different historical labelling.
         var reply = BuildReply(new ReplyFields(
             Status: 0x02,
             Mac: new byte[] { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55 },

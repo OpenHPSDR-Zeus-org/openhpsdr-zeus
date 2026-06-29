@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -48,13 +49,17 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
 } from 'react';
-import { fetchState, setVfo, setVfoB } from '../api/client';
+import { fetchState } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
-import { spectrumReceiverFilterColor, type SpectrumReceiverId } from './spectrumReceiverColor';
+import {
+  getReceiverVfoHz,
+  optimisticSetReceiverVfo,
+  postReceiverVfo,
+} from '../state/receiver-state';
+import { receiverColorByIndex, type SpectrumReceiverId } from './spectrumReceiverColor';
 
 const MAX_HZ = 60_000_000;
 const STATE_POLL_MS = 2000;
@@ -108,30 +113,44 @@ type ReceiverId = SpectrumReceiverId;
 
 type VfoDisplayProps = {
   receiver?: ReceiverId;
+  // Multi-DDC: tune an arbitrary receiver by index (0=RX1, 1=RX2, >=2 extra
+  // DDC). Overrides `receiver`. RX3+ read/write the canonical Receivers[] entry
+  // via POST /api/receivers/{index}; RX1/RX2 keep the flat setVfo/setVfoB path.
+  rxIndex?: number;
   label?: string;
   compact?: boolean;
 };
 
-function readReceiverVfo(receiver: ReceiverId): number {
-  const s = useConnectionStore.getState();
-  return receiver === 'B' ? s.vfoBHz : s.vfoHz;
+// Resolve the 0-based receiver index a display targets from its props.
+function resolveTargetIndex(receiver: ReceiverId, rxIndex?: number): number {
+  if (rxIndex !== undefined) return rxIndex;
+  return receiver === 'B' ? 1 : 0;
 }
 
-function patchReceiverVfo(receiver: ReceiverId, hz: number) {
-  return receiver === 'B' ? { vfoBHz: hz } : { vfoHz: hz };
+function readReceiverVfo(targetIndex: number): number {
+  return getReceiverVfoHz(useConnectionStore.getState(), targetIndex);
+}
+
+// Optimistic store patch so the digits track the wheel before the POST lands.
+function patchReceiverVfo(targetIndex: number, hz: number) {
+  optimisticSetReceiverVfo(targetIndex, hz);
 }
 
 export function VfoDisplay({
   receiver = 'A',
-  label = receiver === 'B' ? 'VFO B' : 'VFO A',
+  rxIndex,
+  label,
   compact = false,
 }: VfoDisplayProps = {}) {
-  const vfoHz = useConnectionStore((s) =>
-    receiver === 'B' ? s.vfoBHz : s.vfoHz,
-  );
+  const targetIndex = resolveTargetIndex(receiver, rxIndex);
+  const resolvedLabel = label ?? `RX${targetIndex + 1}`;
+  const vfoHz = useConnectionStore((s) => getReceiverVfoHz(s, targetIndex));
   const applyState = useConnectionStore((s) => s.applyState);
-  const postVfo = receiver === 'B' ? setVfoB : setVfo;
-  const receiverFilterColor = spectrumReceiverFilterColor(receiver);
+  const postVfo = useCallback(
+    (hz: number, signal?: AbortSignal) => postReceiverVfo(targetIndex, hz, signal),
+    [targetIndex],
+  );
+  const receiverFilterColor = receiverColorByIndex(targetIndex);
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -148,7 +167,7 @@ export function VfoDisplay({
   }, []);
 
   useEffect(() => {
-    if (receiver !== 'A') return;
+    if (targetIndex !== 0) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const tick = async () => {
@@ -167,7 +186,7 @@ export function VfoDisplay({
       cancelled = true;
       if (timer != null) clearTimeout(timer);
     };
-  }, [applyState, editing, receiver]);
+  }, [applyState, editing, targetIndex]);
 
   const beginEdit = useCallback(() => {
     setDraft(formatKhz(vfoHz));
@@ -184,13 +203,13 @@ export function VfoDisplay({
     setEditing(false);
     setDraft('');
     if (next == null || next === vfoHz) return;
-    useConnectionStore.setState(patchReceiverVfo(receiver, next));
+    patchReceiverVfo(targetIndex, next);
     postVfo(next)
       .then(applyState)
       .catch(() => {
         /* next poll will reconcile */
       });
-  }, [draft, vfoHz, applyState, postVfo, receiver]);
+  }, [draft, vfoHz, applyState, postVfo, targetIndex]);
 
   useLayoutEffect(() => {
     if (editing && inputRef.current) {
@@ -241,10 +260,10 @@ export function VfoDisplay({
       e.preventDefault();
 
       const direction = e.deltaY < 0 ? 1 : -1;
-      const current = readReceiverVfo(receiver);
+      const current = readReceiverVfo(targetIndex);
       const next = clampHz(current + direction * decade);
       if (next === current) return;
-      useConnectionStore.setState(patchReceiverVfo(receiver, next));
+      patchReceiverVfo(targetIndex, next);
       wheelPending.current = next;
 
       if (wheelTimer.current != null) clearTimeout(wheelTimer.current);
@@ -271,9 +290,8 @@ export function VfoDisplay({
     // passive:false so preventDefault() actually stops the ancestor scroll.
     el.addEventListener('wheel', handler, { passive: false });
     return () => el.removeEventListener('wheel', handler);
-  }, [applyState, editing, postVfo, receiver]);
+  }, [applyState, editing, postVfo, targetIndex]);
 
-  const digits = useMemo(() => DIGIT_PLACES, []);
   return (
     <div
       className={`freq-display${compact ? ' compact' : ''}`}
@@ -289,7 +307,7 @@ export function VfoDisplay({
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onKeyDown}
             onBlur={cancelEdit}
-            aria-label={`${label} frequency in kHz`}
+            aria-label={`${resolvedLabel} frequency in kHz`}
             style={{
               width: compact ? '100%' : 220,
               minWidth: 0,
@@ -314,7 +332,7 @@ export function VfoDisplay({
           type="button"
           onClick={beginEdit}
           aria-label="Edit frequency"
-          title={`${label}: click to enter frequency in kHz - scroll the wheel over a digit to tune it`}
+          title={`${resolvedLabel}: click to enter frequency in kHz - scroll the wheel over a digit to tune it`}
           className="freq-digits mono"
           style={{
             background: 'none',
@@ -323,7 +341,7 @@ export function VfoDisplay({
             width: '100%',
           }}
         >
-          {digits.map((place) => {
+          {DIGIT_PLACES.map((place) => {
             const d = digitAt(vfoHz, place.decade);
             const isLeading = vfoHz < place.decade;
             return (
@@ -346,7 +364,7 @@ export function VfoDisplay({
         </button>
       )}
       <div className="freq-bot">
-        <span className="label-xs">{label}</span>
+        <span className="label-xs">{resolvedLabel}</span>
         <span className="label-xs">{compact ? 'MHz' : 'MHz · click to type · wheel on a digit to step'}</span>
       </div>
     </div>

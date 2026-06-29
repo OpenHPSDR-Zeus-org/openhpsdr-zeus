@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -18,10 +19,14 @@
 
 import { create } from 'zustand';
 import {
+  defaultSpanFor,
   EMPTY_WORKSPACE_LAYOUT,
   newTileUid,
   parseWorkspaceLayout,
   placeTileInGrid,
+  placeTileInPage,
+  WORKSPACE_GRID_COLS,
+  WORKSPACE_TARGET_ROWS,
   type WorkspaceLayout,
   type WorkspaceTile,
 } from '../layout/workspace';
@@ -74,6 +79,15 @@ interface LayoutState {
   workspace: WorkspaceLayout;
   /** True after loadFromServer() has run (success or 404 / network error). */
   isLoaded: boolean;
+  // Live page size (in grid cells) of the visible PRIMARY workspace, reported
+  // by FlexWorkspace as the window resizes. Used by addTile to decide when a new
+  // panel no longer fits the current page and must spill onto a fresh workspace
+  // (pagination). Defaults to the authored design fold until the first report.
+  viewportCols: number;
+  viewportRows: number;
+  /** Report the visible primary-workspace page size (grid cells). No-op when
+   *  unchanged so it can be called freely from a resize effect. */
+  setViewportPage: (cols: number, rows: number) => void;
   // Add-Panel modal visibility — lifted into the store so the trigger
   // button can live wherever (LeftLayoutBar, FlexWorkspace) while the modal
   // itself still renders inside the workspace.
@@ -119,6 +133,10 @@ interface LayoutState {
   /** Reset the active layout's tiles to DEFAULT_WORKSPACE_LAYOUT. The
    *  layout itself (id + name) is preserved. */
   resetActiveLayout: () => void;
+  /** Replace the active layout's entire workspace (tiles + lock) with the
+   *  given arrangement, keeping the layout's id/name/icon/description. Used to
+   *  apply or restore a saved-layout preset onto the current tab. Persists. */
+  replaceActiveWorkspace: (workspace: WorkspaceLayout) => void;
 
   // Tile mutators — operate on the active layout. Persisted via the same
   // debounced PUT to /api/ui/layouts.
@@ -130,10 +148,34 @@ interface LayoutState {
     panelId: string,
     opts?: { instanceConfig?: unknown },
   ) => string | null;
+  /** Move a tile from one layout to another. Removes it from `fromLayoutId`
+   *  and re-places it (first-fit) in `toLayoutId`, preserving panelId,
+   *  instanceConfig, and lock state. No-op if the source/target is the same,
+   *  the target layout doesn't exist, either workspace is locked, or the tile
+   *  isn't found. Drives the "drag a panel onto a layout tab to transfer it"
+   *  gesture in the LeftLayoutBar. Returns the (possibly new) tile uid in the
+   *  target layout, or null when nothing moved. */
+  moveTileToLayout: (
+    fromLayoutId: string,
+    toLayoutId: string,
+    uid: string,
+  ) => string | null;
   /** Remove the tile with the given uid. */
   removeTile: (uid: string) => void;
   /** Remove a tile from a specific layout without making it active. */
   removeTileFromLayout: (layoutId: string, uid: string) => void;
+  /** One-time cleanup: close every tile whose top-left origin lies outside the
+   *  given bounds (x >= maxCols or y >= maxRows) — i.e. fully off-screen. Bounds
+   *  are measured against the MONITOR, not the window, so a panel that merely
+   *  falls outside a small/un-maximized window is kept (it reappears when the
+   *  window is maximized); only panels beyond the physical screen, unreachable
+   *  even maximized, are removed. Batched into a single persist. Returns the
+   *  number of tiles closed. */
+  pruneOffscreenTilesFromLayout: (
+    layoutId: string,
+    maxCols: number,
+    maxRows: number,
+  ) => number;
   /** Replace a tile's grid placement (x/y/w/h). */
   updateTilePlacement: (
     uid: string,
@@ -231,6 +273,14 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   activeLayoutId: DEFAULT_LAYOUT_ID,
   workspace: DEFAULT_WORKSPACE_LAYOUT,
   isLoaded: false,
+  viewportCols: WORKSPACE_GRID_COLS,
+  viewportRows: WORKSPACE_TARGET_ROWS,
+  setViewportPage: (cols, rows) => {
+    const c = Math.max(1, Math.floor(cols));
+    const r = Math.max(1, Math.floor(rows));
+    if (get().viewportCols === c && get().viewportRows === r) return;
+    set({ viewportCols: c, viewportRows: r });
+  },
   addPanelOpen: false,
   setAddPanelOpen: (open) => set({ addPanelOpen: open }),
 
@@ -415,17 +465,41 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     void putNamedLayout(radioKey, updated);
   },
 
+  replaceActiveWorkspace: (workspace) => {
+    applyWorkspaceMutationForLayout(set, get, get().activeLayoutId, workspace);
+  },
+
   addTile: (panelId, opts) => {
     return get().addTileToLayout(get().activeLayoutId, panelId, opts) ?? '';
   },
 
   addTileToLayout: (layoutId, panelId, opts) => {
-    const target = findActive(get().layouts, layoutId);
-    if (!target && layoutId !== get().activeLayoutId) return null;
-    const workspace = layoutId === get().activeLayoutId
-      ? get().workspace
+    const state = get();
+    const target = findActive(state.layouts, layoutId);
+    const isActive = layoutId === state.activeLayoutId;
+    if (!target && !isActive) return null;
+    const workspace = isActive
+      ? state.workspace
       : parseLayoutOrDefault(target!.layoutJson);
-    const placement = placeTileInGrid(panelId, workspace.tiles);
+
+    // Active workspace: drop the panel into the first free slot on the field.
+    // When the field is FULL, the panel OVERLAPS at the origin instead of
+    // spilling onto a new layout — the operator drops it in on top of the
+    // others and resizes / moves it into place. The workspace is overlap-
+    // friendly and the monitor bound keeps everything on-screen, so there is no
+    // need to paginate or warn.
+    let placement: { x: number; y: number; w: number; h: number };
+    if (isActive) {
+      placement =
+        placeTileInPage(
+          panelId,
+          workspace.tiles,
+          state.viewportCols,
+          state.viewportRows,
+        ) ?? { x: 0, y: 0, ...defaultSpanFor(panelId) };
+    } else {
+      placement = placeTileInGrid(panelId, workspace.tiles);
+    }
     const uid = newTileUid();
     const tile: WorkspaceTile = {
       uid,
@@ -441,6 +515,51 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     };
     applyWorkspaceMutationForLayout(set, get, layoutId, next);
     return uid;
+  },
+
+  moveTileToLayout: (fromLayoutId, toLayoutId, uid) => {
+    if (fromLayoutId === toLayoutId) return null;
+    const state = get();
+    const fromTarget = findActive(state.layouts, fromLayoutId);
+    const fromIsActive = fromLayoutId === state.activeLayoutId;
+    if (!fromTarget && !fromIsActive) return null;
+    // The target must be a real saved layout — there's nowhere to put a tile
+    // in an unhydrated/unknown layout id.
+    const toTarget = findActive(state.layouts, toLayoutId);
+    if (!toTarget) return null;
+
+    const fromWorkspace = fromIsActive
+      ? state.workspace
+      : parseLayoutOrDefault(fromTarget!.layoutJson);
+    if (fromWorkspace.locked) return null;
+    const tile = fromWorkspace.tiles.find((t) => t.uid === uid);
+    if (!tile) return null;
+
+    const toIsActive = toLayoutId === state.activeLayoutId;
+    const toWorkspace = toIsActive
+      ? state.workspace
+      : parseLayoutOrDefault(toTarget.layoutJson);
+    if (toWorkspace.locked) return null;
+
+    // Place the incoming tile first-fit in the destination, carrying over its
+    // panel, per-instance config, and lock state. Geometry is recomputed for
+    // the destination grid — its origin in the source layout is meaningless
+    // there.
+    const placement = placeTileInGrid(tile.panelId, toWorkspace.tiles);
+    const moved: WorkspaceTile = { ...tile, ...placement };
+
+    // Two independent persists: drop from source, append to destination. The
+    // second get() inside applyWorkspaceMutationForLayout sees the first set's
+    // updated layouts, so the writes don't clobber one another.
+    applyWorkspaceMutationForLayout(set, get, fromLayoutId, {
+      ...fromWorkspace,
+      tiles: fromWorkspace.tiles.filter((t) => t.uid !== uid),
+    });
+    applyWorkspaceMutationForLayout(set, get, toLayoutId, {
+      ...toWorkspace,
+      tiles: [...toWorkspace.tiles, moved],
+    });
+    return moved.uid;
   },
 
   removeTile: (uid) => {
@@ -459,6 +578,29 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       tiles: workspace.tiles.filter((t) => t.uid !== uid),
     };
     applyWorkspaceMutationForLayout(set, get, layoutId, next);
+  },
+
+  pruneOffscreenTilesFromLayout: (layoutId, maxCols, maxRows) => {
+    if (!(maxCols > 0) || !(maxRows > 0)) return 0;
+    const target = findActive(get().layouts, layoutId);
+    if (!target && layoutId !== get().activeLayoutId) return 0;
+    const workspace =
+      layoutId === get().activeLayoutId
+        ? get().workspace
+        : parseLayoutOrDefault(target!.layoutJson);
+    // A tile is off-screen only when its top-left origin lies outside the field
+    // (x >= maxCols or y >= maxRows): no part of it can be seen. A tile that
+    // merely straddles an edge keeps its origin inside and is left alone.
+    const kept = workspace.tiles.filter(
+      (t) => t.x < maxCols && t.y < maxRows,
+    );
+    const removed = workspace.tiles.length - kept.length;
+    if (removed === 0) return 0;
+    applyWorkspaceMutationForLayout(set, get, layoutId, {
+      ...workspace,
+      tiles: kept,
+    });
+    return removed;
   },
 
   updateTilePlacement: (uid, layout) => {

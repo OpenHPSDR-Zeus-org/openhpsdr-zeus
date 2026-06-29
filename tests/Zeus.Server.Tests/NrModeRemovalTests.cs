@@ -26,7 +26,9 @@ public sealed class NrModeRemovalTests : IDisposable
         using var dspStore = NewDspStore();
         using var radio = NewRadio(dspStore);
 
-        var snapshot = radio.SetNr(new NrConfig(NrMode: (NrMode)4));
+        // 5 is one past the last defined mode (Rnnr = 4) — a corrupt/legacy
+        // DB value that must normalize to Off rather than be honored.
+        var snapshot = radio.SetNr(new NrConfig(NrMode: (NrMode)5));
 
         Assert.Equal(NrMode.Off, snapshot.Nr?.NrMode);
         Assert.Equal(NrMode.Off, dspStore.Get()?.NrMode);
@@ -36,11 +38,34 @@ public sealed class NrModeRemovalTests : IDisposable
     public void Constructor_NormalizesPersistedUnsupportedModeToOff()
     {
         using var dspStore = NewDspStore();
-        dspStore.Upsert(new NrConfig(NrMode: (NrMode)4));
+        // 5 is one past the last defined mode (Rnnr = 4): a stale persisted
+        // value from an older schema must be clamped to Off on load.
+        dspStore.Upsert(new NrConfig(NrMode: (NrMode)5));
 
         using var radio = NewRadio(dspStore);
 
         Assert.Equal(NrMode.Off, radio.Snapshot().Nr?.NrMode);
+    }
+
+    // Regression: the store's NormalizeNrMode must accept every mode
+    // RadioService.IsSupportedNrMode accepts. NR3 (Rnnr) was added to the
+    // RadioService allow-list but not the store's, so SetNr(Rnnr) was silently
+    // persisted as Off and the operator's NR3 selection never survived a
+    // restart. Keep the two allow-lists in lock-step.
+    [Fact]
+    public void SetNr_PersistsRnnrModeAcrossReload()
+    {
+        using var dspStore = NewDspStore();
+        using (var radio = NewRadio(dspStore))
+        {
+            var snapshot = radio.SetNr(new NrConfig(NrMode: NrMode.Rnnr));
+            Assert.Equal(NrMode.Rnnr, snapshot.Nr?.NrMode);
+        }
+
+        Assert.Equal(NrMode.Rnnr, dspStore.Get()?.NrMode);
+
+        using var reloaded = NewRadio(dspStore);
+        Assert.Equal(NrMode.Rnnr, reloaded.Snapshot().Nr?.NrMode);
     }
 
     private RadioService NewRadio(DspSettingsStore dspStore)

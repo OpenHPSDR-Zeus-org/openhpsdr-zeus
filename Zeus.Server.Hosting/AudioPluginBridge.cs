@@ -47,6 +47,12 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     private readonly PluginManager _manager;
     private readonly DspPipelineService _pipeline;
     private readonly IVstBridgeNative _vstBridge;
+    // Second native backend for macOS Audio Units (audio.format == "au").
+    // Selected per-manifest in ResolveAudioPlugin; the VST3 backend
+    // (_vstBridge) is untouched. Lazily created so a tests/Win/Linux process
+    // that never loads an AU pays nothing (and on non-macOS the AU dylib is
+    // simply absent → AuBridgeNative degrades to passthrough).
+    private IVstBridgeNative? _auBridge;
     private readonly Func<bool> _isMoxOn;
     private readonly Func<bool> _isMonitorOn;
     private readonly Func<bool> _isTciTxAudioActive;
@@ -62,6 +68,15 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     private readonly AudioChain _chain = new();
     private readonly Dictionary<string, int> _idToSlot = new();
     private readonly Dictionary<string, IAudioPlugin> _idToPlugin = new();
+    // TX plugins whose native resources have actually been loaded
+    // (InitializeAudioAsync ran). A PARKED plugin is registered in
+    // _idToPlugin but stays out of this set until the operator un-parks it
+    // into the live chain — native instantiation is DEFERRED, exactly like
+    // the receive path's _rxInitializedIds. This is what stops a scan from
+    // launching every scanned plugin (the whole macOS AU registry, in the AU
+    // scanner's case) the moment it registers them.
+    private readonly HashSet<string> _txInitializedIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _txIdToSlotName = new();
     // RX audio insert chain — plugins whose manifest slot is rx.* (e.g.
     // rx.post-demod, a CW SCAF audio filter). Kept ENTIRELY separate from the
     // TX _chain: separate plugin instances, separate IIR state, and a separate
@@ -103,6 +118,44 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     private volatile float _rxInPeak;
     private volatile float _rxOutPeak;
 
+    // ── VST-engine TX-audio liveness sampler (diagnostics only) ──────────────
+    // Off-realtime timer that watches for the one engine failure the seq-based
+    // health model is blind to: the engine stays alive AND responsive
+    // (outSeq==inSeq promptly, so DegradedBlocks never climbs and the process
+    // never exits) yet returns dead samples (silence / NaN sanitized to silence)
+    // after sustained TX. The supervisor can't see it, so the operator transmits
+    // silence until a manual profile change forces a fresh load_chain. This timer
+    // never touches the realtime path — it only reads volatile peak fields and the
+    // controller's diagnostic counters off a threadpool thread. See zeus-umt6.
+    private System.Threading.Timer? _livenessTimer;
+    private long _lastEngineDegraded;
+    private int _deadOutputStreak;
+    private int _livenessHeartbeat;
+    private const int LivenessIntervalMs = 2000;
+    // Input clearly above the noise floor (~-40 dBFS) but output effectively
+    // silent (~-80 dBFS) — the dead-output signature.
+    private const float LivenessInPresentPeak = 0.01f;
+    private const float LivenessOutSilentPeak = 1e-4f;
+    // Require the signature to persist before warning, so a brief speech gap or a
+    // MOX edge can't false-trip it (~6 s at the 2 s interval).
+    private const int LivenessWarnAfterTicks = 3;
+    // Re-log cadence (heartbeat when healthy, repeat-warn when wedged): ~10 s.
+    private const int LivenessHeartbeatTicks = 5;
+
+    // ── VST-engine TX auto-recovery escalation (Phase 2, zeus-umt6) ──────────
+    // Once the dead-output signature is confirmed, self-heal instead of waiting for
+    // a manual profile change: Tier-1 re-pushes the chain into the live engine
+    // (re-instantiates plugins — the manual-profile-change fix); if it's STILL dead
+    // a grace window later, Tier-2 recycles the engine process. At most one of each
+    // per episode; both reset when output recovers (or TX/engine drops). Default on
+    // — the operator chose auto-recovery; the off-switch is for tests/diagnostics.
+    internal bool AutoRecoverTxDeadOutput { get; set; } = true;
+    private bool _reloadAttempted;
+    private bool _recycleAttempted;
+    // Ticks AFTER the warn point to let a Tier-1 reload take hold before escalating
+    // to a Tier-2 recycle (~6 s at the 2 s interval).
+    private const int LivenessEscalateAfterTicks = 3;
+
     public AudioPluginBridge(
         PluginManager manager,
         DspPipelineService pipeline,
@@ -140,11 +193,13 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         ILogger<AudioPluginBridge> log,
         Func<bool>? isTciTxAudioActive = null,
         RxVstEngineService? rxVstEngine = null,
-        VstEngineController? vstEngine = null)
+        VstEngineController? vstEngine = null,
+        IVstBridgeNative? auBridge = null)
     {
         _manager = manager;
         _pipeline = pipeline;
         _vstBridge = vstBridge;
+        _auBridge = auBridge;
         _isMoxOn = isMoxOn;
         _isMonitorOn = isMonitorOn;
         _isTciTxAudioActive = isTciTxAudioActive ?? (() => false);
@@ -216,6 +271,74 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
 
     /// <summary>Current RX master bypass state.</summary>
     public bool IsRxMasterBypassed => _rxChain.MasterBypassed;
+
+    /// <summary>
+    /// Real-time diagnostics snapshot of the Audio Suite for the diagnostics v2
+    /// surface: active route, out-of-process engine health, and per-chain
+    /// (TX / RX) insert latency, per-block DSP load, and fidelity counters.
+    /// Off the realtime path — reads lock-free chain telemetry and enumerates
+    /// the plugin maps under the control-thread lock. Never call from audio.
+    /// </summary>
+    public AudioSuiteDiagnostics GetAudioSuiteDiagnostics()
+    {
+        const double sampleRate = 48000.0; // Audio Suite chains run at the host rate
+        bool engineActive = _vstEngine is { IsActive: true };
+
+        AudioChainDiagnostics BuildChain(AudioChain chain, int hostBlock)
+        {
+            // Enumerate the actual realtime slots (≤ MaxSlots) in chain order —
+            // NOT the registered/scanned plugin set, which holds the whole
+            // library. Latency is summed only over non-bypassed slots, matching
+            // what Process actually runs.
+            var plugins = new List<ChainPluginInfo>(AudioChain.MaxSlots);
+            int vstCount = 0, sumLatency = 0;
+            for (int slot = 0; slot < chain.SlotCount; slot++)
+            {
+                var plugin = chain.GetSlot(slot);
+                if (plugin is null) continue;
+                bool bypassed = chain.IsSlotBypassed(slot);
+                int latency = 0;
+                bool isVst = plugin is VstHostAudioPlugin;
+                if (plugin is VstHostAudioPlugin vst)
+                {
+                    latency = vst.ReportedLatencySamples;
+                    vstCount++;
+                    if (!bypassed) sumLatency += latency;
+                }
+                plugins.Add(new ChainPluginInfo(
+                    slot, plugin.DisplayName, isVst, bypassed, latency, latency / sampleRate * 1000.0));
+            }
+
+            var t = chain.Telemetry;
+            var (inPk, outPk) = chain.Meters;
+            double periodMicros = hostBlock / sampleRate * 1_000_000.0;
+            return new AudioChainDiagnostics(
+                ActivePlugins: plugins.Count,
+                VstPlugins: vstCount,
+                SumLatencySamples: sumLatency,
+                SumLatencyMs: sumLatency / sampleRate * 1000.0,
+                InPeakDbfs: ToDbfs(inPk),
+                OutPeakDbfs: ToDbfs(outPk),
+                LastBlockProcMicros: t.LastProcMicros,
+                MaxBlockProcMicros: t.MaxProcMicros,
+                BlockPeriodMicros: periodMicros,
+                DspLoadPercent: periodMicros > 0 ? t.LastProcMicros / periodMicros * 100.0 : 0.0,
+                PeakDspLoadPercent: periodMicros > 0 ? t.MaxProcMicros / periodMicros * 100.0 : 0.0,
+                BlocksProcessed: t.BlocksProcessed,
+                NonFiniteRepairs: t.NonFiniteRepairs,
+                Plugins: plugins);
+        }
+
+        return new AudioSuiteDiagnostics(
+            ProcessingMode: engineActive ? "vst-out-of-process" : "native-in-process",
+            OutOfProcessEngineActive: engineActive,
+            OutOfProcessDegradedBlocks: _vstEngine?.DegradedBlocks ?? 0,
+            Tx: BuildChain(_chain, TxAudioHostBlockSize),
+            Rx: BuildChain(_rxChain, RxAudioHostBlockSize));
+    }
+
+    private static double ToDbfs(float linearPeak) =>
+        linearPeak <= 1e-6f ? -120.0 : 20.0 * Math.Log10(linearPeak);
 
     /// <summary>
     /// Chain-level signal meters (linear peak) for the Audio Suite IN /
@@ -293,6 +416,21 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         return vst;
     }
 
+    /// <summary>
+    /// True when the in-process bridge actually hosts a <em>natively-loaded</em>
+    /// plugin (TX or RX) for this id — i.e. there is a real plugin instance
+    /// behind the handle whose editor the bridge can open in-process. This
+    /// gates strictly on <see cref="VstHostAudioPlugin.IsNativelyLoaded"/>, not
+    /// bare map membership: engine-routed VSTs (the Windows out-of-process VST
+    /// path, and the opt-in-gated TX slot) live in the bridge maps but were
+    /// never natively loaded, so they return false here and the editor guard /
+    /// engine routing stays exactly as before for them. Used by the editor
+    /// endpoints to skip the "install the VST engine" guard for AU/VST3 plugins
+    /// the bridge genuinely hosts in-process (the only host on macOS).
+    /// </summary>
+    public bool HostsPlugin(string pluginId) =>
+        ResolveVst(pluginId, out _) is { IsNativelyLoaded: true };
+
     public Task StartAsync(CancellationToken ct)
     {
         _manager.PluginActivated   += OnPluginActivated;
@@ -317,12 +455,25 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         // Install the handler on whatever engine is currently live.
         if (_pipeline.CurrentEngine is { } engine) AttachToEngine(engine);
 
+        // Arm the VST-engine TX-audio liveness sampler (diagnostics only). Harmless
+        // when VST mode is never selected — the tick short-circuits unless the
+        // out-of-process engine is active and MOX is on.
+        if (_vstEngine is not null)
+        {
+            _lastEngineDegraded = _vstEngine.DegradedBlocks;
+            _livenessTimer = new System.Threading.Timer(
+                _ => LivenessTick(), null, LivenessIntervalMs, LivenessIntervalMs);
+        }
+
         _log.LogInformation("AudioPluginBridge online.");
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken ct)
     {
+        _livenessTimer?.Dispose();
+        _livenessTimer = null;
+
         _manager.PluginActivated   -= OnPluginActivated;
         _manager.PluginDeactivated -= OnPluginDeactivated;
         _pipeline.EngineChanged    -= OnEngineChanged;
@@ -463,11 +614,16 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         bool processed;
         try { processed = vst.TryProcess(input, output, ctx); }
         finally { Volatile.Write(ref _engineGate, 0); }
-        DspPipelineService.SanitizeAudioBuffer(output[..sampleCount]);
         // Sample master IN/OUT peaks so the Audio Suite meters stay live in VST
-        // mode (the native chain's own metering path didn't run).
+        // mode (the native chain's own metering path didn't run). Tap the OUT
+        // peak from the RAW engine output BEFORE the ±1 safety clamp below, so
+        // the meter shows real overshoot (a hot plugin railing past full scale)
+        // instead of pinning at exactly 0 dBFS once the chain clips. This
+        // mirrors the native AudioChain, which also meters pre-clamp; BlockPeak
+        // skips non-finite samples, so reading un-sanitized output is safe.
         if (processed || recordPassthroughMeters)
             RecordEngineMeters(input, output[..sampleCount]);
+        DspPipelineService.SanitizeAudioBuffer(output[..sampleCount]);
         return true;
     }
 
@@ -475,6 +631,124 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     {
         _engineInPeak = BlockPeak(input);
         _engineOutPeak = BlockPeak(output);
+    }
+
+    /// <summary>
+    /// Off-realtime diagnostic tick (threadpool, ~2 s). Watches the VST-engine TX
+    /// path for the "alive but output dead" wedge that the supervisor's seq/exit
+    /// health model can't detect, and leaves a trail in the log. NEVER touches the
+    /// realtime path — reads only the volatile meter fields and the controller's
+    /// diagnostic counters. Behaviour-neutral: logs only. See zeus-umt6.
+    /// </summary>
+    private void LivenessTick()
+    {
+        try
+        {
+            var vst = _vstEngine;
+            // Only meaningful while the out-of-process engine is the live TX route
+            // AND we're actually transmitting (the engine meters are only fed during
+            // MOX / monitor). Otherwise reset state and rebase the degraded counter.
+            if (vst is not { IsActive: true } || !_isMoxOn())
+            {
+                _deadOutputStreak = 0;
+                _livenessHeartbeat = 0;
+                _reloadAttempted = false;
+                _recycleAttempted = false;
+                _lastEngineDegraded = vst?.DegradedBlocks ?? _lastEngineDegraded;
+                return;
+            }
+
+            float inPeak = _engineInPeak;
+            float outPeak = _engineOutPeak;
+            long degraded = vst.DegradedBlocks;
+            long degradedDelta = degraded - _lastEngineDegraded;
+            _lastEngineDegraded = degraded;
+            uint engineState = vst.EngineState;
+            uint engineFlags = vst.EngineFlags;
+
+            // The wedge signature: clear input energy, effectively-silent output,
+            // and NOT a transport degrade (degradedDelta==0 means the engine IS
+            // answering — so this is bad audio, not a hang the watchdog would catch).
+            bool deadOutput = inPeak >= LivenessInPresentPeak
+                              && outPeak <= LivenessOutSilentPeak
+                              && degradedDelta == 0;
+
+            if (deadOutput)
+            {
+                _deadOutputStreak++;
+
+                // Tier-1: at the warn point, re-push the chain into the LIVE engine
+                // (re-instantiate plugins) — the same fix a manual profile change
+                // performs. One attempt per episode.
+                if (_deadOutputStreak == LivenessWarnAfterTicks)
+                {
+                    _log.LogWarning(
+                        "VST engine TX output is DEAD while input is present for ~{Sec}s " +
+                        "(in={In:F4} out={Out:F4} degradedΔ={Delta} engineState={State} flags=0x{Flags:X2}). " +
+                        "Engine is responsive (no degraded blocks) but returning silence — the " +
+                        "post-long-TX wedge (zeus-umt6).",
+                        _deadOutputStreak * (LivenessIntervalMs / 1000),
+                        inPeak, outPeak, degradedDelta, engineState, engineFlags);
+
+                    if (AutoRecoverTxDeadOutput && !_reloadAttempted)
+                    {
+                        _reloadAttempted = true;
+                        _log.LogWarning(
+                            "VST TX auto-recovery (Tier 1): reloading the engine chain in place (zeus-umt6).");
+                        vst.RequestChainReload(
+                            "TX output dead while input present; reloading chain in place (zeus-umt6).");
+                    }
+                    return;
+                }
+
+                // Tier-2: still dead a grace window after the reload — recycle the
+                // engine process. One attempt per episode; the relaunch path's
+                // crash-loop cap prevents thrashing on a genuinely broken plugin.
+                if (_deadOutputStreak == LivenessWarnAfterTicks + LivenessEscalateAfterTicks
+                    && AutoRecoverTxDeadOutput && _reloadAttempted && !_recycleAttempted)
+                {
+                    _recycleAttempted = true;
+                    _log.LogWarning(
+                        "VST TX auto-recovery (Tier 2): chain reload did not clear the dead output after " +
+                        "~{Sec}s; recycling the engine process (zeus-umt6).",
+                        _deadOutputStreak * (LivenessIntervalMs / 1000));
+                    vst.ForceRecycle("TX output still dead after chain reload; recycling engine (zeus-umt6).");
+                    return;
+                }
+
+                // Beyond escalation: periodic repeat-warn while still wedged (covers
+                // the case where auto-recovery is off or a broken plugin can't heal).
+                if (_deadOutputStreak > LivenessWarnAfterTicks
+                    && (_deadOutputStreak - LivenessWarnAfterTicks) % LivenessHeartbeatTicks == 0)
+                {
+                    _log.LogWarning(
+                        "VST engine TX output still dead (~{Sec}s): in={In:F4} out={Out:F4} " +
+                        "degradedΔ={Delta} engineState={State} flags=0x{Flags:X2}.",
+                        _deadOutputStreak * (LivenessIntervalMs / 1000),
+                        inPeak, outPeak, degradedDelta, engineState, engineFlags);
+                }
+                return;
+            }
+
+            if (_deadOutputStreak >= LivenessWarnAfterTicks)
+                _log.LogInformation(
+                    "VST engine TX output recovered (in={In:F4} out={Out:F4}).", inPeak, outPeak);
+            _deadOutputStreak = 0;
+            _reloadAttempted = false;
+            _recycleAttempted = false;
+
+            // Periodic healthy heartbeat so the log captures the baseline IN/OUT
+            // levels leading up to any future wedge.
+            if (++_livenessHeartbeat >= LivenessHeartbeatTicks)
+            {
+                _livenessHeartbeat = 0;
+                _log.LogInformation(
+                    "VST TX liveness: in={In:F4} out={Out:F4} degradedΔ={Delta} " +
+                    "engineState={State} flags=0x{Flags:X2}.",
+                    inPeak, outPeak, degradedDelta, engineState, engineFlags);
+            }
+        }
+        catch { /* diagnostics must never throw on the timer thread */ }
     }
 
     /// <summary>Instantaneous block abs-peak — mirrors AudioChain.BlockPeak so the
@@ -671,30 +945,29 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
             }
         }
 
-        // Realtime-safe init off-thread before the chain dispatches. The
-        // chain itself doesn't call Initialize; we do it here so plugins
-        // get a chance to allocate / open resources before their first
-        // Process() call.
-        try
+        // Realtime-safe native init off-thread before the chain dispatches —
+        // but ONLY for a plugin that is actually in the live chain (slot >= 0).
+        // A PARKED plugin (slot < 0) is registered and left UNINITIALIZED so a
+        // scan never instantiates / launches it; its native resources load
+        // lazily the moment the operator un-parks it (ApplyChainOrder →
+        // EnsureTxPluginInitialized), mirroring the receive path's
+        // EnsureRxPluginInitialized deferral. The chain itself doesn't call
+        // Initialize; we do it here so a plugin can allocate / open resources
+        // before its first Process() call.
+        var slotName = p.Loaded.Manifest.Audio?.Slot ?? "tx.post-leveler";
+        lock (_lock) _txIdToSlotName[p.Loaded.Manifest.Id] = slotName;
+
+        if (slot >= 0 &&
+            !EnsureTxPluginInitialized(p.Loaded.Manifest.Id, audioPlugin, slotName))
         {
-            audioPlugin.InitializeAudioAsync(
-                new AudioHost(
-                    slotName: p.Loaded.Manifest.Audio?.Slot ?? "tx.post-leveler",
-                    blockSize: TxAudioHostBlockSize),
-                CancellationToken.None)
-                .GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            _log.LogError(ex,
-                "Audio plugin {Id} InitializeAudioAsync threw; clearing slot {Slot}",
-                p.Loaded.Manifest.Id, slot);
             lock (_lock)
             {
-                if (slot >= 0) _chain.ClearSlot(slot);
+                _chain.ClearSlot(slot);
                 _idToSlot.Remove(p.Loaded.Manifest.Id);
                 _idToPlugin.Remove(p.Loaded.Manifest.Id);
+                _txIdToSlotName.Remove(p.Loaded.Manifest.Id);
             }
+            _chainOrder?.OnPluginDetached(p.Loaded.Manifest.Id);
             return;
         }
 
@@ -705,7 +978,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         RefreshPreviewEnabled();
         if (parked)
             _log.LogInformation(
-                "Audio plugin {Id} attached (parked — initialized, not in the live chain)",
+                "Audio plugin {Id} attached (parked — registered, native load deferred until added to the chain)",
                 p.Loaded.Manifest.Id);
         else
             _log.LogInformation(
@@ -719,15 +992,20 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         // the TX _idToSlot map.
         if (DetachRxPlugin(p)) return;
 
-        IAudioPlugin? attached = null;
-        int slot;
+        var id = p.Loaded.Manifest.Id;
+        IAudioPlugin? attached;
+        bool wasInitialized;
         lock (_lock)
         {
-            if (!_idToSlot.TryGetValue(p.Loaded.Manifest.Id, out slot)) return;
-            _idToSlot.Remove(p.Loaded.Manifest.Id);
-            _idToPlugin.Remove(p.Loaded.Manifest.Id);
-            attached = _chain.GetSlot(slot);
-            _chain.ClearSlot(slot);
+            // A parked plugin lives in _idToPlugin but not _idToSlot — handle
+            // both so deactivating a never-un-parked (and therefore
+            // never-initialized) scanned plugin cleans up fully instead of
+            // leaking its registration.
+            if (!_idToPlugin.Remove(id, out attached)) return;
+            if (_idToSlot.Remove(id, out var slot))
+                _chain.ClearSlot(slot);
+            _txIdToSlotName.Remove(id);
+            wasInitialized = _txInitializedIds.Remove(id);
             // Re-slot remaining plugins so the chain compacts when
             // ChainOrderService is active — gaps from a removed plugin
             // close instead of leaving a hole in the middle of the
@@ -738,18 +1016,23 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
             // The chain Process loop already no-ops cleanly on an empty
             // slot table (all slots null → all iterations skipped).
         }
-        _chainOrder?.OnPluginDetached(p.Loaded.Manifest.Id);
+        _chainOrder?.OnPluginDetached(id);
         RefreshPreviewEnabled();
 
         if (attached is null) return;
-        try
+        // Only tear down native resources we actually brought up. A parked
+        // plugin was never initialized, so there is nothing to shut down.
+        if (wasInitialized)
         {
-            attached.ShutdownAudioAsync(CancellationToken.None).GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex,
-                "Audio plugin {Id} ShutdownAudioAsync threw", p.Loaded.Manifest.Id);
+            try
+            {
+                attached.ShutdownAudioAsync(CancellationToken.None).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex,
+                    "Audio plugin {Id} ShutdownAudioAsync threw", id);
+            }
         }
         if (attached is IAsyncDisposable ad)
         {
@@ -1024,16 +1307,25 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         if (p.Loaded.Plugin is IAudioPlugin direct) return direct;
 
         var audio = p.Loaded.Manifest.Audio;
-        if (audio is { Vst3Path: { Length: > 0 } })
-        {
-            return new VstHostAudioPlugin(
-                bridge: _vstBridge,
-                manifestAudio: audio,
-                pluginRootPath: p.Loaded.PluginDir,
-                displayName: p.Loaded.Manifest.Name,
-                log: _log);
-        }
-        return null;
+        if (audio is null) return null;
+
+        // Format selects the native backend. "au" → macOS Audio Unit bridge
+        // keyed by auComponentId; anything else (default "vst3") → the VST3
+        // bridge keyed by vst3Path. The VST3 path is unchanged; AU is purely
+        // additive (3-way dispatch).
+        bool isAu = string.Equals(audio.Format, "au", StringComparison.OrdinalIgnoreCase);
+        bool hasIdentity = isAu
+            ? audio.AuComponentId is { Length: > 0 }
+            : audio.Vst3Path is { Length: > 0 };
+        if (!hasIdentity) return null;
+
+        var bridge = isAu ? (_auBridge ??= new AuBridgeNative()) : _vstBridge;
+        return new VstHostAudioPlugin(
+            bridge: bridge,
+            manifestAudio: audio,
+            pluginRootPath: p.Loaded.PluginDir,
+            displayName: p.Loaded.Manifest.Name,
+            log: _log);
     }
 
     private int FindFreeSlot()
@@ -1057,8 +1349,160 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         // service inside the lock — same semantics, but it picks up
         // the latest snapshot in the rare case the order changes again
         // between the OrderChanged fire and our lock acquisition.
+        //
+        // Native load is DEFERRED until a plugin is un-parked into the live
+        // chain, so this OrderChanged fire — the operator adding a plugin to
+        // the chain — is the first point a newly-active plugin must load.
+        // Initialize the now-active set BEFORE slotting it (outside _lock;
+        // native load can block), mirroring ApplyRxChainOrder.
+        EnsureActiveTxPluginsInitialized();
         lock (_lock) ReapplySlotsUnderLock();
         _log.LogInformation("Audio plugin chain re-slotted to operator order");
+    }
+
+    /// <summary>
+    /// Recycle already-active TX plugins so they re-read their
+    /// <see cref="Zeus.Plugins.Contracts.IPluginSettings"/> values after a TX
+    /// audio profile restore. Profile apply writes plugin settings directly to
+    /// LiteDB; an initialized plugin would otherwise keep its prior in-memory
+    /// defaults until the next Zeus restart.
+    /// </summary>
+    public void ReloadActiveTxPlugins(IReadOnlyCollection<string> pluginIds)
+    {
+        if (pluginIds.Count == 0) return;
+
+        var requested = new HashSet<string>(pluginIds, StringComparer.Ordinal);
+        var reload = new List<(string Id, IAudioPlugin Plugin, string SlotName)>();
+
+        lock (_lock)
+        {
+            foreach (var id in requested)
+            {
+                if (!_idToPlugin.TryGetValue(id, out var plugin)) continue;
+                if (!_idToSlot.TryGetValue(id, out var slot)) continue;
+                if (!_txInitializedIds.Remove(id)) continue;
+
+                var slotName = _txIdToSlotName.TryGetValue(id, out var s)
+                    ? s
+                    : "tx.post-leveler";
+                reload.Add((id, plugin, slotName));
+                _chain.ClearSlot(slot);
+            }
+        }
+
+        if (reload.Count == 0) return;
+
+        foreach (var item in reload)
+        {
+            try
+            {
+                item.Plugin.ShutdownAudioAsync(CancellationToken.None)
+                    .GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex,
+                    "Audio plugin {Id} ShutdownAudioAsync threw during TX profile reload",
+                    item.Id);
+            }
+        }
+
+        var failed = new List<string>();
+        foreach (var item in reload)
+        {
+            if (!EnsureTxPluginInitialized(item.Id, item.Plugin, item.SlotName))
+                failed.Add(item.Id);
+        }
+
+        if (failed.Count > 0)
+        {
+            lock (_lock)
+            {
+                foreach (var id in failed)
+                {
+                    if (_idToSlot.Remove(id, out var slot))
+                        _chain.ClearSlot(slot);
+                    _idToPlugin.Remove(id);
+                    _txIdToSlotName.Remove(id);
+                    _txInitializedIds.Remove(id);
+                }
+                if (_chainOrder is not null) ReapplySlotsUnderLock();
+            }
+
+            foreach (var id in failed)
+                _chainOrder?.OnPluginDetached(id);
+        }
+        else
+        {
+            lock (_lock)
+            {
+                if (_chainOrder is not null) ReapplySlotsUnderLock();
+            }
+        }
+
+        RefreshPreviewEnabled();
+        _log.LogInformation(
+            "Reloaded {Count} active TX audio plugin(s) after profile restore",
+            reload.Count - failed.Count);
+    }
+
+    /// <summary>
+    /// Lazily load the native resources of any TX plugin that is currently
+    /// ACTIVE (un-parked) in the operator's order but not yet initialized.
+    /// Native instantiation is deferred until a plugin enters the live chain
+    /// (parity with the receive path's <see cref="EnsureRxPluginInitialized"/>),
+    /// so this runs on un-park / reorder. Outside <c>_lock</c> —
+    /// <c>InitializeAudioAsync</c> can block on native load.
+    /// </summary>
+    private void EnsureActiveTxPluginsInitialized()
+    {
+        if (_chainOrder is null) return;
+        foreach (var id in _chainOrder.CurrentOrder)
+        {
+            IAudioPlugin? plugin;
+            string slotName;
+            lock (_lock)
+            {
+                if (!_idToPlugin.TryGetValue(id, out plugin)) continue;
+                slotName = _txIdToSlotName.TryGetValue(id, out var s) ? s : "tx.post-leveler";
+            }
+            EnsureTxPluginInitialized(id, plugin, slotName);
+        }
+    }
+
+    /// <summary>
+    /// Initialize one TX plugin's native resources exactly once. Returns true
+    /// if the plugin is initialized (now or already); false if
+    /// <c>InitializeAudioAsync</c> threw — the caller leaves it out of the live
+    /// chain (it passes audio through until a later successful load). Mirrors
+    /// <see cref="EnsureRxPluginInitialized"/>.
+    /// </summary>
+    private bool EnsureTxPluginInitialized(string id, IAudioPlugin audioPlugin, string slotName)
+    {
+        lock (_lock)
+        {
+            if (_txInitializedIds.Contains(id)) return true;
+        }
+
+        try
+        {
+            audioPlugin.InitializeAudioAsync(
+                    new AudioHost(slotName, blockSize: TxAudioHostBlockSize),
+                    CancellationToken.None)
+                .GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex,
+                "Audio plugin {Id} InitializeAudioAsync threw; leaving it inactive", id);
+            return false;
+        }
+
+        lock (_lock)
+        {
+            _txInitializedIds.Add(id);
+        }
+        return true;
     }
 
     /// <summary>

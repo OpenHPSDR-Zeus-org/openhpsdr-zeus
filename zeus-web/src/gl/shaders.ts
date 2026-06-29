@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -251,6 +252,14 @@ void main() {
   float n = sampleLevel(vUv);
   float popI = clamp(uPopIntensity, 0.0, 1.0) * step(0.5, uPopActive);
   float normalI = 1.0 - step(0.5, uPopActive);
+  // Binary Signal-Pop mode gate (1 in Pop, 0 in normal RX). The hillshade relief
+  // (multiplicative shade) is kept in BOTH modes — that is the topographic look
+  // the WebGPU heightfield also has and it does not over-expose on its own. But
+  // the additive glow/halo/terrain decoration and the carrier level-lifts below
+  // bloomed the noise field and washed the colours out in normal RX. Gating them
+  // to Pop makes normal RX render as plain colormap × hillshade, matching the
+  // WebGPU heightfield tone, while leaving the Pop look byte-for-byte unchanged.
+  float popModeI = step(0.5, uPopActive);
   float reliefDepthI = clamp(uReliefDepth, 0.0, 1.0);
   float normalHdrI = normalI * mix(0.14, 0.24, reliefDepthI);
   // Toned down from 0.72..1.30: the legacy normal-mode relief stacked many
@@ -356,7 +365,7 @@ void main() {
       smoothI * mix(0.84, 0.30, edgeGuard) * (1.0 - smoothstep(0.86, 1.0, n) * 0.45));
     n = mix(n, smoothLevel, clamp(smoothAmount, 0.0, 0.92));
     float shoulderLift = shoulderSeed * reliefCurve * smoothstep(0.035, 0.50, ridgeSource);
-    n = max(n, shoulderLift * mix(0.52, 0.82, reliefCurve));
+    n = max(n, shoulderLift * mix(0.52, 0.82, reliefCurve) * popModeI);
     crest = max(0.0, n - smoothLevel);
 
     if (reliefCurve > 0.001) {
@@ -382,7 +391,7 @@ void main() {
       float bevel = terrainHeight - hCross;
       float valueBevelGain = mix(0.82, 2.70, reliefCurve) * mix(1.0, 0.34, popI);
       n = clamp(
-        n + bevel * valueBevelGain + max(bevel, 0.0) * (0.22 + height * 0.30) * reliefCurve * mix(1.0, 0.42, popI),
+        n + (bevel * valueBevelGain + max(bevel, 0.0) * (0.22 + height * 0.30) * reliefCurve * mix(1.0, 0.42, popI)) * popModeI,
         0.0,
         1.0);
       float slope = mix(34.0, 116.0, reliefCurve);
@@ -437,29 +446,38 @@ void main() {
   // signals reach the brighter end of the Pop palette (closer to how the normal
   // textured waterfall lets them pop) while terrain still has headroom above.
   float colorLevel = mix(n, min(n, 0.82 + terrainDisplayHeight * 0.12), popI);
-  // Match the WebGPU heightfield tone: in normal RX mode pull the noise floor
-  // down with a gamma so it reads dark and signals separate, instead of the
-  // legacy lifted/harsh curve. Gated to normal mode (Pop/TX keep their mapping).
-  colorLevel = mix(colorLevel, pow(colorLevel, 1.5), normalI);
+  // Match the WebGPU heightfield's normal-RX tone: a mild contrast lift around
+  // 0.5, not a gamma squash. The previous pow(colorLevel, 1.5) pulled the noise
+  // floor so far down that the Blue palette's 0.42 dark anchor swallowed typical
+  // HF signal levels — colour only appeared above ~-90 dBm, well above a
+  // Hermes-Lite 2 noise floor (#840). Gated to normal mode (Pop unchanged).
+  colorLevel = mix(colorLevel, clamp((colorLevel - 0.5) * 1.12 + 0.5, 0.0, 1.0), normalI);
   vec4 c = texture(uLut, vec2(colorLevel, 0.5));
+  // Hillshade relief multiply — applied in BOTH modes (this is the topographic
+  // look the WebGPU heightfield also uses; it does not over-expose on its own).
   c.rgb *= mix(1.0, shade, reliefI);
+  // Everything below is Signal-Pop decoration (terrain tint, cast shadows, edge
+  // glows/halos, rim light, contour lines, crest/specular sheen). popModeI is 0
+  // in normal RX — so there the surface is plain colormap × hillshade and matches
+  // the WebGPU heightfield instead of blooming the noise field (over-exposure
+  // fix) — and 1 in Pop, so the Pop look is unchanged.
   vec3 shadedTerrain = terrainColor * mix(vec3(0.60), vec3(1.18), clamp(shade * 0.58, 0.0, 1.0));
-  c.rgb = mix(c.rgb, shadedTerrain, min(0.99, terrainTint * mix(0.82, 1.0, terrainModeI)));
-  c.rgb = mix(c.rgb, vec3(0.0, 0.004, 0.010), min(0.95, max(dropShadow * 1.08, terrainShadow * 1.22)));
-  c.rgb = mix(c.rgb, vec3(0.00, 0.030, 0.055) + c.rgb * 0.24, min(0.84, 0.82 * shadow));
-  c.rgb = mix(c.rgb, vec3(0.00, 0.055, 0.13), min(0.84, castGlow * 1.05));
-  c.rgb += vec3(0.00, 0.78, 1.00) * offsetGlow * 0.72;
-  c.rgb += vec3(0.70, 0.42, 0.10) * warmHalo * 1.02;
-  c.rgb += vec3(0.00, 0.18, 0.32) * coolHalo * 0.72;
-  c.rgb += vec3(0.04, 0.54, 0.60) * ridge * 1.18;
-  c.rgb += vec3(0.36, 0.88, 0.90) * rim * 1.52;
-  c.rgb += vec3(0.98, 1.00, 0.68) * contour * 0.82;
-  c.rgb += vec3(1.00, 0.82, 0.34) * heightContour * 0.54;
-  c.rgb = mix(c.rgb, c.rgb * vec3(0.48, 0.38, 0.26), min(0.84, terrainContourDark * 0.92));
-  c.rgb += vec3(1.00, 0.66, 0.16) * goldRim * mix(1.18, 0.44, popI);
-  c.rgb += vec3(1.00, 0.92, 0.60) * terrainRim * mix(1.34, 0.50, popI);
-  c.rgb += vec3(0.28, 0.96, 1.00) * crest * reliefI * mix(0.78, 0.34, popI);
-  c.rgb += vec3(1.00, 0.92, 0.48) * specular * mix(1.48, 0.38, popI);
+  c.rgb = mix(c.rgb, shadedTerrain, min(0.99, terrainTint * mix(0.82, 1.0, terrainModeI)) * popModeI);
+  c.rgb = mix(c.rgb, vec3(0.0, 0.004, 0.010), min(0.95, max(dropShadow * 1.08, terrainShadow * 1.22)) * popModeI);
+  c.rgb = mix(c.rgb, vec3(0.00, 0.030, 0.055) + c.rgb * 0.24, min(0.84, 0.82 * shadow) * popModeI);
+  c.rgb = mix(c.rgb, vec3(0.00, 0.055, 0.13), min(0.84, castGlow * 1.05) * popModeI);
+  c.rgb += vec3(0.00, 0.78, 1.00) * offsetGlow * 0.72 * popModeI;
+  c.rgb += vec3(0.70, 0.42, 0.10) * warmHalo * 1.02 * popModeI;
+  c.rgb += vec3(0.00, 0.18, 0.32) * coolHalo * 0.72 * popModeI;
+  c.rgb += vec3(0.04, 0.54, 0.60) * ridge * 1.18 * popModeI;
+  c.rgb += vec3(0.36, 0.88, 0.90) * rim * 1.52 * popModeI;
+  c.rgb += vec3(0.98, 1.00, 0.68) * contour * 0.82 * popModeI;
+  c.rgb += vec3(1.00, 0.82, 0.34) * heightContour * 0.54 * popModeI;
+  c.rgb = mix(c.rgb, c.rgb * vec3(0.48, 0.38, 0.26), min(0.84, terrainContourDark * 0.92) * popModeI);
+  c.rgb += vec3(1.00, 0.66, 0.16) * goldRim * mix(1.18, 0.44, popI) * popModeI;
+  c.rgb += vec3(1.00, 0.92, 0.60) * terrainRim * mix(1.34, 0.50, popI) * popModeI;
+  c.rgb += vec3(0.28, 0.96, 1.00) * crest * reliefI * mix(0.78, 0.34, popI) * popModeI;
+  c.rgb += vec3(1.00, 0.92, 0.48) * specular * mix(1.48, 0.38, popI) * popModeI;
   c.rgb = min(c.rgb, mix(vec3(1.0), vec3(0.92, 0.86, 0.68), popI * terrainTint * 0.82));
   c.rgb = min(c.rgb, vec3(1.0));
   float reliefMask = max(
@@ -470,7 +488,9 @@ void main() {
         max(max(ridge, rim), max(heightContour, terrainContourDark)),
         max(max(dropShadow, terrainShadow), max(goldRim, terrainRim)))));
   float a = mix(smoothstep(0.05, 0.9, n), 1.0, uBgAlpha);
-  a = max(a, reliefMask * mix(0.45, 0.98, reliefI));
+  // Decoration masks raise alpha only in Pop; in normal RX the floor keeps its
+  // smoothstep transparency instead of being forced opaque by the relief terms.
+  a = max(a, reliefMask * mix(0.45, 0.98, reliefI) * popModeI);
   fragColor = vec4(c.rgb * a, a);
 }`;
 

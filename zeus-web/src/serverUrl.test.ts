@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 // See LICENSE / ATTRIBUTIONS.md at the repository root.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -35,7 +36,6 @@ function installLocalStorageShim() {
 installLocalStorageShim();
 
 const {
-  apiUrl,
   getServerBaseUrl,
   installFetchInterceptor,
   setServerBaseUrl,
@@ -79,28 +79,6 @@ describe('getServerBaseUrl / setServerBaseUrl', () => {
     setServerBaseUrl('');
     expect(getServerBaseUrl()).toBe('');
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
-  });
-});
-
-describe('apiUrl', () => {
-  it('returns the path unchanged when no base is configured', () => {
-    expect(apiUrl('/api/state')).toBe('/api/state');
-  });
-
-  it('prepends the configured base for relative paths', () => {
-    setServerBaseUrl('http://192.168.1.23:6060');
-    expect(apiUrl('/api/state')).toBe('http://192.168.1.23:6060/api/state');
-  });
-
-  it('passes absolute URLs through untouched', () => {
-    setServerBaseUrl('http://192.168.1.23:6060');
-    expect(apiUrl('http://other.example/foo')).toBe('http://other.example/foo');
-    expect(apiUrl('https://example.com/x')).toBe('https://example.com/x');
-  });
-
-  it('inserts a leading slash if the caller forgot one', () => {
-    setServerBaseUrl('http://10.0.0.1:6060');
-    expect(apiUrl('api/state')).toBe('http://10.0.0.1:6060/api/state');
   });
 });
 

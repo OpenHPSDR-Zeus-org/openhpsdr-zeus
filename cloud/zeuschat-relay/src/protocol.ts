@@ -38,6 +38,9 @@ export interface Operator {
   status?: PresenceStatus;
   /** Epoch ms the operator connected. */
   since: number;
+  /** True when this operator is a relay moderator. Lets clients paint admin
+   *  callsigns distinctly (gold). Omitted (falsy) for ordinary operators. */
+  admin?: boolean;
 }
 
 /** A chat channel the operator can see: the public lobby, a group, or a DM. */
@@ -51,6 +54,30 @@ export interface RoomInfo {
   members: string[];
 }
 
+/**
+ * An inline media attachment carried with a message. Photos are sent "like a
+ * text message": the bytes ride inside the message as a base64 data URL rather
+ * than via out-of-band blob storage. The Zeus web client downscales/compresses
+ * photos and records voice at a low Opus bitrate so `dataUrl` stays under
+ * MAX_ATTACHMENT_DATAURL_LEN — the whole message is stored in a single
+ * Durable-Object value (128 KiB cap), so it must fit with headroom. `kind` is
+ * "image" or "audio"; unknown kinds are ignored by clients.
+ */
+export interface Attachment {
+  kind: string;
+  /** MIME type, e.g. "image/jpeg" or "audio/webm". Must match the kind family. */
+  mime: string;
+  /** Base64 data URL, e.g. "data:image/jpeg;base64,…" or "data:audio/webm;base64,…". */
+  dataUrl: string;
+  /** Original filename, if known. */
+  name?: string;
+  /** Pixel dimensions, if known. */
+  width?: number;
+  height?: number;
+  /** Decoded byte size, if known. */
+  size?: number;
+}
+
 /** A stored/relayed chat message. */
 export interface Msg {
   id: string;
@@ -60,6 +87,8 @@ export interface Msg {
   ts: number;
   /** Room id this message belongs to. */
   room: string;
+  /** Optional inline photo (absent for the common text-only case). */
+  attachment?: Attachment;
 }
 
 /** Messages sent by a backend chat node TO the relay. */
@@ -80,10 +109,11 @@ export type ClientToRelay =
     }
   // Live presence update (frequency / mode / status / freq-visibility changed).
   | { t: 'presence'; freq?: number; mode?: string; status?: PresenceStatus; freqPublic?: boolean }
-  // Outgoing chat message to a room (defaults to the public lobby).
-  | { t: 'msg'; text: string; room?: string }
+  // Outgoing chat message to a room (defaults to the public lobby). `text` may
+  // be empty when an `attachment` (inline photo) is present.
+  | { t: 'msg'; text: string; room?: string; attachment?: Attachment }
   // Send a direct message to another operator (creates the DM room on demand).
-  | { t: 'dm'; to: string; text: string }
+  | { t: 'dm'; to: string; text: string; attachment?: Attachment }
   // Request recent history for a room the operator can see.
   | { t: 'history'; room: string }
   // --- friends (consent graph) ---------------------------------------------
@@ -98,6 +128,16 @@ export type ClientToRelay =
   | { t: 'admin_remove_member'; room: string; callsign: string }
   | { t: 'admin_ban'; callsign: string }
   | { t: 'admin_unban'; callsign: string }
+  // Wipe a room's stored history (defaults to the public lobby).
+  | { t: 'admin_clear_room'; room?: string }
+  // Push a one-off global announcement to every connected operator.
+  | { t: 'admin_broadcast'; text: string }
+  // Ask the relay for the current ban list (relay replies with a `bans` frame).
+  | { t: 'admin_list_bans' }
+  // Toggle the admin "see all frequencies" override for THIS connection: while
+  // on, the operator's roster carries every connected operator's frequency,
+  // regardless of friendship or the owner's eye toggle. Ignored unless admin.
+  | { t: 'admin_see_all'; on: boolean }
   // Keepalive. The relay auto-responds with {t:"pong"} without waking (see
   // setWebSocketAutoResponse in chat-room.ts) — send this EXACT string:
   // '{"t":"ping"}'.
@@ -116,11 +156,19 @@ export type RelayToClient =
   // join). Ordered oldest→newest.
   | { t: 'history'; room: string; messages: Msg[] }
   // A chat message in a room the operator is a member of (including own echo).
-  | { t: 'msg'; id: string; from: string; text: string; ts: number; room: string }
+  | { t: 'msg'; id: string; from: string; text: string; ts: number; room: string; attachment?: Attachment }
+  // A room's history was wiped by an admin — clients should drop their scrollback.
+  | { t: 'cleared'; room: string }
+  // A one-off global announcement from an admin, shown to everyone regardless of
+  // which room they're viewing.
+  | { t: 'notice'; from: string; text: string; ts: number }
   // The operator's friend graph (see ChatFriendsDto on the C# side).
   | { t: 'friends'; accepted: string[]; incoming: string[]; outgoing: string[] }
   // The operator has been banned/kicked; the socket is about to close.
   | { t: 'banned'; message: string }
+  // The current ban list, sent to admins on hello, on every ban/unban, and in
+  // response to `admin_list_bans`. Non-admins never receive this.
+  | { t: 'bans'; bans: string[] }
   // Protocol/validation error. Non-fatal unless the socket is also closed.
   | { t: 'error'; code: string; message: string }
   // Keepalive response.
@@ -128,6 +176,15 @@ export type RelayToClient =
 
 /** Max accepted chat message length (characters); longer is truncated. */
 export const MAX_MESSAGE_LEN = 2000;
+
+/**
+ * Max accepted length of an attachment's base64 data URL (characters). Sized to
+ * leave headroom under the Durable-Object 128 KiB per-value storage cap once the
+ * surrounding message JSON is added. An attachment over this is dropped (the
+ * message still delivers as text). Mirrors ChatAttachment.MaxDataUrlLength on
+ * the C# side; keep the two in sync.
+ */
+export const MAX_ATTACHMENT_DATAURL_LEN = 120_000;
 
 /** The single room used in P0. Kept as an alias of PUBLIC_ROOM. */
 export const DEFAULT_ROOM = PUBLIC_ROOM;

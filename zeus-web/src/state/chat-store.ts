@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -25,6 +26,7 @@ import { create } from 'zustand';
 import {
   chatStatus,
   chatSetEnabled,
+  chatSetVisible,
   chatSend,
   chatDm,
   chatMessages,
@@ -43,6 +45,10 @@ import {
   chatRemoveMember,
   chatBan,
   chatUnban,
+  chatClearRoom,
+  chatBroadcast,
+  chatListBans,
+  chatSetSeeAll,
   normalizeStatus,
   normalizeOperator,
   normalizeMessage,
@@ -50,6 +56,7 @@ import {
   normalizeRoom,
   type ChatOperator,
   type ChatMessage,
+  type ChatAttachment,
   type ChatStatus,
   type ChatRoom,
   type ChatFriends,
@@ -87,7 +94,13 @@ export type ChatEnvelope =
   | { kind: 'history'; room?: unknown; messages: unknown }
   | { kind: 'friends'; friends: unknown }
   | { kind: 'rooms'; rooms: unknown }
-  | { kind: 'banned'; message?: unknown };
+  | { kind: 'banned'; message?: unknown }
+  | { kind: 'cleared'; room?: unknown }
+  | { kind: 'notice'; from?: unknown; text?: unknown; ts?: unknown }
+  | { kind: 'bans'; bans?: unknown };
+
+/** A one-off global announcement pushed by an admin (shown as a banner). */
+export type ChatAnnouncement = { from: string; text: string; ts: number };
 
 export type ChatStoreState = {
   enabled: boolean;
@@ -97,6 +110,8 @@ export type ChatStoreState = {
   relayError: string | null;
   isAdmin: boolean;
   freqPublic: boolean;
+  /** Admin only: whether the "see all frequencies" override is armed. */
+  seeAllFreq: boolean;
   roster: ChatOperator[];
 
   // Channels + per-room message threads + which tab is active.
@@ -113,9 +128,20 @@ export type ChatStoreState = {
   incomingRequests: string[];
   outgoingRequests: string[];
 
+  // The latest global admin announcement, shown as a dismissible banner.
+  announcement: ChatAnnouncement | null;
+
+  // Currently-banned callsigns (admins only; relay-authoritative). Pushed on
+  // connect, on every ban/unban, and in reply to listBans().
+  bannedUsers: string[];
+
   refreshStatus: () => Promise<void>;
   setEnabled: (enabled: boolean) => Promise<void>;
-  send: (text: string) => Promise<boolean>;
+  /** Report whether the Chat panel is currently displayed (gates presence). */
+  setPanelVisible: (visible: boolean) => Promise<void>;
+  /** Send a message to the active room. `attachment` is an optional inline
+   *  photo; when present `text` may be empty (image-only message). */
+  send: (text: string, attachment?: ChatAttachment | null) => Promise<boolean>;
   loadHistory: () => Promise<void>;
   loadRoster: () => Promise<void>;
   loadRooms: () => Promise<void>;
@@ -125,6 +151,8 @@ export type ChatStoreState = {
   closeDm: (room: string) => void;
   requestRoomHistory: (room: string) => Promise<void>;
   setFreqVisibility: (isPublic: boolean) => Promise<void>;
+  /** Admin: arm/disarm the "see all frequencies" override. */
+  setSeeAll: (on: boolean) => Promise<void>;
   requestFriend: (callsign: string) => Promise<void>;
   acceptFriend: (callsign: string) => Promise<void>;
   denyFriend: (callsign: string) => Promise<void>;
@@ -136,6 +164,11 @@ export type ChatStoreState = {
   removeMember: (room: string, callsign: string) => Promise<void>;
   ban: (callsign: string) => Promise<void>;
   unban: (callsign: string) => Promise<void>;
+  /** Refresh the ban list from the relay (admins only). */
+  listBans: () => Promise<void>;
+  clearRoom: (room?: string) => Promise<void>;
+  broadcast: (text: string) => Promise<void>;
+  dismissAnnouncement: () => void;
   ingest: (envelope: ChatEnvelope) => void;
 };
 
@@ -148,6 +181,7 @@ function applyStatus(s: ChatStatus): Partial<ChatStoreState> {
     relayError: s.error,
     isAdmin: s.isAdmin,
     freqPublic: s.freqPublic,
+    seeAllFreq: s.seeAllFreq,
   };
 }
 
@@ -188,6 +222,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
   relayError: null,
   isAdmin: false,
   freqPublic: true,
+  seeAllFreq: false,
   roster: [],
   rooms: [{ id: PUBLIC_ROOM, name: 'Public', kind: 'public', members: [] }],
   activeRoom: PUBLIC_ROOM,
@@ -197,6 +232,8 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
   acceptedFriends: [],
   incomingRequests: [],
   outgoingRequests: [],
+  announcement: null,
+  bannedUsers: [],
 
   refreshStatus: async () => {
     try {
@@ -214,17 +251,27 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
     }
   },
 
-  send: async (text) => {
+  setPanelVisible: async (visible) => {
+    try {
+      set(applyStatus(await chatSetVisible(visible)));
+    } catch {
+      // Best-effort presence heartbeat; a missed ping just lapses on the
+      // backend timeout and the next interval tick re-asserts visibility.
+    }
+  },
+
+  send: async (text, attachment) => {
     const trimmed = text.trim();
-    if (!trimmed) return false;
+    // Allow an image-only message (empty text) when an attachment is present.
+    if (!trimmed && !attachment) return false;
     const { activeRoom, callsign } = get();
     try {
       if (activeRoom.startsWith('dm:')) {
         const other = dmOther(activeRoom, callsign);
         if (!other) return false;
-        await chatDm(other, trimmed);
+        await chatDm(other, trimmed, attachment);
       } else {
-        await chatSend(trimmed, activeRoom);
+        await chatSend(trimmed, activeRoom, attachment);
       }
       return true;
     } catch (err) {
@@ -321,6 +368,16 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
     }
   },
 
+  setSeeAll: async (on) => {
+    set({ seeAllFreq: on }); // optimistic; status frame confirms
+    try {
+      await chatSetSeeAll(on);
+    } catch (err) {
+      set({ relayError: errMsg(err) });
+      void get().refreshStatus();
+    }
+  },
+
   // Friend actions are fire-and-forget: the relay echoes the resulting graph
   // back as a 0x35 friends frame, which ingest() applies as the source of truth.
   requestFriend: async (callsign) => {
@@ -354,6 +411,18 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
   unban: async (callsign) => {
     try { await chatUnban(callsign); } catch (err) { set({ relayError: errMsg(err) }); }
   },
+  listBans: async () => {
+    try { await chatListBans(); } catch (err) { set({ relayError: errMsg(err) }); }
+  },
+  clearRoom: async (room) => {
+    try { await chatClearRoom(room); } catch (err) { set({ relayError: errMsg(err) }); }
+  },
+  broadcast: async (text) => {
+    const t = text.trim();
+    if (!t) return;
+    try { await chatBroadcast(t); } catch (err) { set({ relayError: errMsg(err) }); }
+  },
+  dismissAnnouncement: () => set({ announcement: null }),
 
   ingest: (envelope) => {
     if (!envelope || typeof envelope !== 'object') return;
@@ -409,6 +478,29 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
       case 'banned':
         set({ relayError: typeof envelope.message === 'string' ? envelope.message : 'You have been banned from ZeusChat.' });
         return;
+      case 'cleared': {
+        const room = typeof envelope.room === 'string' ? envelope.room : PUBLIC_ROOM;
+        set((s) => ({ messagesByRoom: { ...s.messagesByRoom, [room]: [] } }));
+        return;
+      }
+      case 'notice': {
+        const text = typeof envelope.text === 'string' ? envelope.text : '';
+        if (!text) return;
+        const from = typeof envelope.from === 'string' ? envelope.from : '';
+        const ts = typeof envelope.ts === 'number' && Number.isFinite(envelope.ts) ? envelope.ts : Date.now();
+        set({ announcement: { from, text, ts } });
+        return;
+      }
+      case 'bans': {
+        const bans = Array.isArray(envelope.bans)
+          ? envelope.bans
+              .filter((b): b is string => typeof b === 'string' && b.length > 0)
+              .map((b) => b.toUpperCase())
+              .sort()
+          : [];
+        set({ bannedUsers: bans });
+        return;
+      }
       default:
         warnOnce('chat-ingest-unknown-kind', `unknown chat envelope kind: ${String((envelope as { kind?: unknown }).kind)}`);
     }
@@ -421,4 +513,4 @@ export function ownCallsign(): string | null {
 }
 
 // Re-export the wire types so panels can import them from one place.
-export type { ChatOperator, ChatMessage, ChatStatus, ChatRoom } from '../api/chat';
+export type { ChatOperator, ChatMessage, ChatAttachment, ChatStatus, ChatRoom } from '../api/chat';

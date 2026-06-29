@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // Wall-clock peak hold for the immersive meter widgets. Mirrors the
 // prototype's peak/peakHold logic: a peak that bumps up immediately, holds
@@ -21,13 +21,12 @@ interface PeakState {
   holdUntil: number;
 }
 
-/** Pure-function variant — useful for SSR / tests. */
-export function advancePeakHold(
+function advancePeakHold(
   state: PeakState,
   currentFrac: number,
   nowMs: number,
-  holdMs: number = HOLD_MS_DEFAULT,
-  decayFracPerSec: number = DECAY_FRAC_PER_SEC_DEFAULT,
+  holdMs: number,
+  decayFracPerSec: number,
 ): PeakState {
   if (currentFrac > state.peak) {
     return { peak: currentFrac, ts: nowMs, holdUntil: nowMs + holdMs };

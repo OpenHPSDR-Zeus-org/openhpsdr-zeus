@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -48,7 +49,12 @@ import { maybeUpdateEstimator } from '../dsp/signal-estimator';
 
 const DISPLAY_INVALID_BIN_DB = -200;
 
-export type SpectrumReceiver = 'A' | 'B';
+// Receiver discriminator for the spectrum surfaces. Numbers are canonical
+// (0 = RX1, 1 = RX2, >= 2 = RX3+); 'A'/'B' remain accepted as legacy aliases
+// for 0/1. Re-exported as SpectrumReceiver (its historical name) since many
+// files import that identifier.
+export type ReceiverKey = 'A' | 'B' | number;
+export type SpectrumReceiver = ReceiverKey;
 
 export type ReceiverDisplaySlice = {
   width: number;
@@ -76,6 +82,11 @@ export type DisplayState = {
   wfFloorDb: number | null;
   lastSeq: number;
   rx2: ReceiverDisplaySlice;
+  // Display slices for RX3+ (multi-DDC). Indexed by rxId - 2, so extra[0] is
+  // RX3 (rxId 2), extra[1] is RX4, etc. RX1 lives in the root fields and RX2 in
+  // `rx2`; keeping those untouched preserves the VFO-A/B ('A'/'B') consumers
+  // while RX3+ frames land here instead of clobbering the primary slice.
+  extra: ReceiverDisplaySlice[];
   setConnected: (c: boolean) => void;
   pushFrame: (f: DecodedFrame) => void;
 };
@@ -180,15 +191,16 @@ function sliceFromFrame(f: DecodedFrame): ReceiverDisplaySlice {
   };
 }
 
-export function receiverFromRxId(rxId: number): SpectrumReceiver {
-  return rxId === 1 ? 'B' : 'A';
-}
-
 export function selectDisplaySlice(
   state: DisplayState,
   receiver: SpectrumReceiver = 'A',
 ): ReceiverDisplaySlice {
-  if (receiver === 'B') return state.rx2;
+  // Numeric RX3+ key → the multi-DDC `extra` array (extra[index-2]); RX1/RX2
+  // keep their dedicated slices. 'A'/'B' and 0/1 stay byte-identical.
+  if (typeof receiver === 'number' && receiver >= 2) {
+    return state.extra[receiver - 2] ?? EMPTY_DISPLAY_SLICE;
+  }
+  if (receiver === 'B' || receiver === 1) return state.rx2;
   return {
     width: state.width,
     centerHz: state.centerHz,
@@ -201,6 +213,24 @@ export function selectDisplaySlice(
     wfFloorDb: state.wfFloorDb,
     lastSeq: state.lastSeq,
   };
+}
+
+// Shared empty slice for not-yet-seen RX3+ receivers. Slices are treated as
+// read-only snapshots, so a single frozen instance avoids per-render allocation
+// and keeps reference identity stable until the first frame arrives.
+const EMPTY_DISPLAY_SLICE: ReceiverDisplaySlice = createEmptyDisplaySlice();
+
+// Select a display slice by raw rxId (0 = RX1 / VFO A, 1 = RX2 / VFO B, >=2 =
+// RX3+ from the multi-DDC `extra` array). This is the N-receiver accessor used
+// by RX3+ panadapter/waterfall surfaces; the binary 'A'/'B' selectDisplaySlice
+// above still serves the VFO-A/B UI unchanged.
+export function selectDisplaySliceByRxId(
+  state: DisplayState,
+  rxId: number,
+): ReceiverDisplaySlice {
+  if (rxId <= 0) return selectDisplaySlice(state, 'A');
+  if (rxId === 1) return state.rx2;
+  return state.extra[rxId - 2] ?? EMPTY_DISPLAY_SLICE;
 }
 
 export const useDisplayStore = create<DisplayState>((set) => ({
@@ -216,14 +246,27 @@ export const useDisplayStore = create<DisplayState>((set) => ({
   wfFloorDb: null,
   lastSeq: 0,
   rx2: createEmptyDisplaySlice(),
+  extra: [],
   setConnected: (connected) => set({ connected }),
   pushFrame: (f) => {
     const clean = cleanFrame(f);
-    const receiver = receiverFromRxId(clean.rxId);
     const nextSlice = sliceFromFrame(clean);
+    const rxId = clean.rxId;
 
-    if (receiver === 'B') {
+    if (rxId === 1) {
       set({ rx2: nextSlice });
+      return;
+    }
+
+    // RX3+ (multi-DDC): land in the `extra` array keyed by rxId - 2 instead of
+    // falling through to the primary slice. Before this, receiverFromRxId mapped
+    // any rxId != 1 to 'A', so RX3 frames overwrote RX1's display.
+    if (rxId >= 2) {
+      set((state) => {
+        const extra = state.extra.slice();
+        extra[rxId - 2] = nextSlice;
+        return { extra };
+      });
       return;
     }
 

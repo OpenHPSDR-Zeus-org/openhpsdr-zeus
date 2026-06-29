@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -893,7 +894,7 @@ public sealed class TciSession : IDisposable
         {
             // Query
             var state = _radio.Snapshot();
-            Send(TciProtocol.Command("dds", rx, state.VfoHz));
+            Send(TciProtocol.Command("dds", rx, CwOffset.EffectiveLoHz(state)));
         }
         else if (args.Length >= 2 && TciProtocol.TryParseLong(args[1], out long hz))
         {
@@ -1145,8 +1146,9 @@ public sealed class TciSession : IDisposable
     private void HandleAgcGain(string[] args)
     {
         // agc_gain:<rx>,<db> or agc_gain:<rx> (query)
-        // ExpertSDR3 TCI spec: AGC gain is synonymous with AGC top (max gain)
-        // Range: -20 to 120 dB per Thetis convention
+        // ExpertSDR3 TCI spec: AGC gain is synonymous with AGC top (max gain).
+        // The value is clamped to the operator baseline range (30..80 dB) by
+        // RadioService.SetAgcTop — same authority as the REST slider.
         if (args.Length < 1) return;
         if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
 

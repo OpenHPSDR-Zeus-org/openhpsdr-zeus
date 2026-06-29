@@ -119,48 +119,52 @@ describe('drop placement — move-only + swap', () => {
     expectNoCollisions(next);
   });
 
-  it('relocates (does not swap) on a glancing overlap', () => {
-    // Drop `a` only one row into `b` (overlap is 1 of b's 4 rows, < 50%) → no
-    // swap; `a` relocates to the nearest free slot and `b` stays exactly put.
+  it('stays where dropped (overlaps) on a glancing overlap — never relocates down', () => {
+    // Drop `a` one row into `b` (overlap 1 of b's 4 rows, < 50%) → no swap. `a`
+    // STAYS exactly where dropped, overlapping b; b never moves and nothing is
+    // pushed below the fold.
     const next = drop(base, 'a', { x: 0, y: 1 });
     expect(next.find((i) => i.i === 'b')).toMatchObject({ x: 0, y: 4 });
-    // `a` did not take `b`'s slot — it settled into free space instead.
-    expect(next.find((i) => i.i === 'a')).not.toMatchObject({ x: 0, y: 4 });
-    expectNoCollisions(next);
+    expect(next.find((i) => i.i === 'a')).toMatchObject({ x: 0, y: 1 });
   });
 
-  it('never moves a locked panel a tile is dropped onto', () => {
+  it('overlaps a locked tile on drop without moving it (no relocate)', () => {
     const layout: Layout = [
       { i: 'dragged', x: 0, y: 0, w: 6, h: 4 },
       { i: 'locked', x: 0, y: 4, w: 6, h: 4, static: true },
     ];
     const next = drop(layout, 'dragged', { x: 0, y: 4 });
+    // Locked tile is untouched; the dragged tile stays where dropped, on top.
     expect(next.find((i) => i.i === 'locked')).toMatchObject({
       x: 0,
       y: 4,
       static: true,
     });
-    // The dragged tile relocates off the locked footprint; nothing else moves.
-    expectNoCollisions(next);
+    expect(next.find((i) => i.i === 'dragged')).toMatchObject({ x: 0, y: 4 });
   });
 
-  it('keeps a large panel at full size when relocating around a locked tile', () => {
+  it('keeps a large dropped panel at full size, overlapping a locked tile (no relocate)', () => {
     const layout: Layout = [
       { i: 'locked', x: 0, y: 0, w: 24, h: 4, static: true },
       { i: 'hero', x: 0, y: 6, w: 18, h: 20 },
     ];
-    // Drop hero up onto the locked banner — it must not shrink, just relocate.
+    // Drop hero up onto the locked banner — it stays where dropped at full size;
+    // the locked banner does not move.
     const next = drop(layout, 'hero', { x: 0, y: 0 });
-    expect(next.find((i) => i.i === 'hero')).toMatchObject({ w: 18, h: 20 });
+    expect(next.find((i) => i.i === 'hero')).toMatchObject({
+      x: 0,
+      y: 0,
+      w: 18,
+      h: 20,
+    });
     expect(next.find((i) => i.i === 'locked')).toMatchObject({
       x: 0,
       y: 0,
       static: true,
     });
-    expectNoCollisions(next);
   });
 
-  it('places a large dropped panel without an exponential search blowup', () => {
+  it('keeps a large dropped panel at full size where dropped (no relocate search)', () => {
     const layout: Layout = cloneLayout([
       { i: 'filter', x: 0, y: 0, w: 12, h: 10 },
       { i: 'filterpresets', x: 12, y: 0, w: 6, h: 10 },
@@ -171,40 +175,45 @@ describe('drop placement — move-only + swap', () => {
       { i: 'txmeters', x: 18, y: 26, w: 6, h: 12 },
       { i: 'dsp', x: 18, y: 38, w: 6, h: 10 },
     ]);
-    const start = performance.now();
     const next = drop(layout, 'hero', { x: 6, y: 4 });
-    const elapsedMs = performance.now() - start;
-    expect(elapsedMs).toBeLessThan(250);
-    expect(next.find((i) => i.i === 'hero')).toMatchObject({ w: 18, h: 38 });
-    expectNoCollisions(next);
+    // Stays exactly where dropped, full size — no downward free-slot search.
+    expect(next.find((i) => i.i === 'hero')).toMatchObject({
+      x: 6,
+      y: 4,
+      w: 18,
+      h: 38,
+    });
   });
 });
 
-describe('resolveResizeOverlaps — local, no cascade', () => {
-  it('nudges only the overlapped neighbour aside when a tile grows', () => {
+describe('resolveResizeOverlaps — overlap allowed, locked protected', () => {
+  it('leaves the overlapped neighbour exactly in place — the resized tile overlaps it', () => {
     const layout: Layout = [
-      { i: 'top', x: 0, y: 0, w: 6, h: 4 }, // already grown into `below`
+      { i: 'top', x: 0, y: 0, w: 6, h: 4 }, // grown down over `below`
       { i: 'below', x: 0, y: 2, w: 6, h: 2 },
       { i: 'far', x: 0, y: 10, w: 6, h: 2 },
     ];
     const next = resolveResizeOverlaps(layout, 'top', 24);
     expect(next.find((i) => i.i === 'top')).toMatchObject({ y: 0, h: 4 });
-    // `below` hops to the nearest free slot, `far` is left exactly where it was.
-    expect(next.find((i) => i.i === 'far')).toMatchObject({ y: 10 });
-    expectNoCollisions(next);
+    // `below` and `far` are both left exactly where they were — nothing is
+    // pushed to a free slot (which is what used to bring the scrollbar back).
+    expect(next.find((i) => i.i === 'below')).toMatchObject({ x: 0, y: 2 });
+    expect(next.find((i) => i.i === 'far')).toMatchObject({ x: 0, y: 10 });
   });
 
-  it('does not move a locked neighbour', () => {
+  it('clamps the resized tile out of a locked neighbour instead of covering it', () => {
     const layout: Layout = [
-      { i: 'top', x: 0, y: 0, w: 6, h: 4 },
+      { i: 'top', x: 0, y: 0, w: 6, h: 4 }, // grown down into the locked tile
       { i: 'locked', x: 0, y: 2, w: 6, h: 2, static: true },
     ];
     const next = resolveResizeOverlaps(layout, 'top', 24);
+    // The locked tile never moves; the resized tile is trimmed back to its top.
     expect(next.find((i) => i.i === 'locked')).toMatchObject({
       x: 0,
       y: 2,
       static: true,
     });
+    expect(next.find((i) => i.i === 'top')).toMatchObject({ y: 0, h: 2 });
   });
 });
 

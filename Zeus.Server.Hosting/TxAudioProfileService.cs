@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Zeus.Contracts;
 using Zeus.Plugins.Host;
@@ -40,6 +42,7 @@ public sealed class TxAudioProfileService : IHostedService
     private readonly TxFidelityPolicyStore _fidelity;
     private readonly PluginManager _manager;
     private readonly PluginSettingsStore _pluginSettings;
+    private readonly AudioPluginBridge _audioBridge;
     private readonly ILogger<TxAudioProfileService> _log;
 
     public TxAudioProfileService(
@@ -51,6 +54,7 @@ public sealed class TxAudioProfileService : IHostedService
         TxFidelityPolicyStore fidelity,
         PluginManager manager,
         PluginSettingsStore pluginSettings,
+        AudioPluginBridge audioBridge,
         ILogger<TxAudioProfileService> log)
     {
         _store = store;
@@ -61,6 +65,7 @@ public sealed class TxAudioProfileService : IHostedService
         _fidelity = fidelity;
         _manager = manager;
         _pluginSettings = pluginSettings;
+        _audioBridge = audioBridge;
         _log = log;
     }
 
@@ -78,6 +83,62 @@ public sealed class TxAudioProfileService : IHostedService
         if (removed)
             _log.LogInformation("TX audio profile '{Id}' deleted", TxAudioProfileStore.NormalizeId(id));
         return removed;
+    }
+
+    /// <summary>The on-disk folder every profile is mirrored into as JSON.</summary>
+    public string ProfileFolder => _store.ProfileFolder;
+
+    // Indented camelCase export — matches the folder-mirror format so a
+    // downloaded file is byte-for-byte the same shape as the on-disk mirror.
+    private static readonly JsonSerializerOptions ExportJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true,
+    };
+
+    /// <summary>
+    /// Import a profile from a JSON document (an uploaded/shared file). The
+    /// profile is ADDED to the collection — it is never auto-applied, and it
+    /// never clobbers an existing profile: if the derived slug is taken, the
+    /// display name is bumped (\"Voice\" -> \"Voice 2\") until the id is free.
+    /// Partial / hand-edited files are tolerated (missing collections default to
+    /// empty so the apply path can't dereference a null). Throws
+    /// <see cref="ArgumentException"/> on unparseable input.
+    /// </summary>
+    public TxAudioProfileDto ImportProfile(string json, string? fallbackName = null)
+    {
+        var parsed = TxAudioProfileStore.ParseJson(json)
+            ?? throw new ArgumentException("File is not a valid TX audio profile (could not parse JSON).");
+
+        var clean = SanitizeForCurrentInstall(parsed, fallbackName);
+
+        var baseName = !string.IsNullOrWhiteSpace(clean.Name) ? clean.Name!.Trim()
+            : !string.IsNullOrWhiteSpace(fallbackName) ? fallbackName!.Trim()
+            : "imported profile";
+
+        var name = baseName;
+        var id = Slugify(name);
+        for (int n = 2; _store.Get(id) is not null; n++)
+        {
+            name = $"{baseName} {n}";
+            id = Slugify(name);
+        }
+
+        var saved = _store.Upsert(SanitizeForCurrentInstall(clean with { Id = id, Name = name }, name));
+        _log.LogInformation("TX audio profile imported as '{Name}' (id={Id})", saved.Name, saved.Id);
+        return saved;
+    }
+
+    /// <summary>
+    /// Serialize a saved profile to downloadable JSON bytes (indented). Returns
+    /// null when no such profile. The byte shape matches the folder mirror.
+    /// </summary>
+    public (byte[] Bytes, string FileName)? ExportProfile(string id)
+    {
+        var profile = _store.Get(id);
+        if (profile is null) return null;
+        var json = JsonSerializer.Serialize(profile, ExportJsonOptions);
+        return (Encoding.UTF8.GetBytes(json), profile.Id + ".json");
     }
 
     /// <summary>
@@ -153,8 +214,9 @@ public sealed class TxAudioProfileService : IHostedService
     /// </summary>
     public async Task<TxAudioProfileDto?> ApplyAsync(string id, CancellationToken ct = default)
     {
-        var profile = _store.Get(id);
-        if (profile is null) return null;
+        var stored = _store.Get(id);
+        if (stored is null) return null;
+        var profile = SanitizeForCurrentInstall(stored, stored.Name);
 
         ApplyScalars(profile);
 
@@ -168,10 +230,13 @@ public sealed class TxAudioProfileService : IHostedService
         var targetMode = string.Equals(profile.ProcessingMode, "vst", StringComparison.OrdinalIgnoreCase)
             ? AudioProcessingMode.Vst : AudioProcessingMode.Native;
         await _mode.SetModeAsync(targetMode, ct).ConfigureAwait(false);
-        // ApplyMembershipAndOrder fires OrderChanged -> AudioChain rebuild ->
-        // native plugins re-read PluginSettingsStore (restored above), and the
-        // VST engine reloads its chain with the armed states.
+        // ApplyMembershipAndOrder fires OrderChanged -> AudioChain rebuild.
+        // Newly-active native plugins initialize after the restored settings
+        // above. Already-active native plugins need one explicit recycle so
+        // their in-memory controls and DSP state re-read PluginSettingsStore
+        // immediately instead of waiting for a Zeus restart.
         _chainOrder.ApplyMembershipAndOrder(profile.ChainOrder, profile.ChainParked);
+        _audioBridge.ReloadActiveTxPlugins(profile.NativePluginStates.Keys.ToArray());
         _masterBypass.SetMasterBypassed(profile.MasterBypass);
 
         _store.SetLastLoadedId(profile.Id);
@@ -203,9 +268,55 @@ public sealed class TxAudioProfileService : IHostedService
 
     private bool IsVstPlugin(string pluginId)
     {
+        if (LooksLikeVstPluginId(pluginId)) return true;
         var p = _manager.Find(pluginId);
         return !string.IsNullOrEmpty(p?.Loaded.Manifest.Audio?.Vst3Path);
     }
+
+    private TxAudioProfileDto SanitizeForCurrentInstall(TxAudioProfileDto profile, string? fallbackName)
+    {
+        var clean = TxAudioProfileStore.Sanitize(profile, fallbackName: fallbackName);
+        var nativeMode = !string.Equals(clean.ProcessingMode, "vst", StringComparison.OrdinalIgnoreCase);
+
+        var order = new List<string>(clean.ChainOrder.Count);
+        var seenOrder = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var id in clean.ChainOrder)
+        {
+            if (nativeMode && IsVstPlugin(id)) continue;
+            if (seenOrder.Add(id)) order.Add(id);
+        }
+
+        var parked = new List<string>(clean.ChainParked.Count);
+        var seenParked = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var id in clean.ChainParked)
+        {
+            if (seenOrder.Contains(id)) continue;
+            if (seenParked.Add(id)) parked.Add(id);
+        }
+
+        var nativeStates = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+        foreach (var (id, state) in clean.NativePluginStates)
+        {
+            if (nativeMode && IsVstPlugin(id)) continue;
+            nativeStates[id] = state;
+        }
+
+        return clean with
+        {
+            ChainOrder = order,
+            ChainParked = parked,
+            VstPluginStates = nativeMode
+                ? new Dictionary<string, string>(StringComparer.Ordinal)
+                : clean.VstPluginStates,
+            NativePluginStates = nativeStates,
+        };
+    }
+
+    private static bool LooksLikeVstPluginId(string pluginId) =>
+        pluginId.Contains(".vst.", StringComparison.OrdinalIgnoreCase)
+        || pluginId.Contains(".rxvst.", StringComparison.OrdinalIgnoreCase)
+        || pluginId.Contains(".au.", StringComparison.OrdinalIgnoreCase)
+        || pluginId.Contains(".rxau.", StringComparison.OrdinalIgnoreCase);
 
     private static string Slugify(string name)
     {

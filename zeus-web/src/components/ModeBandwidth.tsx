@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -43,8 +44,17 @@
 // License for details.
 
 import { useCallback } from 'react';
-import { setMode, type RxMode, type TxVfo } from '../api/client';
+import { type RxMode } from '../api/client';
+import { isDigitalEntryAvailable, toggleDigital } from '../state/enter-digital';
+import { useFt8Store } from '../state/ft8-store';
+import { useWsprStore } from '../state/wspr-store';
 import { useConnectionStore } from '../state/connection-store';
+import {
+  gangedReceiverAction,
+  getReceiverMode,
+  optimisticSetReceiverMode,
+  postReceiverMode,
+} from '../state/receiver-state';
 import { saveReceiverBandModeMemory } from '../util/band-memory';
 import { toolbarFavDragMime } from './toolbar/toolbarFavoriteDrag';
 
@@ -61,32 +71,39 @@ const MODES: readonly ModeEntry[] = [
   { value: 'FM', label: 'FM' },
   { value: 'DIGL', label: 'DIGL' },
   { value: 'DIGU', label: 'DIGU' },
+  { value: 'FREEDV', label: 'FreeDV' },
 ];
 
 export function ModeBandwidth() {
-  const mode = useConnectionStore((s) => s.mode);
-  const modeB = useConnectionStore((s) => s.modeB);
-  const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
-  const rxFocus = useConnectionStore((s) => s.rxFocus);
-  const applyState = useConnectionStore((s) => s.applyState);
-  const activeReceiver: TxVfo = rxFocus === 'B' && rx2Enabled ? 'B' : 'A';
-  const activeMode = activeReceiver === 'B' ? modeB : mode;
+  // Follow the focused receiver across all DDCs (0=RX1, 1=RX2, >=2=RX3+), the
+  // same model VFO B used via rxFocus — generalised to any numeric receiver so
+  // the mode row drives whichever receiver the operator is working in.
+  const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
+  const activeMode = useConnectionStore((s) => getReceiverMode(s, focusedRxIndex));
+
+  // Engaged-digital state so the FT8/FT4/WSPR buttons stay DEPRESSED while their
+  // pop-out is open (FT8/FT4 distinguished by the active protocol).
+  const ft8Open = useFt8Store((s) => s.open);
+  const ft8Protocol = useFt8Store((s) => s.protocol);
+  const wsprOpen = useWsprStore((s) => s.open);
+  const digitalEngaged = (p: 'FT8' | 'FT4' | 'WSPR') =>
+    p === 'WSPR' ? wsprOpen : ft8Open && ft8Protocol === p;
 
   const selectMode = useCallback(
     (m: RxMode) => {
       if (m === activeMode) return;
-      useConnectionStore.setState(activeReceiver === 'B' ? { modeB: m } : { mode: m });
-      saveReceiverBandModeMemory(activeReceiver, m);
-      setMode(m, undefined, activeReceiver)
-        .then((state) => {
-          applyState(state);
-          saveReceiverBandModeMemory(activeReceiver, undefined, state);
-        })
-        .catch(() => {
-          /* next state poll will reconcile */
-        });
+      // Ganged: apply to every selected receiver; the focused one reconciles.
+      gangedReceiverAction({
+        optimistic: (k) => optimisticSetReceiverMode(k, m),
+        post: (k) => postReceiverMode(k, m),
+      });
+      // Per-band last-mode memory is an RX1/RX2 (A/B) concept; record the
+      // focused receiver's band only.
+      if (focusedRxIndex <= 1) {
+        saveReceiverBandModeMemory(focusedRxIndex === 1 ? 'B' : 'A', m);
+      }
     },
-    [activeReceiver, activeMode, applyState],
+    [focusedRxIndex, activeMode],
   );
 
   return (
@@ -112,6 +129,41 @@ export function ModeBandwidth() {
               {m.label}
             </button>
           ))}
+          {/* Digital modes are Zeus-level modes (like FreeDV), not WDSP demods —
+              they open the dedicated FT8/FT4/WSPR workspace and auto-configure
+              the radio (DIGU + FT8 bandwidth + band dial). Rendered inline with
+              the mode buttons so they're always visible next to DIGU/DIGL. */}
+          {(['FT8', 'FT4', 'WSPR'] as const).map((p) => {
+            const engaged = digitalEngaged(p);
+            const available = isDigitalEntryAvailable(p);
+            return (
+              <button
+                key={p}
+                type="button"
+                disabled={!available}
+                onClick={() => {
+                  if (available) toggleDigital(p);
+                }}
+                className={`btn sm ${engaged ? 'active' : ''}`}
+                style={
+                  !available
+                    ? { opacity: 0.4, cursor: 'not-allowed', borderColor: 'var(--line)', color: 'var(--fg-3)' }
+                    : engaged
+                      ? undefined
+                      : { borderColor: 'var(--accent)', color: 'var(--accent)' }
+                }
+                title={
+                  !available
+                    ? `${p} — coming soon (not yet available)`
+                    : engaged
+                      ? `Exit ${p} — restores the prior frequency and mode`
+                      : `Enter ${p} — QSYs the radio and opens the ${p} pop-out`
+                }
+              >
+                {p}
+              </button>
+            );
+          })}
         </div>
       </div>
 

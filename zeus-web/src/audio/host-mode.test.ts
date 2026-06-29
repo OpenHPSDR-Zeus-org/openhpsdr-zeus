@@ -57,6 +57,19 @@ describe('audio host-mode flag', () => {
     expect(getAudioHostMode()).toBe('browser');
   });
 
+  it('forces browser audio for a remote session even on a desktop host', () => {
+    // A remote operator connecting to a desktop-mode radio must play RX audio
+    // in the browser — the host's native sink only drives its own speakers.
+    window.history.replaceState({}, '', '/?remote=N9WAR');
+    try {
+      setHost('desktop');
+      expect(isNativeAudio()).toBe(false);
+      expect(getAudioHostMode()).toBe('browser');
+    } finally {
+      window.history.replaceState({}, '', '/');
+    }
+  });
+
   it('setAudioHostMode("native") logs exactly once across repeated calls', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     setAudioHostMode('native');

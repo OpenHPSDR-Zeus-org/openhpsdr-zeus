@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -51,6 +52,23 @@ const R_EARTH_KM = 6371;
 
 const toRad = (deg: number) => (deg * Math.PI) / 180;
 const toDeg = (rad: number) => (rad * 180) / Math.PI;
+
+/**
+ * Maidenhead grid locator → the lat/lon of the square's CENTRE. Accepts 4- or
+ * 6-character grids (extra characters past the 4-char field are ignored — the
+ * 4-char centre is plenty for an HF distance/bearing read). Returns null for
+ * anything that isn't a valid `AA00`-form locator.
+ */
+export function gridToLatLon(grid: string): { lat: number; lon: number } | null {
+  const g = grid.trim().toUpperCase();
+  if (!/^[A-R]{2}[0-9]{2}/.test(g)) return null;
+  const A = 'A'.charCodeAt(0);
+  const Z = '0'.charCodeAt(0);
+  // Field (20° lon × 10° lat) then square (2° lon × 1° lat), shifted to centre.
+  const lon = (g.charCodeAt(0) - A) * 20 - 180 + (g.charCodeAt(2) - Z) * 2 + 1;
+  const lat = (g.charCodeAt(1) - A) * 10 - 90 + (g.charCodeAt(3) - Z) * 1 + 0.5;
+  return { lat, lon };
+}
 
 /**
  * Solar elevation angle (degrees above the horizon) at a point and instant.

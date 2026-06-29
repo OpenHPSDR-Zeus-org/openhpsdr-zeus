@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 
 import { create } from 'zustand';
 import {
@@ -49,10 +50,15 @@ export const useBandPlanStore = create<BandPlanState>()((set, get) => ({
     set({ loading: true, error: null });
     try {
       const [current, regions] = await Promise.all([fetchCurrent(), fetchRegions()]);
+      // Coerce to arrays: a malformed / empty API response (or a test stub that
+      // omits these fields) must never leave the store holding `undefined` for
+      // segments/regions. `segments` is consumed app-wide by BandPlanProvider's
+      // edge-alert hook, so an undefined here would throw inside an app-level
+      // provider and trip AppErrorBoundary, blanking the whole UI.
       set({
-        regions,
+        regions: Array.isArray(regions) ? regions : [],
         currentRegionId: current.regionId,
-        segments: current.segments,
+        segments: Array.isArray(current.segments) ? current.segments : [],
         txGuardIgnore: current.txGuardIgnore,
         loading: false,
       });

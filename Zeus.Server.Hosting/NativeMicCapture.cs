@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // Desktop-mode TX mic capture: replaces the browser → WS MicPcm uplink with
 // a direct miniaudio capture device feed into TxAudioIngest. The two paths
@@ -15,6 +15,7 @@
 // the selected OS input device instead of getUserMedia.
 
 using System.Runtime.InteropServices;
+using System.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Hosting;
 using Zeus.Contracts;
@@ -54,6 +55,11 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
     // adds wire churn for no visible gain. See report for the trade-off.
     private const int PeakWindowSamples = 4800;     // 100 ms @ 48 kHz
 
+    // A native capture-device open can block inside miniaudio indefinitely when
+    // Windows reports a stale / exclusive / malformed endpoint. Keep that off
+    // the host startup path and bound individual selected/default attempts.
+    private static readonly TimeSpan DeviceOpenTimeout = TimeSpan.FromSeconds(5);
+
     private readonly TxAudioIngest _ingest;
     private readonly StreamingHub _hub;
     private readonly AudioPluginBridge _bridge;
@@ -62,6 +68,7 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
 
     private MiniAudioInput? _input;
     private readonly object _deviceSync = new();
+    private bool _shutdown;
     private string? _activeInputDeviceId;
     private readonly float[] _accum = new float[MicBlockSamples];
     private int _accumFill;
@@ -102,11 +109,19 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        lock (_deviceSync)
+        var thread = new Thread(() =>
         {
-            if (_input != null) return Task.CompletedTask;
-            OpenInputLocked(ConfiguredInputDeviceId);
-        }
+            lock (_deviceSync)
+            {
+                if (_shutdown || _input != null) return;
+                OpenInputLocked(ConfiguredInputDeviceId);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "zeus-mic-start",
+        };
+        thread.Start();
         return Task.CompletedTask;
     }
 
@@ -114,6 +129,7 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
     {
         lock (_deviceSync)
         {
+            _shutdown = true;
             try { _input?.Stop(); }
             catch (Exception ex) { _log.LogWarning(ex, "audio.native.tx stop threw"); }
         }
@@ -124,6 +140,7 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
     {
         lock (_deviceSync)
         {
+            _shutdown = true;
             CloseInputLocked(dispose: true);
         }
     }
@@ -145,45 +162,74 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
 
     private void OpenInputLocked(string? requestedDeviceId)
     {
-        try
+        var selected = !string.IsNullOrWhiteSpace(requestedDeviceId);
+        var input = OpenInputTimeboxed(requestedDeviceId, out var failure);
+        if (input != null)
         {
-            _input = CreateInput(requestedDeviceId);
-            _input.Start();
-            _activeInputDeviceId = NormalizeDeviceId(requestedDeviceId);
-            _log.LogInformation(
-                "audio.native.tx mic open device={Device} rate={Rate}Hz channels={Channels}",
-                _activeInputDeviceId is null ? "default" : "selected",
-                _input.SampleRate, _input.Channels);
-            return;
-        }
-        catch (Exception ex) when (!string.IsNullOrWhiteSpace(requestedDeviceId))
-        {
-            _log.LogWarning(ex, "audio.native.tx selected mic open failed; falling back to default");
-            CloseInputLocked(dispose: true);
-        }
-        catch (Exception ex)
-        {
-            // Don't kill the host; desktop mode without a working mic should
-            // still RX. The operator may not even have a mic plugged in.
-            _log.LogWarning(ex, "audio.native.tx mic open failed; TX uplink disabled");
-            CloseInputLocked(dispose: true);
+            AdoptInputLocked(input, requestedDeviceId);
             return;
         }
 
-        try
+        LogOpenGaveUp(selected ? "selected" : "default", failure);
+        if (!selected)
         {
-            _input = CreateInput(null);
-            _input.Start();
-            _activeInputDeviceId = null;
-            _log.LogInformation(
-                "audio.native.tx mic open device=default rate={Rate}Hz channels={Channels}",
-                _input.SampleRate, _input.Channels);
+            _log.LogWarning("audio.native.tx TX uplink disabled (no usable mic input)");
+            return;
         }
-        catch (Exception fallbackEx)
+
+        var fallback = OpenInputTimeboxed(null, out var fallbackFailure);
+        if (fallback != null)
         {
-            _log.LogWarning(fallbackEx, "audio.native.tx default mic fallback open failed; TX uplink disabled");
-            CloseInputLocked(dispose: true);
+            AdoptInputLocked(fallback, null);
+            return;
         }
+
+        LogOpenGaveUp("default fallback", fallbackFailure);
+        _log.LogWarning("audio.native.tx TX uplink disabled (no usable mic input)");
+    }
+
+    private MiniAudioInput? OpenInputTimeboxed(string? requestedDeviceId, out Exception? failure) =>
+        TimeboxedNativeOpen.Run(
+            () =>
+            {
+                MiniAudioInput? input = null;
+                try
+                {
+                    input = CreateInput(requestedDeviceId);
+                    input.Start();
+                    return input;
+                }
+                catch
+                {
+                    input?.Dispose();
+                    throw;
+                }
+            },
+            static input => input.Dispose(),
+            DeviceOpenTimeout,
+            out failure);
+
+    private void AdoptInputLocked(MiniAudioInput input, string? requestedDeviceId)
+    {
+        _input = input;
+        _activeInputDeviceId = NormalizeDeviceId(requestedDeviceId);
+        _log.LogInformation(
+            "audio.native.tx mic open device={Device} rate={Rate}Hz channels={Channels}",
+            _activeInputDeviceId is null ? "default" : "selected",
+            input.SampleRate, input.Channels);
+    }
+
+    private void LogOpenGaveUp(string which, Exception? failure)
+    {
+        if (failure != null)
+        {
+            _log.LogWarning(failure, "audio.native.tx {Which} mic open failed", which);
+            return;
+        }
+
+        _log.LogWarning(
+            "audio.native.tx {Which} mic open timed out after {Timeout:0.#}s; not blocking host startup",
+            which, DeviceOpenTimeout.TotalSeconds);
     }
 
     private MiniAudioInput CreateInput(string? deviceId) =>
@@ -285,17 +331,25 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
                 // are discarded — TxAudioIngest still gets the unmodified
                 // mic block via FlushBlock, so the on-air audio path is
                 // bit-identical to the no-preview case.
-                try
+                // Only run the host-mic plugin preview when Host is the active
+                // source. When a radio jack is selected the host mic is off the
+                // air, so its per-plugin IN / OUT / GR preview meters must not
+                // animate from it either (same source-awareness as the level
+                // meter above).
+                if (_ingest.ActiveSource == MicBlockSource.Host)
                 {
-                    _bridge.ProcessLivePreview(
-                        new ReadOnlySpan<float>(_accum, 0, MicBlockSamples),
-                        sampleRate: 48_000);
-                }
-                catch (Exception ex)
-                {
-                    if (++_previewErrLogged <= 4)
-                        _log.LogWarning(ex,
-                            "audio.native.tx plugin preview threw (suppressed after 4)");
+                    try
+                    {
+                        _bridge.ProcessLivePreview(
+                            new ReadOnlySpan<float>(_accum, 0, MicBlockSamples),
+                            sampleRate: 48_000);
+                    }
+                    catch (Exception ex)
+                    {
+                        if (++_previewErrLogged <= 4)
+                            _log.LogWarning(ex,
+                                "audio.native.tx plugin preview threw (suppressed after 4)");
+                    }
                 }
 
                 FlushBlock();
@@ -307,13 +361,24 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
 
     private void FlushPeakWindow()
     {
+        // The mic meter must reflect the ACTIVE TX audio source, not always the
+        // host mic. When the operator selects a radio jack (Radio Mic / Line In /
+        // Balanced) the host mic is gated off the air in TxAudioIngest — and it
+        // must drop off the METER too, otherwise the operator sees host-mic level
+        // on a radio source with nothing connected (the meter would "lie"). So:
+        //   Host source  → this device's host-mic window peak.
+        //   Radio source → the radio-jack peak TxAudioIngest tracked, which is
+        //                   silence (0) when no UDP-1026 audio is arriving.
+        // Either way this is a steady ~10 Hz heartbeat, so a radio source with no
+        // input falls to silence rather than freezing on the last host value.
+        //
         // Convert linear peak (0..1) to dBFS via the shared converter on the
         // contract type. Flooring + clipping happens inside LinearToDbfs.
-        // Timestamp the frame here so a client can detect mic-stream stalls
-        // (e.g. if the OS unplugs the input device, the frame stops
-        // arriving and the operator sees the meter freeze rather than fall
-        // to silence — that's the right behaviour).
-        float peakDbfs = MicPeakFrame.LinearToDbfs(_peakWindow);
+        // Timestamp the frame here so a client can detect mic-stream stalls.
+        float peakLinear = _ingest.ActiveSource == MicBlockSource.Host
+            ? _peakWindow
+            : _ingest.ConsumeRadioPeakLinear();
+        float peakDbfs = MicPeakFrame.LinearToDbfs(peakLinear);
         long tsUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         try
         {

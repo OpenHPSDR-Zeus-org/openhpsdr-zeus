@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -55,7 +56,9 @@ import {
   registerEstimatorConsumer,
   useSignalEnhanceStore,
 } from '../dsp/signal-estimator';
-import { normalizeStitchedBins, stitchFloorShiftDb } from '../dsp/stitch-normalizer';
+import { getReceiverVfoHz, KIWI_RECEIVER_INDEX, rxIndexOf, type ReceiverKey } from '../state/receiver-state';
+import { estimateRowFloorDb, forgetReceiverFloor, reportReceiverFloorDb } from '../dsp/floor-normalization';
+import { effectiveRxWfWindow, useRxDbWindowStore } from '../state/rx-db-window-store';
 import * as viewCenter from '../state/view-center';
 import * as viewZoom from '../state/view-zoom';
 import { useTxStore } from '../state/tx-store';
@@ -70,11 +73,14 @@ import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
 type WaterfallProps = {
   /** When true, noise floor fades to transparent so the QRZ-mode map shows through. */
   transparent?: boolean;
-  receiver?: 'A' | 'B';
+  receiver?: ReceiverKey;
   touchMode?: PanTuneGestureOptions['touchMode'];
   tuneReceiver?: PanTuneGestureOptions['tuneReceiver'];
   stitched?: boolean;
   foreground?: boolean;
+  /** Render the in-tile dB scale on RX1. Off when the parent draws one scale
+   *  spanning the whole (possibly multi-row) waterfall grid instead. */
+  dbScale?: boolean;
 };
 
 type WaterfallValueDomain = 'rx-db' | 'pop' | 'tx-db';
@@ -89,11 +95,13 @@ export function Waterfall({
   tuneReceiver,
   stitched = false,
   foreground = true,
+  dbScale = true,
 }: WaterfallProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cursorRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<ReturnType<typeof createWfRenderer> | null>(null);
+  const rxIndex = rxIndexOf(receiver);
   const popEnabled = useSignalEnhanceStore((s) => s.popEnabled);
   const popRenderIntensity = useSignalEnhanceStore((s) => s.popRenderIntensity);
   const waterfallReliefDepth = useSignalEnhanceStore((s) => s.waterfallReliefDepth);
@@ -223,7 +231,6 @@ export function Waterfall({
     // is safe — there's no deferred reference-identity dirty check here.
     let enhBuf: Float32Array | null = null;
     let terrainBuf: Float32Array | null = null;
-    let stitchBuf: Float32Array | null = null;
     // Scroll speed is a rare toggle; cache the last value pushed to the renderer
     // so a steady redraw loop skips the store read + GL uniform update per frame.
     let lastScrollSpeed = -1;
@@ -244,7 +251,7 @@ export function Waterfall({
 
     const redraw = () => {
       if (contextLost || !renderer) return;
-      const { wfDbMin, wfDbMax, wfTxDbMin, wfTxDbMax, waterfallScrollSpeed } =
+      const { wfTxDbMin, wfTxDbMax, waterfallScrollSpeed } =
         useDisplaySettingsStore.getState();
       const { moxOn, tunOn } = useTxStore.getState();
       const keyed = moxOn || tunOn;
@@ -261,17 +268,32 @@ export function Waterfall({
         renderer.setScrollSpeed(waterfallScrollSpeed);
         lastScrollSpeed = waterfallScrollSpeed;
       }
-      // Mirror DbScale.tsx — keyed (MOX/TUN) renders the TX waterfall
-      // window so the operator's RX noise-floor view stays put.
-      const dbMin = popOn ? 0 : keyed ? wfTxDbMin : wfDbMin;
-      const dbMax = popOn ? 1 : keyed ? wfTxDbMax : wfDbMax;
+      // Mirror DbScale.tsx — keyed (MOX/TUN) renders the TX waterfall window so
+      // the operator's RX noise-floor view stays put.
+      // Per-receiver RX window: RX1 uses the global window; every other receiver
+      // uses its own — an operator override (set by focusing it and dragging the
+      // WfDbScale), or the global window floor-normalized to RX1 so noise floors
+      // line up out of the box. Keyed/POP domains are absolute, never per-RX.
+      const rxWin = popOn || keyed ? null : effectiveRxWfWindow(rxIndex);
+      const dbMin = popOn ? 0 : keyed ? wfTxDbMin : rxWin!.wfDbMin;
+      const dbMax = popOn ? 1 : keyed ? wfTxDbMax : rxWin!.wfDbMax;
       renderer.setPopMode(popOn, popIntensity, reliefDepth, smoothness);
-      renderer.draw(
-        dbMin,
-        dbMax,
-        visualCenterHz(),
-        viewZoom.isInitialized() ? viewZoom.getDisplayedHzPerPixel() : null,
-      );
+      // Draw-time zoom span. Hardware DDCs follow the shared RX1-driven tween;
+      // the Kiwi slice receiver self-scales to its OWN current frame Hz/pixel so
+      // the renderer's viewScale (viewHzPerPixel / lastHzPerPixel) resolves to 1
+      // and its history fills the pane instead of being squished to the centre.
+      // Passing null keeps unit scale until a span is known. See
+      // displayedHzPerPixelFor.
+      const ownFrameHzPerPixel = selectDisplaySlice(useDisplayStore.getState(), receiver).hzPerPixel;
+      const viewHzPerPixel =
+        rxIndex === KIWI_RECEIVER_INDEX
+          ? ownFrameHzPerPixel > 0
+            ? viewZoom.displayedHzPerPixelFor(rxIndex, ownFrameHzPerPixel)
+            : null
+          : viewZoom.isInitialized()
+            ? viewZoom.getDisplayedHzPerPixel()
+            : null;
+      renderer.draw(dbMin, dbMax, visualCenterHz(), viewHzPerPixel);
     };
     const requestRedraw = () => {
       if (!isActive()) return;
@@ -337,7 +359,7 @@ export function Waterfall({
       // planner to emit a 'reset' on the next frame so the textures re-seed,
       // and seed immediately from the last-held frame so a paused-RX restore
       // is not left blank.
-      resetFramePlan(receiver);
+      resetFramePlan(String(receiver));
       contextLost = false;
       resize();
       const st = selectDisplaySlice(useDisplayStore.getState(), receiver);
@@ -382,13 +404,13 @@ export function Waterfall({
         centerHz: slice.centerHz,
         hzPerPixel: slice.hzPerPixel,
         width: slice.width,
-        planKey: receiver,
+        planKey: String(receiver),
       });
       // Drive the shared zoom tween (view-zoom.ts) from RX1 only — zoom is a
       // single global setting, so one driver avoids RX2's resets interrupting
       // an in-flight glide. A hard reset snaps (no glide); otherwise ease to
       // the server span so a zoom step scales smoothly instead of snapping.
-      if (receiver === 'A' && slice.hzPerPixel > 0) {
+      if (rxIndex === 0 && slice.hzPerPixel > 0) {
         if (decision.kind === 'reset') viewZoom.snapTo(slice.hzPerPixel);
         else viewZoom.setTarget(slice.hzPerPixel);
       }
@@ -402,8 +424,16 @@ export function Waterfall({
         // Feed the RX auto-range tracker — it's a no-op when AUTO is off, and
         // while keyed (TX pixels are a hotter domain; the Panadapter ingest
         // owns the TX auto-range fit so it works on every waterfall renderer).
-        if (receiver === 'A' && !useTxStore.getState().moxOn && !useTxStore.getState().tunOn) {
+        if (rxIndex === 0 && !useTxStore.getState().moxOn && !useTxStore.getState().tunOn) {
           useDisplaySettingsStore.getState().updateAutoRange(wfDb);
+        }
+        // Report this pane's noise floor for cross-band normalization (every
+        // receiver, RX domain only). Cheap downsampled percentile, EMA-smoothed
+        // in the registry; consumed by redraw() to align floors to RX1 so one
+        // dB-scale slider fits every band.
+        if (!useTxStore.getState().moxOn && !useTxStore.getState().tunOn) {
+          const floorDb = estimateRowFloorDb(wfDb);
+          if (floorDb != null) reportReceiverFloorDb(rxIndex, floorDb);
         }
       }
       // RX only: substitute the per-bin floor-subtracted texture row so weak
@@ -414,14 +444,6 @@ export function Waterfall({
       if (wfDb) {
         const { moxOn, tunOn } = useTxStore.getState();
         let rowForPush = wfDb;
-        if (stitched && !moxOn && !tunOn) {
-          rowForPush = normalizeStitchedBins(
-            wfDb,
-            stitchBuf,
-            stitchFloorShiftDb(receiver, 'waterfall'),
-          );
-          if (rowForPush !== wfDb) stitchBuf = rowForPush;
-        }
         if (!moxOn && !tunOn) {
           if (!enhBuf || enhBuf.length !== rowForPush.length) enhBuf = new Float32Array(rowForPush.length);
           if (!terrainBuf || terrainBuf.length !== rowForPush.length) terrainBuf = new Float32Array(rowForPush.length);
@@ -443,7 +465,16 @@ export function Waterfall({
     // (the draw-time scale in draw() animates the zoom). Silent when parked.
     const unsubViewZoom = viewZoom.subscribe(requestRedraw);
     const unsubConn = useConnectionStore.subscribe((state, prev) => {
-      if (receiver === 'B' && state.vfoBHz !== prev.vfoBHz) requestRedraw();
+      // Secondary receivers (RX2 / RX3+) center on their VFO; redraw on its move.
+      // Every secondary lives in the receivers[] array (RX2 = index 1).
+      if (rxIndex === 0) return;
+      if (state.receivers !== prev.receivers) requestRedraw();
+    });
+
+    // Repaint when this receiver's per-RX dB window override changes (operator
+    // dragged the WfDbScale while this RX was focused).
+    const unsubRxWin = useRxDbWindowStore.subscribe((state, prev) => {
+      if (state.overrides[rxIndex] !== prev.overrides[rxIndex]) requestRedraw();
     });
 
     // Repaint on dB-range or colormap changes so the WfDbScale drag and the
@@ -522,6 +553,7 @@ export function Waterfall({
       unsubViewCenter();
       unsubViewZoom();
       unsubConn();
+      unsubRxWin();
       unsubSettings();
       unsubTx();
       unsubEnhance();
@@ -537,6 +569,9 @@ export function Waterfall({
       cancelDrawBusFrame(redraw);
       releaseFrameConsumer();
       releaseEstimatorConsumer();
+      // Drop this pane's floor from the median anchor — a removed band shouldn't
+      // keep skewing the cross-RX normalization with its last reading.
+      forgetReceiverFloor(rxIndex);
       renderer?.dispose();
       // Free the ANGLE context slot on real unmounts, but give React
       // StrictMode's development-only effect remount a chance to cancel it.
@@ -581,7 +616,7 @@ export function Waterfall({
       }
       const spanHz = s.width * s.hzPerPixel;
       const c = useConnectionStore.getState();
-      const vfoHz = receiver === 'B' ? c.vfoBHz : c.vfoHz;
+      const vfoHz = getReceiverVfoHz(c, receiver);
       // Dial offset from THIS receiver's animated target center, so the cursor
       // tracks the glide identically on both stitched halves.
       const dialOffsetHz = vc.isInitialized() ? vfoHz - vc.getTargetCenterHz() : 0;
@@ -590,7 +625,9 @@ export function Waterfall({
     const schedule = () => requestDrawBusFrame(update);
     const unsubVc = vc.subscribe(schedule);
     const unsubConn = useConnectionStore.subscribe((s, prev) => {
-      if (s.vfoHz !== prev.vfoHz || s.vfoBHz !== prev.vfoBHz) schedule();
+      // RX1 is the flat primary VFO; every secondary (RX2 = index 1, RX3+) lives
+      // in the receivers[] array, whose reference changes on any update.
+      if (s.vfoHz !== prev.vfoHz || s.receivers !== prev.receivers) schedule();
     });
     const unsubFrame = useDisplayStore.subscribe((s, prev) => {
       if (selectDisplaySlice(s, receiver).lastSeq !== selectDisplaySlice(prev, receiver).lastSeq) schedule();
@@ -676,7 +713,9 @@ export function Waterfall({
           Waterfall renderer unavailable
         </div>
       )}
-      {(!stitched || receiver === 'A') && <WfDbScale />}
+      {/* One global waterfall dB scale — only RX1 (leftmost) renders it, and
+          only when the parent isn't drawing a grid-spanning scale itself. */}
+      {dbScale && rxIndex === 0 && <WfDbScale />}
       {/* Dial-position cursor on BOTH halves (RX2) — each tracks its own VFO. */}
       <div
         ref={cursorRef}
@@ -688,7 +727,7 @@ export function Waterfall({
           Parity with the WebGPU heightfield and the panadapter. */}
       <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
       <FilterCursorOverlay containerRef={containerRef} receiver={receiver} />
-      {receiver === 'A' && (!stitched || foreground) && (
+      {rxIndex === 0 && (!stitched || foreground) && (
         <>
           {/* No delete x here — the single control lives on the panadapter (top). */}
           <NotchOverlay resizable containerRef={containerRef} />

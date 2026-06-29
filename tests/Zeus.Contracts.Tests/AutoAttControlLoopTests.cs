@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -102,6 +103,9 @@ public class AutoAttControlLoopTests : IDisposable
     public void OverloadRepeated_RampsOneStepPerTickWindow()
     {
         var r = MakeService();
+        // Disable the sustained-overload gate so this exercises pure ramp
+        // mechanics (gate behaviour has its own test below).
+        r.SetAdcProtection(new AdcProtectionSetRequest(WarningThreshold: 0));
 
         // First event is a free "baseline" — no step applied (throttle rule).
         r.HandleAdcOverload(Overload, nowMs: 0);
@@ -115,6 +119,26 @@ public class AutoAttControlLoopTests : IDisposable
         // Another window crossing.
         r.HandleAdcOverload(Overload, nowMs: 210);
         Assert.Equal(2, r.Snapshot().AttOffsetDb);
+    }
+
+    [Fact]
+    public void SustainedOverloadGate_NoRampUntilCounterExceedsThreshold()
+    {
+        var r = MakeService();  // default WarningThreshold = 3
+
+        // Establish the tick baseline, then ramp the counter one step per
+        // window. Thetis only touches the attenuator once the counter > 3, so
+        // the first three sustained windows must leave the offset at zero.
+        r.HandleAdcOverload(Overload, nowMs: 0);    // baseline
+        r.HandleAdcOverload(Overload, nowMs: 105);  // level 1
+        r.HandleAdcOverload(Overload, nowMs: 210);  // level 2
+        r.HandleAdcOverload(Overload, nowMs: 315);  // level 3
+        Assert.Equal(0, r.Snapshot().AttOffsetDb);
+
+        // Fourth sustained window crosses the gate (level 4 > 3) → first step.
+        r.HandleAdcOverload(Overload, nowMs: 420);
+        Assert.Equal(1, r.Snapshot().AttOffsetDb);
+        Assert.True(r.Snapshot().AdcOverloadWarning);
     }
 
     [Fact]
@@ -134,6 +158,9 @@ public class AutoAttControlLoopTests : IDisposable
     public void ClearAfterRamp_DecaysToZero()
     {
         var r = MakeService();
+        // No gate, no release hold — pure decay mechanics.
+        r.SetAdcProtection(new AdcProtectionSetRequest(WarningThreshold: 0, ReleaseHoldMs: 0));
+
         r.HandleAdcOverload(Overload, nowMs: 0);
         // Ramp to 5 dB offset.
         for (int i = 1; i <= 5; i++)
@@ -151,9 +178,36 @@ public class AutoAttControlLoopTests : IDisposable
     }
 
     [Fact]
+    public void ReleaseHoldOff_HoldsOffsetThenUnwinds()
+    {
+        var r = MakeService();
+        // No gate so the ramp is simple; 1 s release hold so we can watch it.
+        r.SetAdcProtection(new AdcProtectionSetRequest(WarningThreshold: 0, ReleaseHoldMs: 1_000));
+
+        r.HandleAdcOverload(Overload, nowMs: 0);     // baseline
+        r.HandleAdcOverload(Overload, nowMs: 105);   // offset 1
+        r.HandleAdcOverload(Overload, nowMs: 210);   // offset 2
+        Assert.Equal(2, r.Snapshot().AttOffsetDb);
+
+        // Clean windows arrive but the 1 s hold has not elapsed since the last
+        // overload (t=210): the offset is held, not unwound.
+        r.HandleAdcOverload(Clean, nowMs: 400);
+        r.HandleAdcOverload(Clean, nowMs: 800);
+        r.HandleAdcOverload(Clean, nowMs: 1_100);
+        Assert.Equal(2, r.Snapshot().AttOffsetDb);
+
+        // Past the hold (t >= 210 + 1000): the offset unwinds one step per window.
+        r.HandleAdcOverload(Clean, nowMs: 1_300);
+        Assert.Equal(1, r.Snapshot().AttOffsetDb);
+        r.HandleAdcOverload(Clean, nowMs: 1_500);
+        Assert.Equal(0, r.Snapshot().AttOffsetDb);
+    }
+
+    [Fact]
     public void OverloadBurstsWithinWindow_CountAsOneStep()
     {
         var r = MakeService();
+        r.SetAdcProtection(new AdcProtectionSetRequest(WarningThreshold: 0));
         r.HandleAdcOverload(Clean, nowMs: 0);    // baseline tick
         // Many events in one 100ms window.
         for (int i = 1; i <= 50; i++)
@@ -168,12 +222,16 @@ public class AutoAttControlLoopTests : IDisposable
     {
         var r = MakeService();
         r.HandleAdcOverload(Overload, nowMs: 0);   // baseline
-        // Each overload tick adds +2 to the counter, clamped to 5. Red lamp on
-        // counter>3 means 2 overload ticks are enough.
+        // Each overload tick adds +1 to the counter (Thetis analog), clamped to
+        // 5. Red lamp on counter>3 means four sustained ticks (~400 ms).
         r.HandleAdcOverload(Overload, nowMs: 105);
-        Assert.False(r.Snapshot().AdcOverloadWarning); // counter=2 after 1 tick
+        Assert.False(r.Snapshot().AdcOverloadWarning); // counter=1
         r.HandleAdcOverload(Overload, nowMs: 210);
-        Assert.True(r.Snapshot().AdcOverloadWarning);  // counter=4 after 2 ticks
+        Assert.False(r.Snapshot().AdcOverloadWarning); // counter=2
+        r.HandleAdcOverload(Overload, nowMs: 315);
+        Assert.False(r.Snapshot().AdcOverloadWarning); // counter=3
+        r.HandleAdcOverload(Overload, nowMs: 420);
+        Assert.True(r.Snapshot().AdcOverloadWarning);  // counter=4 → red
     }
 
     [Fact]
@@ -181,12 +239,12 @@ public class AutoAttControlLoopTests : IDisposable
     {
         var r = MakeService();
         r.HandleAdcOverload(Overload, nowMs: 0);
-        r.HandleAdcOverload(Overload, nowMs: 105);
-        r.HandleAdcOverload(Overload, nowMs: 210);
+        for (int i = 1; i <= 4; i++)
+            r.HandleAdcOverload(Overload, nowMs: i * 100 + 5);
         Assert.True(r.Snapshot().AdcOverloadWarning); // counter=4
 
         // Each clean tick decrements by 1. After 1 clean tick counter=3 → !warn.
-        r.HandleAdcOverload(Clean, nowMs: 315);
+        r.HandleAdcOverload(Clean, nowMs: 525);
         Assert.False(r.Snapshot().AdcOverloadWarning);
     }
 
@@ -210,6 +268,7 @@ public class AutoAttControlLoopTests : IDisposable
     public void MoxOn_SuspendsControlLoop()
     {
         var r = MakeService();
+        r.SetAdcProtection(new AdcProtectionSetRequest(WarningThreshold: 0));
         r.HandleAdcOverload(Overload, nowMs: 0);
         r.HandleAdcOverload(Overload, nowMs: 105);
         Assert.Equal(1, r.Snapshot().AttOffsetDb);
@@ -235,6 +294,7 @@ public class AutoAttControlLoopTests : IDisposable
     public void TurningAutoAttOff_ResetsOffsetAndWarning()
     {
         var r = MakeService();
+        r.SetAdcProtection(new AdcProtectionSetRequest(WarningThreshold: 0));
         r.HandleAdcOverload(Overload, nowMs: 0);
         for (int i = 1; i <= 4; i++)
             r.HandleAdcOverload(Overload, nowMs: i * 100 + 5);
@@ -287,15 +347,18 @@ public class AutoAttControlLoopTests : IDisposable
             ReleaseStepDb: 99,
             MaxOffsetDb: 99,
             WarningThreshold: 99,
-            MagnitudeSoftLimit: 99_999));
+            MagnitudeSoftLimit: 99_999,
+            ReleaseHoldMs: 99_999));
 
         Assert.Equal(25, status.Config.AttackMs);
         Assert.Equal(5_000, status.Config.ReleaseMs);
         Assert.Equal(6, status.Config.AttackStepDb);
         Assert.Equal(6, status.Config.ReleaseStepDb);
         Assert.Equal(31, status.Config.MaxOffsetDb);
-        Assert.Equal(5, status.Config.WarningThreshold);
+        // Capped at 4 (not 5) so the gate stays reachable against the level-5 cap.
+        Assert.Equal(4, status.Config.WarningThreshold);
         Assert.Equal((int)ushort.MaxValue, status.Config.MagnitudeSoftLimit);
+        Assert.Equal(10_000, status.Config.ReleaseHoldMs);
     }
 
     [Fact]
@@ -308,6 +371,7 @@ public class AutoAttControlLoopTests : IDisposable
             AttackStepDb: 2,
             ReleaseStepDb: 1,
             MaxOffsetDb: 4,
+            WarningThreshold: 0,   // isolate the magnitude-soft-limit ramp from the gate
             MagnitudeSoftLimit: 1_000));
 
         var hot = new P2TelemetryReading(

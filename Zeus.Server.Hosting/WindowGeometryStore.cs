@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
@@ -36,6 +36,7 @@ public sealed class WindowGeometryStore : IDisposable
     public const int MinWidth = 1280;
     public const int MinHeight = 800;
 
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<WindowGeometryEntry> _docs;
     private readonly ILogger<WindowGeometryStore> _log;
@@ -51,7 +52,8 @@ public sealed class WindowGeometryStore : IDisposable
             Directory.CreateDirectory(dir);
         }
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _docs = _db.GetCollection<WindowGeometryEntry>("window_geometry");
 
         _log.LogInformation("WindowGeometryStore initialized at {Path}", dbPath);
@@ -63,7 +65,15 @@ public sealed class WindowGeometryStore : IDisposable
         {
             var e = _docs.FindAll().FirstOrDefault();
             if (e is null)
-                return new WindowGeometry(DefaultWidth, DefaultHeight, Maximized: false);
+                // Fresh install: open maximized (full screen) on every platform.
+                // The G2's built-in panel and other small/embedded displays expect
+                // a full-screen client (matching deskhpsdr), and the desktop hosts
+                // benefit from the same default. The frame still carries its
+                // titlebar because RunDesktop seats a normal restored size first
+                // and relaxes the min size to fit small panels before maximizing —
+                // see PlaceWindowOnVisibleWorkArea. Once the operator
+                // resizes/un-maximizes, the saved doc below is authoritative.
+                return new WindowGeometry(DefaultWidth, DefaultHeight, Maximized: true);
             return new WindowGeometry(
                 ClampWidth(e.Width),
                 ClampHeight(e.Height),
@@ -90,7 +100,7 @@ public sealed class WindowGeometryStore : IDisposable
     private static int ClampWidth(int v) => v < MinWidth ? DefaultWidth : v;
     private static int ClampHeight(int v) => v < MinHeight ? DefaultHeight : v;
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 // Normal-size geometry plus maximized flag. Plain Hosting-layer record — not a

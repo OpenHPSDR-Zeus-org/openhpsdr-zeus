@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -99,14 +100,21 @@ export function registerServiceWorker(
         registration = reg;
         console.log('Service worker registered successfully');
 
-        // Check for updates every 60 seconds when the page is visible
-        setInterval(() => {
-          if (document.visibilityState === 'visible') {
-            reg?.update().catch((err) => {
-              console.warn('SW update check failed:', err);
-            });
-          }
-        }, 60000);
+        const checkForUpdate = () => {
+          if (document.visibilityState !== 'visible') return;
+          reg?.update().catch((err) => {
+            console.warn('SW update check failed:', err);
+          });
+        };
+
+        // Check on a 60s heartbeat AND whenever the operator returns to the tab
+        // (refocus / un-hide), so a new deploy is picked up "when they open" the
+        // app instead of waiting up to a minute for the next poll. The no-cache
+        // header on sw.js (see ZeusHost.cs UseStaticFiles) is what lets update()
+        // actually see a fresh worker. See docs/lessons/service-worker-updates.md.
+        setInterval(checkForUpdate, 60000);
+        document.addEventListener('visibilitychange', checkForUpdate);
+        window.addEventListener('focus', checkForUpdate);
       })
       .catch((err) => {
         console.error('Service worker registration failed:', err);

@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -44,6 +45,11 @@ public sealed class ChatService : BackgroundService
     private static readonly TimeSpan ReconnectMinDelay = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan ReconnectMaxDelay = TimeSpan.FromSeconds(30);
 
+    // How long a panel-visible heartbeat keeps the operator "showing the panel"
+    // before it lapses. The web client re-pings every ~15s; this leaves room for
+    // a couple of misses before we drop presence (e.g. the browser was closed).
+    private static readonly TimeSpan PanelActiveTimeout = TimeSpan.FromSeconds(45);
+
     private readonly QrzService _qrz;
     private readonly RadioService _radio;
     private readonly StreamingHub _hub;
@@ -71,6 +77,11 @@ public sealed class ChatService : BackgroundService
     // Whether the operator is a relay moderator (from the welcome frame).
     private volatile bool _isAdmin;
 
+    // Admin "see all frequencies" override (session-scoped, default OFF). When
+    // armed by an admin it is re-asserted to the relay after each (re)connect so
+    // a network blip doesn't silently drop it. Meaningless for non-admins.
+    private volatile bool _seeAllFreq;
+
     // Live connection state, set on the worker loop and read by the API.
     private volatile bool _connected;
     private volatile string? _lastError;
@@ -85,6 +96,11 @@ public sealed class ChatService : BackgroundService
     // throttle. Written by event handlers, drained by the worker.
     private readonly PresenceThrottle _presence = new(PresenceThrottleWindow);
     private volatile bool _moxOn;
+
+    // UTC ticks of the last "Chat panel is displayed" heartbeat from the web
+    // client; 0 means the panel is not shown. Presence is gated on this so an
+    // enabled operator who has the panel closed never appears on the roster.
+    private long _panelHeartbeatTicks;
 
     // The live socket, set while connected so SendMessageAsync (API path) can
     // post a {t:"msg"} frame. Null when disconnected.
@@ -125,7 +141,8 @@ public sealed class ChatService : BackgroundService
         RelayUrl: _relayUrl,
         Error: _lastError,
         IsAdmin: _isAdmin,
-        FreqPublic: _store.GetFreqPublic());
+        FreqPublic: _store.GetFreqPublic(),
+        SeeAllFreq: _seeAllFreq);
 
     /// <summary>Persists the opt-in and wakes the worker to connect/disconnect.</summary>
     public ChatStatusDto SetEnabled(bool enabled)
@@ -137,6 +154,34 @@ public sealed class ChatService : BackgroundService
         }
         Wake();
         return GetStatus();
+    }
+
+    /// <summary>
+    /// Records a heartbeat from the web client reporting whether the operator
+    /// currently has the Chat panel displayed, and wakes the worker so it can
+    /// connect (panel shown) or drop presence (panel hidden). Presence is gated
+    /// on this in addition to the enabled opt-in — see <see cref="PanelActive"/>.
+    /// </summary>
+    public ChatStatusDto ReportPanelVisible(bool visible)
+    {
+        Interlocked.Exchange(ref _panelHeartbeatTicks, visible ? DateTimeOffset.UtcNow.UtcTicks : 0L);
+        Wake();
+        return GetStatus();
+    }
+
+    /// <summary>
+    /// True while a recent panel-visible heartbeat is in force. Lapses
+    /// <see cref="PanelActiveTimeout"/> after the last heartbeat so a closed
+    /// browser (which can't send the explicit <c>false</c>) still drops off.
+    /// </summary>
+    private bool PanelActive
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref _panelHeartbeatTicks);
+            if (ticks == 0L) return false;
+            return DateTimeOffset.UtcNow - new DateTimeOffset(ticks, TimeSpan.Zero) < PanelActiveTimeout;
+        }
     }
 
     public IReadOnlyList<ChatMessage> GetMessages(int limit) => _messages.Snapshot(limit);
@@ -152,24 +197,64 @@ public sealed class ChatService : BackgroundService
     /// <see cref="ArgumentException"/> when the text is empty — the endpoint
     /// maps these to 409 / 400.
     /// </summary>
-    public async Task SendMessageAsync(string text, string? room, CancellationToken ct)
+    public async Task SendMessageAsync(string text, string? room, ChatAttachment? attachment, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(text))
+        attachment = ValidateAttachment(attachment);
+        // An attachment may stand on its own (image-only message); only require
+        // text when there is no attachment.
+        if (string.IsNullOrWhiteSpace(text) && attachment is null)
             throw new ArgumentException("message text is empty", nameof(text));
 
         var socket = RequireSocket();
         var roomId = string.IsNullOrWhiteSpace(room) ? "lobby" : room.Trim();
-        await SendFrameAsync(socket, new { t = "msg", text, room = roomId }, ct);
+        await SendFrameAsync(socket, attachment is null
+            ? new { t = "msg", text, room = roomId }
+            : new { t = "msg", text, room = roomId, attachment }, ct);
     }
 
     /// <summary>Sends a direct message to <paramref name="to"/> (creates the DM on demand).</summary>
-    public async Task SendDmAsync(string to, string text, CancellationToken ct)
+    public async Task SendDmAsync(string to, string text, ChatAttachment? attachment, CancellationToken ct)
     {
         var call = (to ?? string.Empty).Trim().ToUpperInvariant();
         if (call.Length == 0) throw new ArgumentException("recipient is empty", nameof(to));
-        if (string.IsNullOrWhiteSpace(text)) throw new ArgumentException("message text is empty", nameof(text));
+        attachment = ValidateAttachment(attachment);
+        if (string.IsNullOrWhiteSpace(text) && attachment is null)
+            throw new ArgumentException("message text is empty", nameof(text));
         var socket = RequireSocket();
-        await SendFrameAsync(socket, new { t = "dm", to = call, text }, ct);
+        await SendFrameAsync(socket, attachment is null
+            ? new { t = "dm", to = call, text }
+            : new { t = "dm", to = call, text, attachment }, ct);
+    }
+
+    /// <summary>
+    /// Validates an outgoing attachment: image or audio kind with a matching
+    /// MIME family + data-URL scheme, non-empty data URL within
+    /// <see cref="ChatAttachment.MaxDataUrlLength"/>. Returns the attachment
+    /// unchanged (passthrough) or null when none was supplied. Throws
+    /// <see cref="ArgumentException"/> (mapped to 400 by the endpoint) on a bad
+    /// or oversized attachment so a buggy/hostile client can't push payloads the
+    /// relay would store. The web client downscales photos / records voice at a
+    /// low bitrate to fit before sending; this is the backend guardrail, not the
+    /// primary size control.
+    /// </summary>
+    private static ChatAttachment? ValidateAttachment(ChatAttachment? attachment)
+    {
+        if (attachment is null) return null;
+        var isImage = string.Equals(attachment.Kind, "image", StringComparison.Ordinal);
+        var isAudio = string.Equals(attachment.Kind, "audio", StringComparison.Ordinal);
+        if (!isImage && !isAudio)
+            throw new ArgumentException("unsupported attachment kind", nameof(attachment));
+        var mimePrefix = isAudio ? "audio/" : "image/";
+        var dataPrefix = isAudio ? "data:audio/" : "data:image/";
+        if (string.IsNullOrEmpty(attachment.Mime) ||
+            !attachment.Mime.StartsWith(mimePrefix, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException($"attachment must be {(isAudio ? "audio" : "an image")}", nameof(attachment));
+        if (string.IsNullOrEmpty(attachment.DataUrl) ||
+            !attachment.DataUrl.StartsWith(dataPrefix, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("attachment data is empty or malformed", nameof(attachment));
+        if (attachment.DataUrl.Length > ChatAttachment.MaxDataUrlLength)
+            throw new ArgumentException("attachment is too large", nameof(attachment));
+        return attachment;
     }
 
     /// <summary>Asks the relay for recent history of a room (pushed back as a 0x35 frame).</summary>
@@ -212,6 +297,27 @@ public sealed class ChatService : BackgroundService
     public Task UnbanAsync(string callsign, CancellationToken ct) =>
         SendFriendActionAsync("admin_unban", "callsign", callsign, ct);
 
+    /// <summary>Admin: asks the relay for the current ban list (pushed back as a
+    /// 0x35 <c>bans</c> frame). The relay ignores this unless the caller is an
+    /// admin.</summary>
+    public Task ListBansAsync(CancellationToken ct) =>
+        SendFrameAsync(RequireSocket(), new { t = "admin_list_bans" }, ct);
+
+    /// <summary>Admin: clears a room's history (defaults to the public lobby).</summary>
+    public Task ClearRoomAsync(string? room, CancellationToken ct)
+    {
+        var roomId = string.IsNullOrWhiteSpace(room) ? "lobby" : room.Trim();
+        return SendFrameAsync(RequireSocket(), new { t = "admin_clear_room", room = roomId }, ct);
+    }
+
+    /// <summary>Admin: broadcasts a one-off global announcement to all operators.</summary>
+    public Task BroadcastAsync(string text, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            throw new ArgumentException("message text is empty", nameof(text));
+        return SendFrameAsync(RequireSocket(), new { t = "admin_broadcast", text = text.Trim() }, ct);
+    }
+
     private Task SendRoomMemberAsync(string verb, string room, string callsign, CancellationToken ct)
     {
         var call = (callsign ?? string.Empty).Trim().ToUpperInvariant();
@@ -240,6 +346,40 @@ public sealed class ChatService : BackgroundService
                 status = CurrentStatus(),
                 freqPublic = isPublic,
             }, ct);
+        }
+    }
+
+    /// <summary>
+    /// Admin: arms/disarms the "see all frequencies" override. Persists the
+    /// session-scoped flag, reflects it in status, and — if connected — tells the
+    /// relay so the next roster carries (or strips) everyone's freq. The relay
+    /// ignores the toggle unless it has flagged this connection as an admin, so a
+    /// non-admin calling this is a harmless no-op on the relay side.
+    /// </summary>
+    public async Task SetSeeAllFreqAsync(bool on, CancellationToken ct)
+    {
+        _seeAllFreq = on;
+        PushStatus();
+        var socket = _socket;
+        if (socket is not null && socket.State == WebSocketState.Open && _connected)
+            await SendFrameAsync(socket, new { t = "admin_see_all", on }, ct);
+    }
+
+    /// <summary>Re-sends the current see-all override to the relay after a
+    /// reconnect. Best-effort: swallows send failures (the loop will reconnect
+    /// and try again) so it can be safely fire-and-forgotten from the receive
+    /// loop.</summary>
+    private async Task ReassertSeeAllAsync()
+    {
+        try
+        {
+            var socket = _socket;
+            if (socket is not null && socket.State == WebSocketState.Open && _connected)
+                await SendFrameAsync(socket, new { t = "admin_see_all", on = _seeAllFreq }, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "chat: failed to re-assert see-all override");
         }
     }
 
@@ -291,7 +431,10 @@ public sealed class ChatService : BackgroundService
         var backoff = ReconnectMinDelay;
         while (!stoppingToken.IsCancellationRequested)
         {
-            if (!_store.GetEnabled())
+            // Connect only while the operator both opted in AND is showing the
+            // Chat panel. Idling here (no socket) keeps them off everyone's
+            // roster. A heartbeat or enable toggle wakes the loop to re-evaluate.
+            if (!_store.GetEnabled() || !PanelActive)
             {
                 await WaitForWakeAsync(Timeout.InfiniteTimeSpan, stoppingToken);
                 continue;
@@ -432,6 +575,12 @@ public sealed class ChatService : BackgroundService
             // boundary without a busy loop.
             await WaitForWakeAsync(TimeSpan.FromSeconds(1), ct);
 
+            // If the operator disabled chat or stopped showing the panel (the
+            // visible heartbeat lapsed, or the browser closed), tear the link
+            // down so the relay drops them from everyone's roster.
+            if (!_store.GetEnabled() || !PanelActive)
+                return;
+
             var now = DateTimeOffset.UtcNow;
             if (_presence.TryTake(now, out var p))
                 await SendFrameAsync(socket, new { t = "presence", freq = p.FreqHz, mode = p.Mode, status = p.Status }, ct);
@@ -462,6 +611,12 @@ public sealed class ChatService : BackgroundService
                         && adminEl.ValueKind == JsonValueKind.True;
                     UpdateRoster(root, "roster");
                     PushStatus();
+                    // Re-assert a sticky "see all" override on (re)connect so a
+                    // blip doesn't silently drop it. Only meaningful for admins;
+                    // the relay ignores it otherwise. Fire-and-forget — we're on
+                    // the receive loop and must not block it.
+                    if (_isAdmin && _seeAllFreq)
+                        _ = ReassertSeeAllAsync();
                     break;
                 case "roster":
                     UpdateRoster(root, "roster");
@@ -491,6 +646,22 @@ public sealed class ChatService : BackgroundService
                     _lastError = ReadString(root, "message") ?? "You have been banned from ZeusChat.";
                     _hub.BroadcastChatEvent(ChatEventFrame.Banned(_lastError));
                     PushStatus();
+                    break;
+                case "cleared":
+                    var clearedRoom = ReadString(root, "room") ?? "lobby";
+                    // The in-memory ring caches only the public room; group/DM
+                    // scrollback lives on the relay, so nothing local to drop.
+                    if (clearedRoom == "lobby") _messages.Clear();
+                    _hub.BroadcastChatEvent(ChatEventFrame.Cleared(clearedRoom));
+                    break;
+                case "notice":
+                    _hub.BroadcastChatEvent(ChatEventFrame.Notice(
+                        ReadString(root, "from") ?? string.Empty,
+                        ReadString(root, "text") ?? string.Empty,
+                        ReadLong(root, "ts") ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+                    break;
+                case "bans":
+                    _hub.BroadcastChatEvent(ChatEventFrame.Bans(ReadStringArray(root, "bans")));
                     break;
                 case "error":
                     var code = ReadString(root, "code");
@@ -527,7 +698,39 @@ public sealed class ChatService : BackgroundService
         From: ReadString(root, "from") ?? string.Empty,
         Text: ReadString(root, "text") ?? string.Empty,
         Ts: ReadLong(root, "ts") ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-        Room: ReadString(root, "room") ?? "lobby");
+        Room: ReadString(root, "room") ?? "lobby",
+        Attachment: ParseAttachment(root));
+
+    /// <summary>
+    /// Parses an optional <c>attachment</c> object out of a relay message frame.
+    /// Returns null when absent, malformed, an unsupported media type, or
+    /// oversized — a bad attachment degrades to a plain message rather than
+    /// dropping it. Accepts image and audio (voice snippet) kinds, deriving the
+    /// <c>kind</c> from the MIME/scheme family so a mislabelled payload can't slip
+    /// through. Internal for unit tests.
+    /// </summary>
+    internal static ChatAttachment? ParseAttachment(JsonElement root)
+    {
+        if (!root.TryGetProperty("attachment", out var a) || a.ValueKind != JsonValueKind.Object)
+            return null;
+        var dataUrl = ReadString(a, "dataUrl");
+        var mime = ReadString(a, "mime");
+        if (string.IsNullOrEmpty(dataUrl) || string.IsNullOrEmpty(mime)) return null;
+        var isImage = mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase) &&
+            dataUrl.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase);
+        var isAudio = mime.StartsWith("audio/", StringComparison.OrdinalIgnoreCase) &&
+            dataUrl.StartsWith("data:audio/", StringComparison.OrdinalIgnoreCase);
+        if (!isImage && !isAudio) return null;
+        if (dataUrl.Length > ChatAttachment.MaxDataUrlLength) return null;
+        return new ChatAttachment(
+            Kind: isAudio ? "audio" : "image",
+            Mime: mime,
+            DataUrl: dataUrl,
+            Name: ReadString(a, "name"),
+            Width: (int?)ReadLong(a, "width"),
+            Height: (int?)ReadLong(a, "height"),
+            Size: (int?)ReadLong(a, "size"));
+    }
 
     /// <summary>
     /// Parses the <paramref name="property"/> roster array out of a relay
@@ -548,7 +751,8 @@ public sealed class ChatService : BackgroundService
                 FreqHz: ReadLong(op, "freq"),
                 Mode: ReadString(op, "mode"),
                 Status: ReadString(op, "status"),
-                Since: ReadLong(op, "since") ?? 0));
+                Since: ReadLong(op, "since") ?? 0,
+                Admin: op.TryGetProperty("admin", out var adminEl) && adminEl.ValueKind == JsonValueKind.True));
         }
         return list;
     }

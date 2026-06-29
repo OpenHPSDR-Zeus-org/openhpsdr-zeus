@@ -124,3 +124,14 @@
 }
 
 .toolbar-fav__chip.is-dragging { opacity: 0.45; }
+
+/* Gated/unavailable option (e.g. a not-yet-shippable mode) — greyed and inert
+   in both the favorite slot row and the popover chip grid. Tokens only. */
+.toolbar-fav__slot:disabled,
+.toolbar-fav__slot.is-disabled,
+.toolbar-fav__chip.is-disabled,
+.toolbar-fav__chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  color: var(--fg-3);
+}

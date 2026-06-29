@@ -1,0 +1,20 @@
+{
+  "name": "zeus-remote-broker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker + Durable Object signaling broker for Zeus remote access (WebRTC SDP/ICE relay, TURN credential minting, QRZ-gated host registration).",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/admin-auth.test.ts test/crash-validate.test.ts test/admin-cors.test.ts",
+    "cf-typegen": "wrangler types"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.0.0"
+  }
+}

@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
@@ -23,6 +24,7 @@ namespace Zeus.Server;
 /// </summary>
 public sealed class SpotsSettingsStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<SpotsSettingsEntry> _state;
     private readonly ILogger<SpotsSettingsStore> _log;
@@ -36,7 +38,8 @@ public sealed class SpotsSettingsStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _state = _db.GetCollection<SpotsSettingsEntry>("spots_settings");
 
         _log.LogInformation("SpotsSettingsStore initialized at {Path}", dbPath);
@@ -154,7 +157,7 @@ public sealed class SpotsSettingsStore : IDisposable
         UpdatedUtc = nowUtc,
     };
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class SpotsSettingsEntry

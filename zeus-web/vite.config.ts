@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -95,7 +96,11 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // 'prompt' (not 'autoUpdate') is load-bearing: the manual handler in
+      // src/service-worker/registerSW.ts listens for the workbox `waiting`
+      // event and surfaces UpdatePrompt. autoUpdate caused the stale-frontend
+      // -on-first-run bug. See docs/lessons/service-worker-updates.md.
+      registerType: 'prompt',
       includeAssets: ['mic-uplink-worklet.js'],
       injectRegister: null, // We handle registration manually
       manifest: {
@@ -115,8 +120,12 @@ export default defineConfig({
         ],
       },
       workbox: {
-        skipWaiting: true,
-        clientsClaim: true,
+        // Do NOT set skipWaiting/clientsClaim here. With 'prompt' mode the new
+        // SW must stay in the waiting state until the operator clicks "RELOAD
+        // NOW", which posts SKIP_WAITING (see registerSW.ts). skipWaiting:true
+        // would activate the new SW immediately, the `waiting` event would
+        // never fire, UpdatePrompt would never show, and the page would be
+        // claimed mid-session — the exact bug in the lesson doc.
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api/, /^\/ws/],
@@ -146,6 +155,10 @@ export default defineConfig({
     proxy: {
       '/api': `http://${backendHost}:${backendPort}`,
       '/ws': { target: `ws://${backendHost}:${backendPort}`, ws: true },
+      // Operator manual PDF (About panel → /manual). Same-origin in the real
+      // app/desktop builds; proxied here so the link also works under the Vite
+      // dev server.
+      '/manual': `http://${backendHost}:${backendPort}`,
     },
   },
   build: {

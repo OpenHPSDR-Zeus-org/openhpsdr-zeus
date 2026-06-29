@@ -8,6 +8,7 @@ namespace Zeus.Server;
 /// </summary>
 public sealed class RxAudioProfileStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<RxAudioProfileEntry> _profiles;
     private readonly ILiteCollection<RxAudioProfileSelectionEntry> _selection;
@@ -22,7 +23,8 @@ public sealed class RxAudioProfileStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _profiles = _db.GetCollection<RxAudioProfileEntry>("rx_audio_profiles");
         _profiles.EnsureIndex(x => x.Name, unique: true);
         _selection = _db.GetCollection<RxAudioProfileSelectionEntry>("rx_audio_profile_selection");
@@ -128,7 +130,7 @@ public sealed class RxAudioProfileStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
     private string? GetSelectedProfileUnderLock() =>
         _selection.FindAll().FirstOrDefault()?.Name;

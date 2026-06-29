@@ -50,6 +50,10 @@
   --tx-soft:       rgba(255,74,89,0.18);
   --power:         #ffb13c;
   --power-soft:    rgba(255,177,60,0.16);
+  /* Chat group rooms — a third channel hue, distinct from public (blue) and
+     DM (gold/amber). Used only by the Chat panel to color group tabs/threads. */
+  --chat-group:      #b07cff;
+  --chat-group-soft: rgba(176,124,255,0.16);
   --ok:            #2dd566;
   --ok-soft:       rgba(45,213,102,0.18);
   --green-soft:    #1aa84e;

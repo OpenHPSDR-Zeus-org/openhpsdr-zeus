@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -182,6 +183,7 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
     public void SetRxDisplayFastAttack(int channelId, bool fast) { }
         public void SetRxAfGainDb(int channelId, double db) { }
         public void SetNoiseReduction(int channelId, NrConfig cfg) { }
+        public Zeus.Dsp.Nr3ModelLoadResult LoadNr3Model(string? modelFilePath) => Zeus.Dsp.Nr3ModelLoadResult.Unavailable;
         public void SetNotches(IReadOnlyList<NotchDto> notches) { }
         public void SetNotchTuneFrequencyHz(double loHz) { }
         public void SetZoom(int channelId, int level) { }
@@ -196,6 +198,8 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
         public RxStageMeters GetRxStageMeters(int channelId) => RxStageMeters.Silent;
         public void SetTxMode(RxMode mode) { }
         public void SetTxFilter(int lowHz, int highHz) { }
+        public void SetRxBandpassWindow(int channelId, BandpassWindow window) { }
+        public void SetTxBandpassWindow(BandpassWindow window) { }
         public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved) => 0;
         public void SetTxTune(bool on) { }
         public TxStageMeters GetTxStageMeters() => TxStageMeters.Silent;

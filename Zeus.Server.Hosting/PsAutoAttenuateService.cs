@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -105,12 +106,12 @@ public sealed class PsAutoAttenuateService : BackgroundService
     // observed counter (0 or any value) registers as "new".
     private int _lastCalibrationAttempts = -1;
 
-    // Rate-limit bucket for diagnostic gate-skip logging. Tick1 runs at 10 Hz;
-    // without rate-limiting a stuck gate would emit 10 lines/sec. 1 s bucket
-    // gives one line per gate-state per second — enough to localise the
-    // failing gate during a 5 s rack key without flooding the log.
-    private long _lastGateLogTickMs;
-    private const long GateLogIntervalMs = 1000;
+    // Diagnostic gate-skip logging emits only on outcome TRANSITIONS. A sticky
+    // gate (e.g. PS disarmed for an entire session) would otherwise drown the
+    // INFO-level ring buffer with the same `skip=PsEnabled-off` line every
+    // idle tick, leaving no room for the events that matter when the operator
+    // hits the "Report a problem" button (issue #1074).
+    private string? _lastGateOutcome;
 
     // HL2 P1 path — mi0bot timer2code 3-state dance. mi0bot PSForm.cs:728-815.
     //   Monitor:          detect new fit + threshold breach → SetPSControl
@@ -271,16 +272,16 @@ public sealed class PsAutoAttenuateService : BackgroundService
         }
     }
 
-    // Diagnostic — emits one line per second tagging which gate short-
-    // circuited Tick1. Without this the loop is invisible when it returns
-    // early (the only visible signals were `psAutoAttn.armed` and
-    // `psAutoAttn.step`, neither of which fire when a gate fails). Used to
-    // localise the silent-gate symptom on the G2 MkII rack test.
+    // Diagnostic — emits one line whenever the gate outcome CHANGES. Without
+    // the transition check the loop spams the same gate string every idle tick
+    // (e.g. `skip=PsEnabled-off` once per second forever), drowning the
+    // diagnostic log ring with one repeating line. State transitions are the
+    // useful signal (operator armed PS, MOX dropped, engine reconnected);
+    // sticky idle is not.
     private void LogGate(string outcome)
     {
-        long now = Environment.TickCount64;
-        if (now - _lastGateLogTickMs < GateLogIntervalMs) return;
-        _lastGateLogTickMs = now;
+        if (outcome == _lastGateOutcome) return;
+        _lastGateOutcome = outcome;
         _log.LogInformation("psAutoAttn.gate {Outcome}", outcome);
     }
 

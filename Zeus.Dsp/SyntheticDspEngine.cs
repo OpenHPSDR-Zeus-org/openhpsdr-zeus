@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -142,6 +143,10 @@ public sealed class SyntheticDspEngine : IDspEngine
         if (!Enum.IsDefined(cfg.NbMode)) throw new ArgumentException($"unknown NbMode {cfg.NbMode}", nameof(cfg));
     }
 
+    // No RNNoise backend in the synthetic engine — report "unavailable" so the
+    // server surfaces NR3 as off rather than pretending a model loaded.
+    public Nr3ModelLoadResult LoadNr3Model(string? modelFilePath) => Nr3ModelLoadResult.Unavailable;
+
     // Manual notch filters have no audio effect in the synthetic engine; accept
     // and ignore so dev/CI exercises the full plumbing without a WDSP backend.
     public void SetNotches(IReadOnlyList<NotchDto> notches) => ArgumentNullException.ThrowIfNull(notches);
@@ -203,6 +208,8 @@ public sealed class SyntheticDspEngine : IDspEngine
     // the same buffering shape.
     public void SetTxMode(RxMode mode) { }
     public void SetTxFilter(int lowHz, int highHz) { }
+    public void SetRxBandpassWindow(int channelId, BandpassWindow window) { }
+    public void SetTxBandpassWindow(BandpassWindow window) { }
     public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved) => 0;
     public int TxBlockSamples => 1024;
     public int TxOutputSamples => 1024;

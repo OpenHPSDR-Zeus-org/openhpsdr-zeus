@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -58,8 +59,11 @@ export function SquelchSettingsSection() {
   );
 
   const stage = stageForMode(mode);
-  const levelDisabled = !connected || squelch.adaptive;
-  const fixedSensitivityDisabled = !connected || squelch.adaptive;
+  // FIX/DYN and the level/sensitivity sliders don't affect audio while SQL is
+  // OFF; mirror the inline SquelchSlider and gray them out in that state.
+  const modeDisabled = !connected || !squelch.enabled;
+  const levelDisabled = modeDisabled || squelch.adaptive;
+  const fixedSensitivityDisabled = modeDisabled || squelch.adaptive;
 
   return (
     <div className="dsp-cfg">
@@ -141,11 +145,15 @@ export function SquelchSettingsSection() {
         <span className="dsp-cfg-label">Mode</span>
         <button
           type="button"
-          disabled={!connected}
+          disabled={modeDisabled}
           aria-pressed={squelch.adaptive}
-          onClick={() => connected && send({ ...squelch, adaptive: !squelch.adaptive })}
+          onClick={() => !modeDisabled && send({ ...squelch, adaptive: !squelch.adaptive })}
           className={`btn sm ${squelch.adaptive ? 'active' : ''}`}
-          title="Switch between adaptive noise-floor squelch and fixed WDSP squelch"
+          title={
+            !squelch.enabled
+              ? 'Enable SQL to switch between FIX and DYN'
+              : 'Switch between adaptive noise-floor squelch and fixed WDSP squelch'
+          }
         >
           {squelch.adaptive ? 'DYN' : 'FIX'}
         </button>

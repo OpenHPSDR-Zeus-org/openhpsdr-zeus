@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -47,6 +48,7 @@ import type {
   LogEntry,
   CreateLogEntryRequest,
   AdifImportResponse,
+  AdifExportToFileResponse,
   QrzPublishResponse,
   WorkedCallsignSummary,
 } from '../api/log';
@@ -54,10 +56,12 @@ import {
   getLogEntries,
   getWorkedCallsignSummary,
   createLogEntry,
+  exportAdifToDirectory,
   exportToAdif,
   importAdif,
   publishToQrz,
 } from '../api/log';
+import { useCapabilitiesStore } from './capabilities-store';
 
 type LoggerState = {
   entries: LogEntry[];
@@ -70,6 +74,9 @@ type LoggerState = {
   publishInFlight: boolean;
   publishError: string | null;
   lastPublishResult: QrzPublishResponse | null;
+  exportInFlight: boolean;
+  exportError: string | null;
+  lastExportResult: AdifExportToFileResponse | null;
   selectedIds: Set<string>;
   workedSummary: WorkedCallsignSummary | null;
   workedSummaryLoading: boolean;
@@ -81,6 +88,7 @@ type LoggerState = {
   clearWorkedSummary: () => void;
   addLogEntry: (request: CreateLogEntryRequest) => Promise<LogEntry | null>;
   exportAdif: () => Promise<void>;
+  clearExportResult: () => void;
   importAdifFile: (file: File) => Promise<AdifImportResponse | null>;
   clearImportResult: () => void;
   publishSelectedToQrz: (logEntryIds: string[]) => Promise<void>;
@@ -101,6 +109,9 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
   publishInFlight: false,
   publishError: null,
   lastPublishResult: null,
+  exportInFlight: false,
+  exportError: null,
+  lastExportResult: null,
   selectedIds: new Set<string>(),
   workedSummary: null,
   workedSummaryLoading: false,
@@ -162,12 +173,36 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
   },
 
   exportAdif: async () => {
-    set({ error: null });
-    try {
-      await exportToAdif();
-    } catch (err) {
-      set({ error: err instanceof Error ? err.message : 'Failed to export ADIF' });
+    // When the backend is on the operator's own machine (desktop, or a
+    // loopback web session), write the .adi into a directory there and report
+    // the path. When it's remote (LAN/headless backend), a server-side file
+    // would be unreachable, so fall back to delivering the ADIF to the
+    // operator's browser as a download.
+    const localToServer = useCapabilitiesStore.getState().localToServer;
+    if (!localToServer) {
+      set({ exportInFlight: false, exportError: null, lastExportResult: null, error: null });
+      try {
+        await exportToAdif();
+      } catch (err) {
+        set({ exportError: err instanceof Error ? err.message : 'Failed to export ADIF' });
+      }
+      return;
     }
+
+    set({ exportInFlight: true, exportError: null, lastExportResult: null, error: null });
+    try {
+      const result = await exportAdifToDirectory();
+      set({ lastExportResult: result, exportInFlight: false });
+    } catch (err) {
+      set({
+        exportError: err instanceof Error ? err.message : 'Failed to export ADIF',
+        exportInFlight: false,
+      });
+    }
+  },
+
+  clearExportResult: () => {
+    set({ lastExportResult: null, exportError: null });
   },
 
   importAdifFile: async (file: File) => {

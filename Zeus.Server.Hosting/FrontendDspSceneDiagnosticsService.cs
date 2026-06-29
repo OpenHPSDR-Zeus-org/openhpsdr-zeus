@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
@@ -786,6 +787,7 @@ public sealed class FrontendDspSceneDiagnosticsService
         {
             "NR1" => "Anr",
             "NR2" => "Emnr",
+            "NR3" => "Rnnr",
             "NR4" => "Sbnr",
             "LIGHT" => "Off",
             "NOTCH" => "Off",
@@ -816,6 +818,7 @@ public sealed class FrontendDspSceneDiagnosticsService
         {
             "ANR" => "Anr",
             "EMNR" => "Emnr",
+            "RNNR" => "Rnnr",
             "SBNR" => "Sbnr",
             _ => null,
         };

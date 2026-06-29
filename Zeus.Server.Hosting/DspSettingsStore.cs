@@ -14,6 +14,7 @@ namespace Zeus.Server;
 // because LiteDB's BsonMapper races on parallel construction (commit b57c12d).
 public sealed class DspSettingsStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<DspSettingsEntry> _entries;
     private readonly ILogger<DspSettingsStore> _log;
@@ -27,7 +28,8 @@ public sealed class DspSettingsStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _entries = _db.GetCollection<DspSettingsEntry>("dsp_settings");
         _entries.EnsureIndex(x => x.ProfileId, unique: true);
 
@@ -369,6 +371,59 @@ public sealed class DspSettingsStore : IDisposable
         e.TxCompressorGainDb = c.CompressorGainDb;
     }
 
+    // SSB bandpass "rectangularity" — operator-selectable WDSP FIR window (issue
+    // #871). Null on legacy rows / never-written → caller falls back to
+    // BandpassWindow.Sharp, the current hardcoded WDSP default at
+    // OpenChannel/OpenTxChannel time, so a fresh install hears no behaviour
+    // change. RX and TX are stored independently.
+    public BandpassWindow? GetRxFilterWindow(string profileId = "default")
+    {
+        var e = _entries.FindOne(x => x.ProfileId == profileId);
+        return e?.RxFilterWindow;
+    }
+
+    public BandpassWindow? GetTxFilterWindow(string profileId = "default")
+    {
+        var e = _entries.FindOne(x => x.ProfileId == profileId);
+        return e?.TxFilterWindow;
+    }
+
+    public void SetRxFilterWindow(BandpassWindow window, string profileId = "default")
+        => UpsertFilterWindow(rx: window, tx: null, profileId);
+
+    public void SetTxFilterWindow(BandpassWindow window, string profileId = "default")
+        => UpsertFilterWindow(rx: null, tx: window, profileId);
+
+    private void UpsertFilterWindow(BandpassWindow? rx, BandpassWindow? tx, string profileId)
+    {
+        var existing = _entries.FindOne(x => x.ProfileId == profileId);
+        if (existing is null)
+        {
+            var nrSeed = new NrConfig();
+            existing = new DspSettingsEntry
+            {
+                ProfileId = profileId,
+                NrMode = nrSeed.NrMode,
+                AnfEnabled = nrSeed.AnfEnabled,
+                SnbEnabled = nrSeed.SnbEnabled,
+                NbpNotchesEnabled = nrSeed.NbpNotchesEnabled,
+                NbMode = nrSeed.NbMode,
+                NbThreshold = nrSeed.NbThreshold,
+                RxFilterWindow = rx,
+                TxFilterWindow = tx,
+                UpdatedUtc = DateTime.UtcNow,
+            };
+            _entries.Insert(existing);
+        }
+        else
+        {
+            if (rx.HasValue) existing.RxFilterWindow = rx.Value;
+            if (tx.HasValue) existing.TxFilterWindow = tx.Value;
+            existing.UpdatedUtc = DateTime.UtcNow;
+            _entries.Update(existing);
+        }
+    }
+
     public CfcConfig? GetCfc(string profileId = "default")
     {
         var e = _entries.FindOne(x => x.ProfileId == profileId);
@@ -519,12 +574,15 @@ public sealed class DspSettingsStore : IDisposable
         e.CfcBand10Freq = c.Bands[9].FreqHz; e.CfcBand10Comp = c.Bands[9].CompLevelDb; e.CfcBand10Post = c.Bands[9].PostGainDb;
     }
 
+    // Keep this in lock-step with RadioService.IsSupportedNrMode — the store
+    // must persist every mode RadioService treats as supported, or the live
+    // selection (e.g. NR3 / Rnnr) is silently dropped to Off on the next read.
     private static NrMode NormalizeNrMode(NrMode mode) =>
-        mode is NrMode.Off or NrMode.Anr or NrMode.Emnr or NrMode.Sbnr
+        mode is NrMode.Off or NrMode.Anr or NrMode.Emnr or NrMode.Sbnr or NrMode.Rnnr
             ? mode
             : NrMode.Off;
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
 }
 
@@ -617,5 +675,11 @@ public sealed class DspSettingsEntry
     public int? TxLevelerDecayMs { get; set; }
     public bool? TxCompressorEnabled { get; set; }
     public double? TxCompressorGainDb { get; set; }
+    // SSB bandpass "rectangularity" — operator-selectable WDSP FIR window
+    // (issue #871). Null on legacy rows → RadioService falls back to
+    // BandpassWindow.Sharp on hydration, matching the current hardcoded WDSP
+    // default at OpenChannel/OpenTxChannel time. Stored as the byte enum value.
+    public BandpassWindow? RxFilterWindow { get; set; }
+    public BandpassWindow? TxFilterWindow { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

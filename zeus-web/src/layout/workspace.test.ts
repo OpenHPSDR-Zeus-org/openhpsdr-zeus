@@ -6,6 +6,7 @@ import {
   WORKSPACE_OVERSIZED_LAYOUT_NORMALIZED_ROWS,
   parseWorkspaceLayout,
   placeTileInGrid,
+  placeTileInPage,
   type WorkspaceTile,
 } from './workspace';
 
@@ -122,5 +123,34 @@ describe('placeTileInGrid', () => {
     ];
     const placed = placeTileInGrid('qrz', others);
     expect(others.some((t) => overlaps(placed, t))).toBe(false);
+  });
+});
+
+describe('placeTileInPage (pagination bounds)', () => {
+  it('places within the page when a slot is free', () => {
+    // cw is 8×8. Empty page → origin.
+    expect(placeTileInPage('cw', [], 24, 48)).toEqual({ x: 0, y: 0, w: 8, h: 8 });
+  });
+
+  it('returns null when nothing fits the page (signals paginate)', () => {
+    // A single tile filling the whole 24×48 page leaves no room for an 8×8.
+    const full = [tile({ uid: 'full', x: 0, y: 0, w: 24, h: 48 })];
+    expect(placeTileInPage('cw', full, 24, 48)).toBeNull();
+  });
+
+  it('finds a free slot inside the page rather than appending below', () => {
+    // Top 24×8 band is taken; an 8×8 should drop to the next free row, NOT below
+    // the page fold (placeTileInGrid would append below; this stays in-page).
+    const others = [tile({ uid: 'band', x: 0, y: 0, w: 24, h: 8 })];
+    const placed = placeTileInPage('cw', others, 24, 48);
+    expect(placed).not.toBeNull();
+    expect(placed!.y).toBe(8);
+    expect(placed!.y + placed!.h).toBeLessThanOrEqual(48);
+  });
+
+  it('places an oversized tile at the origin instead of paginating forever', () => {
+    // hero is 18×24; on a tiny 6×6 page it can never fit, so it must NOT return
+    // null (which would spill endlessly) — it lands at the origin.
+    expect(placeTileInPage('hero', [], 6, 6)).toMatchObject({ x: 0, y: 0 });
   });
 });

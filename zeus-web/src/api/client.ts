@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -64,13 +65,20 @@ export type RxMode =
   | 'SAM'
   | 'DSB'
   | 'DIGL'
-  | 'DIGU';
+  | 'DIGU'
+  | 'FREEDV';
 
-export type Rx2AudioMode = 'both' | 'rx1' | 'rx2';
 export type TxVfo = 'A' | 'B';
 
-export type NrMode = 'Off' | 'Anr' | 'Emnr' | 'Sbnr';
+export type NrMode = 'Off' | 'Anr' | 'Emnr' | 'Sbnr' | 'Rnnr';
 export type NbMode = 'Off' | 'Nb1' | 'Nb2';
+
+// SSB bandpass "rectangularity" (issue #871). 'Soft' = WDSP fir.c
+// Blackman-Harris 4-term (gentler shoulder, Yaesu-like); 'Sharp' = BH 7-term
+// (steeper shoulder, Icom-like). RX and TX selectors are independent. Match
+// the Zeus.Contracts.BandpassWindow enum (server serialises as the string
+// name via JsonStringEnumConverter).
+export type BandpassWindow = 'Soft' | 'Normal' | 'Sharp';
 
 // RXA AGC mode. PascalCase strings match the server's JsonStringEnumConverter
 // (AgcMode enum). Custom unlocks the per-param controls; Fixed unlocks the
@@ -203,7 +211,7 @@ export const NR2_CORE_DEFAULTS = {
   npeMethod: 0 as 0 | 1 | 2,         // OSMS
   aeRun: true,
   trainT1: -0.5,
-  trainT2: 2.0,
+  trainT2: 0.2, // Thetis udDSPNR2trainT2 NUD default (range 0.02..0.3)
 } as const;
 
 export const GAIN_METHOD_LABELS = ['Linear', 'Log', 'Gamma', 'Trained'] as const;
@@ -231,6 +239,14 @@ export type ZoomLevel = number;
 export const ZOOM_MIN: ZoomLevel = 1;
 export const ZOOM_MAX: ZoomLevel = 32;
 
+// Workspace UI zoom as a whole-percent scale of the panel-grid cell pitch.
+// 100 = authored size. Distinct from the spectral ZoomLevel above. Range +
+// step mirror the backend clamp (RadioService.Min/MaxWorkspaceZoomPct).
+export const WORKSPACE_ZOOM_MIN = 50;
+export const WORKSPACE_ZOOM_MAX = 200;
+export const WORKSPACE_ZOOM_STEP = 10;
+export const WORKSPACE_ZOOM_DEFAULT = 100;
+
 export type AdcProtectionConfigDto = {
   enabled: boolean;
   attackMs: number;
@@ -240,6 +256,7 @@ export type AdcProtectionConfigDto = {
   maxOffsetDb: number;
   warningThreshold: number;
   magnitudeSoftLimit: number;
+  releaseHoldMs: number;
 };
 
 export const ADC_PROTECTION_CONFIG_DEFAULT: AdcProtectionConfigDto = {
@@ -251,6 +268,7 @@ export const ADC_PROTECTION_CONFIG_DEFAULT: AdcProtectionConfigDto = {
   maxOffsetDb: 31,
   warningThreshold: 3,
   magnitudeSoftLimit: 0,
+  releaseHoldMs: 2000,
 };
 
 export type AdcProtectionStatusDto = {
@@ -274,25 +292,29 @@ export type RadioStateDto = {
   status: ConnectionStatus;
   endpoint: string | null;
   vfoHz: number;
-  vfoBHz: number;
+  // RX2+ per-receiver state (VFO/mode/filter/AF) is read from `receivers[]`
+  // (RX2 = index 1); the client no longer carries the flat *B fields. The server
+  // still accepts the legacy A/B write endpoints (setVfoB/setMode?receiver=B/…).
   rx2Enabled: boolean;
-  rx2AudioMode: Rx2AudioMode;
-  rx2AfGainDb: number;
   txVfo: TxVfo;
+  // Authoritative TX target as a receiver index (0=RX1/VFO A, 1=RX2/VFO B,
+  // >=2 extra DDC). txVfo stays the legacy A/B projection. Optional until a v2
+  // server reports it.
+  txReceiverIndex?: number;
   mode: RxMode;
-  modeB: RxMode;
   filterLowHz: number;
   filterHighHz: number;
-  filterLowHzB: number;
-  filterHighHzB: number;
   // Null after a drag edit without a named-slot context (PRD §4.1).
   filterPresetName: string | null;
-  filterPresetNameB: string | null;
   // Advanced-filter ribbon visibility; persisted server-side.
   filterAdvancedPaneOpen: boolean;
   // TX bandpass (signed, per-sideband). Per-mode family memory on the server.
   txFilterLowHz: number;
   txFilterHighHz: number;
+  // SSB bandpass "rectangularity" — operator-selectable WDSP FIR window
+  // (issue #871). RX and TX are independent.
+  rxFilterWindow: BandpassWindow;
+  txFilterWindow: BandpassWindow;
   sampleRate: number;
   agcTopDb: number;
   // AGC mode + custom/fixed params (separate from agcTopDb max-gain).
@@ -316,7 +338,20 @@ export type RadioStateDto = {
   adcOverloadWarning: boolean;
   preampOn: boolean;
   nr: NrConfigDto;
+  // NR3 (RNNoise): native availability (libwdsp RNNR exports present) plus the
+  // active model name (operator-installed file name, the bundled-default display
+  // name, or null when neither is available). NR3 is revealed in the NR cycle
+  // when available AND a model is active. Zeus ships a bundled default so NR3
+  // works out of the box; the operator can override it via the DSP menu.
+  wdspNr3RnnrAvailable: boolean;
+  nr3ModelName: string | null;
+  // True when the active model is the shipped default (no operator model). The
+  // UI labels the source and gates "Remove" (remove reverts to the default).
+  nr3UsingBundledDefault: boolean;
   zoomLevel: ZoomLevel;
+  // Workspace UI zoom (whole-percent cell-pitch scale; 100 = authored size).
+  // Server-persisted so it follows the radio across clients.
+  workspaceZoomPct: number;
   // PureSignal persisted settings — server is the source of truth, hydrated
   // into tx-store on connect so a fresh browser (no localStorage) sees the
   // operator's last dial-in. PsEnabled is the persisted standing arm
@@ -380,6 +415,65 @@ export type RadioStateDto = {
   // the display on the tuned frequency. Toggled via setCtun → POST
   // /api/radio/ctun. See docs/prd/panfall_behavior.md.
   ctunEnabled: boolean;
+  // ---- Multi-DDC receivers array (wire v2) ----
+  // Canonical per-receiver list: index 0 = RX1, 1 = RX2, >= 2 = extra DDCs.
+  // Optional until the frontend migrates off the flat RX1/RX2 fields; the
+  // server projects these from the flat fields so [0]/[1] always mirror them.
+  receivers?: ReceiverDto[];
+  // Wire contract version (WireContract.Version). v2 = receivers[] present.
+  wireVersion?: number;
+  // DDC / receiver ceiling for this build (WireContract.MaxReceivers).
+  maxReceivers?: number;
+};
+
+// Mirrors Zeus.Contracts.ReceiverDto — per-receiver (per-DDC) state. Index 0 is
+// RX1, index 1 is RX2, indices >= 2 are additional DDCs. The multi-DDC UI reads
+// this array; the flat RX1/RX2 fields above remain the source for indices 0/1
+// until that migration completes.
+export type ReceiverDto = {
+  index: number;
+  enabled: boolean;
+  // Operator-facing display name. Hardware DDCs leave this null and fall back to
+  // an "RX{n}" label; the reserved KiwiSDR slice receiver (index
+  // WireContract.KiwiReceiverIndex) carries "Kiwi". See receiverLabel().
+  name?: string | null;
+  // Which phase-synchronous 16-bit ADC feeds this DDC (0 or 1).
+  adcSource: number;
+  vfoHz: number;
+  mode: RxMode;
+  filterLowHz: number;
+  filterHighHz: number;
+  filterPresetName: string | null;
+  afGainDb: number;
+  sampleRateHz: number;
+  // Per-receiver audio mute (Thetis chkMUT/chkRX2Mute). The hero mixer + VFO
+  // panel drive this via POST /api/receivers/{index}/mute.
+  muted: boolean;
+};
+
+// Mirrors Zeus.Contracts.KiwiConfigDto — status of the KiwiSDR slice receiver.
+// `hasPassword` avoids ever shipping the stored secret to the client; `status`
+// is one of "disabled" | "connecting" | "connected" | "error" | "closed".
+export type KiwiConfigDto = {
+  enabled: boolean;
+  url: string | null;
+  hasPassword: boolean;
+  status: string;
+  statusDetail: string | null;
+};
+
+// Mirrors Zeus.Server.KiwiDirectoryEntry — one public KiwiSDR for the map
+// picker. `url` is the address to store/connect; `lat`/`lon` place the marker.
+export type KiwiDirectoryEntry = {
+  name: string;
+  url: string;
+  lat: number;
+  lon: number;
+  users: number;
+  usersMax: number;
+  online: boolean;
+  location: string | null;
+  snr: string | null;
 };
 
 // CFC mirrors Zeus.Contracts.CfcConfig. Bands array is fixed at 10 entries
@@ -1957,6 +2051,11 @@ export type ConnectRequest = {
   // identifies as Hermes/0x01 on P2). Omit for manual connects where the
   // board is unknown.
   boardId?: number;
+  // Take over a radio another controller is already driving. /api/connect/p2
+  // refuses to become a second master on a Busy radio (relay-chatter / brown-out
+  // guard); the Reclaim-then-connect takeover flow sets this so the post-reclaim
+  // re-connect isn't re-blocked while the radio is still settling.
+  force?: boolean;
 };
 
 // System.Text.Json can serialize enums as either numbers (default) or strings
@@ -1980,10 +2079,10 @@ const MODE_ORDER: readonly RxMode[] = [
   'DSB',
   'DIGL',
   'DIGU',
+  'FREEDV',
 ];
 
-const RX2_AUDIO_MODE_ORDER: readonly Rx2AudioMode[] = ['both', 'rx1', 'rx2'];
-const NR_MODE_ORDER: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
+const NR_MODE_ORDER: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr', 'Rnnr'];
 const NB_MODE_ORDER: readonly NbMode[] = ['Off', 'Nb1', 'Nb2'];
 
 export function normalizeStatus(v: unknown): ConnectionStatus {
@@ -2000,8 +2099,15 @@ export function normalizeStatus(v: unknown): ConnectionStatus {
 
 function modeFromWire(v: unknown): RxMode | null {
   if (typeof v === 'string') {
-    return (MODE_ORDER as readonly string[]).includes(v)
-      ? (v as RxMode)
+    // The server serialises RxMode by its C# enum NAME. Every name is all-caps
+    // (USB, CWL, …) EXCEPT FreeDv (PascalCase), while our RxMode literals are
+    // all-caps ('FREEDV'). Match case-insensitively so "FreeDv" resolves to
+    // 'FREEDV' instead of falling through to the 'USB' default in normalizeMode
+    // — that miss is what made FreeDV mode silently revert to USB on the next
+    // state round-trip.
+    const upper = v.toUpperCase();
+    return (MODE_ORDER as readonly string[]).includes(upper)
+      ? (upper as RxMode)
       : null;
   }
   if (typeof v === 'number' && Number.isInteger(v)) {
@@ -2012,19 +2118,6 @@ function modeFromWire(v: unknown): RxMode | null {
 
 export function normalizeMode(v: unknown): RxMode {
   return modeFromWire(v) ?? 'USB';
-}
-
-export function normalizeRx2AudioMode(v: unknown): Rx2AudioMode {
-  if (typeof v === 'string') {
-    const lowered = v.toLowerCase();
-    return (RX2_AUDIO_MODE_ORDER as readonly string[]).includes(lowered)
-      ? (lowered as Rx2AudioMode)
-      : 'both';
-  }
-  if (typeof v === 'number' && Number.isInteger(v)) {
-    return RX2_AUDIO_MODE_ORDER[v] ?? 'both';
-  }
-  return 'both';
 }
 
 export function normalizeTxVfo(v: unknown): TxVfo {
@@ -2235,6 +2328,10 @@ function normalizeAdcProtectionConfig(raw: unknown): AdcProtectionConfigDto {
       typeof r.magnitudeSoftLimit === 'number'
         ? r.magnitudeSoftLimit
         : ADC_PROTECTION_CONFIG_DEFAULT.magnitudeSoftLimit,
+    releaseHoldMs:
+      typeof r.releaseHoldMs === 'number'
+        ? r.releaseHoldMs
+        : ADC_PROTECTION_CONFIG_DEFAULT.releaseHoldMs,
   };
 }
 
@@ -2266,48 +2363,53 @@ export function normalizeAdcProtectionStatus(raw: unknown): AdcProtectionStatusD
   };
 }
 
+// Normalise one wire ReceiverDto (mirrors Zeus.Contracts.ReceiverDto). A
+// malformed entry falls back to safe defaults rather than dropping the whole
+// array, so a single bad receiver can't blank the multi-DDC UI.
+function normalizeReceiver(raw: unknown, fallbackIndex: number): ReceiverDto {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    index: typeof r.index === 'number' ? r.index : fallbackIndex,
+    enabled: typeof r.enabled === 'boolean' ? r.enabled : false,
+    name: typeof r.name === 'string' ? r.name : null,
+    adcSource: typeof r.adcSource === 'number' ? r.adcSource : 0,
+    vfoHz: typeof r.vfoHz === 'number' ? r.vfoHz : 0,
+    mode: normalizeMode(r.mode),
+    filterLowHz: typeof r.filterLowHz === 'number' ? r.filterLowHz : 0,
+    filterHighHz: typeof r.filterHighHz === 'number' ? r.filterHighHz : 0,
+    filterPresetName: typeof r.filterPresetName === 'string' ? r.filterPresetName : null,
+    afGainDb: typeof r.afGainDb === 'number' ? r.afGainDb : 0,
+    sampleRateHz: typeof r.sampleRateHz === 'number' ? r.sampleRateHz : 0,
+    muted: typeof r.muted === 'boolean' ? r.muted : false,
+  };
+}
+
 export function normalizeState(raw: unknown): RadioStateDto {
   const r = (raw ?? {}) as Record<string, unknown>;
   return {
     status: normalizeStatus(r.status),
     endpoint: typeof r.endpoint === 'string' ? r.endpoint : null,
     vfoHz: typeof r.vfoHz === 'number' ? r.vfoHz : 0,
-    vfoBHz:
-      typeof r.vfoBHz === 'number' && r.vfoBHz > 0
-        ? r.vfoBHz
-        : typeof r.vfoHz === 'number'
-        ? r.vfoHz
-        : 0,
+    // RX2 (and RX3+) state comes from the receivers[] array below — the flat *B
+    // fields the server may still send are ignored.
     rx2Enabled: typeof r.rx2Enabled === 'boolean' ? r.rx2Enabled : false,
-    rx2AudioMode: normalizeRx2AudioMode(r.rx2AudioMode),
-    rx2AfGainDb: typeof r.rx2AfGainDb === 'number' ? r.rx2AfGainDb : 0,
     txVfo: normalizeTxVfo(r.txVfo),
+    txReceiverIndex:
+      typeof r.txReceiverIndex === 'number' ? r.txReceiverIndex : undefined,
     mode: normalizeMode(r.mode),
-    modeB: normalizeMode(r.modeB ?? r.mode),
     filterLowHz: typeof r.filterLowHz === 'number' ? r.filterLowHz : 0,
     filterHighHz: typeof r.filterHighHz === 'number' ? r.filterHighHz : 0,
-    filterLowHzB:
-      typeof r.filterLowHzB === 'number'
-        ? r.filterLowHzB
-        : typeof r.filterLowHz === 'number'
-        ? r.filterLowHz
-        : 0,
-    filterHighHzB:
-      typeof r.filterHighHzB === 'number'
-        ? r.filterHighHzB
-        : typeof r.filterHighHz === 'number'
-        ? r.filterHighHz
-        : 0,
     filterPresetName: typeof r.filterPresetName === 'string' ? r.filterPresetName : null,
-    filterPresetNameB:
-      typeof r.filterPresetNameB === 'string'
-        ? r.filterPresetNameB
-        : typeof r.filterPresetName === 'string'
-        ? r.filterPresetName
-        : null,
     filterAdvancedPaneOpen: typeof r.filterAdvancedPaneOpen === 'boolean' ? r.filterAdvancedPaneOpen : false,
     txFilterLowHz: typeof r.txFilterLowHz === 'number' ? r.txFilterLowHz : 150,
     txFilterHighHz: typeof r.txFilterHighHz === 'number' ? r.txFilterHighHz : 2850,
+    // Normal = today's default tap count; older servers without the field
+    // hydrate to Normal so first-connect behaviour is unchanged (#871). Any
+    // unrecognised value also falls back to Normal.
+    rxFilterWindow:
+      r.rxFilterWindow === 'Soft' || r.rxFilterWindow === 'Sharp' ? r.rxFilterWindow : 'Normal',
+    txFilterWindow:
+      r.txFilterWindow === 'Soft' || r.txFilterWindow === 'Sharp' ? r.txFilterWindow : 'Normal',
     sampleRate: typeof r.sampleRate === 'number' ? r.sampleRate : 0,
     // Default 80 matches WdspDspEngine.ApplyAgcDefaults and the Thetis
     // AGC_MEDIUM preset. Missing from older servers — tolerate absence.
@@ -2340,7 +2442,11 @@ export function normalizeState(raw: unknown): RadioStateDto {
     // StateDto.Nr is nullable on the server (older clients) — fall back to
     // the engine's declared defaults so the UI has something to render.
     nr: normalizeNr(r.nr),
+    wdspNr3RnnrAvailable: Boolean(r.wdspNr3RnnrAvailable),
+    nr3ModelName: typeof r.nr3ModelName === 'string' ? r.nr3ModelName : null,
+    nr3UsingBundledDefault: Boolean(r.nr3UsingBundledDefault),
     zoomLevel: normalizeZoomLevel(r.zoomLevel),
+    workspaceZoomPct: normalizeWorkspaceZoomPct(r.workspaceZoomPct),
     // PureSignal persisted settings. Defaults match RadioService.cs init and
     // PsSettingsEntry — older servers without the fields fall back cleanly.
     psEnabled: typeof r.psEnabled === 'boolean' ? r.psEnabled : false,
@@ -2390,6 +2496,18 @@ export function normalizeState(raw: unknown): RadioStateDto {
     cwPitchHz: typeof r.cwPitchHz === 'number' ? r.cwPitchHz : 600,
     // Legacy server without the field → CTUN off (classic recenter-on-click).
     ctunEnabled: typeof r.ctunEnabled === 'boolean' ? r.ctunEnabled : false,
+    // ---- Multi-DDC receivers array (wire v2) ----
+    // A v1 server omits these. Leave them undefined (not []/0) so applyState's
+    // `s.receivers ?? prev.receivers` keeps the store's prior values instead of
+    // collapsing the exposed-receiver control back to RX1. A v2 server projects
+    // RX1/RX2 into [0]/[1] and appends the contiguous extra DDCs, so the array
+    // is authoritative whenever present. (Without this the receivers menu and
+    // the multi-DDC panels never see RX2+.)
+    receivers: Array.isArray(r.receivers)
+      ? (r.receivers as unknown[]).map((entry, i) => normalizeReceiver(entry, i))
+      : undefined,
+    wireVersion: typeof r.wireVersion === 'number' ? r.wireVersion : undefined,
+    maxReceivers: typeof r.maxReceivers === 'number' ? r.maxReceivers : undefined,
   };
 }
 
@@ -2540,6 +2658,16 @@ function normalizeZoomLevel(v: unknown): ZoomLevel {
     return v;
   }
   return ZOOM_MIN;
+}
+
+// Clamp the server's workspace zoom percent into range, falling back to 100
+// for a missing/garbage field so a v1 server (no field) renders at authored
+// size rather than collapsing the grid.
+function normalizeWorkspaceZoomPct(v: unknown): number {
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    return Math.min(WORKSPACE_ZOOM_MAX, Math.max(WORKSPACE_ZOOM_MIN, Math.round(v)));
+  }
+  return WORKSPACE_ZOOM_DEFAULT;
 }
 
 function normalizeRadios(raw: unknown): RadioInfoDto[] {
@@ -4624,6 +4752,11 @@ export class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    // Set from the server's 409 body when a P2 connect is refused because the
+    // radio is owned by another controller. `reclaimable` means the caller can
+    // offer a Reclaim-then-connect takeover (see /api/connect/p2 busy guard).
+    public readonly busy: boolean = false,
+    public readonly reclaimable: boolean = false,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -4639,20 +4772,20 @@ async function jsonFetch<T>(
   if (!res.ok) {
     // Server returns { error: "..." } on 400; fall back to status text otherwise.
     let message = `${res.status} ${res.statusText}`;
+    let busy = false;
+    let reclaimable = false;
     try {
       const body = (await res.json()) as unknown;
-      if (
-        body &&
-        typeof body === 'object' &&
-        'error' in body &&
-        typeof (body as { error: unknown }).error === 'string'
-      ) {
-        message = (body as { error: string }).error;
+      if (body && typeof body === 'object') {
+        const b = body as { error?: unknown; busy?: unknown; reclaimable?: unknown };
+        if (typeof b.error === 'string') message = b.error;
+        busy = b.busy === true;
+        reclaimable = b.reclaimable === true;
       }
     } catch {
       /* non-JSON body — keep status text */
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, busy, reclaimable);
   }
   const raw = (await res.json()) as unknown;
   return parse(raw);
@@ -4966,6 +5099,49 @@ export function uploadPrefsDatabase(
   );
 }
 
+/** Download an existing prefs database (.db) to the user's machine. Fetches the
+ *  bytes and saves them via a temporary object URL (rather than navigating to
+ *  the endpoint) so server-side errors surface as exceptions the caller can show
+ *  instead of opening a JSON error blob in a new tab. */
+export async function exportPrefsDatabase(
+  relativePath: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const url = `/api/prefs/databases/export?relativePath=${encodeURIComponent(relativePath)}`;
+  const res = await fetch(url, { signal });
+  if (!res.ok) {
+    let message = `${res.status} ${res.statusText}`;
+    try {
+      const body = (await res.json()) as { error?: unknown };
+      if (typeof body?.error === 'string') message = body.error;
+    } catch {
+      /* non-JSON body — keep status text */
+    }
+    throw new ApiError(res.status, message);
+  }
+
+  const blob = await res.blob();
+  // Prefer the server's Content-Disposition filename; fall back to the leaf of
+  // the relative path.
+  const cd = res.headers.get('content-disposition') ?? '';
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+  const fileName = match?.[1]
+    ? decodeURIComponent(match[1])
+    : relativePath.split('/').pop() || 'zeus-prefs.db';
+
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 /** Ask the backend to relaunch itself (a fresh copy with the same args, after
  *  this process exits). Used after switching the active prefs database. */
 export function restartApp(
@@ -4981,6 +5157,26 @@ export function restartApp(
     (raw) => {
       const o = (raw ?? {}) as Record<string, unknown>;
       return { restarting: o.restarting === true };
+    },
+  );
+}
+
+/** Ask the backend to exit (close the app). Used by the login dialog's Exit
+ *  button — the desktop Photino window tears down cleanly when the process
+ *  exits. The response may not arrive before the process dies. */
+export function quitApp(
+  signal?: AbortSignal,
+): Promise<{ quitting: boolean }> {
+  return jsonFetch(
+    '/api/app/quit',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      signal,
+    },
+    (raw) => {
+      const o = (raw ?? {}) as Record<string, unknown>;
+      return { quitting: o.quitting === true };
     },
   );
 }
@@ -5285,6 +5481,27 @@ export function connectP2(
   );
 }
 
+// Take over a Busy radio: ask the server to send a protocol stop so the radio
+// drops its current owner, freeing it for an immediate connect. `endpoint` is
+// the discovered "ip:port"; `protocol` is 'P1' or 'P2'. Resolves once the
+// server has sent the stop and waited for the radio to settle.
+export function reclaimRadio(
+  endpoint: string,
+  protocol: 'P1' | 'P2',
+  signal?: AbortSignal,
+): Promise<unknown> {
+  return jsonFetch(
+    '/api/radios/reclaim',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ endpoint, protocol }),
+      signal,
+    },
+    (raw) => raw,
+  );
+}
+
 export function disconnect(signal?: AbortSignal): Promise<RadioStateDto> {
   return jsonFetch(
     '/api/disconnect',
@@ -5311,6 +5528,28 @@ export function setRadioLo(
 ): Promise<RadioStateDto> {
   return jsonFetch(
     '/api/radio/lo',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hz }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// Pan a receiver's DDC centre (the keep-in-view autopan lever). Index 0 is
+// RX1's hardware NCO (→ /api/radio/lo); index >= 1 recentres a secondary DDC
+// via /api/receivers/{index}/lo. The server no-ops the secondary path for P1
+// (shared NCO), CTUN-off, or a disabled receiver — see RequestSecondaryLo.
+export function setReceiverLo(
+  index: number,
+  hz: number,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  if (index <= 0) return setRadioLo(hz, signal);
+  return jsonFetch(
+    `/api/receivers/${index}/lo`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -5366,10 +5605,6 @@ export function setVfo(
   );
 }
 
-function rx2AudioModeToWire(mode: Rx2AudioMode): number {
-  return RX2_AUDIO_MODE_ORDER.indexOf(mode);
-}
-
 export function setVfoB(
   hz: number,
   signal?: AbortSignal,
@@ -5407,7 +5642,6 @@ export function setRx2(
   req: {
     enabled?: boolean;
     vfoBHz?: number;
-    audioMode?: Rx2AudioMode;
     afGainDb?: number;
   },
   signal?: AbortSignal,
@@ -5420,11 +5654,48 @@ export function setRx2(
       body: JSON.stringify({
         enabled: req.enabled,
         vfoBHz: req.vfoBHz,
-        audioMode:
-          req.audioMode === undefined
-            ? undefined
-            : rx2AudioModeToWire(req.audioMode),
         afGainDb: req.afGainDb,
+      }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// Configure any receiver by index for full multi-DDC (RX1=0, RX2=1, RX3+=2..).
+// Mirrors POST /api/receivers/{index}; index 0/1 delegate server-side to the
+// RX1/RX2 setters, index >= 2 drives an extra hardware DDC. Only the supplied
+// fields change. Returns the canonical state for `.then(applyState)`.
+export function setReceiver(
+  index: number,
+  req: {
+    enabled?: boolean;
+    vfoHz?: number;
+    adcSource?: number;
+    mode?: RxMode;
+    filterLowHz?: number;
+    filterHighHz?: number;
+    afGainDb?: number;
+    filterPresetName?: string | null;
+  },
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    `/api/receivers/${index}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabled: req.enabled,
+        vfoHz: req.vfoHz,
+        adcSource: req.adcSource,
+        // RxMode serialises as its numeric ordinal on the write path (the
+        // server has no JsonStringEnumConverter) — same encoding setMode uses.
+        mode: req.mode !== undefined ? MODE_ORDER.indexOf(req.mode) : undefined,
+        filterLowHz: req.filterLowHz,
+        filterHighHz: req.filterHighHz,
+        afGainDb: req.afGainDb,
+        filterPresetName: req.filterPresetName,
       }),
       signal,
     },
@@ -5442,6 +5713,43 @@ export function setTxVfo(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ txVfo: txVfo === 'B' ? 1 : 0 }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// Select the transmit target by receiver index (0=RX1, 1=RX2, >=2 extra DDC).
+// Mirrors POST /api/tx/receiver; the server clamps an unexposed index to RX1.
+export function setTxReceiver(
+  index: number,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/receiver',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ index }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// Per-RX audio mute for the hero mixer / VFO panel. Mirrors
+// POST /api/receivers/{index}/mute. index 0=RX1, 1=RX2, >=2 extra DDC.
+export function setReceiverMuted(
+  index: number,
+  muted: boolean,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    `/api/receivers/${index}/mute`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ muted }),
       signal,
     },
     normalizeState,
@@ -5525,6 +5833,41 @@ export function setTxFilter(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ lowHz, highHz }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// SSB bandpass "rectangularity" — issue #871. Independent RX and TX
+// selectors push the chosen WDSP fir.c window (Soft / Sharp) to the live
+// engine and persist server-side.
+export function setRxFilterWindow(
+  window: BandpassWindow,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/rx/filter-window',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ window }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+export function setTxFilterWindow(
+  window: BandpassWindow,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/filter-window',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ window }),
       signal,
     },
     normalizeState,
@@ -5797,6 +6140,25 @@ export function setZoom(
   );
 }
 
+// Workspace UI zoom — POSTs the new percent; the server clamps and echoes the
+// full state back for the optimistic-send + applyState reconcile. Distinct from
+// setZoom (spectral analyzer zoom).
+export function setWorkspaceZoom(
+  pct: number,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/ui/workspace-zoom',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pct }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
 export function setNr(
   nr: NrConfigDto,
   signal?: AbortSignal,
@@ -5950,6 +6312,50 @@ export function setNr4(
     },
     normalizeState,
   );
+}
+
+// ---- NR3 (RNNoise) model management ----
+// Zeus ships no model; the operator installs an RNNoise weights file (upload or
+// URL fetch) via the DSP menu. `available` reflects whether libwdsp exports the
+// RNNR symbols; `modelName` is the installed file name (null = none).
+export type Nr3ModelStatus = { available: boolean; modelName: string | null };
+
+export function getNr3ModelStatus(signal?: AbortSignal): Promise<Nr3ModelStatus> {
+  return jsonFetch(
+    '/api/rx/nr3/model',
+    { signal },
+    (raw) => {
+      const r = (raw ?? {}) as Record<string, unknown>;
+      return {
+        available: Boolean(r.available),
+        modelName: typeof r.modelName === 'string' ? r.modelName : null,
+      };
+    },
+  );
+}
+
+export function uploadNr3Model(file: File, signal?: AbortSignal): Promise<RadioStateDto> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  // No content-type header: the browser sets multipart/form-data + boundary.
+  return jsonFetch('/api/rx/nr3/model', { method: 'POST', body: form, signal }, normalizeState);
+}
+
+export function downloadNr3Model(url: string, signal?: AbortSignal): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/rx/nr3/model/download',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+export function removeNr3Model(signal?: AbortSignal): Promise<RadioStateDto> {
+  return jsonFetch('/api/rx/nr3/model', { method: 'DELETE', signal }, normalizeState);
 }
 
 // MOX endpoint returns {moxOn} — not a full StateDto — because MOX is
@@ -6375,6 +6781,69 @@ export function setLastLoadedTxAudioProfile(
   );
 }
 
+// Import a TX audio profile from a user-picked .json file (uploaded as
+// multipart — the webview can't hand the server a filesystem path). The profile
+// is ADDED to the collection (never applied); the server uniquifies the name if
+// the slug is already taken. Returns the stored profile.
+export function importTxAudioProfile(
+  file: File,
+  name?: string,
+  signal?: AbortSignal,
+): Promise<TxAudioProfileDto> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  if (name && name.trim().length > 0) form.append('name', name.trim());
+  // No explicit content-type — the browser sets the multipart boundary.
+  return jsonFetch(
+    '/api/tx-audio-profiles/import',
+    { method: 'POST', body: form, signal },
+    (raw) => {
+      const p = normalizeTxAudioProfile(raw);
+      if (!p) throw new ApiError(500, 'Malformed imported TX audio profile response');
+      return p;
+    },
+  );
+}
+
+// Download a saved TX audio profile as a .json file. Fetches the bytes and saves
+// them via a temporary object URL (so server-side errors surface as exceptions
+// the caller can show, rather than opening a JSON error blob in a new tab) —
+// mirrors exportPrefsDatabase.
+export async function exportTxAudioProfile(
+  id: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const url = `/api/tx-audio-profiles/${encodeURIComponent(id)}/export`;
+  const res = await fetch(url, { signal });
+  if (!res.ok) {
+    let message = `${res.status} ${res.statusText}`;
+    try {
+      const body = (await res.json()) as { error?: unknown };
+      if (typeof body?.error === 'string') message = body.error;
+    } catch {
+      /* non-JSON body — keep status text */
+    }
+    throw new ApiError(res.status, message);
+  }
+
+  const blob = await res.blob();
+  const cd = res.headers.get('content-disposition') ?? '';
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+  const fileName = match?.[1] ? decodeURIComponent(match[1]) : `${id}.json`;
+
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 export function fetchTxFidelityPolicy(
   signal?: AbortSignal,
 ): Promise<TxFidelityPolicyDto> {
@@ -6499,6 +6968,50 @@ export async function setTwoTone(
   );
 }
 
+// Normalise a wire KiwiConfigDto, tolerating an older/partial server response.
+function normalizeKiwiConfig(raw: unknown): KiwiConfigDto {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    enabled: typeof r.enabled === 'boolean' ? r.enabled : false,
+    url: typeof r.url === 'string' ? r.url : null,
+    hasPassword: typeof r.hasPassword === 'boolean' ? r.hasPassword : false,
+    status: typeof r.status === 'string' ? r.status : 'disabled',
+    statusDetail: typeof r.statusDetail === 'string' ? r.statusDetail : null,
+  };
+}
+
+// KiwiSDR slice receiver: GET /api/kiwi → current config + connection status.
+export async function getKiwiConfig(signal?: AbortSignal): Promise<KiwiConfigDto> {
+  return jsonFetch('/api/kiwi', { signal }, (raw) => normalizeKiwiConfig(raw));
+}
+
+// KiwiSDR slice receiver: POST /api/kiwi → apply config, returns updated status.
+// Only supplied fields change. An empty-string `password` clears the stored
+// password; omitting it leaves it unchanged.
+export async function setKiwiConfig(
+  req: { enabled?: boolean; url?: string; password?: string },
+  signal?: AbortSignal,
+): Promise<KiwiConfigDto> {
+  return jsonFetch(
+    '/api/kiwi',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+      signal,
+    },
+    (raw) => normalizeKiwiConfig(raw),
+  );
+}
+
+// Public KiwiSDR directory: GET /api/kiwi/directory → receivers for the map
+// picker. Proxied + cached server-side. Returns [] on any upstream failure.
+export async function getKiwiDirectory(signal?: AbortSignal): Promise<KiwiDirectoryEntry[]> {
+  return jsonFetch('/api/kiwi/directory', { signal }, (raw) =>
+    Array.isArray(raw) ? (raw as KiwiDirectoryEntry[]) : [],
+  );
+}
+
 // Mic-gain endpoint: POST /api/mic-gain { db }. Returns { micGainDb }.
 // Failures bubble up so the slider can roll back the optimistic update.
 export function setMicGain(
@@ -6517,5 +7030,325 @@ export function setMicGain(
       const v = (raw as { micGainDb?: unknown }).micGainDb;
       return { micGainDb: typeof v === 'number' ? v : 0 };
     },
+  );
+}
+
+// ---- FreeDV digital-voice telemetry / config ----
+// FreeDV is a normal selectable RxMode ('FREEDV', byte 10); selecting it goes
+// through setMode like any other mode. The backend forces USB underneath and
+// runs the codec2/FreeDV modem. These endpoints carry the modem telemetry +
+// config that drive the native FreeDV panel — they are NOT part of StateDto.
+
+export type FreeDvSubmode =
+  | 'RadeV1'
+  | 'Mode700D'
+  | 'Mode700E'
+  | 'Mode700C'
+  | 'Mode1600'
+  | 'Mode800XA';
+
+// Panel-facing submode order + short labels, matching freedv-gui 2.1.0's
+// selector (RADEV1, 700D, 700E, 1600). 700C/800XA remain valid on the backend
+// and in auto-detect's scan set, but freedv-gui retired them from its UI so we
+// mirror that here. `rade` marks the submode that needs the native RADE library.
+export const FREEDV_SUBMODES: ReadonlyArray<{
+  value: FreeDvSubmode;
+  label: string;
+  rade?: boolean;
+}> = [
+  { value: 'RadeV1', label: 'RADEV1', rade: true },
+  { value: 'Mode700D', label: '700D' },
+  { value: 'Mode700E', label: '700E' },
+  { value: 'Mode1600', label: '1600' },
+];
+
+// Mirrors the server-side FreeDvStatusDto (GET /api/freedv/status).
+export type FreeDvStatusDto = {
+  nativeAvailable: boolean;
+  active: boolean;
+  submode: FreeDvSubmode;
+  synced: boolean;
+  snrDb: number;
+  squelchEnabled: boolean;
+  snrSquelchThreshDb: number;
+  speechSampleRateHz: number;
+  modemSampleRateHz: number;
+  rxText: string | null;
+  txText: string | null;
+  libraryVersion: string | null;
+  // Auto submode detection: while unsynced the modem cycles submodes until one
+  // locks. `submode` reflects the live (possibly scanner-chosen) mode.
+  autoDetect: boolean;
+  // True when the native RADE modem is available. False until librade is
+  // integrated — RADEV1 then runs no decoder and the panel shows a gated state.
+  radeAvailable: boolean;
+};
+
+// PUT /api/freedv/config body — all fields optional, null = leave unchanged.
+export type FreeDvConfigRequest = {
+  submode?: FreeDvSubmode;
+  squelchEnabled?: boolean;
+  snrSquelchThreshDb?: number;
+  txText?: string;
+  autoDetect?: boolean;
+};
+
+// Every valid submode name — a SUPERSET of the panel list. The backend can
+// report 700C/800XA (auto-detect still scans them) even though they're not shown
+// as buttons, so the normalizer must accept them or it would mislabel them.
+const FREEDV_SUBMODE_NAMES: readonly FreeDvSubmode[] = [
+  'Mode700D',
+  'Mode700E',
+  'Mode700C',
+  'Mode1600',
+  'Mode800XA',
+  'RadeV1',
+];
+
+// Indexed by the C# FreeDvSubmode byte value (700D=0 … 800XA=4, RadeV1=5) for the
+// defensive numeric path. Order here is the wire byte order, NOT the panel order.
+const FREEDV_SUBMODE_BY_BYTE: readonly FreeDvSubmode[] = [
+  'Mode700D',
+  'Mode700E',
+  'Mode700C',
+  'Mode1600',
+  'Mode800XA',
+  'RadeV1',
+];
+
+function normalizeFreeDvSubmode(v: unknown): FreeDvSubmode {
+  if (typeof v === 'string' && (FREEDV_SUBMODE_NAMES as readonly string[]).includes(v)) {
+    return v as FreeDvSubmode;
+  }
+  if (typeof v === 'number' && Number.isInteger(v)) {
+    return FREEDV_SUBMODE_BY_BYTE[v] ?? 'Mode700D';
+  }
+  return 'Mode700D';
+}
+
+// Defensive normalizer: the backend may not be wired yet (404) or may send a
+// partial frame. Coerce every field so the panel never reads undefined.
+function normalizeFreeDvStatus(raw: unknown): FreeDvStatusDto {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const num = (v: unknown, dflt: number): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : dflt;
+  const bool = (v: unknown): boolean => v === true;
+  const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+  return {
+    nativeAvailable: bool(r.nativeAvailable),
+    active: bool(r.active),
+    submode: normalizeFreeDvSubmode(r.submode),
+    synced: bool(r.synced),
+    snrDb: num(r.snrDb, 0),
+    squelchEnabled: bool(r.squelchEnabled),
+    snrSquelchThreshDb: num(r.snrSquelchThreshDb, 0),
+    speechSampleRateHz: num(r.speechSampleRateHz, 8000),
+    modemSampleRateHz: num(r.modemSampleRateHz, 8000),
+    rxText: str(r.rxText),
+    txText: str(r.txText),
+    libraryVersion: str(r.libraryVersion),
+    autoDetect: bool(r.autoDetect),
+    radeAvailable: bool(r.radeAvailable),
+  };
+}
+
+// GET /api/freedv/status. Callers should catch and fall back to an
+// "unavailable" UI state — the backend may 404 transiently while it's wired.
+export function getFreeDvStatus(signal?: AbortSignal): Promise<FreeDvStatusDto> {
+  return jsonFetch('/api/freedv/status', { signal }, normalizeFreeDvStatus);
+}
+
+// PUT /api/freedv/config. Only the supplied fields change; returns the updated
+// status so the panel can reconcile in one round-trip.
+export function setFreeDvConfig(
+  req: FreeDvConfigRequest,
+  signal?: AbortSignal,
+): Promise<FreeDvStatusDto> {
+  return jsonFetch(
+    '/api/freedv/config',
+    {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        submode: req.submode ?? null,
+        autoDetect: req.autoDetect ?? null,
+        squelchEnabled: req.squelchEnabled ?? null,
+        snrSquelchThreshDb: req.snrSquelchThreshDb ?? null,
+        txText: req.txText ?? null,
+      }),
+      signal,
+    },
+    normalizeFreeDvStatus,
+  );
+}
+
+// FreeDV codec2-library install (GET status / POST start). Mirrors the server
+// FreeDvInstallDto. codec2 can't be built on an operator's machine, so when the
+// bundled binary is missing the backend downloads the prebuilt one Zeus
+// committed for this platform and reloads the modem live. The panel polls the
+// GET while installing until `phase` is 'done' or 'failed'.
+export type FreeDvInstallPhase = 'idle' | 'downloading' | 'staging' | 'done' | 'failed';
+
+export type FreeDvInstallStatusDto = {
+  phase: FreeDvInstallPhase;
+  percent: number;
+  message: string | null;
+  installed: boolean;
+};
+
+const FREEDV_INSTALL_PHASES: readonly FreeDvInstallPhase[] = [
+  'idle',
+  'downloading',
+  'staging',
+  'done',
+  'failed',
+];
+
+function normalizeFreeDvInstallStatus(raw: unknown): FreeDvInstallStatusDto {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const phase =
+    typeof r.phase === 'string' && (FREEDV_INSTALL_PHASES as readonly string[]).includes(r.phase)
+      ? (r.phase as FreeDvInstallPhase)
+      : 'idle';
+  return {
+    phase,
+    percent: typeof r.percent === 'number' ? r.percent : 0,
+    message: typeof r.message === 'string' ? r.message : null,
+    installed: r.installed === true,
+  };
+}
+
+export function getFreeDvInstallStatus(signal?: AbortSignal): Promise<FreeDvInstallStatusDto> {
+  return jsonFetch('/api/freedv/install', { signal }, normalizeFreeDvInstallStatus);
+}
+
+export function startFreeDvInstall(signal?: AbortSignal): Promise<FreeDvInstallStatusDto> {
+  return jsonFetch('/api/freedv/install', { method: 'POST', signal }, normalizeFreeDvInstallStatus);
+}
+
+// ---- FreeDV Reporter — live station list (GET /api/freedv/stations) ----
+// Mirrors the server-side FreeDvStationDto / FreeDvStationsResponseDto records
+// (System.Text.Json camelCase serialisation).
+
+export type FreeDvStationDto = {
+  sid: string;
+  callsign: string;
+  gridSquare: string | null;
+  freqHz: number;
+  mode: string;          // FreeDV submode as advertised, e.g. "1600","700D","700E","RADEV1"
+  transmitting: boolean;
+  rxOnly: boolean;
+  message: string | null;
+  version: string | null;
+  lastRxSnr: number | null;
+  lastRxCallsign: string | null;
+  lastRxMode: string | null;
+  lastUpdate: string;    // ISO-8601 UTC
+  connectTime: string | null;
+};
+
+export type FreeDvStationsResponseDto = {
+  connectionState: string; // "Disconnected"|"Connecting"|"Connected"|"Reconnecting"
+  enabled: boolean;
+  stations: FreeDvStationDto[];
+  reporting: boolean;      // true when on the public map ("report" role)
+  mySid: string | null;    // operator's own session id while reporting
+};
+
+// ---- FreeDV Reporter "report mode" settings (GET/POST /api/freedv/reporter/settings) ----
+// Mirrors the server-side FreeDvReporterSettings record. Strictly opt-in:
+// reportEnabled defaults false and the backend only joins the public map in
+// "report" role when enabled AND callsign + grid are present.
+export type FreeDvReporterSettings = {
+  reportEnabled: boolean;
+  callsign: string;
+  gridSquare: string;
+  message: string;
+};
+
+function normalizeFreeDvReporterSettings(raw: unknown): FreeDvReporterSettings {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    reportEnabled: r.reportEnabled === true,
+    callsign: typeof r.callsign === 'string' ? r.callsign : '',
+    gridSquare: typeof r.gridSquare === 'string' ? r.gridSquare : '',
+    message: typeof r.message === 'string' ? r.message : '',
+  };
+}
+
+function normalizeFreeDvStation(raw: unknown): FreeDvStationDto {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+  const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  return {
+    sid: typeof r.sid === 'string' ? r.sid : '',
+    callsign: typeof r.callsign === 'string' ? r.callsign : '',
+    gridSquare: str(r.gridSquare),
+    freqHz: typeof r.freqHz === 'number' ? r.freqHz : 0,
+    mode: typeof r.mode === 'string' ? r.mode : '',
+    transmitting: r.transmitting === true,
+    rxOnly: r.rxOnly === true,
+    message: str(r.message),
+    version: str(r.version),
+    lastRxSnr: num(r.lastRxSnr),
+    lastRxCallsign: str(r.lastRxCallsign),
+    lastRxMode: str(r.lastRxMode),
+    lastUpdate: typeof r.lastUpdate === 'string' ? r.lastUpdate : '',
+    connectTime: str(r.connectTime),
+  };
+}
+
+function normalizeFreeDvStationsResponse(raw: unknown): FreeDvStationsResponseDto {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    connectionState: typeof r.connectionState === 'string' ? r.connectionState : 'Disconnected',
+    enabled: r.enabled === true,
+    stations: Array.isArray(r.stations) ? (r.stations as unknown[]).map(normalizeFreeDvStation) : [],
+    reporting: r.reporting === true,
+    mySid: typeof r.mySid === 'string' ? r.mySid : null,
+  };
+}
+
+// GET /api/freedv/stations — live FreeDV Reporter station list.
+export function fetchFreeDvStations(signal?: AbortSignal): Promise<FreeDvStationsResponseDto> {
+  return jsonFetch('/api/freedv/stations', { signal }, normalizeFreeDvStationsResponse);
+}
+
+// GET /api/freedv/reporter/settings — current report-mode opt-in settings.
+export function getFreeDvReporterSettings(signal?: AbortSignal): Promise<FreeDvReporterSettings> {
+  return jsonFetch('/api/freedv/reporter/settings', { signal }, normalizeFreeDvReporterSettings);
+}
+
+// POST /api/freedv/reporter/settings — save report-mode settings (the backend
+// normalizes, persists, and reconnects in the new role). Returns what was saved.
+export function setFreeDvReporterSettings(
+  settings: FreeDvReporterSettings,
+  signal?: AbortSignal,
+): Promise<FreeDvReporterSettings> {
+  return jsonFetch(
+    '/api/freedv/reporter/settings',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        reportEnabled: settings.reportEnabled,
+        callsign: settings.callsign,
+        gridSquare: settings.gridSquare,
+        message: settings.message,
+      }),
+      signal,
+    },
+    normalizeFreeDvReporterSettings,
+  );
+}
+
+// POST /api/freedv/stations/{sid}/qsy — ask that station to QSY to my current
+// VFO frequency. Resolves on success; rejects (jsonFetch throws on non-2xx) when
+// not reporting or the sid is unknown.
+export function freeDvStationQsy(sid: string, signal?: AbortSignal): Promise<void> {
+  return jsonFetch(
+    `/api/freedv/stations/${encodeURIComponent(sid)}/qsy`,
+    { method: 'POST', signal },
+    () => undefined,
   );
 }

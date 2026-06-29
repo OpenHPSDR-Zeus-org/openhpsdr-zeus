@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // Shared "TX Audio Profile" bar. Mounted MIRRORED in BOTH the TX Fidelity panel
 // and the TX Audio Suite window; both reads/writes go through the same
@@ -16,8 +17,8 @@
 // Token-only styling (var(--*) — never raw hex). The Save body is captured
 // server-side from live state; this component never assembles a profile body.
 
-import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
-import { ChevronDown, Plus } from 'lucide-react';
+import { useEffect, useId, useRef, useState, type ChangeEvent, type CSSProperties } from 'react';
+import { ChevronDown, Download, Plus, Upload } from 'lucide-react';
 
 import { ConfirmDialog } from '../layout/ConfirmDialog';
 import { TextInputDialog } from '../layout/TextInputDialog';
@@ -64,6 +65,8 @@ export function TxAudioProfileBar({ compact = false }: TxAudioProfileBarProps) {
   const save = useTxAudioProfileStore((s) => s.save);
   const apply = useTxAudioProfileStore((s) => s.apply);
   const remove = useTxAudioProfileStore((s) => s.remove);
+  const importProfile = useTxAudioProfileStore((s) => s.importProfile);
+  const exportProfile = useTxAudioProfileStore((s) => s.exportProfile);
 
   const [saveOpen, setSaveOpen] = useState(false);
   const [deletePending, setDeletePending] = useState<string | null>(null);
@@ -71,6 +74,7 @@ export function TxAudioProfileBar({ compact = false }: TxAudioProfileBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const menuId = useId();
 
   // Load the list + last-loaded pointer once. Mounting in two places is fine —
@@ -148,6 +152,37 @@ export function TxAudioProfileBar({ compact = false }: TxAudioProfileBarProps) {
     const result = await remove(id);
     if (!result.ok) {
       setNotice({ tone: 'error', text: result.error ?? 'Profile delete failed.' });
+    }
+  };
+
+  // Import: open the OS file picker; the chosen .json is uploaded, saved, then
+  // immediately applied so recovered/shared profiles become live in one action.
+  const onImportPick = () => {
+    setNotice(null);
+    fileInputRef.current?.click();
+  };
+
+  const onImportFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    // Reset so re-picking the same file fires `change` again.
+    event.target.value = '';
+    if (!file) return;
+    setNotice(null);
+    const result = await importProfile(file);
+    if (!result.ok) {
+      setNotice({ tone: 'error', text: result.error ?? 'Profile import failed.' });
+      return;
+    }
+    setNotice({ tone: 'ok', text: `Imported and loaded "${file.name}".` });
+  };
+
+  // Export: download the selected profile as a .json file.
+  const onExport = async () => {
+    if (!selectedProfile) return;
+    setNotice(null);
+    const result = await exportProfile(selectedProfile.id);
+    if (!result.ok) {
+      setNotice({ tone: 'error', text: result.error ?? 'Profile export failed.' });
     }
   };
 
@@ -295,6 +330,33 @@ export function TxAudioProfileBar({ compact = false }: TxAudioProfileBarProps) {
         >
           Delete
         </button>
+        <button
+          type="button"
+          aria-label="Import TX audio profile"
+          title="Import a TX audio profile from a .json file"
+          disabled={busy}
+          onClick={onImportPick}
+          style={{ ...buttonStyle(busy), display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '0 7px' }}
+        >
+          <Upload size={14} aria-hidden />
+        </button>
+        <button
+          type="button"
+          aria-label="Export TX audio profile"
+          title="Download the selected TX audio profile as a .json file"
+          disabled={busy || !selectedProfile}
+          onClick={() => void onExport()}
+          style={{ ...buttonStyle(busy || !selectedProfile), display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '0 7px' }}
+        >
+          <Download size={14} aria-hidden />
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json,application/json"
+          style={{ display: 'none' }}
+          onChange={(event) => void onImportFile(event)}
+        />
       </div>
 
       {notice && (

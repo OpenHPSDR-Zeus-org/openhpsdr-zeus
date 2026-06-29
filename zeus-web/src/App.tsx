@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -46,9 +47,17 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import { ChevronLeft, ChevronRight, Download, Upload } from 'lucide-react';
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
+import { DigitalWindow } from './components/DigitalWindow';
+import { enterDigital, toggleDigital } from './state/enter-digital';
 import { WorkspaceErrorBoundary } from './layout/WorkspaceErrorBoundary';
-import { currentDetachedWorkspaceLayoutId } from './layout/workspace-windows';
+import { AppErrorBoundary } from './layout/AppErrorBoundary';
+import {
+  currentDetachedWorkspaceLayoutId,
+  restorePersistedWorkspaceWindows,
+} from './layout/workspace-windows';
 import { ConfirmDialog } from './layout/ConfirmDialog';
+import { SupportSessionWatcher } from './components/SupportSessionWatcher';
+import { FreeDvWindow } from './components/FreeDvWindow';
 import { AfGainSlider } from './components/AfGainSlider';
 import { AgcSlider } from './components/AgcSlider';
 import { SquelchSlider } from './components/SquelchSlider';
@@ -65,8 +74,10 @@ import { ModeFavorites } from './components/toolbar/ModeFavorites';
 import { CtunButton } from './components/CtunButton';
 import { MoxButton } from './components/MoxButton';
 import { PreampButton } from './components/PreampButton';
+import { ProfileOverlayHost } from './components/ProfileOverlay';
 import { PsToggleButton } from './components/PsToggleButton';
 import { PaTempChip } from './components/PaTempChip';
+import { WorkspaceZoomControls } from './components/WorkspaceZoomControls';
 import { QrzStatusPill } from './components/QrzStatusPill';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
 import ReportProblemButton from './components/report-problem/ReportProblemButton';
@@ -87,21 +98,28 @@ import { useFilterRibbonOpenSync } from './components/filter/filterRibbonShared'
 import { CONTACTS, bandOf } from './components/design/data';
 import { bearingDeg, distanceKm } from './components/design/geo';
 import { startRealtime } from './realtime/ws-client';
+import { isRemoteMode } from './remote/remote-client';
+import { RemoteGate } from './remote/RemoteGate';
 import { getServerBaseUrl, isCapacitorRuntime } from './serverUrl';
 import { getAudioClient } from './audio/audio-client';
 import { setAudioHostMode } from './audio/host-mode';
 import { useMicUplink } from './audio/use-mic-uplink';
 import { fetchState, fetchUpdateStatus, type RepoUpdateStatus } from './api/client';
 import { useConnectionStore } from './state/connection-store';
+import { getReceiverMode } from './state/receiver-state';
+import { useFreeDvWindowStore } from './state/freedv-window-store';
 import { useRadioStore } from './state/radio-store';
 import { useQrzStore } from './state/qrz-store';
+import { qrzFullName } from './api/qrz';
 import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
 import { useTxStore } from './state/tx-store';
 import { useLayoutStore } from './state/layout-store';
+import { useSavedLayoutsStore } from './state/saved-layouts-store';
 import { useDisplaySettingsStore } from './state/display-settings-store';
 import { useCapabilitiesStore } from './state/capabilities-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
+import { useFilterAutopan } from './util/filter-autopan';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
 import { BandPlanProvider } from './context/BandPlanContext';
 import { registerServiceWorker } from './service-worker/registerSW';
@@ -128,6 +146,19 @@ const STATE_POLL_MS = 1000;
 
 export default function App() {
   const detachedLayoutId = useMemo(() => currentDetachedWorkspaceLayoutId(), []);
+  // Remote (WebRTC) RX-monitoring mode — ?remote=<CALLSIGN>. Frames arrive over
+  // the broker instead of the local /ws; RemoteGate prompts for the session
+  // password and owns that transport.
+  const remoteMode = useMemo(() => isRemoteMode(), []);
+  // Reopen any detached workspace windows the operator left open at the last
+  // desktop shutdown. Main window only (a detached window must not re-spawn its
+  // siblings) and not in remote/web mode. Runs once on mount; the helper is a
+  // no-op outside the Photino desktop shell.
+  useEffect(() => {
+    if (detachedLayoutId || remoteMode) return;
+    void restorePersistedWorkspaceWindows();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const settingsViewOpen = useLayoutStore((s) => s.settingsViewOpen);
   const settingsInitialTab = useLayoutStore((s) => s.settingsInitialTab);
   const setSettingsView = useLayoutStore((s) => s.setSettingsView);
@@ -145,10 +176,23 @@ export default function App() {
   const status = useConnectionStore((s) => s.status);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const mode = useConnectionStore((s) => s.mode);
+  const modeB = useConnectionStore((s) => getReceiverMode(s, 1));
   const preampOn = useConnectionStore((s) => s.preampOn);
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
+  // FT8/FT4/WSPR now render as a floating, on-top DigitalWindow pop-out over the
+  // operator's normal console (mounted below, next to FreeDvWindow) — the main
+  // FlexWorkspace stays mounted, so the panadapter/waterfall/VFO/QRZ/logbook
+  // remain live underneath rather than being unmounted by a full-screen overlay.
   const endpoint = useConnectionStore((s) => s.endpoint);
+  // Chrome zoom — same operator-set workspace-zoom percent that scales the
+  // panel grid (see FlexWorkspace); piped to .topbar / .transport via the
+  // --zeus-chrome-zoom CSS var so the top bar and bottom transport strip
+  // grow/shrink together with the panels (issue #1107). Falls back to 1.0
+  // before the server-persisted value arrives so chrome never collapses on
+  // first paint.
+  const workspaceZoomPct = useConnectionStore((s) => s.workspaceZoomPct);
+  const chromeZoom = (workspaceZoomPct > 0 ? workspaceZoomPct : 100) / 100;
   const connected = status === 'Connected';
   // Brand sub label reflects what discovery actually saw on the wire
   // (selection.connected), not the operator's preferred override — showing
@@ -174,6 +218,8 @@ export default function App() {
   // landing flips this to e.g. "HermesLite2" / "AnanG2" and the store
   // re-fetches that radio's named-layout collection from the server.
   const loadLayoutsForRadio = useLayoutStore((s) => s.loadForRadio);
+  // The saved-layouts library is keyed on the same BoardKind as the tabs.
+  const loadSavedLayoutsForRadio = useSavedLayoutsStore((s) => s.loadForRadio);
   // Wait for the radio-store's initial fetch before loading any layout. Until
   // `radioLoaded` is true, `connected === 'Unknown'` is ambiguous: it could mean
   // "no radio" OR "not resolved yet". Loading 'default' eagerly here renders the
@@ -185,7 +231,8 @@ export default function App() {
     if (!radioLoaded) return;
     const key = radioConnected !== 'Unknown' ? radioConnected : 'default';
     void loadLayoutsForRadio(key);
-  }, [loadLayoutsForRadio, radioConnected, radioLoaded]);
+    void loadSavedLayoutsForRadio(key);
+  }, [loadLayoutsForRadio, loadSavedLayoutsForRadio, radioConnected, radioLoaded]);
   const activeLayoutId = useLayoutStore((s) => s.activeLayoutId);
 
   // Recover action for the workspace error boundary: reset the active layout to
@@ -198,6 +245,8 @@ export default function App() {
   useKeyboardShortcuts();
   useMicUplink();
   useFilterRibbonOpenSync();
+  // Keep the RX filter + dial crosshair inside the spectrum view under CTUN.
+  useFilterAutopan();
 
   const topbarControlsRef = useRef<HTMLDivElement | null>(null);
   const [topbarScroll, setTopbarScroll] = useState({ canLeft: false, canRight: false });
@@ -274,11 +323,15 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Remote (WebRTC) mode sources frames over the broker, not the local
+    // websocket — RemoteGate owns that transport. Starting startRealtime() here
+    // too would open a second, doomed /ws connection.
+    if (remoteMode) return;
     const stop = startRealtime();
     return () => {
       stop();
     };
-  }, []);
+  }, [remoteMode]);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -305,12 +358,23 @@ export default function App() {
     // own Zustand subscription on the hot path.
     return useCapabilitiesStore.subscribe((state) => {
       const host = state.capabilities?.host;
-      if (host) setAudioHostMode(host === 'desktop' ? 'native' : 'browser');
+      // A remote (?remote=) session always plays RX audio in the browser even
+      // when the host is a desktop app — the host's native sink only feeds its
+      // own speakers, not the remote operator. See isNativeAudio().
+      if (host) setAudioHostMode(host === 'desktop' && !remoteMode ? 'native' : 'browser');
     });
   }, []);
 
   useEffect(() => {
-    if (!connected) return;
+    // Normally the poll only runs once a radio is connected. In remote (WebRTC)
+    // mode it must also run while still 'Disconnected': the mount-time one-shot
+    // fetchState() queues in the API tunnel until the SPAKE2+ unlock and can
+    // time out during password entry, so without a self-healing poll the
+    // connection-store status never reaches 'Connected'. That stuck status
+    // disables MOX and empties every store-driven panel (meters, TX, controls)
+    // even though the panadapter — fed straight from frames — keeps rendering.
+    // The poll seeds the store as soon as the tunnel can serve /api/state.
+    if (!connected && !remoteMode) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let ctrl: AbortController | null = null;
@@ -338,13 +402,34 @@ export default function App() {
       if (timer != null) clearTimeout(timer);
       ctrl?.abort();
     };
-  }, [connected]);
+  }, [connected, remoteMode]);
 
   useEffect(() => {
     return useConnectionStore.subscribe((state, prev) => {
-      if (state.mode !== prev.mode || state.modeB !== prev.modeB) getAudioClient().reset();
+      if (state.mode !== prev.mode || getReceiverMode(state, 1) !== getReceiverMode(prev, 1)) getAudioClient().reset();
     });
   }, []);
+
+  // Selecting FreeDV mode pops the FreeDV window open (submode / SYNC / SNR /
+  // TX-text sidechannel) so the operator gets immediate feedback and the modem
+  // controls — without it the mode runs USB underneath with no visible change,
+  // which reads as "nothing happened". It comes up as a draggable popup overlay
+  // rather than a docked workspace tile, so engaging FreeDV never rearranges the
+  // operator's console. Fires only on the false→true edge into FreeDV on either
+  // VFO (tracked via a ref) so closing the window while still in FreeDV doesn't
+  // immediately reopen it. The true→false edge (leaving FreeDV on both VFOs)
+  // closes the popup automatically — the modem controls have nothing to act on
+  // once the mode is gone, so leaving the window up reads as stale.
+  const wasInFreeDv = useRef(false);
+  useEffect(() => {
+    const inFreeDv = mode === 'FREEDV' || modeB === 'FREEDV';
+    if (inFreeDv && !wasInFreeDv.current) {
+      useFreeDvWindowStore.getState().open();
+    } else if (!inFreeDv && wasInFreeDv.current) {
+      useFreeDvWindowStore.getState().close();
+    }
+    wasInFreeDv.current = inFreeDv;
+  }, [mode, modeB]);
 
   useEffect(() => {
     return useTxStore.subscribe((state, prev) => {
@@ -380,6 +465,10 @@ export default function App() {
       ) {
         setSettingsView(true, hash as SettingsTabId);
         // Clear the hash after handling it
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      } else if (hash === 'ft8' || hash === 'ft4') {
+        // Engage the native FT8/FT4 mode (closes any other digital mode first).
+        enterDigital(hash === 'ft4' ? 'FT4' : 'FT8');
         window.history.replaceState(null, '', window.location.pathname + window.location.search);
       }
     };
@@ -444,6 +533,9 @@ export default function App() {
   const logSelectedIds = useLoggerStore((s) => s.selectedIds);
   const logPublishSelected = useLoggerStore((s) => s.publishSelectedToQrz);
   const logExportAdif = useLoggerStore((s) => s.exportAdif);
+  const logExportInFlight = useLoggerStore((s) => s.exportInFlight);
+  const logExportResult = useLoggerStore((s) => s.lastExportResult);
+  const logExportError = useLoggerStore((s) => s.exportError);
   const logImportAdifFile = useLoggerStore((s) => s.importAdifFile);
   const workedSummary = useLoggerStore((s) => s.workedSummary);
   const workedSummaryLoading = useLoggerStore((s) => s.workedSummaryLoading);
@@ -470,6 +562,13 @@ export default function App() {
     logbookTitle = logPublishResult.failedCount > 0
       ? `Logbook · ${logPublishResult.successCount} ok, ${logPublishResult.failedCount} failed`
       : `Logbook · Published ${logPublishResult.successCount}`;
+  } else if (logExportInFlight) {
+    logbookTitle = 'Logbook · Exporting…';
+  } else if (logExportError) {
+    logbookTitle = `Logbook · ${logExportError.length > 28 ? 'Export failed' : logExportError}`;
+  } else if (logExportResult) {
+    const dir = logExportResult.path.replace(/[/\\][^/\\]*$/, '');
+    logbookTitle = `Logbook · Exported ${logExportResult.count} → ${dir}`;
   }
 
   const logSelectedCount = logSelectedIds.size;
@@ -573,7 +672,7 @@ export default function App() {
 
     void addLogEntry({
       callsign: contact.callsign,
-      name: qrzLookup.name ?? undefined,
+      name: qrzFullName(qrzLookup) ?? undefined,
       frequencyMhz,
       band,
       mode,
@@ -640,13 +739,21 @@ export default function App() {
   }, [callsign]);
 
   // `/` focuses the callsign input so the operator can type a call and hit Enter.
+  // Alt+8 toggles the FT8 workspace (a desktop shortcut alongside the FT8/FT4
+  // mode-panel buttons; desktop has no URL bar for the #ft8 hash).
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
-      if (e.key === '/' && !(t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement)) {
+      const typing = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement;
+      if (e.key === '/' && !typing) {
         e.preventDefault();
         csInputRef.current?.focus();
         csInputRef.current?.select();
+      } else if (e.altKey && (e.key === '8' || e.code === 'Digit8') && !typing) {
+        e.preventDefault();
+        // Toggle FT8 (mutually exclusive with FT4/WSPR; restores the radio on
+        // un-toggle) — same contract as the mode-picker buttons.
+        toggleDigital('FT8');
       }
     };
     window.addEventListener('keydown', h);
@@ -709,9 +816,13 @@ export default function App() {
       : null
   ), [qrzHome]);
 
-  const sp = contact && effectiveHome ? bearingDeg(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon) : 0;
+  const sp = contact && effectiveHome && contact.lat != null && contact.lon != null
+    ? bearingDeg(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon)
+    : 0;
   const lp = (sp + 180) % 360;
-  const dist = contact && effectiveHome ? distanceKm(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon) : 0;
+  const dist = contact && effectiveHome && contact.lat != null && contact.lon != null
+    ? distanceKm(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon)
+    : 0;
 
   const rotateToBearing = useCallback((brg: number) => {
     const normalized = ((brg % 360) + 360) % 360;
@@ -738,11 +849,18 @@ export default function App() {
   // --- Hero title
   const heroTitle = useMemo(() => (
     terminatorActive && contact ? (
-      <>
-        Panadapter · World Map ·{' '}
-        <span style={{ color: 'var(--accent)' }}>{contact.callsign}</span> ·{' '}
-        {Math.round(dist).toLocaleString()} km · brg {sp.toFixed(0)}°
-      </>
+      contact.lat != null && contact.lon != null ? (
+        <>
+          Panadapter · World Map ·{' '}
+          <span style={{ color: 'var(--accent)' }}>{contact.callsign}</span> ·{' '}
+          {Math.round(dist).toLocaleString()} km · brg {sp.toFixed(0)}°
+        </>
+      ) : (
+        <>
+          Panadapter · World Map ·{' '}
+          <span style={{ color: 'var(--accent)' }}>{contact.callsign}</span>
+        </>
+      )
     ) : (
       <>Panadapter · {(vfoHz / 1e6).toFixed(3)} MHz · {bandLabel}</>
     )
@@ -868,6 +986,9 @@ export default function App() {
           </WorkspaceErrorBoundary>
         </div>
         {disconnectedOverlay}
+        <FreeDvWindow />
+        <ProfileOverlayHost />
+        <DigitalWindow />
       </div>
       </SpectrumWheelActionsContext.Provider>
       </WorkspaceContext.Provider>
@@ -892,6 +1013,7 @@ export default function App() {
           <Suspense fallback={null}>
             <MobileApp />
           </Suspense>
+          {remoteMode && <RemoteGate />}
         </SpectrumWheelActionsContext.Provider>
       </WorkspaceContext.Provider>
     );
@@ -906,7 +1028,14 @@ export default function App() {
     <SmartNrController />
     <DspSceneDiagnosticsPublisher />
     <AudioPlaybackDiagnosticsPublisher />
-    <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
+    <div
+      className="app"
+      data-screen-label="01 Main Console"
+      style={{
+        position: 'relative',
+        ['--zeus-chrome-zoom' as string]: chromeZoom,
+      }}
+    >
       {/* Left layout bar — issue #241. Spans the full app height; lists named
           layouts for the active radio with switch/add/delete/reset actions. */}
       <LeftLayoutBar />
@@ -951,10 +1080,11 @@ export default function App() {
             className="btn sm topbar-scroll-btn"
             onClick={() => scrollTopbarControls(-1)}
             disabled={!topbarScroll.canLeft}
+            hidden={!topbarScroll.canLeft && !topbarScroll.canRight}
             title="Previous topbar controls"
             aria-label="Previous topbar controls"
           >
-            <ChevronLeft size={14} aria-hidden />
+            <ChevronLeft size={14} strokeWidth={2.25} aria-hidden />
           </button>
           <div
             ref={topbarControlsRef}
@@ -997,10 +1127,11 @@ export default function App() {
             className="btn sm topbar-scroll-btn"
             onClick={() => scrollTopbarControls(1)}
             disabled={!topbarScroll.canRight}
+            hidden={!topbarScroll.canLeft && !topbarScroll.canRight}
             title="Next topbar controls"
             aria-label="Next topbar controls"
           >
-            <ChevronRight size={14} aria-hidden />
+            <ChevronRight size={14} strokeWidth={2.25} aria-hidden />
           </button>
         </div>
 
@@ -1025,12 +1156,18 @@ export default function App() {
       <div className="workspace-area">
         <AlertBanner />
         {settingsViewOpen ? (
-          <Suspense fallback={null}>
-            <SettingsView
-              initialTab={settingsInitialTab as SettingsTabId | undefined}
-              onClose={() => setSettingsView(false)}
-            />
-          </Suspense>
+          <AppErrorBoundary
+            scope="Settings"
+            resetKey={settingsInitialTab}
+            recover={{ label: 'Close settings', run: () => setSettingsView(false) }}
+          >
+            <Suspense fallback={null}>
+              <SettingsView
+                initialTab={settingsInitialTab as SettingsTabId | undefined}
+                onClose={() => setSettingsView(false)}
+              />
+            </Suspense>
+          </AppErrorBoundary>
         ) : (
           <WorkspaceErrorBoundary
             key={activeLayoutId}
@@ -1048,6 +1185,17 @@ export default function App() {
           state in the store is the single source of truth. */}
       <AudioSuiteWindow route="tx" />
       <AudioSuiteWindow route="rx" />
+
+      {/* FreeDV modem popup — floating overlay that opens when the operator
+          selects FreeDV mode (see the mode-transition effect above). Mounted
+          unconditionally; renders null when closed, so the store's isOpen flag
+          is the single source of truth. */}
+      <FreeDvWindow />
+
+      {/* FT8/FT4/WSPR floating pop-out — opens off ft8-store/wspr-store `open`
+          (engaging the mode), always on top, draggable, not resizable. Renders
+          null when no digital mode is engaged. */}
+      <DigitalWindow />
 
       {/* Transport — MOX/TUN + audio + mic + macro buttons on the left,
           PA/PRE chips, then the per-radio status (radio IP, rotator, QRZ)
@@ -1067,6 +1215,7 @@ export default function App() {
         <button type="button" className="btn ghost hide-mobile">RIT</button>
         <button type="button" className="btn ghost hide-mobile">SAVE MEM</button>
         <div className="spacer" style={{ flex: 1 }} />
+        <WorkspaceZoomControls />
         <PaTempChip />
         <div className="chip hide-mobile">
           <span className="k">PRE</span>
@@ -1124,6 +1273,9 @@ export default function App() {
       />
       <UpdatePrompt show={updateAvailable} onUpdate={installUpdate} />
       <ReportProblemModal />
+      <ProfileOverlayHost />
+      <SupportSessionWatcher />
+      {remoteMode && <RemoteGate />}
     </div>
     </SpectrumWheelActionsContext.Provider>
     </WorkspaceContext.Provider>

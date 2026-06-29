@@ -228,7 +228,7 @@ jobs:
             '-T', 'ClangCL',
             "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake",
             "-DVCPKG_TARGET_TRIPLET=$triplet",
-            '-DWDSP_WITH_NR3=OFF',
+            '-DWDSP_WITH_NR3=ON',
             '-DWDSP_WITH_NR4=ON'
           )
           if ("${{ matrix.arch }}" -eq "arm64") {
@@ -251,6 +251,18 @@ jobs:
           $count = ($exports | Measure-Object).Count
           Write-Host "Found $count SetRXASBNR* exports"
           if ($count -ne 8) { throw "Expected 8 SetRXASBNR* exports, got $count. NR4 did not link correctly." }
+
+      - name: Verify RNNR exports
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstall = & $vswhere -latest -property installationPath
+          $dumpbin = Get-ChildItem -Path "$vsInstall\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" |
+                     Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dumpbin) { throw "dumpbin.exe not found under $vsInstall\VC\Tools\MSVC" }
+          $exports = & $dumpbin /EXPORTS native/build/Release/wdsp.dll | Select-String "RNNR"
+          $count = ($exports | Measure-Object).Count
+          Write-Host "Found $count RNNR exports"
+          if ($count -ne 4) { throw "Expected 4 RNNR exports, got $count. NR3 did not link correctly." }
 
       - name: Stage DLL
         run: |
@@ -324,7 +336,7 @@ jobs:
         run: |
           cmake -S native/wdsp -B native/build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DWDSP_WITH_NR3=OFF \
+            -DWDSP_WITH_NR3=ON \
             -DWDSP_WITH_NR4=ON
 
       - name: Build
@@ -336,6 +348,15 @@ jobs:
           echo "Found $count SetRXASBNR* exports"
           if [ "$count" -ne 8 ]; then
             echo "ERROR: Expected 8 SetRXASBNR* exports, got $count. NR4 did not link correctly."
+            exit 1
+          fi
+
+      - name: Verify RNNR exports
+        run: |
+          count=$(nm -D native/build/libwdsp.so | grep -c "RNNR" || true)
+          echo "Found $count RNNR exports"
+          if [ "$count" -ne 4 ]; then
+            echo "ERROR: Expected 4 RNNR exports, got $count. NR3 did not link correctly."
             exit 1
           fi
 
@@ -397,7 +418,7 @@ jobs:
         run: |
           cmake -S native/wdsp -B native/build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DWDSP_WITH_NR3=OFF \
+            -DWDSP_WITH_NR3=ON \
             -DWDSP_WITH_NR4=ON
 
       - name: Build
@@ -410,6 +431,15 @@ jobs:
           echo "Found $count _SetRXASBNR* exports"
           if [ "$count" -ne 8 ]; then
             echo "ERROR: Expected 8 _SetRXASBNR* exports, got $count. NR4 did not link correctly."
+            exit 1
+          fi
+
+      - name: Verify RNNR exports
+        run: |
+          count=$(nm -gU native/build/libwdsp.dylib | grep -c "RNNR" || true)
+          echo "Found $count RNNR exports"
+          if [ "$count" -ne 4 ]; then
+            echo "ERROR: Expected 4 RNNR exports, got $count. NR3 did not link correctly."
             exit 1
           fi
 
@@ -515,7 +545,7 @@ jobs:
         run: |
           cmake -S native/wdsp -B native/build-wdsp-arm64 \
             -DCMAKE_BUILD_TYPE=Release \
-            -DWDSP_WITH_NR3=OFF \
+            -DWDSP_WITH_NR3=ON \
             -DWDSP_WITH_NR4=ON \
             -DFFTW_ROOT="$HOME/fftw-arm64" \
             -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
@@ -534,6 +564,15 @@ jobs:
           echo "Found $count SetRXASBNR* exports"
           if [ "$count" -ne 8 ]; then
             echo "ERROR: Expected 8 SetRXASBNR* exports, got $count. NR4 did not link correctly."
+            exit 1
+          fi
+
+      - name: Verify RNNR exports
+        run: |
+          count=$(aarch64-linux-gnu-nm -D native/build-wdsp-arm64/libwdsp.so | grep -c "RNNR" || true)
+          echo "Found $count RNNR exports"
+          if [ "$count" -ne 4 ]; then
+            echo "ERROR: Expected 4 RNNR exports, got $count. NR3 did not link correctly."
             exit 1
           fi
 
@@ -811,6 +850,24 @@ jobs:
         run: |
           $url = "https://aka.ms/vs/17/release/vc_redist.${{ matrix.config.arch }}.exe"
           $out = "installers\vc_redist.${{ matrix.config.arch }}.exe"
+          Write-Host "Downloading $url -> $out"
+          Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
+          Get-Item $out | Select-Object Name, Length
+
+      # Download the Microsoft Edge WebView2 Evergreen Runtime bootstrapper.
+      # zeus-windows.iss bundles it and runs it at install time, guarded by a
+      # WebView2Needed() registry check so it skips machines that already have
+      # the runtime. Without WebView2, Photino cannot create the desktop window
+      # and Zeus flash-and-closes on first launch — common on Windows 11 LTSC /
+      # IoT / Enterprise N and debloated images. The fwlink redirect is
+      # Microsoft's stable evergreen URL; the same universal bootstrapper covers
+      # both x64 and arm64 (it detects the host arch), so it is not arch-suffixed.
+      - name: Download Edge WebView2 Runtime
+        if: matrix.config.os == 'windows'
+        shell: pwsh
+        run: |
+          $url = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+          $out = "installers\MicrosoftEdgeWebview2Setup.exe"
           Write-Host "Downloading $url -> $out"
           Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
           Get-Item $out | Select-Object Name, Length
@@ -1230,7 +1287,7 @@ jobs:
 
           ## License
 
-          GNU GPL v2 or later. See [LICENSE](https://github.com/Kb2uka/openhpsdr-zeus/blob/main/LICENSE) for details.
+          GNU GPL v2 or later. See [LICENSE](https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus/blob/main/LICENSE) for details.
           EOF
 
       - name: Create or Update Release

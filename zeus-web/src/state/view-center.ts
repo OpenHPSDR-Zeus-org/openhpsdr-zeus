@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -249,13 +250,40 @@ function createViewCenter(): ViewCenterInternal {
   };
 }
 
-const rx1 = createViewCenter();
-const rx2 = createViewCenter();
+// Receiver discriminator for the spectrum surfaces. Numbers are canonical
+// (0 = RX1, 1 = RX2, >= 2 = RX3+); 'A'/'B' are legacy aliases for 0/1. Kept in
+// sync with state/receiver-state.ts; defined locally (not imported) so this
+// module — which connection-store depends on — stays free of an import cycle.
+export type ReceiverKey = 'A' | 'B' | number;
 
-/** The view-center instance for a receiver. RX1/VFO A and RX2/VFO B glide
- *  independently. */
-export function viewCenterFor(receiver: 'A' | 'B'): ViewCenterController {
-  return receiver === 'B' ? rx2 : rx1;
+function rxIndexOfKey(receiver: ReceiverKey): number {
+  if (receiver === 'A') return 0;
+  if (receiver === 'B') return 1;
+  return receiver;
+}
+
+// One animated view-center per receiver INDEX, created lazily. RX1 (0) and RX2
+// (1) are seeded eagerly so the module-level back-compat exports (bound to the
+// rx1 instance below) and the RX2 consumers have a stable instance from the
+// start; RX3+ instances spin up the first time a surface asks for them.
+const controllers = new Map<number, ViewCenterInternal>();
+
+function getOrCreate(index: number): ViewCenterInternal {
+  let c = controllers.get(index);
+  if (!c) {
+    c = createViewCenter();
+    controllers.set(index, c);
+  }
+  return c;
+}
+
+const rx1 = getOrCreate(0);
+getOrCreate(1);
+
+/** The view-center instance for a receiver. Each RX index glides its own pan
+ *  motion independently. */
+export function viewCenterFor(receiver: ReceiverKey): ViewCenterController {
+  return getOrCreate(rxIndexOfKey(receiver));
 }
 
 // Back-compat module-level API — operates on the RX1 instance, so every
@@ -307,7 +335,7 @@ export const msSinceOptimisticTune = rx1.msSinceOptimisticTune;
 /** Per-receiver optimistic tune age for poll guards. RX1/VFO A and RX2/VFO B
  *  must suppress stale state independently while the operator is dragging one
  *  side of the stitched display. */
-export function msSinceOptimisticTuneFor(receiver: 'A' | 'B'): number {
+export function msSinceOptimisticTuneFor(receiver: ReceiverKey): number {
   return viewCenterFor(receiver).msSinceOptimisticTune();
 }
 /** Subscribe to RX1 view-center motion. Fires once per tween tick (display
@@ -324,8 +352,12 @@ export function _setClockForTest(clock: Clock, rafImpl: Raf, cancelImpl: CancelR
 }
 
 export function _resetForTest(): void {
-  rx1._resetForTest();
-  rx2._resetForTest();
+  for (const c of controllers.values()) c._resetForTest();
+  // Drop any RX3+ instances created mid-test, then reseed the canonical RX1/RX2
+  // pair so the module-level rx1 exports (and RX2 consumers) stay live.
+  controllers.clear();
+  controllers.set(0, rx1);
+  getOrCreate(1);
 }
 
 export function _isLoopRunningForTest(): boolean {

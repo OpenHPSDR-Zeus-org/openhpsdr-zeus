@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -54,18 +55,26 @@ import { useSmartNrStore } from '../state/smart-nr-store';
 import { useAudioSuiteStore } from '../state/audio-suite-store';
 import { Slider } from './design/Slider';
 import { NrSettingsSection, type NrSettingsMode } from './nr/NrSettingsSection';
+import { Nr3ModelPanel } from './nr/Nr3ModelPanel';
 
 // Leveler max-gain moved to TxFilterPanel (alongside DRV/TUN/MIC) — it's
 // a TX-only stage and lives with the other TX controls now.
 
-// Mirrors NrControls.tsx. NR3 (RNNR) is intentionally skipped, and removed
-// NR modes are not exposed in the normal operator cycle.
-const NR_CYCLE: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
+// Mirrors NrControls.tsx. NR3 (RNNR / RNNoise) joins the cycle only when
+// libwdsp exports RNNR AND the operator has installed a model (Zeus ships none;
+// install it from the NR3 panel below). Removed NR modes are not exposed.
+const NR_CYCLE_BASE: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
+
+function nrCycleFor(nr3Ready: boolean): readonly NrMode[] {
+  return nr3Ready ? [...NR_CYCLE_BASE, 'Rnnr'] : NR_CYCLE_BASE;
+}
+
 const NR_LABEL: Record<NrMode, string> = {
   Off: 'NR',
   Anr: 'NR',
   Emnr: 'NR2',
   Sbnr: 'NR4',
+  Rnnr: 'NR3',
 };
 
 function nrButtonTitle(mode: NrMode): string {
@@ -74,6 +83,7 @@ function nrButtonTitle(mode: NrMode): string {
     case 'Anr': return 'NR1 (ANR, time-domain LMS) — right-click for tunables';
     case 'Emnr': return 'NR2 (EMNR, spectral) — right-click for tunables';
     case 'Sbnr': return 'NR4 (SBNR, libspecbleach) — right-click for tunables';
+    case 'Rnnr': return 'NR3 (RNNoise, neural)';
   }
 }
 
@@ -135,12 +145,17 @@ export function DspPanel() {
     [setLocalNr, applyState],
   );
 
+  const nr3Available = useConnectionStore((s) => s.wdspNr3RnnrAvailable);
+  const nr3ModelName = useConnectionStore((s) => s.nr3ModelName);
+  const nr3Ready = nr3Available && !!nr3ModelName;
+
   const cycleNr = useCallback(() => {
     if (!connected) return;
-    const idx = NR_CYCLE.indexOf(nr.nrMode);
-    const nextIdx = (idx < 0 ? 0 : idx + 1) % NR_CYCLE.length;
-    send({ ...nr, nrMode: NR_CYCLE[nextIdx]! });
-  }, [nr, send, connected]);
+    const cycle = nrCycleFor(nr3Ready);
+    const idx = cycle.indexOf(nr.nrMode);
+    const nextIdx = (idx < 0 ? 0 : idx + 1) % cycle.length;
+    send({ ...nr, nrMode: cycle[nextIdx]! });
+  }, [nr, send, connected, nr3Ready]);
 
   const cycleNb = useCallback(() => {
     const idx = NB_CYCLE.indexOf(nr.nbMode);
@@ -319,6 +334,9 @@ export function DspPanel() {
       {hasNrSettings(nr.nrMode) && (
         <NrSettingsSection mode={settingsModeFor(nr.nrMode)} />
       )}
+      {/* NR3 (RNNoise) model install lives in the DSP menu so the operator can
+          install a model even while NR3 is hidden from the cycle. */}
+      <Nr3ModelPanel />
     </div>
   );
 }

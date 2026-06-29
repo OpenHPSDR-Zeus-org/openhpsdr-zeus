@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -43,16 +44,26 @@
 // License for details.
 
 import { createContext, useContext, useEffect, type RefObject } from 'react';
-import { setRadioLo, setVfo, setVfoB, setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
+import { setRadioLo, setReceiverLo, setZoom, ZOOM_MAX, ZOOM_MIN, type RadioStateDto, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
+import {
+  getReceiverVfoFromState,
+  getReceiverVfoHz,
+  isSecondaryReceiver,
+  KIWI_RECEIVER_INDEX,
+  optimisticSetReceiverVfo,
+  postReceiverVfo,
+  rxIndexOf,
+  type ReceiverKey,
+} from '../state/receiver-state';
 import { computeSnapToLineHz, getSnapHistorySpectrum, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { armSnapLock } from './snap-lock';
 import { useNotchStore } from '../state/notch-store';
 import * as viewCenter from '../state/view-center';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 import { roundToStep } from './number';
-import { applyCtunZoomCenterAfterState, centerCtunForZoomIn } from './ctun-zoom-center';
+import { applyCtunZoomCenterAfterState, centerCtunForZoomIn, centerKiwiForZoomIn } from './ctun-zoom-center';
 import { rulerDragTargetHz } from './use-ruler-pan-gesture';
 
 const MAX_HZ = 60_000_000;
@@ -87,6 +98,16 @@ const NOTCH_CLICK_WIDTH_HZ = 150;
 // deltas to one discrete tick per this many pixels of deltaY.
 const WHEEL_NOTCH_PX = 40;
 const SPECTRUM_TUNE_CURSOR = 'var(--spectrum-tune-cursor, default)';
+
+// Shared "a spectrum pan/tune drag is in progress" signal. filter-autopan reads
+// this so it never recentres the view mid-drag — a CTUN-sweep drag maps the
+// cursor against the frozen grab-time centre, and a ruler-pan drag IS the user
+// moving the view, so autopan must stay out of both and recover on release. A
+// depth counter tolerates overlapping gestures across receiver panes.
+let spectrumDragDepth = 0;
+export function isSpectrumDragActive(): boolean {
+  return spectrumDragDepth > 0;
+}
 
 // Grid snap helper for ordinary click/drag tuning. Snap-to-signal goes through
 // resolvePanTuneTarget so click and hover share the same carrier target.
@@ -125,7 +146,9 @@ export type SpectrumWheelActions = {
 
 export const SpectrumWheelActionsContext = createContext<SpectrumWheelActions>({});
 
-export type SpectrumReceiver = 'A' | 'B';
+// Receiver discriminator. Numbers are canonical (0 = RX1, 1 = RX2, >= 2 =
+// RX3+); 'A'/'B' remain accepted as legacy aliases for 0/1.
+export type SpectrumReceiver = ReceiverKey;
 
 export type PanTuneTarget = {
   tuneHz: number;
@@ -139,12 +162,11 @@ export type PanTuneTarget = {
 // this every frame and the click handler reads the same value, so the committed
 // dial matches whichever signal the preview was showing — they never diverge.
 // Cleared when the cursor leaves every signal so a fresh hover starts unbiased.
-const lastSnapHz: Record<SpectrumReceiver, number | null> = { A: null, B: null };
+const lastSnapHz = new Map<number, number | null>();
 
-/** Test-only: forget the snap hysteresis anchor for both receivers. */
+/** Test-only: forget the snap hysteresis anchor for every receiver. */
 export function _resetPanSnapStickyForTest(): void {
-  lastSnapHz.A = null;
-  lastSnapHz.B = null;
+  lastSnapHz.clear();
 }
 
 export function resolvePanTuneTarget(
@@ -161,9 +183,10 @@ export function resolvePanTuneTarget(
   };
   if (!Number.isFinite(lineHz)) return fallback;
 
+  const rxIdx = rxIndexOf(receiver);
   const enhance = useSignalEnhanceStore.getState();
   if (!enhance.snapEnabled) {
-    lastSnapHz[receiver] = null;
+    lastSnapHz.set(rxIdx, null);
     return fallback;
   }
 
@@ -172,7 +195,7 @@ export function resolvePanTuneTarget(
 
   const maxRadiusHz = Math.min(ds.hzPerPixel * SNAP_RADIUS_PX, enhance.snapRadiusHz);
   const hysteresisHz = ds.hzPerPixel * SNAP_HYSTERESIS_PX;
-  const sticky = lastSnapHz[receiver];
+  const sticky = lastSnapHz.get(rxIdx) ?? null;
   const mode = useConnectionStore.getState().mode;
   const centerHz = Number(ds.centerHz);
   const stepHz = useToolbarFavoritesStore.getState().stepHz;
@@ -187,7 +210,7 @@ export function resolvePanTuneTarget(
     hysteresisHz,
   );
   if (liveHz != null) {
-    lastSnapHz[receiver] = liveHz;
+    lastSnapHz.set(rxIdx, liveHz);
     return {
       tuneHz: quantizeToStepHz(liveHz, stepHz),
       snappedToSignal: true,
@@ -196,7 +219,7 @@ export function resolvePanTuneTarget(
     };
   }
 
-  if (includeHistory && receiver === 'A') {
+  if (includeHistory && rxIdx === 0) {
     const history = getSnapHistorySpectrum();
     if (history) {
       const historyHz = computeSnapToLineHz(
@@ -210,7 +233,7 @@ export function resolvePanTuneTarget(
         hysteresisHz,
       );
       if (historyHz != null) {
-        lastSnapHz[receiver] = historyHz;
+        lastSnapHz.set(rxIdx, historyHz);
         return {
           tuneHz: quantizeToStepHz(historyHz, stepHz),
           snappedToSignal: true,
@@ -221,7 +244,7 @@ export function resolvePanTuneTarget(
     }
   }
 
-  lastSnapHz[receiver] = null;
+  lastSnapHz.set(rxIdx, null);
   return fallback;
 }
 
@@ -232,22 +255,18 @@ type VfoNudgeController = {
 };
 
 export function createVfoNudgeController(receiver: SpectrumReceiver = 'A'): VfoNudgeController {
-  const receiverIsB = receiver === 'B';
+  const secondary = isSecondaryReceiver(receiver);
   const vc = viewCenter.viewCenterFor(receiver);
   let pendingHz: number | null = null;
   let pendingAbort: AbortController | null = null;
   let pendingRaf = 0;
 
-  const readVfo = () => {
-    const s = useConnectionStore.getState();
-    return receiverIsB ? s.vfoBHz : s.vfoHz;
-  };
+  const readVfo = () => getReceiverVfoHz(useConnectionStore.getState(), receiver);
   const writeVfo = (hz: number) => {
-    useConnectionStore.setState(receiverIsB ? { vfoBHz: hz } : { vfoHz: hz });
+    optimisticSetReceiverVfo(receiver, hz);
   };
-  const postVfo = (hz: number, signal?: AbortSignal) =>
-    receiverIsB ? setVfoB(hz, signal) : setVfo(hz, signal);
-  const tunesOffCenter = () => receiverIsB || useConnectionStore.getState().ctunEnabled;
+  const postVfo = (hz: number, signal?: AbortSignal) => postReceiverVfo(receiver, hz, signal);
+  const tunesOffCenter = () => secondary || useConnectionStore.getState().ctunEnabled;
   const commandedHz = () => pendingHz ?? readVfo();
 
   const flushPending = () => {
@@ -306,11 +325,13 @@ function readView(receiver: SpectrumReceiver = 'A'): { centerHz: number; spanHz:
   const width = s.width > 0 ? s.width : fallback.width;
   const hzPerPixel = s.hzPerPixel > 0 ? s.hzPerPixel : fallback.hzPerPixel;
   if (width <= 0 || hzPerPixel <= 0) return null;
+  // Secondary receivers (RX2 / RX3+) centre on their own VFO when their slice
+  // hasn't arrived yet; RX1 falls back to its frame centre.
   const centerHz =
     s.width > 0 && s.hzPerPixel > 0
       ? Number(s.centerHz)
-      : receiver === 'B'
-      ? useConnectionStore.getState().vfoBHz
+      : isSecondaryReceiver(receiver)
+      ? getReceiverVfoHz(useConnectionStore.getState(), receiver)
       : Number(fallback.centerHz);
   return {
     centerHz,
@@ -336,8 +357,18 @@ export function usePanTuneGesture(
     if (!canvas) return;
     const tuneReceiver = options.tuneReceiver ?? receiver;
     const dragMode = options.dragMode ?? 'tune';
-    const receiverIsB = tuneReceiver === 'B';
-    const panReceiverIsB = receiver === 'B';
+    const panIsSecondary = isSecondaryReceiver(receiver);
+    // The Kiwi slice has an INDEPENDENT waterfall centre (SetCenter / the per-RX
+    // /lo endpoint) that is decoupled from its demod dial — exactly like RX1's
+    // CTUN-frozen NCO, and unlike a hardware secondary DDC whose centre IS its
+    // VFO. So a ruler-pan must move the Kiwi's centre, NOT retune its dial:
+    // posting the VFO under CTUN only roams the dial inside the frozen window and
+    // never streams the panned-to band (operator report: "drag pan doesn't load
+    // the rest of the waterfall"). Route the Kiwi pan-centre through SetCenter.
+    const panIsKiwi = rxIndexOf(receiver) === KIWI_RECEIVER_INDEX;
+    // RX1 and the Kiwi pan an independent centre; true hardware secondaries pan
+    // by retuning their VFO (the DDC follows it).
+    const panUsesCenter = panIsKiwi || !panIsSecondary;
     const touchPinchOnly = options.touchMode === 'pinch-only';
 
     type Drag = {
@@ -355,6 +386,17 @@ export function usePanTuneGesture(
       raf: number;
     };
     let drag: Drag | null = null;
+    // Reflect this instance's drag state into the shared depth counter exactly
+    // once per transition, so filter-autopan can suppress recentring mid-drag.
+    let dragHeld = false;
+    const setDrag = (d: Drag | null) => {
+      drag = d;
+      const held = d !== null;
+      if (held !== dragHeld) {
+        dragHeld = held;
+        spectrumDragDepth += held ? 1 : -1;
+      }
+    };
     // Notch painting: while NOTCH is armed, a pointer drag defines a notch
     // band (start..current frequency) instead of tuning. startHz is captured
     // at pointerdown; the live preview is published to the notch store for
@@ -404,15 +446,12 @@ export function usePanTuneGesture(
     // target always mirrors exactly what was commanded — including clamp
     // effects at the band edges — and CW pitch offsets cancel (issue #597
     // adversary #2/#12).
-    const readVfo = () => {
-      const s = useConnectionStore.getState();
-      return receiverIsB ? s.vfoBHz : s.vfoHz;
-    };
+    const readVfo = () => getReceiverVfoHz(useConnectionStore.getState(), tuneReceiver);
     const writeVfo = (hz: number) => {
-      useConnectionStore.setState(receiverIsB ? { vfoBHz: hz } : { vfoHz: hz });
+      optimisticSetReceiverVfo(tuneReceiver, hz);
     };
     const postVfo = (hz: number, signal?: AbortSignal) =>
-      receiverIsB ? setVfoB(hz, signal) : setVfo(hz, signal);
+      postReceiverVfo(tuneReceiver, hz, signal);
     // Each receiver glides its OWN view-centre tween (RX1 and RX2/VFO B are
     // independent instances), so dragging either stitched half pans smoothly and
     // optimistically — the gesture leads the frames, which then reconcile.
@@ -426,14 +465,35 @@ export function usePanTuneGesture(
     const ctunSweep = () => useConnectionStore.getState().ctunEnabled;
 
     const commandedHz = () => pendingHz ?? readVfo();
+    // Secondary receivers (RX2 / RX3+) have no separate "radio LO": their DDC
+    // follows their VFO, so a ruler/pan drag retunes the VFO. RX1 (index 0)
+    // repositions the hardware radio LO.
     const fallbackPanCenterHz = () =>
-      panReceiverIsB
-        ? useConnectionStore.getState().vfoBHz
-        : Number(selectDisplaySlice(useDisplayStore.getState(), receiver).centerHz);
-    const writePanCenter = (hz: number) =>
-      useConnectionStore.setState(panReceiverIsB ? { vfoBHz: hz } : { radioLoHz: hz });
+      panUsesCenter
+        ? Number(selectDisplaySlice(useDisplayStore.getState(), receiver).centerHz)
+        : getReceiverVfoHz(useConnectionStore.getState(), receiver);
+    const writePanCenter = (hz: number) => {
+      // The Kiwi centre lives server-side (no connection-store field); the pan
+      // view-centre tween carries the optimistic motion until frames reconcile.
+      if (panIsKiwi) return;
+      if (panIsSecondary) optimisticSetReceiverVfo(receiver, hz);
+      else useConnectionStore.setState({ radioLoHz: hz });
+    };
     const postPanCenter = (hz: number, signal?: AbortSignal) =>
-      panReceiverIsB ? setVfoB(hz, signal) : setRadioLo(hz, signal);
+      panIsKiwi
+        ? setReceiverLo(rxIndexOf(receiver), hz, signal)
+        : panIsSecondary
+          ? postReceiverVfo(receiver, hz, signal)
+          : setRadioLo(hz, signal);
+    const appliedPanCenterFromState = (state: RadioStateDto) =>
+      // The Kiwi's centre isn't carried in the StateDto — the next DisplayFrame
+      // reconciles it (view-center.reconcileFrame), so report the commanded value
+      // here to leave the tween untouched on the POST round-trip.
+      panIsKiwi
+        ? commandedPanHz()
+        : panIsSecondary
+          ? getReceiverVfoFromState(state, receiver)
+          : state.radioLoHz;
     const commandedPanHz = () =>
       pendingPanHz ?? (panVc.isInitialized() ? panVc.getTargetCenterHz() : fallbackPanCenterHz());
     const readPanViewport = (): { centerHz: number; spanHz: number } | null => {
@@ -485,7 +545,7 @@ export function usePanTuneGesture(
         .then((state) => {
           if (ctrl.signal.aborted) return;
           useConnectionStore.getState().applyState(state, { trustVfo: false });
-          reconcileAppliedPan(panReceiverIsB ? state.vfoBHz : state.radioLoHz);
+          reconcileAppliedPan(appliedPanCenterFromState(state));
         })
         .catch(() => {});
     };
@@ -567,9 +627,12 @@ export function usePanTuneGesture(
       const ctrl = new AbortController();
       zoomInflight = ctrl;
       const centeredLoHz =
-        receiver === 'A' && tuneReceiver === 'A'
+        rxIndexOf(receiver) === 0 && rxIndexOf(tuneReceiver) === 0
           ? centerCtunForZoomIn(cur, next, ctrl.signal)
           : null;
+      // Zoom is global — re-centre the Kiwi slice on its dial too (self-guards on
+      // CTUN + Kiwi-enabled + zoom-in), whichever panel the wheel is over.
+      centerKiwiForZoomIn(cur, next);
       setZoom(next, ctrl.signal)
         .then((s) => {
           if (!ctrl.signal.aborted) {
@@ -587,7 +650,7 @@ export function usePanTuneGesture(
       // single-pointer drag; we drop the drag state so the lifted finger
       // doesn't snap-tune on release.
       if (pointers.size >= 2) {
-        if (drag) drag = null;
+        if (drag) setDrag(null);
         if (mapDrag) mapDrag = null;
         canvas.style.cursor = '';
         if (!pinch) {
@@ -615,6 +678,17 @@ export function usePanTuneGesture(
         canvas.style.cursor = 'grabbing';
         return;
       }
+      // Focus the receiver whose pane you're interacting with, so the global
+      // mode / band / AF toolbar acts on it. Without this, those controls always
+      // targeted whatever the RX mixer last focused (RX1 by default), so RX2/RX3
+      // and the Kiwi slice couldn't have their mode changed by clicking into
+      // their pane — only via the mixer's focus button. Gated below the pinch/
+      // alt-drag early-returns so multi-touch zoom and map-drag are unaffected.
+      {
+        const tuneIdx = rxIndexOf(tuneReceiver);
+        if (useConnectionStore.getState().focusedRxIndex !== tuneIdx)
+          useConnectionStore.getState().setFocusedRxIndex(tuneIdx);
+      }
       const view = readView(receiver);
       if (!view) return;
       // NOTCH armed: paint a notch band instead of tuning. Capture the start
@@ -636,13 +710,13 @@ export function usePanTuneGesture(
       } catch {
         /* synthetic events don't have an active pointer; real mouse/touch does */
       }
-      drag = {
+      setDrag({
         startX: e.clientX,
         startHz: dragView.centerHz,
         spanHz: dragView.spanHz,
         moved: false,
         mode: dragMode,
-      };
+      });
       canvas.style.cursor = dragMode === 'ruler-pan' ? 'grabbing' : SPECTRUM_TUNE_CURSOR;
     };
 
@@ -789,7 +863,7 @@ export function usePanTuneGesture(
       }
       const d = drag;
       if (!d) return;
-      drag = null;
+      setDrag(null);
       canvas.style.cursor = idleCursor();
       if (canvas.hasPointerCapture(e.pointerId)) {
         canvas.releasePointerCapture(e.pointerId);
@@ -830,7 +904,7 @@ export function usePanTuneGesture(
           // Only a LIVE signal can be tracked frame-to-frame; a waterfall-memory
           // hit is by definition not on screen right now, so it tunes once but
           // does not arm the self-correcting lock.
-          if (target.fromLive && !receiverIsB && receiver === 'A') {
+          if (target.fromLive && rxIndexOf(tuneReceiver) === 0 && rxIndexOf(receiver) === 0) {
             armSnapLock({
               dialHz: target.tuneHz,
               anchorBodyHz: target.anchorBodyHz,
@@ -890,6 +964,8 @@ export function usePanTuneGesture(
     canvas.addEventListener('wheel', onWheel, { passive: false });
 
     return () => {
+      // Release any drag depth this instance still holds (unmount mid-drag).
+      setDrag(null);
       if (pendingRaf !== 0) cancelAnimationFrame(pendingRaf);
       if (pendingPanRaf !== 0) cancelAnimationFrame(pendingPanRaf);
       cancelPinchRaf();

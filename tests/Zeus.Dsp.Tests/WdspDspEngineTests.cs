@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -211,7 +212,21 @@ public class WdspDspEngineTests
                 iq[2 * n] = Amplitude * Math.Cos(phase);
                 iq[2 * n + 1] = Amplitude * Math.Sin(phase);
             }
-            engine.FeedIq(channel, iq);
+            // Feed in realtime-shaped chunks. FeedIq is non-blocking with
+            // drop-OLDEST (in production it runs on the realtime RX sink thread,
+            // where IQ arrives one packet at a time and the worker keeps pace),
+            // so dumping all 64 frames in a single synchronous call would
+            // overflow the bounded hand-off queue and intentionally drop most of
+            // the burst before the worker is even scheduled. Pacing the feed — as
+            // the network does — lets the worker drain each chunk so the analyzer
+            // integrates the whole tone. This mirrors production, not a workaround.
+            const int ChunkComplex = 8 * 1024; // 8 frames/chunk; queue holds ≥32
+            for (int off = 0; off < TotalComplex; off += ChunkComplex)
+            {
+                int count = Math.Min(ChunkComplex, TotalComplex - off);
+                engine.FeedIq(channel, iq.AsSpan(off * 2, count * 2));
+                Thread.Sleep(5); // let the worker drain before the next chunk
+            }
 
             var pan = new float[Width];
             Assert.True(WaitForPixels(engine, channel, pan),

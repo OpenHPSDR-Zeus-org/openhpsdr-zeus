@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -33,6 +34,7 @@ namespace Zeus.Server;
 // the next C&C/HPC tick.
 public sealed class PaSettingsStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<PaBandEntry> _bands;
     private readonly ILiteCollection<PaGlobalEntry> _globals;
@@ -51,7 +53,8 @@ public sealed class PaSettingsStore : IDisposable
             Directory.CreateDirectory(dir);
         }
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _bands = _db.GetCollection<PaBandEntry>("pa_bands");
         _bands.EnsureIndex(x => x.Band, unique: true);
         _globals = _db.GetCollection<PaGlobalEntry>("pa_globals");
@@ -211,7 +214,7 @@ public sealed class PaSettingsStore : IDisposable
         Changed?.Invoke();
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
 }
 
@@ -222,13 +225,26 @@ public sealed class PaSettingsStore : IDisposable
 // OcDxTxMask / OcDxRxMask carry the Anvelina-PRO3 DX OUT 7..10 wiring (4-bit
 // masks, bit 0..3 = DX OUT 7..10). Pushed unconditionally; Protocol2Client
 // gates whether they reach the wire by board + variant (#407 / EU2AV).
+//
+// TxAntenna / RxAntenna / HasTxAntennaRelays / RxAuxInput / MkiiBpfRxSelect
+// carry the per-band external-antenna selection (external-ports plan — antenna
+// slice, #804). Pushed unconditionally to the P2 client via
+// DspPipelineService.SetAntennas; Protocol2Client gates the TX-antenna emission
+// on HasTxAntennaRelays and routes the operator RX-aux strictly BEFORE the PS
+// coupler OR (the PS-K36 firewall). All defaulted so existing constructions stay
+// valid (default ANT1/ANT1/None = byte-identical to today).
 public sealed record PaRuntimeSnapshot(
     byte DriveByte,
     byte OcTxMask,
     byte OcRxMask,
     bool PaEnabled,
     byte OcDxTxMask = 0,
-    byte OcDxRxMask = 0);
+    byte OcDxRxMask = 0,
+    HpsdrAntenna TxAntenna = HpsdrAntenna.Ant1,
+    HpsdrAntenna RxAntenna = HpsdrAntenna.Ant1,
+    bool HasTxAntennaRelays = false,
+    int RxAuxInput = 0,
+    bool MkiiBpfRxSelect = false);
 
 public sealed class PaBandEntry
 {

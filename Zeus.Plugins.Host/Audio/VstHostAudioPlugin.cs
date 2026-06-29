@@ -14,11 +14,13 @@ namespace Zeus.Plugins.Host.Audio;
 public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
 {
     private readonly IVstBridgeNative _bridge;
-    private readonly string _vst3Path;
+    private readonly string _loadIdentity;
+    private readonly bool _isAudioUnit;
     private readonly string _pluginRootPath;
     private readonly string _slot;
     private readonly ILogger? _log;
     private nint _handle;
+    private int _latencySamples;
 
     public VstHostAudioPlugin(
         IVstBridgeNative bridge,
@@ -36,20 +38,42 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
             SampleRate: manifestAudio.SampleRate,
             Channels: manifestAudio.Channels,
             BlockSize: manifestAudio.Slot.StartsWith("rx.", StringComparison.OrdinalIgnoreCase) ? 2048 : 1024);
-        _vst3Path = manifestAudio.Vst3Path
-            ?? throw new ArgumentException("audio.vst3Path is required for VstHostAudioPlugin");
+
+        // Format selects the load identity. "au" loads a macOS Audio Unit by
+        // its type:subtype:manufacturer triple (resolved from the OS registry,
+        // not a file); anything else (default "vst3") loads from a VST3 path.
+        // AudioPluginBridge picks the matching IVstBridgeNative backend; this
+        // class stays backend-agnostic.
+        _isAudioUnit = string.Equals(manifestAudio.Format, "au", StringComparison.OrdinalIgnoreCase);
+        _loadIdentity = _isAudioUnit
+            ? (manifestAudio.AuComponentId
+                ?? throw new ArgumentException("audio.auComponentId is required when audio.format is \"au\""))
+            : (manifestAudio.Vst3Path
+                ?? throw new ArgumentException("audio.vst3Path is required for VstHostAudioPlugin"));
     }
 
     public string DisplayName { get; }
     public AudioPluginRequirements Requirements { get; }
 
     /// <summary>
-    /// Safety gate: TX native VST loading remains opt-in because real plugins
-    /// can crash an in-process bridge. RX VSTs default on so receive-only
-    /// cleanup plugins such as Supertone Clear/RNNoise can be used from the
-    /// dedicated rx.post-demod route; ZEUS_DISABLE_RX_VST_LOAD=1 is the
-    /// receive-side kill switch. Set ZEUS_ENABLE_VST_LOAD=1 to opt TX native
-    /// VSTs in as well. See native/zeus-vst-bridge.
+    /// The plugin's reported processing latency in samples at its loaded
+    /// geometry (0 if zero-latency, not natively loaded, or the bridge does
+    /// not report it). Captured once at load.
+    /// </summary>
+    public int ReportedLatencySamples => _latencySamples;
+
+    /// <summary>
+    /// Load gate for in-process native plugin hosting (VST3 + Audio Unit). Both
+    /// RX and TX native load default ON — TX was enabled by KB2UKA after
+    /// bench-verifying AU TX hosting (audio confirmed changing under the editor)
+    /// on 2026-06-26; it had previously been opt-in.
+    ///
+    /// Kill switches fall back to the crash-isolated out-of-process engine:
+    /// <c>ZEUS_DISABLE_VST_LOAD=1</c> (all slots), <c>ZEUS_DISABLE_RX_VST_LOAD=1</c>
+    /// (RX only), <c>ZEUS_DISABLE_TX_VST_LOAD=1</c> (TX only).
+    /// <c>ZEUS_ENABLE_VST_LOAD=1</c> force-enables everything even if a per-side
+    /// disable is set. Precedence: global disable &gt; force-enable &gt; per-side
+    /// disable. See native/zeus-vst-bridge.
     /// </summary>
     /// <summary>Test override for <see cref="NativeLoadEnabled"/>; null = use the env var.</summary>
     internal static bool? NativeLoadEnabledOverride;
@@ -59,8 +83,34 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
         if (NativeLoadEnabledOverride is { } forced) return forced;
         if (Environment.GetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD") == "1") return false;
         if (Environment.GetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD") == "1") return true;
-        return slot.StartsWith("rx.", StringComparison.OrdinalIgnoreCase)
-            && Environment.GetEnvironmentVariable("ZEUS_DISABLE_RX_VST_LOAD") != "1";
+        if (slot.StartsWith("rx.", StringComparison.OrdinalIgnoreCase))
+            return Environment.GetEnvironmentVariable("ZEUS_DISABLE_RX_VST_LOAD") != "1";
+        // TX native load now defaults on (KB2UKA-approved 2026-06-26);
+        // ZEUS_DISABLE_TX_VST_LOAD=1 is the TX-side kill switch.
+        return Environment.GetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD") != "1";
+    }
+
+    /// <summary>
+    /// Editor-guard signal ONLY — whether the TX editor-open fallback should
+    /// treat TX as in-process-hostable when a plugin is <em>not</em> already
+    /// natively loaded. Deliberately <b>decoupled</b> from the TX <em>load</em>
+    /// default (<see cref="NativeLoadEnabled"/>, which now defaults TX on as of
+    /// 2026-06-26): it stays pinned to the pre-flip explicit <c>ZEUS_ENABLE_VST_LOAD</c>
+    /// opt-in so flipping the load default does not move the cross-platform
+    /// editor engine-redirect UX (Windows in-process TX editor hosting is
+    /// unverified). A TX plugin that actually loaded in-process is detected via
+    /// <c>AudioPluginBridge.HostsPlugin</c> upstream and bypasses the guard
+    /// regardless; this governs only the not-hosted fallback message. Mirrors the
+    /// pre-flip <c>TxNativeLoadEnabled</c> semantics exactly.
+    /// </summary>
+    public static bool TxNativeEditorOptIn
+    {
+        get
+        {
+            if (NativeLoadEnabledOverride is { } forced) return forced;
+            if (Environment.GetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD") == "1") return false;
+            return Environment.GetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD") == "1";
+        }
     }
 
     public Task InitializeAudioAsync(IAudioHost host, CancellationToken ct)
@@ -69,40 +119,64 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
         {
             _log?.LogInformation(
                 "VST host '{Name}' registered but native load is disabled "
-                + "(set ZEUS_ENABLE_VST_LOAD=1 for TX native VSTs, or clear "
-                + "ZEUS_DISABLE_RX_VST_LOAD for RX VSTs); passing audio through.",
+                + "(clear ZEUS_DISABLE_VST_LOAD / ZEUS_DISABLE_TX_VST_LOAD / "
+                + "ZEUS_DISABLE_RX_VST_LOAD to re-enable); passing audio through.",
                 DisplayName);
             return Task.CompletedTask; // _handle stays 0 → Process passes through
         }
 
-        // Bridge init is idempotent — the native side ref-counts.
+        // Bridge init is idempotent — the native side ref-counts. (The AU
+        // bridge ignores the abi argument and validates against its own
+        // ZAU_ABI; VstBridgeAbi.Current is the VST3 ABI but the AU backend's
+        // Init clamps to AuBridgeAbi.Current internally.)
         var initStatus = _bridge.Init(VstBridgeAbi.Current);
         if (initStatus != VstBridgeStatus.Ok)
             throw new PluginLoadException(
-                $"VST bridge init failed (status={initStatus}); is zeus-vst-bridge installed?");
+                $"audio bridge init failed (status={initStatus}); is the native bridge installed?");
 
-        var absPath = Path.IsPathRooted(_vst3Path)
-            ? _vst3Path
-            : Path.Combine(_pluginRootPath, _vst3Path);
+        // For an Audio Unit the load identity is a registry triple, not a
+        // filesystem path — pass it through unchanged and skip the file check.
+        string loadIdentity;
+        if (_isAudioUnit)
+        {
+            loadIdentity = _loadIdentity;
+        }
+        else
+        {
+            loadIdentity = Path.IsPathRooted(_loadIdentity)
+                ? _loadIdentity
+                : Path.Combine(_pluginRootPath, _loadIdentity);
 
-        if (!File.Exists(absPath) && !Directory.Exists(absPath))
-            throw new PluginLoadException($"VST3 path not found: {absPath}");
+            if (!File.Exists(loadIdentity) && !Directory.Exists(loadIdentity))
+                throw new PluginLoadException($"VST3 path not found: {loadIdentity}");
+        }
 
         var blockSize = Math.Max(1, host.CurrentBlockSize);
+        // Load at the host's ACTUAL processing rate, not the manifest's
+        // declared rate — the plugin must run at the stream rate it will be
+        // fed, or its time-based DSP (filters, modulation) is detuned. Falls
+        // back to the manifest rate only if the host reports nothing usable.
+        var sampleRate = host.CurrentSampleRate > 0 ? host.CurrentSampleRate : Requirements.SampleRate;
         var status = _bridge.LoadVst3(
-            absPath,
+            loadIdentity,
             Requirements.Channels,
-            Requirements.SampleRate,
+            sampleRate,
             blockSize,
             out _handle);
 
         if (status != VstBridgeStatus.Ok || _handle == 0)
             throw new PluginLoadException(
-                $"VST3 load failed for {absPath} (status={status})");
+                $"{(_isAudioUnit ? "Audio Unit" : "VST3")} load failed for {loadIdentity} (status={status})");
+
+        // Capture the plugin's reported processing latency (ABI v3). 0 for
+        // zero-latency effects; the host sums these to report total insert
+        // latency. Defaulted bridges (test fakes) return 0.
+        _latencySamples = _bridge.GetLatencySamples(_handle);
 
         _log?.LogInformation(
-            "VST host loaded {Path} (channels={Channels} sr={SampleRate} block={Block})",
-            absPath, Requirements.Channels, Requirements.SampleRate, blockSize);
+            "{Kind} host loaded {Id} (channels={Channels} sr={SampleRate} block={Block} latency={Latency}smp)",
+            _isAudioUnit ? "AU" : "VST", loadIdentity,
+            Requirements.Channels, sampleRate, blockSize, _latencySamples);
         return Task.CompletedTask;
     }
 

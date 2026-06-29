@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -131,7 +132,11 @@ export function AgcSettingsSection() {
 
   const isCustom = agc.mode === 'Custom';
   const isFixed = agc.mode === 'Fixed';
-  const effectiveTop = Math.round(Math.max(0, Math.min(120, agcTopDb + offsetDb)));
+  // Slider baseline is 30..80 (loudest 80 / quietest 30). The effective value
+  // (baseline + Auto-AGC offset) can roam wider, so the "eff" hint is clamped to
+  // the server's effective range (RadioService AgcMin/MaxEffectiveAgcT = 20..100),
+  // not the slider bounds, so Auto's authority isn't visually clipped.
+  const effectiveTop = Math.round(Math.max(20, Math.min(100, agcTopDb + offsetDb)));
   const topDisabled = !connected || autoEnabled;
 
   return (
@@ -182,12 +187,12 @@ export function AgcSettingsSection() {
         </span>
         <input
           type="range"
-          min={0}
-          max={120}
+          min={30}
+          max={90}
           step={1}
           value={agcTopDb}
           disabled={topDisabled}
-          title={autoEnabled ? 'Auto-AGC is controlling max gain' : 'AGC-T max gain'}
+          title={autoEnabled ? 'Auto-AGC is controlling max gain' : 'AGC-T max gain (30-90 dB)'}
           onChange={(e) => sendTop(Number(e.currentTarget.value))}
           style={{
             flex: 1,

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // LeftLayoutBar — vertical bar listing the current radio's named layouts.
 // Each item shows a large emoji icon with a small label beneath. Clicking
@@ -33,6 +33,7 @@ import {
 } from 'react';
 import { LockKeyhole } from 'lucide-react';
 import { parseLayoutOrDefault, useLayoutStore } from '../state/layout-store';
+import { useSavedLayoutsStore } from '../state/saved-layouts-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import {
   LayoutSettingsModal,
@@ -56,9 +57,16 @@ export function LeftLayoutBar() {
   const addLayout = useLayoutStore((s) => s.addLayout);
   const removeLayout = useLayoutStore((s) => s.removeLayout);
   const updateLayoutMeta = useLayoutStore((s) => s.updateLayoutMeta);
+  const replaceActiveWorkspace = useLayoutStore((s) => s.replaceActiveWorkspace);
   const setWorkspaceLockedInLayout = useLayoutStore(
     (s) => s.setWorkspaceLockedInLayout,
   );
+  // Saved-layouts library (reusable presets, separate from the tabs).
+  const savedLayouts = useSavedLayoutsStore((s) => s.savedLayouts);
+  const saveWorkspaceToLibrary = useSavedLayoutsStore((s) => s.saveWorkspaceAs);
+  const replaceSavedLayout = useSavedLayoutsStore((s) => s.replaceWorkspace);
+  const updateSavedLayoutMeta = useSavedLayoutsStore((s) => s.updateMeta);
+  const deleteSavedLayout = useSavedLayoutsStore((s) => s.deleteSavedLayout);
   const isLoaded = useLayoutStore((s) => s.isLoaded);
   const settingsViewOpen = useLayoutStore((s) => s.settingsViewOpen);
   const setSettingsView = useLayoutStore((s) => s.setSettingsView);
@@ -89,6 +97,8 @@ export function LeftLayoutBar() {
   }, [rxTraceColor]);
 
   const [modal, setModal] = useState<ModalState>({ kind: 'closed' });
+  // Create-mode "Start from" selection: '' = blank, else a saved-layout id.
+  const [createSourceId, setCreateSourceId] = useState('');
   const [draggingLayoutId, setDraggingLayoutId] = useState<string | null>(null);
   const lockedLayoutIds = useMemo(
     () =>
@@ -100,25 +110,43 @@ export function LeftLayoutBar() {
     [layouts],
   );
 
-  const handleAdd = () => setModal({ kind: 'create' });
+  const handleAdd = () => {
+    setCreateSourceId('');
+    setModal({ kind: 'create' });
+  };
 
   const handleDelete = (id: string, name: string) => {
     if (layouts.length <= 1) return;
     setModal({ kind: 'delete', id, name });
   };
 
-  const openEdit = (id: string) => setModal({ kind: 'edit', id });
+  // Opening the manager switches the workspace to that layout so the editor's
+  // "current arrangement" (used by Save / Save as new) always matches the
+  // layout being edited.
+  const openManage = (id: string) => {
+    setActiveLayout(id);
+    setModal({ kind: 'edit', id });
+  };
 
   const handleModalSave = (value: LayoutSettingsValue) => {
     if (modal.kind === 'create') {
+      // Seed the new workspace: a chosen saved layout's arrangement, or blank.
+      const source = createSourceId
+        ? savedLayouts.find((l) => l.id === createSourceId)
+        : undefined;
+      const base = source
+        ? parseLayoutOrDefault(source.layoutJson)
+        : EMPTY_WORKSPACE_LAYOUT;
+      const seeded = value.locked || source;
       addLayout(value.name, {
         icon: value.icon || undefined,
         description: value.description || undefined,
-        ...(value.locked
-          ? { workspace: { ...EMPTY_WORKSPACE_LAYOUT, locked: true } }
+        ...(seeded
+          ? { workspace: value.locked ? { ...base, locked: true } : base }
           : {}),
       });
     } else if (modal.kind === 'edit') {
+      // Save edits IN PLACE — never spawns a new tab.
       updateLayoutMeta(modal.id, {
         name: value.name,
         icon: value.icon,
@@ -127,6 +155,41 @@ export function LeftLayoutBar() {
       setWorkspaceLockedInLayout(modal.id, value.locked);
     }
     setModal({ kind: 'closed' });
+  };
+
+  // Saved-layouts library handlers (manager mode) ----------------------------
+
+  // Snapshot the live workspace into a NEW saved layout, seeding its icon /
+  // description from the workspace being edited.
+  const handleSaveToLibrary = (name: string) => {
+    if (modal.kind !== 'edit') return;
+    const ws = useLayoutStore.getState().workspace;
+    const current = layouts.find((l) => l.id === modal.id);
+    void saveWorkspaceToLibrary(name, ws, {
+      ...(current?.icon ? { icon: current.icon } : {}),
+      ...(current?.description ? { description: current.description } : {}),
+    });
+  };
+
+  // Apply (restore) a saved layout onto the current workspace in place.
+  const handleApplySaved = (id: string) => {
+    const saved = savedLayouts.find((l) => l.id === id);
+    if (!saved) return;
+    replaceActiveWorkspace(parseLayoutOrDefault(saved.layoutJson));
+  };
+
+  // Overwrite a saved layout with the current workspace arrangement.
+  const handleReplaceSaved = (id: string) => {
+    void replaceSavedLayout(id, useLayoutStore.getState().workspace);
+  };
+
+  // Delete the selected workspace tab from the manager — removeLayout promotes
+  // the next layout to active; follow it so the manager keeps editing a valid
+  // workspace.
+  const handleDeleteWorkspace = (id: string) => {
+    removeLayout(id);
+    const nextActive = useLayoutStore.getState().activeLayoutId;
+    setModal({ kind: 'edit', id: nextActive });
   };
 
   const editingLayout =
@@ -184,6 +247,7 @@ export function LeftLayoutBar() {
                     className="lb-tab"
                     role="tab"
                     aria-selected={active}
+                    data-layout-tab-id={l.id}
                     draggable
                     onDragStart={(e) => handleLayoutDragStart(e, l.id, l.name)}
                     onDragEnd={(e) => handleLayoutDragEnd(e, l)}
@@ -209,7 +273,7 @@ export function LeftLayoutBar() {
                   <button
                     type="button"
                     className="lb-gear"
-                    onClick={() => openEdit(l.id)}
+                    onClick={() => openManage(l.id)}
                     title={`Edit ${l.name}`}
                     aria-label={`Edit ${l.name}`}
                   >
@@ -266,12 +330,18 @@ export function LeftLayoutBar() {
 
       {modal.kind === 'create' && (
         <LayoutSettingsModal
-          title="New layout"
+          title="New workspace"
+          saveLabel="Create"
           initial={{
-            name: `Layout ${layouts.length + 1}`,
+            name: `Workspace ${layouts.length + 1}`,
             icon: '',
             description: '',
             locked: false,
+          }}
+          createSource={{
+            savedLayouts,
+            sourceId: createSourceId,
+            onSourceChange: setCreateSourceId,
           }}
           onSave={handleModalSave}
           onClose={() => setModal({ kind: 'closed' })}
@@ -285,6 +355,24 @@ export function LeftLayoutBar() {
             icon: editingLayout.icon ?? '',
             description: editingLayout.description ?? '',
             locked: parseLayoutOrDefault(editingLayout.layoutJson).locked === true,
+          }}
+          manager={{
+            workspaces: layouts.map((l) => ({
+              id: l.id,
+              name: l.name,
+              ...(l.icon ? { icon: l.icon } : {}),
+              locked: lockedLayoutIds.has(l.id),
+            })),
+            selectedId: modal.id,
+            onSelectWorkspace: openManage,
+            onDeleteWorkspace: handleDeleteWorkspace,
+            canDeleteWorkspace: layouts.length > 1,
+            savedLayouts,
+            onSaveWorkspaceToLibrary: handleSaveToLibrary,
+            onApplySaved: handleApplySaved,
+            onReplaceSaved: handleReplaceSaved,
+            onRenameSaved: (id, name) => void updateSavedLayoutMeta(id, { name }),
+            onDeleteSaved: (id) => void deleteSavedLayout(id),
           }}
           onSave={handleModalSave}
           onClose={() => setModal({ kind: 'closed' })}

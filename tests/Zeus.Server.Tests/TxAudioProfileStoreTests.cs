@@ -7,16 +7,21 @@ namespace Zeus.Server.Tests;
 
 public class TxAudioProfileStoreTests : IDisposable
 {
+    private readonly string _root;
     private readonly string _dbPath;
 
     public TxAudioProfileStoreTests()
     {
-        _dbPath = Path.Combine(Path.GetTempPath(), $"zeus-prefs-txaudioprofiles-{Guid.NewGuid():N}.db");
+        // Per-test directory so the on-disk profile mirror folder
+        // (<dir>/tx-audio-profiles) is isolated and cleaned with the test.
+        _root = Path.Combine(Path.GetTempPath(), $"zeus-txaudioprofiles-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_root);
+        _dbPath = Path.Combine(_root, "zeus-prefs.db");
     }
 
     public void Dispose()
     {
-        try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { }
+        try { Directory.Delete(_root, recursive: true); } catch { }
     }
 
     private TxAudioProfileStore NewStore() =>
@@ -124,5 +129,126 @@ public class TxAudioProfileStoreTests : IDisposable
         store.SetLastLoadedId("studio-ssb");
         store.SetLastLoadedId(null);
         Assert.Null(store.GetLastLoadedId());
+    }
+
+    [Fact]
+    public void Upsert_MirrorsProfileToFolder()
+    {
+        using var store = NewStore();
+        store.Upsert(Sample("studio-ssb", "Studio SSB"));
+
+        var file = Path.Combine(store.ProfileFolder, "studio-ssb.json");
+        Assert.True(File.Exists(file));
+        Assert.Contains("Studio SSB", File.ReadAllText(file));
+    }
+
+    [Fact]
+    public void Delete_RemovesProfileFile()
+    {
+        using var store = NewStore();
+        store.Upsert(Sample("dx-punch", "DX Punch"));
+        var file = Path.Combine(store.ProfileFolder, "dx-punch.json");
+        Assert.True(File.Exists(file));
+
+        Assert.True(store.Delete("dx-punch"));
+        Assert.False(File.Exists(file));
+    }
+
+    [Fact]
+    public void NewStore_SyncsExistingProfilesToFolder()
+    {
+        using (var first = NewStore())
+            first.Upsert(Sample("essb-wide", "eSSB Wide"));
+
+        // Wipe the mirror folder, then re-open: the ctor must re-materialize it
+        // from the DB rows.
+        var folder = Path.Combine(_root, "tx-audio-profiles");
+        if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+
+        using var second = NewStore();
+        Assert.True(File.Exists(Path.Combine(second.ProfileFolder, "essb-wide.json")));
+    }
+
+    [Fact]
+    public void ParseJson_RoundTripsAndRejectsGarbage()
+    {
+        using var store = NewStore();
+        var saved = store.Upsert(Sample("studio-ssb", "Studio SSB", mic: -4));
+        var json = File.ReadAllText(Path.Combine(store.ProfileFolder, "studio-ssb.json"));
+
+        var parsed = TxAudioProfileStore.ParseJson(json);
+        Assert.NotNull(parsed);
+        Assert.Equal("studio-ssb", parsed!.Id);
+        Assert.Equal(-4, parsed.MicGainDb);
+
+        Assert.Null(TxAudioProfileStore.ParseJson("not json"));
+        Assert.Null(TxAudioProfileStore.ParseJson(""));
+    }
+
+    [Fact]
+    public void Upsert_SanitizesSparseUnsafeProfile()
+    {
+        using var store = NewStore();
+        var saved = store.Upsert(Sample("", "", mic: 99) with
+        {
+            LevelerMaxGainDb = double.PositiveInfinity,
+            TxLeveling = new TxLevelingConfig(
+                AlcMaxGainDb: double.NaN,
+                AlcDecayMs: -1,
+                LevelerDecayMs: 99_999,
+                CompressorGainDb: double.NaN),
+            CfcConfig = new CfcConfig(true, true, 0, 0, Array.Empty<CfcBand>()),
+            LowCutHz = 0,
+            HighCutHz = 0,
+            ChainOrder = null!,
+            ChainParked = null!,
+            VstPluginStates = null!,
+            NativePluginStates = null!,
+            TargetSpectralDensity = -1,
+        });
+
+        Assert.Equal("profile", saved.Id);
+        Assert.Equal("profile", saved.Name);
+        Assert.Equal(10, saved.MicGainDb);
+        Assert.Equal(8, saved.LevelerMaxGainDb);
+        Assert.Equal(3, saved.TxLeveling.AlcMaxGainDb);
+        Assert.Equal(1, saved.TxLeveling.AlcDecayMs);
+        Assert.Equal(5000, saved.TxLeveling.LevelerDecayMs);
+        Assert.Equal(10, saved.CfcConfig.Bands.Length);
+        Assert.Equal(150, saved.LowCutHz);
+        Assert.Equal(2900, saved.HighCutHz);
+        Assert.Empty(saved.ChainOrder);
+        Assert.Empty(saved.VstPluginStates);
+        Assert.Empty(saved.NativePluginStates);
+        Assert.Equal(55, saved.TargetSpectralDensity);
+    }
+
+    [Fact]
+    public async Task StartupRepair_ParksVstIdsFromNativeLastLoadedProfile()
+    {
+        using var profiles = NewStore();
+        using var chain = new ChainOrderStore(NullLogger<ChainOrderStore>.Instance, _dbPath);
+        const string vstId = "com.openhpsdr.zeus.vst.clear";
+        const string nativeId = "com.openhpsdr.zeus.samples.eq";
+
+        profiles.Upsert(Sample("unsafe", "Unsafe") with
+        {
+            ProcessingMode = "native",
+            ChainOrder = new List<string> { vstId, nativeId },
+            ChainParked = new List<string>(),
+            VstPluginStates = new Dictionary<string, string> { [vstId] = "opaque" },
+        });
+        profiles.SetLastLoadedId("unsafe");
+        chain.SetState(new List<string> { vstId, nativeId }, new List<string>());
+
+        var repair = new TxAudioProfileStartupRepairService(
+            profiles,
+            chain,
+            NullLogger<TxAudioProfileStartupRepairService>.Instance);
+
+        await repair.StartAsync(CancellationToken.None);
+
+        Assert.Contains(vstId, chain.GetParked());
+        Assert.DoesNotContain(nativeId, chain.GetParked());
     }
 }

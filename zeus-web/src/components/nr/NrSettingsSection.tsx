@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -321,7 +322,10 @@ function Nr2Panel() {
     persistPost2({ post2Taper: r });
   };
 
-  // Resets BOTH groups to Thetis-parity factory state. Two endpoints fire;
+  // Resets BOTH groups to Zeus factory state. Method/Trained values track
+  // Thetis exactly; Post-Process defaults to ON (a deliberate Zeus
+  // improvement over the Thetis baseline, which ships post-proc OFF). Two
+  // endpoints fire;
   // each response reconciles independently via applyState (last write wins,
   // and both servers' merged states agree on the reset values).
   const resetDefaults = () => {
@@ -427,7 +431,7 @@ function Nr2Panel() {
             label="T2"
             value={trainT2}
             min={0.02}
-            max={3.5}
+            max={0.3}
             step={0.01}
             decimals={2}
             onChange={onTrainT2Change}
@@ -460,7 +464,7 @@ function Nr2Panel() {
       <GaugeRow
         accent="green"
         icon={<Activity size={14} strokeWidth={2.25} />}
-        label="Nlevel"
+        label="Level"
         value={nlevel}
         min={0}
         max={100}

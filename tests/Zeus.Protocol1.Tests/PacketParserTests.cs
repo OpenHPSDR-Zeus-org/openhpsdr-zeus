@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -571,5 +572,91 @@ public class PacketParserTests
     public void ExtractCwKeyDown_ShortPacket_ReturnsFalse()
     {
         Assert.False(PacketParser.ExtractCwKeyDown(new byte[10]));
+    }
+
+    // ---- Codec mic / line-in extraction (issue #992) ----------------------
+    //
+    // The Protocol-1 codec (TLV320 on ANAN-10E and other Hermes-class boards)
+    // digitises whichever input the operator has selected and embeds the 16-bit
+    // sample at offsets 6..7 of every EP6 sample group. ExtractMicSamples must
+    // emit those samples big-endian-decoded in USB-frame order so the radio-mic
+    // re-blocker can decimate and forward them onto the TX chain.
+
+    private static byte[] BuildPacketWithMic(uint seq, Func<int, short> sampleAt)
+    {
+        var packet = FramingTests.BuildValidPacket(seq, new (int, int)[PacketParser.ComplexSamplesPerPacket]);
+        int g = 0;
+        for (int f = 0; f < 2; f++)
+        {
+            int payloadStart = 8 + f * 512 + 8;
+            for (int s = 0; s < PacketParser.ComplexSamplesPerUsbFrame; s++, g++)
+            {
+                int off = payloadStart + s * 8;
+                BinaryPrimitives.WriteInt16BigEndian(packet.AsSpan(off + 6, 2), sampleAt(g));
+            }
+        }
+        return packet;
+    }
+
+    [Fact]
+    public void ExtractMicSamples_WritesAllOneTwentySixSamplesInOrder()
+    {
+        byte[] packet = BuildPacketWithMic(1, g => (short)(g * 100));
+        Span<short> mic = stackalloc short[PacketParser.ComplexSamplesPerPacket];
+
+        int n = PacketParser.ExtractMicSamples(packet, mic);
+
+        Assert.Equal(PacketParser.ComplexSamplesPerPacket, n);
+        for (int i = 0; i < n; i++)
+            Assert.Equal((short)(i * 100), mic[i]);
+    }
+
+    [Fact]
+    public void ExtractMicSamples_ZeroPayload_AllZero()
+    {
+        byte[] packet = FramingTests.BuildValidPacket(1, new (int, int)[PacketParser.ComplexSamplesPerPacket]);
+        Span<short> mic = stackalloc short[PacketParser.ComplexSamplesPerPacket];
+
+        int n = PacketParser.ExtractMicSamples(packet, mic);
+
+        Assert.Equal(PacketParser.ComplexSamplesPerPacket, n);
+        for (int i = 0; i < n; i++) Assert.Equal((short)0, mic[i]);
+    }
+
+    [Fact]
+    public void ExtractMicSamples_BadMagic_ReturnsZero()
+    {
+        byte[] packet = BuildPacketWithMic(1, _ => (short)123);
+        packet[0] = 0x00; // corrupt Metis magic
+        Span<short> mic = stackalloc short[PacketParser.ComplexSamplesPerPacket];
+
+        Assert.Equal(0, PacketParser.ExtractMicSamples(packet, mic));
+    }
+
+    [Fact]
+    public void ExtractMicSamples_ShortPacket_ReturnsZero()
+    {
+        Span<short> mic = stackalloc short[PacketParser.ComplexSamplesPerPacket];
+        Assert.Equal(0, PacketParser.ExtractMicSamples(new byte[100], mic));
+    }
+
+    [Fact]
+    public void ExtractMicSamples_UndersizedDestination_ReturnsZero()
+    {
+        byte[] packet = BuildPacketWithMic(1, _ => (short)1);
+        Span<short> tooSmall = stackalloc short[PacketParser.ComplexSamplesPerPacket - 1];
+
+        Assert.Equal(0, PacketParser.ExtractMicSamples(packet, tooSmall));
+    }
+
+    [Fact]
+    public void ExtractMicSamples_NegativeAndPositiveSamples_SignExtendedCorrectly()
+    {
+        byte[] packet = BuildPacketWithMic(1, g => g % 2 == 0 ? short.MinValue : short.MaxValue);
+        Span<short> mic = stackalloc short[PacketParser.ComplexSamplesPerPacket];
+
+        Assert.Equal(PacketParser.ComplexSamplesPerPacket, PacketParser.ExtractMicSamples(packet, mic));
+        for (int i = 0; i < mic.Length; i++)
+            Assert.Equal(i % 2 == 0 ? short.MinValue : short.MaxValue, mic[i]);
     }
 }

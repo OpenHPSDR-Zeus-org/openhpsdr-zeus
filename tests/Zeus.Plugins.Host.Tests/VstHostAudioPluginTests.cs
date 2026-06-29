@@ -4,6 +4,13 @@ using Zeus.Plugins.Host.Audio;
 
 namespace Zeus.Plugins.Host.Tests;
 
+// Mutates the process-global VstHostAudioPlugin.NativeLoadEnabledOverride
+// static and the ZEUS_*_VST_LOAD env vars. Serialise with the other
+// load-gate tests so a sibling class's ctor can't reassert the override
+// mid-test (that race surfaced as an intermittent windows-arm64 flake:
+// the kill-switch test fell through to file validation and threw
+// "VST3 path not found").
+[Collection("LoadSensitive")]
 public class VstHostAudioPluginTests : IDisposable
 {
     // Native load is gated OFF by default (real .vst3 loads can crash the
@@ -120,10 +127,12 @@ public class VstHostAudioPluginTests : IDisposable
         public int LoadStatus { get; set; } = VstBridgeStatus.Ok;
         public int ProcessStatus { get; set; } = VstBridgeStatus.Ok;
         public nint HandleToReturn { get; set; } = 0xABCD;
+        public int LatencyToReturn { get; set; }
 
         public bool InitCalled;
         public string? LastLoadPath;
         public int LastBlockSize;
+        public int LastSampleRate;
         public int ProcessCount;
         public int UnloadCount;
 
@@ -137,9 +146,12 @@ public class VstHostAudioPluginTests : IDisposable
         {
             LastLoadPath = path;
             LastBlockSize = blockSize;
+            LastSampleRate = sampleRate;
             handle = LoadStatus == VstBridgeStatus.Ok ? HandleToReturn : 0;
             return LoadStatus;
         }
+
+        public int GetLatencySamples(nint handle) => LatencyToReturn;
 
         public int Process(nint handle, ReadOnlySpan<float> input, Span<float> output, int frames)
         {
@@ -170,27 +182,112 @@ public class VstHostAudioPluginTests : IDisposable
     {
         private readonly int _currentBlockSize;
 
-        public StubHost(int currentBlockSize = 256)
+        private readonly int _currentSampleRate;
+
+        public StubHost(int currentBlockSize = 256, int currentSampleRate = 48000)
         {
             _currentBlockSize = currentBlockSize;
+            _currentSampleRate = currentSampleRate;
         }
 
-        public int CurrentSampleRate => 48000;
+        public int CurrentSampleRate => _currentSampleRate;
         public int CurrentChannels => 1;
         public int CurrentBlockSize => _currentBlockSize;
         public string Slot => "tx.post-leveler";
     }
 
     [Fact]
-    public async Task Initialize_TxNativeLoad_StaysOptInByDefault()
+    public async Task Initialize_CapturesReportedLatency()
     {
+        // ABI v3: the plugin surfaces the bridge's reported processing latency.
+        var bridge = new FakeBridge { HandleToReturn = 0xCAFE, LatencyToReturn = 2238 };
+        var pluginDir = Path.GetTempPath();
+        var vst3Abs = Path.Combine(pluginDir, "vst3", "Fake.vst3");
+        Directory.CreateDirectory(Path.GetDirectoryName(vst3Abs)!);
+        File.WriteAllText(vst3Abs, "stub");
+        try
+        {
+            var plugin = new VstHostAudioPlugin(bridge, AudioManifest(), pluginDir, "FakeFx");
+            Assert.Equal(0, plugin.ReportedLatencySamples); // before load
+            await plugin.InitializeAudioAsync(new StubHost(currentBlockSize: 1024), default);
+            Assert.Equal(2238, plugin.ReportedLatencySamples);
+        }
+        finally { File.Delete(vst3Abs); }
+    }
+
+    [Fact]
+    public async Task Initialize_LoadsAtHostSampleRate_NotManifestRate()
+    {
+        // The plugin must run at the host's ACTUAL processing rate, not the
+        // manifest's declared rate, or its time-based DSP is detuned.
+        var bridge = new FakeBridge();
+        var pluginDir = Path.GetTempPath();
+        var vst3Abs = Path.Combine(pluginDir, "vst3", "Fake.vst3");
+        Directory.CreateDirectory(Path.GetDirectoryName(vst3Abs)!);
+        File.WriteAllText(vst3Abs, "stub");
+        try
+        {
+            // Manifest declares 48000; host reports 44100 → host wins.
+            var plugin = new VstHostAudioPlugin(bridge, AudioManifest(), pluginDir, "FakeFx");
+            await plugin.InitializeAudioAsync(
+                new StubHost(currentBlockSize: 1024, currentSampleRate: 44100), default);
+            Assert.Equal(44100, bridge.LastSampleRate);
+        }
+        finally { File.Delete(vst3Abs); }
+    }
+
+    [Fact]
+    public async Task Initialize_TxNativeLoad_IsEnabledByDefault()
+    {
+        // TX native load now defaults on (KB2UKA-approved 2026-06-26). With no
+        // env overrides a tx.* slot loads natively, same as rx.*.
         VstHostAudioPlugin.NativeLoadEnabledOverride = null;
         var previousEnable = Environment.GetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD");
         var previousDisable = Environment.GetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD");
+        var previousTxDisable = Environment.GetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD");
+        var bridge = new FakeBridge();
+        var pluginDir = Path.GetTempPath();
+        var vst3Abs = Path.Combine(pluginDir, "vst3", "FakeTx.vst3");
+        Directory.CreateDirectory(Path.GetDirectoryName(vst3Abs)!);
+        File.WriteAllText(vst3Abs, "stub");
         try
         {
             Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", null);
             Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", null);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD", null);
+
+            var plugin = new VstHostAudioPlugin(
+                bridge, AudioManifest("vst3/FakeTx.vst3", "tx.post-leveler"), pluginDir, "FakeTx");
+
+            await plugin.InitializeAudioAsync(new StubHost(currentBlockSize: 2048), default);
+
+            Assert.True(bridge.InitCalled);
+            Assert.True(plugin.IsNativelyLoaded);
+        }
+        finally
+        {
+            File.Delete(vst3Abs);
+            Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", previousEnable);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", previousDisable);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD", previousTxDisable);
+            VstHostAudioPlugin.NativeLoadEnabledOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task Initialize_TxNativeLoad_DisabledBy_TxKillSwitch()
+    {
+        // ZEUS_DISABLE_TX_VST_LOAD=1 falls a tx.* slot back to passthrough
+        // (crash-isolated out-of-process engine) without touching rx.*.
+        VstHostAudioPlugin.NativeLoadEnabledOverride = null;
+        var previousEnable = Environment.GetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD");
+        var previousDisable = Environment.GetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD");
+        var previousTxDisable = Environment.GetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD");
+        try
+        {
+            Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", null);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", null);
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD", "1");
 
             var bridge = new FakeBridge();
             var plugin = new VstHostAudioPlugin(bridge, AudioManifest(), Path.GetTempPath(), "FakeFx");
@@ -204,7 +301,8 @@ public class VstHostAudioPluginTests : IDisposable
         {
             Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", previousEnable);
             Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", previousDisable);
-            VstHostAudioPlugin.NativeLoadEnabledOverride = true;
+            Environment.SetEnvironmentVariable("ZEUS_DISABLE_TX_VST_LOAD", previousTxDisable);
+            VstHostAudioPlugin.NativeLoadEnabledOverride = null;
         }
     }
 
@@ -244,7 +342,7 @@ public class VstHostAudioPluginTests : IDisposable
             Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", previousEnable);
             Environment.SetEnvironmentVariable("ZEUS_DISABLE_VST_LOAD", previousDisable);
             Environment.SetEnvironmentVariable("ZEUS_DISABLE_RX_VST_LOAD", previousRxDisable);
-            VstHostAudioPlugin.NativeLoadEnabledOverride = true;
+            VstHostAudioPlugin.NativeLoadEnabledOverride = null;
         }
     }
 }

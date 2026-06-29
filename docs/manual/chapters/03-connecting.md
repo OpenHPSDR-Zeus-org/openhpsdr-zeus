@@ -26,7 +26,7 @@ Each radio Zeus finds appears as a row showing:
 - A **LAST** badge on the radio you most recently connected to. That radio is also floated to the top of the list for convenience.
 - The radio's network address and MAC address underneath.
 
-Press **Connect** on the row you want. If a radio shows **Busy**, another client already has it — Zeus will not fight for it. (Original-protocol radios serve one client at a time.)
+Press **Connect** on the row you want. If a radio shows **Busy**, another client already has it (HPSDR radios serve one client at a time). Use **Take over** next to the Busy badge to claim it anyway: Zeus asks you to confirm, then sends the radio a stop command that drops the current client and connects you. **This kicks the other operator off — including in the middle of a transmission — so only do it for a radio you own.**
 
 > **Tip:** If the list says "No radios found," check the radio's power and Ethernet cable, and make sure your computer is on the same subnet as the radio. Discovery uses a network broadcast, so a radio on a different VLAN or across a router will not appear — use Manual mode in that case.
 
@@ -127,6 +127,29 @@ Note that simply changing the board (without override) only reseeds power-amplif
 ### Switching preference databases
 
 On the desktop app, the connect screen also offers a **Database** picker. This is your settings profile — all your preferences live in a database file. You can switch between profiles, create a **New** one, or **Import** an existing `.db` file. Switching databases restarts Zeus (you'll be asked to confirm), since the new settings load at startup. This is handy for keeping separate profiles for, say, your home G2 and a portable Hermes Lite 2.
+
+### Connecting through a KiwiSDR
+
+You don't need your own radio on the bench to listen. Zeus can tune a public **KiwiSDR** — one of the hundreds of internet-connected SDR receivers shared by operators worldwide — and bring a slice of its spectrum into your workspace.
+
+Open the **KiwiSDR** receiver, pick a station from the **map**, and Zeus connects to it and streams a slice of its band. The slice behaves like a normal receiver: it has its own waterfall (with floor normalization so it matches your other panes), squelch, and zoom/pan that re-centers as you tune. It is muted automatically while you transmit on your own radio, and it reconnects on its own if the audio or waterfall socket drops. It's a quick way to hear how you sound elsewhere, check a band opening, or listen to a net from across the world.
+
+### Operating Zeus remotely
+
+Zeus can be **operated from anywhere over the internet**, not just on the LAN. A remote session gives you the live panadapter, **MOX / transmit control**, low-latency **Opus** receive audio, and a microphone uplink for remote phone — the full station, away from home.
+
+Remote sessions are brokered through a hosted relay with **TURN** so they connect even across home routers and carrier-grade NAT, where a direct connection would fail. An in-app **LAN Browser** lets you reach the station's own web tools (its router, an amplifier's web page, and so on) through the same tunnel. As always with transmit, make sure your station is set up to key safely before you operate it unattended from afar.
+
+### CAT control — Kenwood TS-2000 emulation
+
+To drive Zeus from logging, contesting, or digital-mode software — or to let a desktop rig-control app follow your frequency — turn on **CAT control** in the network settings. Zeus emulates a **Kenwood TS-2000**, the most widely supported rig profile, with parity across Thetis's CAT1–CAT4 ports.
+
+You can expose CAT two ways:
+
+- **Over TCP** — point software at Zeus's CAT port on the network. Good for apps on the same or another machine.
+- **Over a serial COM port** — Zeus opens a real (or virtual) serial port, exactly as a hardware rig would, for the many programs that only speak serial CAT.
+
+Set your call sign and the bind address with the same care as any network service — bind CAT to loopback if only local software needs it. With CAT running, RTTY/PSK/JS8 software in **DIGL / DIGU** can follow and set your frequency while you run those modes the traditional way.
 
 ### Disconnecting
 

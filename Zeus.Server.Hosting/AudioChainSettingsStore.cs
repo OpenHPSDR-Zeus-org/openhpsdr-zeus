@@ -24,6 +24,7 @@ namespace Zeus.Server;
 /// </summary>
 public sealed class AudioChainSettingsStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<AudioChainSettingsEntry> _state;
     private readonly ILogger<AudioChainSettingsStore> _log;
@@ -37,7 +38,8 @@ public sealed class AudioChainSettingsStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _state = _db.GetCollection<AudioChainSettingsEntry>("audio_chain_settings");
 
         _log.LogInformation("AudioChainSettingsStore initialized at {Path}", dbPath);
@@ -117,7 +119,7 @@ public sealed class AudioChainSettingsStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class AudioChainSettingsEntry

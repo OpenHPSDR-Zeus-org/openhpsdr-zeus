@@ -7,14 +7,14 @@ namespace Zeus.Plugins.Host.Registry;
 
 /// <summary>
 /// HTTPS-fetched registry client. Default source is the
-/// Kb2uka/openhpsdr-zeus-plugins repo's <c>registry.json</c>;
+/// OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins repo's <c>registry.json</c>;
 /// operators can override via <c>RegistryClientOptions.SourceUrl</c>
 /// (e.g. point at a private fork or a self-hosted file).
 /// </summary>
 public sealed class HttpRegistryClient : IRegistryClient
 {
     public const string DefaultUrl =
-        "https://raw.githubusercontent.com/Kb2uka/openhpsdr-zeus-plugins/main/registry.json";
+        "https://raw.githubusercontent.com/OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins/main/registry.json";
 
     private readonly HttpClient _http;
     private readonly ILogger<HttpRegistryClient>? _log;

@@ -1,0 +1,227 @@
+# Copyright (C) 1991-2005 Altera Corporation
+# Your use of Altera Corporation's design tools, logic functions 
+# and other software and tools, and its AMPP partner logic 
+# functions, and any output files any of the foregoing 
+# (including device programming or simulation files), and any 
+# associated documentation or information are expressly subject 
+# to the terms and conditions of the Altera Program License 
+# Subscription Agreement, Altera MegaCore Function License 
+# Agreement, or other applicable license agreement, including, 
+# without limitation, that your use is for the sole purpose of 
+# programming logic devices manufactured by Altera and sold by 
+# Altera or its authorized distributors.  Please refer to the 
+# applicable agreement for further details.
+
+
+# The default values for assignments are stored in the file
+#		Mercury_assignment_defaults.qdf
+# If this file doesn't exist, and for assignments not listed, see file
+#		assignment_defaults.qdf
+
+# Altera recommends that you do not modify this file. This
+# file is updated automatically by the Quartus II software
+# and any changes you make may be lost or overwritten.
+
+
+set_global_assignment -name FAMILY "Cyclone III"
+set_global_assignment -name DEVICE EP3C25Q240C8
+set_global_assignment -name TOP_LEVEL_ENTITY Mercury
+set_global_assignment -name ORIGINAL_QUARTUS_VERSION 5.1
+set_global_assignment -name PROJECT_CREATION_TIME_DATE "21:19:27  JUNE 09, 2006"
+set_global_assignment -name LAST_QUARTUS_VERSION 12.1
+set_global_assignment -name ADD_DEFAULT_PINS_TO_SIMULATION_OUTPUT_WAVEFORMS OFF
+set_global_assignment -name GENERATE_RBF_FILE ON
+set_global_assignment -name STRATIX_DEVICE_IO_STANDARD "3.0-V LVTTL"
+set_global_assignment -name RESERVE_ASDO_AFTER_CONFIGURATION "AS INPUT TRI-STATED"
+set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
+set_global_assignment -name CYCLONEII_OPTIMIZATION_TECHNIQUE BALANCED
+set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC ON
+set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION OFF
+set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING OFF
+set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING OFF
+set_global_assignment -name PHYSICAL_SYNTHESIS_EFFORT NORMAL
+set_global_assignment -name CYCLONEII_RESERVE_NCEO_AFTER_CONFIGURATION "USE AS REGULAR IO"
+set_global_assignment -name FMAX_REQUIREMENT "122.88 MHz"
+set_global_assignment -name OPTIMIZE_MULTI_CORNER_TIMING ON
+set_global_assignment -name OPTIMIZE_POWER_DURING_FITTING "EXTRA EFFORT"
+set_global_assignment -name LL_ROOT_REGION ON -section_id "Root Region"
+set_global_assignment -name LL_MEMBER_STATE LOCKED -section_id "Root Region"
+set_global_assignment -name RESERVE_ALL_UNUSED_PINS_WEAK_PULLUP "AS INPUT TRI-STATED"
+set_global_assignment -name ALLOW_POWER_UP_DONT_CARE OFF
+set_global_assignment -name POWER_PRESET_COOLING_SOLUTION "23 MM HEAT SINK WITH 200 LFPM AIRFLOW"
+set_global_assignment -name POWER_BOARD_THERMAL_MODEL "NONE (CONSERVATIVE)"
+set_global_assignment -name MUX_RESTRUCTURE OFF
+set_global_assignment -name RESERVE_DATA7_THROUGH_DATA2_AFTER_CONFIGURATION "AS INPUT TRI-STATED"
+set_location_assignment PIN_70 -to CC
+set_location_assignment PIN_142 -to CDIN
+set_location_assignment PIN_135 -to CMODE
+set_location_assignment PIN_22 -to DEBUG_LED0
+set_location_assignment PIN_21 -to DEBUG_LED1
+set_location_assignment PIN_18 -to DEBUG_LED2
+set_location_assignment PIN_13 -to DEBUG_LED3
+set_location_assignment PIN_9 -to DEBUG_LED4
+set_location_assignment PIN_6 -to DEBUG_LED5
+set_location_assignment PIN_5 -to DEBUG_LED6
+set_location_assignment PIN_4 -to DEBUG_LED7
+set_location_assignment PIN_217 -to DITHER
+set_location_assignment PIN_240 -to FPGA_PLL
+set_location_assignment PIN_184 -to INA[15]
+set_location_assignment PIN_185 -to INA[14]
+set_location_assignment PIN_186 -to INA[13]
+set_location_assignment PIN_187 -to INA[12]
+set_location_assignment PIN_188 -to INA[11]
+set_location_assignment PIN_189 -to INA[10]
+set_location_assignment PIN_194 -to INA[9]
+set_location_assignment PIN_195 -to INA[8]
+set_location_assignment PIN_196 -to INA[7]
+set_location_assignment PIN_197 -to INA[6]
+set_location_assignment PIN_200 -to INA[5]
+set_location_assignment PIN_201 -to INA[4]
+set_location_assignment PIN_202 -to INA[3]
+set_location_assignment PIN_203 -to INA[2]
+set_location_assignment PIN_207 -to INA[1]
+set_location_assignment PIN_214 -to INA[0]
+set_location_assignment PIN_239 -to LVDS_RXE_N
+set_location_assignment PIN_238 -to LVDS_TXE
+set_location_assignment PIN_134 -to MOSI
+set_location_assignment PIN_34 -to OSC_10MHZ
+set_location_assignment PIN_216 -to OVERFLOW
+set_location_assignment PIN_224 -to PGA
+set_location_assignment PIN_230 -to RAND
+set_location_assignment PIN_39 -to Rx_load_strobe
+set_location_assignment PIN_223 -to SHDN
+set_location_assignment PIN_38 -to SPI_clock
+set_location_assignment PIN_37 -to SPI_data
+set_location_assignment PIN_43 -to TEST0
+set_location_assignment PIN_44 -to TEST1
+set_location_assignment PIN_45 -to TEST2
+set_location_assignment PIN_46 -to TEST3
+set_location_assignment PIN_41 -to Tx_load_strobe
+set_location_assignment PIN_82 -to ext_10MHZ
+set_location_assignment PIN_137 -to nCS
+set_location_assignment PIN_133 -to SCLK
+set_global_assignment -name FMAX_REQUIREMENT "10 MHz" -section_id 10MHz
+set_instance_assignment -name CLOCK_SETTINGS 10MHz -to OSC_10MHZ
+set_global_assignment -name CYCLONEIII_CONFIGURATION_DEVICE AUTO
+set_global_assignment -name ENABLE_INIT_DONE_OUTPUT OFF
+set_location_assignment PIN_159 -to INIT_DONE
+set_global_assignment -name NOMINAL_CORE_SUPPLY_VOLTAGE 1.2V
+set_global_assignment -name USE_CONFIGURATION_DEVICE ON
+set_global_assignment -name FORCE_CONFIGURATION_VCCIO ON
+set_location_assignment PIN_183 -to ATTRLY
+set_global_assignment -name GENERATE_TTF_FILE OFF
+set_instance_assignment -name OUTPUT_TERMINATION OFF -to ext_10MHZ
+set_instance_assignment -name CURRENT_STRENGTH_NEW 16MA -to ext_10MHZ
+set_instance_assignment -name PCI_IO OFF -to ext_10MHZ
+set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP ON
+set_global_assignment -name STATE_MACHINE_PROCESSING "USER-ENCODED"
+set_global_assignment -name USE_LOGICLOCK_CONSTRAINTS_IN_BALANCING OFF
+set_global_assignment -name ENABLE_SIGNALTAP OFF
+set_global_assignment -name USE_SIGNALTAP_FILE Mercury.stp
+set_location_assignment PIN_139 -to TLV320_BCLK
+set_location_assignment PIN_132 -to TLV320_MCLK
+set_location_assignment PIN_143 -to TLV320_LRCIN
+set_location_assignment PIN_144 -to TLV320_LRCOUT
+set_global_assignment -name NUMBER_OF_PATHS_TO_REPORT 2000
+set_global_assignment -name FMAX_REQUIREMENT "192 kHz" -section_id LRCLK
+set_global_assignment -name FMAX_REQUIREMENT "12.288 MHz" -section_id BCLK
+set_global_assignment -name ENABLE_DRC_SETTINGS ON
+set_global_assignment -name FMAX_REQUIREMENT "12.288 MHz" -section_id CBCLK
+set_global_assignment -name FMAX_REQUIREMENT "192 kHz" -section_id CLRCLK
+set_location_assignment PIN_68 -to C21
+set_location_assignment PIN_95 -to A12
+set_instance_assignment -name CLOCK_SETTINGS C122_clk -to C122_clk
+set_location_assignment PIN_209 -to C122_clk
+set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -from C122_clk -to *
+set_instance_assignment -name MULTICYCLE 4 -from C122_frequency_HZ -to C122_sync_phase_word
+set_instance_assignment -name CLOCK_SETTINGS BCLK -to SPI_clk
+set_global_assignment -name FMAX_REQUIREMENT "122.88 MHz" -section_id C122_clk
+set_location_assignment PIN_56 -to C24
+set_location_assignment PIN_57 -to C23
+set_location_assignment PIN_89 -to AUX_CLK
+set_location_assignment PIN_167 -to Merc_ID[2]
+set_location_assignment PIN_162 -to Merc_ID[1]
+set_location_assignment PIN_160 -to Merc_ID[0]
+set_location_assignment PIN_146 -to Merc_ID_drv[3]
+set_location_assignment PIN_166 -to Merc_ID_drv[2]
+set_location_assignment PIN_161 -to Merc_ID_drv[1]
+set_location_assignment PIN_148 -to Merc_ID_drv[0]
+set_location_assignment PIN_147 -to MULTIPLE_MERC
+set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -section_id Top
+set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -section_id Top
+set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
+set_global_assignment -name SEARCH_PATH "C:/HPDSDR/trunk/VK6APH/Mercury/megafunctions/"
+set_global_assignment -name SEARCH_PATH "C:/HPDSDR/trunk/VK6APH/Mercury/db/"
+set_global_assignment -name SEARCH_PATH "C:/HPSDR/trunk/VK6APH/Mercury/megafunctions/"
+set_global_assignment -name SEARCH_PATH "C:/HPSDR/trunk/VK6APH/Mercury/db/"
+set_global_assignment -name SEARCH_PATH "C:/FPGA/Mercury/megafunctions/"
+set_global_assignment -name SEARCH_PATH "C:/FPGA/Mercury/db/"
+set_global_assignment -name SEARCH_PATH "Mercury v6.8/Mercury/"
+set_global_assignment -name SEARCH_PATH "Mercury v6.9/Mercury/" -tag from_archive
+set_global_assignment -name SEARCH_PATH Mercury_v3.1/Mercury/ -tag from_archive
+set_global_assignment -name SEARCH_PATH common/ -tag from_archive
+set_location_assignment PIN_69 -to SCL
+set_location_assignment PIN_65 -to SDA
+set_location_assignment PIN_111 -to MDOUT_I[3]
+set_location_assignment PIN_109 -to MDOUT_I[2]
+set_location_assignment PIN_107 -to MDOUT_I[1]
+set_location_assignment PIN_103 -to MDOUT_I[0]
+set_location_assignment PIN_128 -to MDOUT_Q[3]
+set_location_assignment PIN_126 -to MDOUT_Q[2]
+set_location_assignment PIN_119 -to MDOUT_Q[1]
+set_location_assignment PIN_117 -to MDOUT_Q[0]
+set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
+set_global_assignment -name VECTOR_INPUT_SOURCE Mercury.vwf
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firromH.v
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firram36.v
+set_global_assignment -name QIP_FILE Polyphase_FIR/firram36.qip
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firfilt.v
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8H.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8G.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8F.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8E.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8D.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8C.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8B.mif
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8A.mif
+set_global_assignment -name TEXT_FILE Polyphase_FIR/coefL8.txt
+set_global_assignment -name MIF_FILE Polyphase_FIR/coefL8.mif
+set_global_assignment -name LICENSE_FILE Polyphase_FIR/coefL8.dat
+set_global_assignment -name QARLOG_FILE Polyphase_FIR/Angelia_v1.5.qarlog
+set_global_assignment -name VERILOG_FILE common/I2S_xmit.v
+set_global_assignment -name VERILOG_FILE common/NWire_rcv.v
+set_global_assignment -name VERILOG_FILE common/NWire_xmit.v
+set_global_assignment -name VERILOG_FILE common/clk_lrclk_gen.v
+set_global_assignment -name VERILOG_FILE mult_24Sx24S.v
+set_global_assignment -name VERILOG_FILE receiver.v
+set_global_assignment -name VERILOG_FILE fir_mac.v
+set_global_assignment -name VERILOG_FILE fir_shiftreg.v
+set_global_assignment -name VERILOG_FILE fir.v
+set_global_assignment -name VERILOG_FILE fir_coeffs.v
+set_global_assignment -name VERILOG_FILE fir_coeffs_rom.v
+set_global_assignment -name VERILOG_FILE varcic.v
+set_global_assignment -name VERILOG_FILE cic_integrator.v
+set_global_assignment -name VERILOG_FILE cic.v
+set_global_assignment -name VERILOG_FILE cic_comb.v
+set_global_assignment -name VERILOG_FILE cordic.v
+set_global_assignment -name VERILOG_FILE FIFO.v
+set_global_assignment -name VERILOG_FILE SPI.v
+set_global_assignment -name VERILOG_FILE LPF_select.v
+set_global_assignment -name VERILOG_FILE HPF_select.v
+set_global_assignment -name VERILOG_FILE oddClockDiv.v
+set_global_assignment -name VERILOG_FILE Mercury.v
+set_global_assignment -name VERILOG_FILE mac.v
+set_global_assignment -name VECTOR_WAVEFORM_FILE Mercury.vwf
+set_global_assignment -name QIP_FILE fir_shiftreg.qip
+set_global_assignment -name VERILOG_FILE CC_decoder.v
+set_global_assignment -name SIGNALTAP_FILE Mercury.stp
+set_global_assignment -name VERILOG_FILE common/clk_div.v
+set_global_assignment -name QIP_FILE SP_fifo.qip
+set_global_assignment -name VERILOG_FILE sp_xmit_ctrl.v
+set_global_assignment -name SIGNALTAP_FILE spectrum.stp
+set_global_assignment -name VERILOG_FILE kordic.v
+set_global_assignment -name SIGNALTAP_FILE NWire_rcv.stp
+set_global_assignment -name VERILOG_FILE TestModeChecker.v
+set_global_assignment -name QIP_FILE C122_PLL.qip
+set_global_assignment -name QIP_FILE C10_PLL.qip
+set_global_assignment -name SEARCH_PATH Polyphase_FIR/ -tag from_archive

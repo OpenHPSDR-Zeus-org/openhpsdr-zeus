@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -14,10 +15,10 @@
 // in issue #241 — layout switching now lives entirely in the LeftLayoutBar.
 
 import { BackgroundSettingsPanel } from './BackgroundSettingsPanel';
+import { PanadapterOverlaySettingsPanel } from './PanadapterOverlaySettingsPanel';
 import { SpectrumScaleSettingsPanel } from './SpectrumScaleSettingsPanel';
 import { ThemeSettingsPanel } from './ThemeSettingsPanel';
 import { TraceColorPanel } from './TraceColorPanel';
-import { WaterfallColormapPanel } from './WaterfallColormapPanel';
 
 export function DisplayPanel() {
   return (
@@ -25,8 +26,8 @@ export function DisplayPanel() {
       <ThemeSettingsPanel />
       <BackgroundSettingsPanel />
       <TraceColorPanel />
+      <PanadapterOverlaySettingsPanel />
       <SpectrumScaleSettingsPanel />
-      <WaterfallColormapPanel />
     </div>
   );
 }

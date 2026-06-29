@@ -122,11 +122,24 @@ the installer drops it at **`C:\Program Files\VSTHost\engine\VSTHostEngine.exe`*
 (alongside the Tauri shell `vsthost.exe`, which Zeus does **not** use); the
 portable zip has the same `engine\VSTHostEngine.exe` layout. Zeus checks the
 default install path, then a Zeus-managed download location, then `PATH`. When
-no engine is found, Zeus surfaces a **"Get VSTHost"** action linking to
-`KlayaR/VSTHost` releases (or, with consent, downloads the portable zip to a
-Zeus-managed location and verifies it). The engine is **never bundled** in the
-Zeus installer. Auto-installing third-party audio drivers (e.g. VB-Audio)
-is explicitly **out of scope** — see §10.
+no engine is found, Zeus surfaces a **"Get VST Engine"** action that downloads
+the engine to the Zeus-managed location and verifies it. The engine is **never
+bundled** in the Zeus installer. Auto-installing third-party audio drivers (e.g.
+VB-Audio) is explicitly **out of scope** — see §10.
+
+> **Implemented (2026-06-21).** `Zeus.Server.Hosting/VstEngineInstaller.cs` backs
+> the in-app **"Get VST Engine"** button (TX Audio Suite, shown only when VST is
+> selected but no engine is installed). It fetches the **latest**
+> `KlayaR/VSTHost` release via the GitHub API, picks the portable `.zip`,
+> extracts `VSTHostEngine.exe` (+ its sibling DLLs) at any depth, and stages
+> them at `%LOCALAPPDATA%\Zeus\vst-engine\` — the managed path
+> `VstEngineProcess.FindEngineExe()` resolves. Endpoints
+> `GET/POST /api/{tx-,}audio-suite/vst-engine/install` start the background
+> download and report `{phase, percent, message, version, engineAvailable}`;
+> the frontend polls until `done`/`failed` then re-reads the processing-mode so
+> the engine activates. Nothing is vendored — the binary is fetched at runtime,
+> keeping JUCE/GPLv3 outside Zeus's distribution (§3). Source override:
+> `ZEUS_VST_ENGINE_RELEASE_URL`.
 
 ## 8. Mode selector — Native vs VST (decided)
 

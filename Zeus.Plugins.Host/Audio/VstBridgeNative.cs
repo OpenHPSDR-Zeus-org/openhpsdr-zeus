@@ -51,11 +51,55 @@ public sealed partial class VstBridgeNative : IVstBridgeNative
 
     public int Shutdown() => zvst_shutdown();
 
+    public int GetLatencySamples(nint handle) => zvst_get_latency_samples(handle);
+
     public int EditorOpen(nint handle, string title) => zvst_editor_open(handle, title);
 
     public int EditorClose(nint handle) => zvst_editor_close(handle);
 
     public bool EditorIsOpen(nint handle) => zvst_editor_is_open(handle) != 0;
+
+    public int Describe(string path, out string json)
+    {
+        // 64 KiB holds a large shell file's worth of plugin metadata; the
+        // native side reports the full length so a rare overflow grows once.
+        var buf = new byte[64 * 1024];
+        int status = zvst_describe(path, buf, buf.Length, out int len);
+        if (status != VstBridgeStatus.Ok) { json = "[]"; return status; }
+        if (len > buf.Length)
+        {
+            buf = new byte[len + 1];
+            status = zvst_describe(path, buf, buf.Length, out len);
+            if (status != VstBridgeStatus.Ok) { json = "[]"; return status; }
+        }
+        int n = Math.Min(len, buf.Length);
+        json = System.Text.Encoding.UTF8.GetString(buf, 0, n);
+        return VstBridgeStatus.Ok;
+    }
+
+    /// <summary>
+    /// Convenience scan: <see cref="Describe"/> + JSON parse. Returns an empty
+    /// list on any failure (unloadable file, non-VST3, malformed JSON) so a
+    /// directory walk can skip a bad file without throwing.
+    /// </summary>
+    public static IReadOnlyList<VstPluginDescriptor> Scan(IVstBridgeNative bridge, string path)
+    {
+        try
+        {
+            if (bridge.Describe(path, out var json) != VstBridgeStatus.Ok) return [];
+            return System.Text.Json.JsonSerializer
+                       .Deserialize<List<VstPluginDescriptor>>(json, ScanJsonOpts) ?? [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    // JSON from the native scanner uses lower-case keys (uid/name/category/
+    // vendor); match them to the PascalCase record positionally, case-insensitive.
+    private static readonly System.Text.Json.JsonSerializerOptions ScanJsonOpts =
+        new() { PropertyNameCaseInsensitive = true };
 
     // --- P/Invoke imports ---------------------------------------------------
 
@@ -77,6 +121,9 @@ public sealed partial class VstBridgeNative : IVstBridgeNative
     [LibraryImport(LibraryName, EntryPoint = "zvst_shutdown")]
     private static partial int zvst_shutdown();
 
+    [LibraryImport(LibraryName, EntryPoint = "zvst_get_latency_samples")]
+    private static partial int zvst_get_latency_samples(nint handle);
+
     [LibraryImport(LibraryName, EntryPoint = "zvst_editor_open", StringMarshalling = StringMarshalling.Utf8)]
     private static partial int zvst_editor_open(nint handle, string title);
 
@@ -85,4 +132,7 @@ public sealed partial class VstBridgeNative : IVstBridgeNative
 
     [LibraryImport(LibraryName, EntryPoint = "zvst_editor_is_open")]
     private static partial int zvst_editor_is_open(nint handle);
+
+    [LibraryImport(LibraryName, EntryPoint = "zvst_describe", StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int zvst_describe(string path, [Out] byte[] outJson, int outCap, out int outLen);
 }

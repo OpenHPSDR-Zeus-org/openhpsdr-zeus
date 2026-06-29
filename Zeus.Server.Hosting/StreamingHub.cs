@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -77,7 +78,9 @@ public sealed class StreamingHub
     private const int MaxInboundMessageBytes = 16 * 1024;
 
     private readonly ILogger<StreamingHub> _log;
-    private readonly ConcurrentDictionary<Guid, ClientSession> _clients = new();
+    // Keyed by Guid; values are IClientSink so a remote-access WebRTC sink can
+    // ride the same fan-out as WebSocket ClientSessions (see AttachSink).
+    private readonly ConcurrentDictionary<Guid, IClientSink> _clients = new();
     // Latest WDSP wisdom phase + status string. Set by Program.cs wiring on
     // phase- and status-changed events; read on every AttachClientAsync so
     // late joiners see the current state without waiting for the next
@@ -90,6 +93,11 @@ public sealed class StreamingHub
     // spot list changes; pushed to each new WS client in AttachClientAsync so
     // they see the current spots without waiting for the next TCI spot event.
     private volatile byte[]? _spotPayload;
+
+    // Latest serialised DiagnosticsHealth (0x36) payload. Set by
+    // BroadcastDiagnostics on the publisher's timer; pushed to each new WS
+    // client on attach so a dashboard renders current health immediately.
+    private volatile byte[]? _diagnosticsPayload;
 
     // Supplies the ChatEvent (0x35) snapshot frames pushed to each new WS
     // client on attach: current status, the live roster, and the message
@@ -191,6 +199,29 @@ public sealed class StreamingHub
     }
 
     public int ClientCount => _clients.Count;
+
+    /// <summary>
+    /// Read-only websocket-hub health for the diagnostics v2 surface: connected
+    /// clients, audio/display subscriber counts, and the per-bucket frame-drop
+    /// counters (issue #299). All reads are Interlocked/Volatile so this is safe
+    /// to call from any thread off the broadcast path.
+    /// </summary>
+    public object DiagnosticsSnapshot() => new
+    {
+        schemaVersion = 1,
+        generatedUtc = DateTimeOffset.UtcNow,
+        connectedClients = ClientCount,
+        audioSubscribers = Volatile.Read(ref _audioStreamRequests),
+        displaySubscribers = Volatile.Read(ref _displayStreamRequests),
+        drops = new
+        {
+            audio = System.Threading.Interlocked.Read(ref _dropsAudio),
+            display = System.Threading.Interlocked.Read(ref _dropsDisplay),
+            meter = System.Threading.Interlocked.Read(ref _dropsMeter),
+            other = System.Threading.Interlocked.Read(ref _dropsOther),
+        },
+        micUplink = MicInboundDiagnosticsSnapshot(DateTimeOffset.UtcNow),
+    };
 
     public MicInboundDiagnostics MicPeakDiagnosticsSnapshot(DateTimeOffset now)
     {
@@ -298,6 +329,11 @@ public sealed class StreamingHub
         var spotSnap = _spotPayload;
         if (spotSnap is not null) session.TryEnqueue(spotSnap);
 
+        // Push the latest diagnostics health frame (0x36) so a dashboard that
+        // attaches between publisher ticks renders current health immediately.
+        var diagSnap = _diagnosticsPayload;
+        if (diagSnap is not null) session.TryEnqueue(diagSnap);
+
         // Push the current chat snapshot (status + roster + history) so a
         // late-joining client renders the conversation without waiting for the
         // next relay event. Same push-on-attach pattern as the spot list.
@@ -320,6 +356,54 @@ public sealed class StreamingHub
             session.SetWantsDisplay(false);
             _clients.TryRemove(id, out _);
             _log.LogInformation("ws.client.disconnected id={Id} total={Count}", id, _clients.Count);
+        }
+    }
+
+    /// <summary>
+    /// Register a non-WebSocket frame sink (a remote-access WebRTC session) so it
+    /// receives the same broadcast fan-out as <c>/ws</c> clients. The caller
+    /// (RemoteWebRtcSession) only attaches AFTER the SPAKE2+ password unlocks
+    /// (ADR-0008), and the sink's send is gated again, so nothing leaks early.
+    /// </summary>
+    internal void AttachSink(Guid id, IClientSink sink) => _clients[id] = sink;
+
+    /// <summary>
+    /// Bump the global display-stream gate by <paramref name="delta"/> (+1/−1).
+    /// A non-WebSocket sink (the remote WebRTC session) holds no ClientSession,
+    /// so it adjusts the aggregate directly here — mirroring how
+    /// <c>ClientSession.SetWantsDisplay</c> moves the same counter — to open the
+    /// panadapter frame fan-out (Broadcast(in DisplayFrame) gates on this).
+    /// </summary>
+    internal void AdjustDisplayRequests(int delta) => Interlocked.Add(ref _displayStreamRequests, delta);
+
+    /// <summary>
+    /// Bump the global audio-stream gate by <paramref name="delta"/> (+1/−1) for
+    /// a non-WebSocket sink (remote WebRTC session), mirroring
+    /// <c>ClientSession.SetWantsAudio</c>. Drives the desktop-mode on-demand
+    /// 0x02 RX-audio stream the same way a /ws client's 0x21 does.
+    /// </summary>
+    internal void AdjustAudioRequests(int delta) => Interlocked.Add(ref _audioStreamRequests, delta);
+
+    /// <summary>Remove a previously-attached remote sink.</summary>
+    internal void DetachSink(Guid id) => _clients.TryRemove(id, out _);
+
+    /// <summary>
+    /// Inject a mic-PCM block (f32le samples, NO type prefix) from a non-WebSocket
+    /// source — the remote-access WebRTC audio track, after it has been Opus-
+    /// decoded and re-blocked to the front-end's 960-sample/20 ms cadence upstream
+    /// (<see cref="Remote.RemoteMicAudioPipeline"/>). Raises <see cref="MicPcmReceived"/>
+    /// exactly as a <c>/ws</c> 0x20 frame would, so a remote operator's voice
+    /// reaches <see cref="TxAudioIngest"/> through the identical path local mic
+    /// audio takes. MOX-gating + source arbitration happen downstream in the
+    /// ingest; this only delivers the samples.
+    /// </summary>
+    internal void InjectMicPcm(ReadOnlyMemory<byte> f32lePayload)
+    {
+        RecordMicInbound(f32lePayload);
+        if (RecordMicUplinkFrame(f32lePayload.Length) && MicPcmReceived is { } handler)
+        {
+            try { handler(f32lePayload); }
+            catch (Exception ex) { _log.LogWarning(ex, "MicPcmReceived (remote inject) handler threw"); }
         }
     }
 
@@ -647,6 +731,19 @@ public sealed class StreamingHub
         }
     }
 
+    public void Broadcast(in PttStatusFrame frame)
+    {
+        if (_clients.IsEmpty) return;
+
+        var payload = new byte[PttStatusFrame.ByteLength];
+        var writer = new FixedBufferWriter(payload, PttStatusFrame.ByteLength);
+        frame.Serialize(writer);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
+    }
+
     public void Broadcast(in AudioChainOrderFrame frame)
     {
         if (_clients.IsEmpty) return;
@@ -764,7 +861,68 @@ public sealed class StreamingHub
         }
     }
 
-    private sealed class ClientSession
+    /// <summary>
+    /// Broadcasts a pre-encoded Ft8Decode (0x38) frame ([type][UTF-8 JSON of
+    /// <see cref="Zeus.Contracts.Ft8DecodeBatchDto"/>]) to every connected
+    /// client. One frame per completed FT8/FT4 slot — same fan-out shape as
+    /// <see cref="BroadcastChatEvent"/>; called by Ft8BroadcastService.
+    /// </summary>
+    public void BroadcastFt8Decode(byte[] payload)
+    {
+        if (_clients.IsEmpty) return;
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
+    }
+
+    /// <summary>
+    /// Broadcasts a pre-encoded WsprSpot (0x39) frame ([type][UTF-8 JSON of
+    /// <see cref="Zeus.Contracts.WsprSpotBatchDto"/>]) to every connected client.
+    /// One frame per completed 120 s WSPR slot — same fan-out shape as
+    /// <see cref="BroadcastFt8Decode"/>; called by WsprBroadcastService.
+    /// </summary>
+    public void BroadcastWsprSpot(byte[] payload)
+    {
+        if (_clients.IsEmpty) return;
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
+    }
+
+    /// <summary>
+    /// Broadcasts a pre-encoded Ft8TxStatus (0x3A) frame ([type][UTF-8 JSON of
+    /// <see cref="Zeus.Contracts.Ft8TxStatusDto"/>]) to every connected client.
+    /// One frame per FT8/FT4/WSPR keyer arm/stage/transmit edge — same fan-out
+    /// shape as <see cref="BroadcastFt8Decode"/>; called by Ft8TxService /
+    /// WsprTxService.
+    /// </summary>
+    public void BroadcastFt8TxStatus(byte[] payload)
+    {
+        if (_clients.IsEmpty) return;
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
+    }
+
+    /// <summary>
+    /// Broadcasts a pre-encoded DiagnosticsHealth (0x36) frame
+    /// ([type][UTF-8 JSON of <see cref="Zeus.Contracts.DiagnosticsHealthDto"/>]) to every
+    /// connected client and caches it for push-on-attach. Same fan-out shape as
+    /// <see cref="BroadcastSpots"/>; called by DiagnosticsFramePublisher on its timer.
+    /// </summary>
+    public void BroadcastDiagnostics(byte[] payload)
+    {
+        _diagnosticsPayload = payload;
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
+    }
+
+    private sealed class ClientSession : IClientSink
     {
         public Guid Id { get; }
         private readonly WebSocket _ws;

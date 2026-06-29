@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -46,7 +47,7 @@ import { useCallback, useRef } from 'react';
 import { setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useLiveSlider } from '../hooks/useLiveSlider';
-import { applyCtunZoomCenterAfterState, centerCtunForZoomIn } from '../util/ctun-zoom-center';
+import { applyCtunZoomCenterAfterState, centerCtunForZoomIn, centerKiwiForZoomIn } from '../util/ctun-zoom-center';
 
 // Compact zoom slider styled as a panel-head chip. Lives in the hero
 // tile header (above the panadapter) so the operator always sees the
@@ -93,6 +94,9 @@ export function ZoomControl() {
       const centeredLoHz = centerCtunForZoomIn(cur, v);
       if (centeredLoHz != null) centeredLoHzRef.current = centeredLoHz;
       else if (v <= cur) centeredLoHzRef.current = null;
+      // Zoom is global: the Kiwi slice re-centres on its own dial too (the RX1
+      // path above doesn't touch it).
+      centerKiwiForZoomIn(cur, v);
       setLocalZoom(v);
       liveSlider.push(v);
     },

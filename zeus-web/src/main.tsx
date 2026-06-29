@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -86,8 +87,12 @@ import './styles/pa-settings.css';
 import './styles/analog-meter.css';
 import './styles/rotator-dial.css';
 import App from './App.tsx';
+import { AppErrorBoundary } from './layout/AppErrorBoundary';
 import { installFetchInterceptor } from './serverUrl';
 import { loadInstalledPluginUis } from './plugins/runtime/pluginRuntime';
+// Side-effect import: registers the `beforeinstallprompt` capture before the
+// lazily-loaded mobile shell mounts, so the install banner can replay it.
+import './pwa/pwa-install';
 
 // Capacitor / standalone-host builds set localStorage["zeus.serverUrl"]
 // to a LAN address; on plain web this is a no-op (relative paths).
@@ -146,6 +151,8 @@ if (!rootEl) throw new Error('root element missing');
 
 createRoot(rootEl).render(
   <StrictMode>
-    <App />
+    <AppErrorBoundary>
+      <App />
+    </AppErrorBoundary>
   </StrictMode>,
 );

@@ -3,7 +3,23 @@ setlocal EnableDelayedExpansion
 REM Launch the freshly built Zeus desktop app.
 REM This script lives in <repo>\scripts; the built exe is under
 REM <repo>\OpenhpsdrZeus\bin\Debug\net10.0\OpenhpsdrZeus.exe.
-set "EXE=%~dp0..\OpenhpsdrZeus\bin\Debug\net10.0\OpenhpsdrZeus.exe"
+set "REPO=%~dp0.."
+set "EXE=%REPO%\OpenhpsdrZeus\bin\Debug\net10.0\OpenhpsdrZeus.exe"
+
+if not exist "%REPO%\OpenhpsdrZeus\OpenhpsdrZeus.csproj" (
+  echo This launcher is not inside a Zeus source checkout.
+  echo Current launcher folder:
+  echo   %~dp0
+  echo.
+  echo Run the launcher from:
+  echo   ^<checkout^>\scripts\launch-zeus-desktop.cmd
+  echo.
+  echo Example:
+  echo   %%USERPROFILE%%\Desktop\openhpsdr-zeus\scripts\launch-zeus-desktop.cmd
+  echo.
+  pause
+  exit /b 1
+)
 
 if not exist "%EXE%" (
   echo Zeus has not been built yet.
@@ -36,7 +52,7 @@ REM settings) stays stable across every launch. Server-side settings live in
 REM zeus-prefs.db and persist regardless; this keeps the UI side stable too.
 set "ZEUS_DESKTOP_PORT=6061"
 
-REM Launch detached. The app self-detaches its console in --desktop mode
-REM (FreeConsole), so no console window lingers behind the UI.
+REM Launch detached. The app is a GUI-subsystem binary (WinExe), so Windows
+REM never allocates a console for it — no console window behind the UI.
 start "Zeus" "%EXE%" --desktop
 exit /b 0

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 
 /** @vitest-environment jsdom */
 
@@ -40,11 +40,16 @@ describe('layout-store / workspace tile mutators', () => {
     vi.useRealTimers();
   });
 
-  it('addTile appends a new tile with a fresh uid', () => {
-    const before = useLayoutStore.getState().workspace.tiles.length;
+  it('addTile adds a tile with a fresh uid and default span when the page has room', () => {
+    // Empty page → the tile fits, so no pagination: it lands on the current
+    // workspace.
+    useLayoutStore.setState({ workspace: EMPTY_WORKSPACE_LAYOUT });
+    const activeBefore = useLayoutStore.getState().activeLayoutId;
     const uid = useLayoutStore.getState().addTile('cw');
-    const after = useLayoutStore.getState().workspace.tiles;
-    expect(after.length).toBe(before + 1);
+    const state = useLayoutStore.getState();
+    expect(state.activeLayoutId).toBe(activeBefore); // did not paginate
+    const after = state.workspace.tiles;
+    expect(after.length).toBe(1);
     const tile = after[after.length - 1];
     expect(tile?.panelId).toBe('cw');
     expect(tile?.uid).toBe(uid);
@@ -54,15 +59,31 @@ describe('layout-store / workspace tile mutators', () => {
     expect(tile?.h).toBe(8);
   });
 
-  it('addTile places the new tile at y = max(existing y+h)', () => {
-    // DEFAULT_WORKSPACE_LAYOUT's tallest existing y+h is hero/dsp at
-    // y=16+32 / y=38+10 = 48 on the 24×48 grid. So the new tile lands at y=48.
+  it('addTile overlaps at the origin on the SAME layout when the page is full', () => {
+    // Fill the page so there is no free slot for a new tile, then add one. The
+    // workspace is overlap-friendly and bounded to the view: instead of spilling
+    // to a new layout (or warning), the panel drops in at the origin, overlapping
+    // — the operator then resizes / moves it. No new layout, no tab switch.
+    useLayoutStore.setState({
+      viewportCols: 6,
+      viewportRows: 6,
+      workspace: {
+        ...EMPTY_WORKSPACE_LAYOUT,
+        tiles: [{ uid: 'full', panelId: 'hero', x: 0, y: 0, w: 6, h: 6 }],
+      },
+    });
+    const layoutsBefore = useLayoutStore.getState().layouts.length;
+    const activeBefore = useLayoutStore.getState().activeLayoutId;
     const uid = useLayoutStore.getState().addTile('cw');
-    const tile = useLayoutStore
-      .getState()
-      .workspace.tiles.find((t) => t.uid === uid);
-    expect(tile?.y).toBe(48);
+    const state = useLayoutStore.getState();
+    expect(state.layouts.length).toBe(layoutsBefore); // no new layout
+    expect(state.activeLayoutId).toBe(activeBefore); // no tab switch
+    const tiles = state.workspace.tiles;
+    expect(tiles.length).toBe(2); // landed on the same layout, overlapping
+    const tile = tiles.find((t) => t.uid === uid);
+    expect(tile?.panelId).toBe('cw');
     expect(tile?.x).toBe(0);
+    expect(tile?.y).toBe(0);
   });
 
   it('addTile allows multi-instance panels (meters) to be added more than once', () => {
@@ -340,6 +361,111 @@ describe('layout-store / workspace tile mutators', () => {
     expect(parsed.tiles[1]).toMatchObject({ uid, panelId: 'cw' });
   });
 
+  it('moveTileToLayout transfers a panel from the active layout to another', () => {
+    const activeWorkspace: WorkspaceLayout = {
+      schemaVersion: 8,
+      tiles: [
+        { uid: 'tile-keep', panelId: 'vfo', x: 0, y: 0, w: 6, h: 8 },
+        {
+          uid: 'tile-move',
+          panelId: 'cw',
+          x: 8,
+          y: 0,
+          w: 8,
+          h: 8,
+          instanceConfig: { foo: 1 },
+        },
+      ],
+    };
+    useLayoutStore.setState({
+      radioKey: 'radio-1',
+      layouts: [
+        { id: 'layout-a', name: 'A', layoutJson: JSON.stringify(activeWorkspace) },
+        {
+          id: 'layout-b',
+          name: 'B',
+          layoutJson: JSON.stringify(EMPTY_WORKSPACE_LAYOUT),
+        },
+      ],
+      activeLayoutId: 'layout-a',
+      workspace: activeWorkspace,
+      isLoaded: true,
+    });
+
+    const movedUid = useLayoutStore
+      .getState()
+      .moveTileToLayout('layout-a', 'layout-b', 'tile-move');
+
+    const state = useLayoutStore.getState();
+    expect(movedUid).toBe('tile-move');
+    // Active workspace (source) lost the tile, kept the other.
+    expect(state.workspace.tiles.map((t) => t.uid)).toEqual(['tile-keep']);
+    // Destination gained it, panel + instanceConfig preserved, re-placed.
+    const layoutB = state.layouts.find((l) => l.id === 'layout-b');
+    const parsed = JSON.parse(layoutB!.layoutJson) as WorkspaceLayout;
+    expect(parsed.tiles).toHaveLength(1);
+    expect(parsed.tiles[0]).toMatchObject({
+      uid: 'tile-move',
+      panelId: 'cw',
+      instanceConfig: { foo: 1 },
+      x: 0,
+      y: 0,
+    });
+  });
+
+  it('moveTileToLayout is a no-op for same source/target, missing target, or missing tile', () => {
+    const activeWorkspace: WorkspaceLayout = {
+      schemaVersion: 8,
+      tiles: [{ uid: 'tile-move', panelId: 'cw', x: 0, y: 0, w: 8, h: 8 }],
+    };
+    useLayoutStore.setState({
+      radioKey: 'radio-1',
+      layouts: [
+        { id: 'layout-a', name: 'A', layoutJson: JSON.stringify(activeWorkspace) },
+        {
+          id: 'layout-b',
+          name: 'B',
+          layoutJson: JSON.stringify(EMPTY_WORKSPACE_LAYOUT),
+        },
+      ],
+      activeLayoutId: 'layout-a',
+      workspace: activeWorkspace,
+      isLoaded: true,
+    });
+    const move = useLayoutStore.getState().moveTileToLayout;
+    expect(move('layout-a', 'layout-a', 'tile-move')).toBeNull();
+    expect(move('layout-a', 'no-such-layout', 'tile-move')).toBeNull();
+    expect(move('layout-a', 'layout-b', 'no-such-tile')).toBeNull();
+    // Source untouched after the failed moves.
+    expect(useLayoutStore.getState().workspace.tiles).toHaveLength(1);
+  });
+
+  it('moveTileToLayout refuses to move out of a locked source workspace', () => {
+    const activeWorkspace: WorkspaceLayout = {
+      schemaVersion: 8,
+      locked: true,
+      tiles: [{ uid: 'tile-move', panelId: 'cw', x: 0, y: 0, w: 8, h: 8 }],
+    };
+    useLayoutStore.setState({
+      radioKey: 'radio-1',
+      layouts: [
+        { id: 'layout-a', name: 'A', layoutJson: JSON.stringify(activeWorkspace) },
+        {
+          id: 'layout-b',
+          name: 'B',
+          layoutJson: JSON.stringify(EMPTY_WORKSPACE_LAYOUT),
+        },
+      ],
+      activeLayoutId: 'layout-a',
+      workspace: activeWorkspace,
+      isLoaded: true,
+    });
+    expect(
+      useLayoutStore.getState().moveTileToLayout('layout-a', 'layout-b', 'tile-move'),
+    ).toBeNull();
+    expect(useLayoutStore.getState().workspace.tiles).toHaveLength(1);
+  });
+
   it('debounced save persists the mutated layout after a quick layout switch', async () => {
     vi.useFakeTimers();
     const fetchMock = vi
@@ -497,5 +623,74 @@ describe('parseWorkspaceLayout', () => {
       cur = parseWorkspaceLayout(JSON.parse(JSON.stringify(cur)));
     }
     expect(cur).toEqual(DEFAULT_WORKSPACE_LAYOUT);
+  });
+});
+
+describe('layout-store / pruneOffscreenTilesFromLayout', () => {
+  beforeEach(() => {
+    useLayoutStore.setState({
+      radioKey: '',
+      layouts: [],
+      activeLayoutId: 'default',
+      workspace: DEFAULT_WORKSPACE_LAYOUT,
+      isLoaded: true,
+    });
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+  });
+
+  // Field for these cases: 24 cols × 48 rows (the monitor capacity the canvas
+  // would pass in). A tile is "off-screen" only when its top-left origin is
+  // outside that field.
+  const seed = (tiles: WorkspaceLayout['tiles']) =>
+    useLayoutStore.setState({
+      workspace: { ...EMPTY_WORKSPACE_LAYOUT, tiles },
+    });
+
+  it('closes tiles whose origin is past the right edge or below the bottom', () => {
+    seed([
+      { uid: 'in', panelId: 'cw', x: 0, y: 0, w: 8, h: 8 },
+      { uid: 'below', panelId: 'cw', x: 0, y: 48, w: 8, h: 8 }, // y >= rows
+      { uid: 'right', panelId: 'cw', x: 24, y: 0, w: 8, h: 8 }, // x >= cols
+    ]);
+    const removed = useLayoutStore
+      .getState()
+      .pruneOffscreenTilesFromLayout('default', 24, 48);
+    expect(removed).toBe(2);
+    const uids = useLayoutStore.getState().workspace.tiles.map((t) => t.uid);
+    expect(uids).toEqual(['in']);
+  });
+
+  it('keeps a tile that merely straddles an edge (origin still inside)', () => {
+    seed([
+      // Origin inside the field but extends past the bottom — visible, kept.
+      { uid: 'straddle', panelId: 'cw', x: 20, y: 44, w: 8, h: 8 },
+    ]);
+    const removed = useLayoutStore
+      .getState()
+      .pruneOffscreenTilesFromLayout('default', 24, 48);
+    expect(removed).toBe(0);
+    expect(useLayoutStore.getState().workspace.tiles.length).toBe(1);
+  });
+
+  it('is a no-op (returns 0, leaves the layout reference) when nothing is off-screen', () => {
+    seed([{ uid: 'a', panelId: 'cw', x: 0, y: 0, w: 8, h: 8 }]);
+    const before = useLayoutStore.getState().workspace;
+    const removed = useLayoutStore
+      .getState()
+      .pruneOffscreenTilesFromLayout('default', 24, 48);
+    expect(removed).toBe(0);
+    expect(useLayoutStore.getState().workspace).toBe(before);
+  });
+
+  it('refuses to prune against a bogus (non-positive) field', () => {
+    seed([{ uid: 'a', panelId: 'cw', x: 100, y: 100, w: 8, h: 8 }]);
+    expect(
+      useLayoutStore.getState().pruneOffscreenTilesFromLayout('default', 0, 0),
+    ).toBe(0);
+    // The far-off tile survives because the field was invalid — never delete on
+    // a measurement we don't trust.
+    expect(useLayoutStore.getState().workspace.tiles.length).toBe(1);
   });
 });

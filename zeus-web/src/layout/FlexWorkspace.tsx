@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // FlexWorkspace — react-grid-layout (RGL) substrate for the desktop
 // workspace. Replaces the flexlayout-react implementation that lived here
@@ -36,6 +36,7 @@ import { absoluteStrategy } from 'react-grid-layout/core';
 import { Plus, Puzzle, Settings } from 'lucide-react';
 import { useWorkspace } from './WorkspaceContext';
 import { parseLayoutOrDefault, useLayoutStore } from '../state/layout-store';
+import { useConnectionStore } from '../state/connection-store';
 import { getPanelDef } from './panels';
 import {
   WORKSPACE_RESIZE_COMPACTOR,
@@ -44,22 +45,21 @@ import {
   resolveResizeOverlaps,
   type WorkspaceDragStartSnapshot,
 } from './workspaceGrid';
-import {
-  deriveWorkspaceLayout,
-  reconcileReportedToStored,
-  type DeriveTile,
-} from './lockedWorkspaceLayout';
 import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
 import {
   EMPTY_WORKSPACE_LAYOUT,
   WORKSPACE_GRID_COLS,
   WORKSPACE_ROW_HEIGHT_PX,
-  WORKSPACE_TARGET_ROWS,
   WORKSPACE_TILE_MIN_H,
   WORKSPACE_TILE_MIN_W,
   type WorkspaceTile,
 } from './workspace';
 import { AddPanelModal } from './AddPanelModal';
+import {
+  findLayoutTabAtPoint,
+  setLayoutTabDropTarget,
+} from './layout-tab-dnd';
+import { ScaleToFitTile } from './ScaleToFitTile';
 import { TileChrome } from './TileChrome';
 import { ConfirmDialog } from './ConfirmDialog';
 import { TerminatorLines } from '../components/design/TerminatorLines';
@@ -68,15 +68,20 @@ import {
   parseMeterGroupConfig,
   type MeterGroupConfig,
 } from '../components/meter-group/meterGroupConfig';
+import { useWorkspaceZoom } from '../util/use-workspace-zoom';
 import { HeroPanel } from './panels/HeroPanel';
 import { UrlEmbedPanel } from './panels/UrlEmbedPanel';
+import { LanBrowserPanel } from './panels/LanBrowserPanel';
 import {
   parseUrlEmbedConfig,
   type UrlEmbedConfig,
 } from './panels/urlEmbedConfig';
+import {
+  parseLanBrowserConfig,
+  type LanBrowserConfig,
+} from './panels/lanBrowserConfig';
 
 const WORKSPACE_GRID_MARGIN_PX = 3;
-const WORKSPACE_ROW_GAP_SHARE = 6;
 
 type GridInteraction = 'drag' | 'resize' | null;
 
@@ -157,6 +162,11 @@ export function FlexWorkspace({
     [targetLayoutId, updateTilePlacementsInLayout, workspaceLocked],
   );
 
+  const isPrimary = !layoutId;
+  // Add a panel: it drops into the first free slot on the field, and when the
+  // field is full it simply OVERLAPS (the store places it at the origin) for the
+  // operator to resize / move. No "field is full" popup, no spill to a new
+  // layout — the workspace is overlap-friendly and bounded to the view.
   const onAddPanel = useCallback(
     (panelId: string) => {
       addTileToLayout(targetLayoutId, panelId);
@@ -173,6 +183,7 @@ export function FlexWorkspace({
         workspaceLocked={workspaceLocked}
         isLoaded={isLoaded}
         layoutId={targetLayoutId}
+        isPrimary={isPrimary}
         onLayoutChange={onLayoutChange}
         onRequestRemoveTile={(uid, title) => setPendingRemoveTile({ uid, title })}
         onToggleTileLock={(uid, locked, lockedHeightPx) =>
@@ -226,6 +237,9 @@ interface WorkspaceCanvasProps {
   workspaceLocked: boolean;
   isLoaded: boolean;
   layoutId: string;
+  /** True for the main dock workspace (not a detached window). Only the primary
+   *  reports its page size to the store, which drives add-panel pagination. */
+  isPrimary: boolean;
   onLayoutChange: (next: Layout) => void;
   onRequestRemoveTile: (uid: string, title: string) => void;
   onToggleTileLock: (
@@ -240,6 +254,7 @@ function WorkspaceCanvas({
   workspaceLocked,
   isLoaded,
   layoutId,
+  isPrimary,
   onLayoutChange,
   onRequestRemoveTile,
   onToggleTileLock,
@@ -253,14 +268,37 @@ function WorkspaceCanvas({
   // otherwise return undefined and never re-resolve).
   const pluginPanels = usePluginPanels();
   const pluginPanelKey = pluginPanels.map((panel) => panel.panelId).join('\0');
-  // Track container height so the grid can be sized on first paint. Once the
-  // grid metrics are frozen (below) this only feeds the initial capture.
-  const [containerHeight, setContainerHeight] = useState(0);
   const [gridInteraction, setGridInteraction] =
     useState<GridInteraction>(null);
   const draggingRef = useRef(false);
   const skipPostDropLayoutChangeRef = useRef(false);
   const dragStartRef = useRef<WorkspaceDragStartSnapshot | null>(null);
+  // Cross-layout panel transfer: while a tile drag is live, track the pointer
+  // and remember which LeftLayoutBar tab (if any) it's hovering, so releasing
+  // over another layout moves the panel there instead of repositioning it on
+  // this workspace.
+  const moveTileToLayout = useLayoutStore((s) => s.moveTileToLayout);
+  const tileDragActiveRef = useRef(false);
+  const dropTargetLayoutIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const onPointerMove = (e: PointerEvent) => {
+      if (!tileDragActiveRef.current) return;
+      // A tab over THIS layout isn't a transfer target — dropping there is a
+      // normal reposition. Only foreign tabs arm the move.
+      const overId = findLayoutTabAtPoint(e.clientX, e.clientY);
+      const target = overId && overId !== layoutId ? overId : null;
+      if (dropTargetLayoutIdRef.current !== target) {
+        dropTargetLayoutIdRef.current = target;
+        setLayoutTabDropTarget(target);
+      }
+    };
+    window.addEventListener('pointermove', onPointerMove);
+    return () => window.removeEventListener('pointermove', onPointerMove);
+  }, [layoutId]);
+  // Live viewport height of the (scrolling) workspace, in pixels. Only used to
+  // report how many rows are currently visible to the add-panel pagination flow
+  // (setViewportPage below); the fixed-cell geometry itself never depends on it.
+  const [containerHeight, setContainerHeight] = useState(0);
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -272,122 +310,235 @@ function WorkspaceCanvas({
     return () => ro.disconnect();
   }, [containerRef]);
 
-  // Static-size workspace. Capture the grid's pixel metrics ONCE — at the first
-  // valid measurement — and hold them across every later window resize. The
-  // workspace then behaves like a fixed-size page: panels and grid rows keep the
-  // size they had when the page was laid out instead of scaling with the window.
-  // Subsequent container-size changes are intentionally ignored; if the window
-  // later shrinks below the frozen page, the canvas scrolls (see all-panels.css)
-  // rather than rescaling every panel. (A future enhancement spills overflow
-  // onto a new workspace instead of scrolling.)
-  const [frozen, setFrozen] = useState<{ width: number; height: number } | null>(
-    null,
-  );
+  // Ctrl/⌘ + scroll-wheel zooms the workspace (the footer ZOOM cluster's
+  // gesture, usable directly over the canvas — like browser zoom but scoped to
+  // the panel grid). Native non-passive listener so preventDefault actually
+  // suppresses the browser's own Ctrl+wheel page zoom; React's onWheel is
+  // passive at the root and could not. Plain (unmodified) wheel is left alone
+  // so normal scrolling of the workspace and its panels is untouched.
+  const { stepBy: stepWorkspaceZoom } = useWorkspaceZoom();
   useEffect(() => {
-    if (frozen) return;
-    if (mounted && width > 0 && containerHeight > 0) {
-      setFrozen({ width, height: containerHeight });
-    }
-  }, [frozen, mounted, width, containerHeight]);
-  const gridWidth = frozen?.width ?? width;
-  const gridHeight = frozen?.height ?? containerHeight;
-  // The workspace must NEVER show a scrollbar — it fits the viewport like a
-  // hardware front panel. So the grid is fit-to-viewport: the cell size is
-  // sized so the whole layout fits the container height.
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.deltaY === 0) return;
+      e.preventDefault();
+      stepWorkspaceZoom(e.deltaY < 0 ? 1 : -1);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [containerRef, stepWorkspaceZoom]);
+
+  // Fixed-cell workspace. A column and a row are a CONSTANT pixel size, so a
+  // panel never rescales when the window is resized — the core of the "hardware
+  // front panel" model. Resizing the window only changes how many cells are
+  // visible: the column COUNT tracks the live width (growing the window adds
+  // columns, shrinking removes them, never below the base 24 nor below what the
+  // current layout already occupies), and vertically the page grows downward
+  // and SCROLLS (all-panels.css). Nothing is ever shrunk to "fit" the viewport,
+  // so an operator can expand a panel as far as they like and a smaller window
+  // simply scrolls to the content instead of squashing or clipping it.
   //
-  // deriveWorkspaceLayout owns the whole fit. With no locked tiles it
-  // reproduces the legacy uniform shrink (divisor = max(layoutRows, target), so
-  // rearranging within the design fold never rescales a panel; only a layout
-  // taller than the fold shrinks the cell). When a tile is locked AND the
-  // layout would overflow, it instead pins rowHeight at the authored height —
-  // so locked tiles render at their exact authored pixel size, invariant to the
-  // workspace getting longer/shorter — and shrinks only the unlocked tiles to
-  // fit, recompacting around the static locked tiles. The result is a RENDER
-  // layout; the stored layout is untouched (see reconcile below).
-  const deriveTiles = useMemo<DeriveTile[]>(
-    () =>
-      tiles.map((t) => {
-        const def = getPanelDef(t.panelId, pluginPanelKey);
-        const w = def?.maxW !== undefined ? Math.min(t.w, def.maxW) : t.w;
-        const h = def?.maxH !== undefined ? Math.min(t.h, def.maxH) : t.h;
-        return {
-          uid: t.uid,
-          x: t.x,
-          y: t.y,
-          w,
-          h,
-          locked: workspaceLocked || t.locked === true,
-          minH: def?.minH ?? WORKSPACE_TILE_MIN_H,
-          ...(t.lockedHeightPx !== undefined
-            ? { lockedHeightPx: t.lockedHeightPx }
-            : {}),
-        };
-      }),
-    [tiles, pluginPanelKey, workspaceLocked],
-  );
-
-  const derived = useMemo(
-    () =>
-      deriveWorkspaceLayout(deriveTiles, {
-        containerHeight: gridHeight,
-        authoredRowHeightPx: WORKSPACE_ROW_HEIGHT_PX,
-        gridMarginPx: WORKSPACE_GRID_MARGIN_PX,
-        rowGapShare: WORKSPACE_ROW_GAP_SHARE,
-        targetRows: WORKSPACE_TARGET_ROWS,
-        minRowHeightPx: 0.1,
-      }),
-    [deriveTiles, gridHeight],
-  );
-  const { rowHeight, rowMargin } = derived;
-
-  // Stored geometry, keyed by uid, for reconciling RGL's echo of the derived
-  // (possibly shrunk) render layout back to what we persist. Refs keep the
-  // persist callback stable without going stale.
-  const storedByUid = useMemo(
-    () => new Map(tiles.map((t) => [t.uid, { x: t.x, y: t.y, w: t.w, h: t.h }])),
+  // The column pixel pitch is captured ONCE — from a SETTLED width at the base
+  // 24-column count — and then held constant. RGL derives a column width of
+  // (containerWidth - margin*(cols-1)) / cols, so we invert that to recover the
+  // per-column pitch and feed RGL an exact width for `cols` columns, pinning the
+  // rendered column width to baseColWidth with no sub-pixel rescale on resize.
+  //
+  // The latch must wait for the width to STOP changing, not grab the first
+  // non-zero value. During connect/mount the container can report a too-small
+  // intermediate width (notably in the Photino desktop webview) before the flex
+  // pass settles. Freezing on that transient yields a tiny baseColWidth, which
+  // inflates `cols` to fill the real window, which crams every tile (placed in
+  // columns 0..24) into a narrow strip on the left — the "panels stacked on the
+  // left" bug. So debounce: only latch a width that survives a frame without
+  // changing, so a later, larger settled width supersedes an early narrow one.
+  // (While frozenWidth is still 0 the render falls back to baseColWidth=0 →
+  // cols=24 → gridWidth=live width, which already renders correctly; the latch
+  // only fixes the pitch held constant across subsequent window resizes.)
+  const [frozenWidth, setFrozenWidth] = useState(0);
+  useEffect(() => {
+    if (frozenWidth > 0) return;
+    if (!mounted || !(width > 0)) return;
+    const id = window.setTimeout(() => setFrozenWidth(width), 150);
+    return () => window.clearTimeout(id);
+  }, [frozenWidth, mounted, width]);
+  // Workspace UI zoom (operator-set, server-persisted). A multiplier on the
+  // CELL PITCH — not a CSS transform — so RGL keeps doing its drag/resize math
+  // in real pixels and hit-testing stays correct at any zoom. zoom < 1 shrinks
+  // the cells, so monitorCols/monitorRows/visibleRows below all grow and the
+  // operator gets MORE grid to spread panels across; zoom > 1 enlarges the
+  // cells (fewer fit; the canvas scrolls when a layout outgrows the monitor).
+  const workspaceZoomPct = useConnectionStore((s) => s.workspaceZoomPct);
+  const zoomFactor = (workspaceZoomPct > 0 ? workspaceZoomPct : 100) / 100;
+  const baseColWidth =
+    frozenWidth > 0
+      ? ((frozenWidth - WORKSPACE_GRID_MARGIN_PX * (WORKSPACE_GRID_COLS - 1)) /
+          WORKSPACE_GRID_COLS) *
+        zoomFactor
+      : 0;
+  // The MONITOR's capacity in grid cells — the MAXIMUM field. The workspace
+  // canvas is bounded to this (not to the live window), so a panel can never be
+  // dragged or sized past the physical screen and there is no infinite void to
+  // scroll into. The window is then free to be smaller (scroll to reach panels)
+  // or maximized (everything fits, no scrollbars) — the maximized window is the
+  // north star. Derived from screen.avail* at the constant row pitch and the
+  // latched column pitch. 0 when unknown (screen unavailable / pitch not yet
+  // latched): no monitor bound is applied and behaviour falls back to the live
+  // window, so headless/SSR/early-mount never break or prune against a bogus
+  // field.
+  const screenAvailW =
+    typeof screen !== 'undefined' && screen.availWidth > 0
+      ? screen.availWidth
+      : 0;
+  const screenAvailH =
+    typeof screen !== 'undefined' && screen.availHeight > 0
+      ? screen.availHeight
+      : 0;
+  const monitorRows =
+    screenAvailH > 0
+      ? Math.max(
+          1,
+          Math.floor(
+            (screenAvailH + WORKSPACE_GRID_MARGIN_PX) /
+              (WORKSPACE_ROW_HEIGHT_PX * zoomFactor + WORKSPACE_GRID_MARGIN_PX),
+          ),
+        )
+      : 0;
+  const monitorCols =
+    screenAvailW > 0 && baseColWidth > 0
+      ? Math.max(
+          WORKSPACE_GRID_COLS,
+          Math.floor(
+            (screenAvailW + WORKSPACE_GRID_MARGIN_PX) /
+              (baseColWidth + WORKSPACE_GRID_MARGIN_PX),
+          ),
+        )
+      : 0;
+  // Never drop below the base count or below the rightmost tile already placed,
+  // so a window-shrink never clamps an existing tile inward (RGL would otherwise
+  // shove any tile whose x+w exceeds cols). When the window is narrower than the
+  // occupied extent the workspace scrolls horizontally rather than reflowing.
+  const occupiedCols = useMemo(
+    () => tiles.reduce((m, t) => Math.max(m, t.x + t.w), WORKSPACE_GRID_COLS),
     [tiles],
   );
-  const derivedRef = useRef(derived);
-  derivedRef.current = derived;
-  const storedByUidRef = useRef(storedByUid);
-  storedByUidRef.current = storedByUid;
-  // All persistence flows through here so the shrunk render geometry never
-  // reaches the store. When nothing is compensated this is the identity, so the
-  // common path is byte-identical to the legacy behaviour.
-  const persist = useCallback(
-    (next: Layout) => {
-      onLayoutChange(
-        reconcileReportedToStored(
-          next,
-          derivedRef.current,
-          storedByUidRef.current,
-        ),
-      );
-    },
-    [onLayoutChange],
-  );
+  const colsForWidth =
+    baseColWidth > 0
+      ? Math.max(
+          occupiedCols,
+          Math.floor(
+            (width + WORKSPACE_GRID_MARGIN_PX) /
+              (baseColWidth + WORKSPACE_GRID_MARGIN_PX),
+          ),
+        )
+      : occupiedCols;
+  // Cap the canvas at the monitor width: it is never wider than the physical
+  // screen, so horizontal drag is bounded to the monitor and scroll only ever
+  // spans real content. No cap until the monitor size is known.
+  const cols =
+    monitorCols > 0 ? Math.min(monitorCols, colsForWidth) : colsForWidth;
+  // Exact width for `cols` columns at the fixed pitch, so RGL's derived column
+  // width is exactly baseColWidth (no sub-pixel rescale as the window resizes).
+  const gridWidth =
+    baseColWidth > 0
+      ? cols * baseColWidth + (cols - 1) * WORKSPACE_GRID_MARGIN_PX
+      : frozenWidth || width;
+  // Stable ref so the drag/resize-stop callbacks read the live column count
+  // without being recreated (and re-binding RGL) on every resize tick.
+  const colsRef = useRef(cols);
+  colsRef.current = cols;
+  // Cells are a constant pixel size — rowHeight and the grid margins never change
+  // with the window. A locked tile therefore holds its pixel height for free
+  // (h rows × a constant rowHeight), so the old shrink-to-fit solver and its
+  // per-tile pixel compensation are gone: the render layout is simply the stored
+  // geometry, clamped to each panel's maxW/maxH.
+  // Row pitch scales with the same zoom factor so cells grow/shrink uniformly
+  // (square-ish aspect preserved). RGL accepts a fractional rowHeight.
+  const rowHeight = WORKSPACE_ROW_HEIGHT_PX * zoomFactor;
+  const rowMargin = WORKSPACE_GRID_MARGIN_PX;
 
-  const placementByUid = useMemo(
-    () => new Map(derived.placements.map((p) => [p.uid, p])),
-    [derived],
-  );
+  // Per-tile render placement = stored geometry clamped to the panel's caps. A
+  // tile saved wider/taller than its cap snaps back here, and RGL's echo of that
+  // clamped layout persists the correction on the next onLayoutChange.
+  const placementByUid = useMemo(() => {
+    const m = new Map<
+      string,
+      { x: number; y: number; w: number; h: number }
+    >();
+    for (const t of tiles) {
+      const def = getPanelDef(t.panelId);
+      const w = def?.maxW !== undefined ? Math.min(t.w, def.maxW) : t.w;
+      const h = def?.maxH !== undefined ? Math.min(t.h, def.maxH) : t.h;
+      m.set(t.uid, { x: t.x, y: t.y, w, h });
+    }
+    return m;
+  }, [tiles, pluginPanelKey]);
 
-  // When locking a tile, capture its current on-screen pixel height so the
-  // store can hold it there afterwards. The capture is the live rendered size,
-  // so clicking lock never resizes the panel (see deriveWorkspaceLayout).
+  // With constant cells the render geometry equals the stored geometry, so
+  // persistence is a straight passthrough to the store (no reconcile pass).
+  const persist = onLayoutChange;
+
+  // Rows that fit the live workspace area (the measured container, which sits
+  // ABOVE the footer). This is the vertical FIELD OF VIEW: the hard drag/resize
+  // bound (RGL maxRows) and the height the add-panel flow places into. Bounding
+  // to the window — not the monitor — is what keeps horizontal and vertical
+  // symmetric: a panel can't be dragged below the visible area (past the footer)
+  // any more than it can be dragged past the right edge, so dragging never
+  // creates scroll. The window may still be smaller than a layout authored when
+  // maximized — that legitimately scrolls — but nothing the operator does in the
+  // current view pushes content out of it.
+  const visibleRows =
+    rowHeight > 0 && containerHeight > 0
+      ? Math.max(
+          1,
+          Math.floor((containerHeight + rowMargin) / (rowHeight + rowMargin)),
+        )
+      : 0;
+
+  // Report the visible field size (grid cells) to the store so the add-panel
+  // flow places a new panel within the current view (and overlaps at the origin
+  // when the view is full). Only the primary (docked) workspace reports.
+  const pageCols = cols;
+  const pageRows = visibleRows;
+  const setViewportPage = useLayoutStore((s) => s.setViewportPage);
+  useEffect(() => {
+    if (!isPrimary || pageRows <= 0 || pageCols <= 0) return;
+    setViewportPage(pageCols, pageRows);
+  }, [isPrimary, pageCols, pageRows, setViewportPage]);
+
+  // One-time cleanup: close panels saved BEYOND the monitor (unreachable even
+  // when maximized — e.g. dragged off-screen before the canvas was bounded).
+  // Runs once per layout, and only after the column pitch has latched
+  // (frozenWidth > 0) and the monitor size is known, so a transient narrow
+  // mount can never prune against a bogus field. Panels merely outside a small
+  // window are WITHIN the monitor and are left untouched — they reappear when
+  // the window is maximized or scrolled to.
+  const pruneOffscreenTilesFromLayout = useLayoutStore(
+    (s) => s.pruneOffscreenTilesFromLayout,
+  );
+  const prunedLayoutsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!isPrimary) return;
+    if (frozenWidth <= 0 || monitorCols <= 0 || monitorRows <= 0) return;
+    if (prunedLayoutsRef.current.has(layoutId)) return;
+    prunedLayoutsRef.current.add(layoutId);
+    pruneOffscreenTilesFromLayout(layoutId, monitorCols, monitorRows);
+  }, [
+    isPrimary,
+    frozenWidth,
+    monitorCols,
+    monitorRows,
+    layoutId,
+    pruneOffscreenTilesFromLayout,
+  ]);
+
+  // Locking just pins the tile (static). With a constant cell size there is no
+  // pixel height to capture — the tile keeps its size automatically.
   const handleToggleTileLock = useCallback(
-    (uid: string, locked: boolean) => {
-      if (!locked) {
-        onToggleTileLock(uid, false);
-        return;
-      }
-      const p = placementByUid.get(uid);
-      const lockedHeightPx = p
-        ? derived.rowHeight * p.h + Math.max(0, p.h - 1) * derived.rowMargin
-        : undefined;
-      onToggleTileLock(uid, true, lockedHeightPx);
-    },
-    [onToggleTileLock, placementByUid, derived.rowHeight, derived.rowMargin],
+    (uid: string, locked: boolean) => onToggleTileLock(uid, locked),
+    [onToggleTileLock],
   );
 
   const workspaceDragCompactor = useMemo(
@@ -427,6 +578,8 @@ function WorkspaceCanvas({
     oldItem: LayoutItem | null,
   ) => {
     draggingRef.current = true;
+    tileDragActiveRef.current = true;
+    dropTargetLayoutIdRef.current = null;
     skipPostDropLayoutChangeRef.current = false;
     dragStartRef.current = oldItem
       ? {
@@ -449,6 +602,32 @@ function WorkspaceCanvas({
     oldItem: LayoutItem | null,
     newItem: LayoutItem | null,
   ) => {
+    // Cross-layout transfer: the panel was released over a different layout's
+    // tab. Move it there and skip the normal reposition persist entirely — the
+    // tile no longer belongs to this workspace, so writing back the dragged
+    // geometry would resurrect it.
+    tileDragActiveRef.current = false;
+    const transferTarget = dropTargetLayoutIdRef.current;
+    dropTargetLayoutIdRef.current = null;
+    setLayoutTabDropTarget(null);
+    if (transferTarget && transferTarget !== layoutId) {
+      const movedUid =
+        dragStartRef.current?.item.i ?? oldItem?.i ?? newItem?.i ?? null;
+      draggingRef.current = false;
+      dragStartRef.current = null;
+      setGridInteraction(null);
+      if (movedUid) {
+        // Suppress the post-drop layout echo so RGL's re-render (which still
+        // momentarily holds the tile) doesn't re-persist it onto this layout.
+        skipPostDropLayoutChangeRef.current = true;
+        window.setTimeout(() => {
+          skipPostDropLayoutChangeRef.current = false;
+        }, 250);
+        moveTileToLayout(layoutId, transferTarget, movedUid);
+        return;
+      }
+    }
+
     const dragStart = dragStartRef.current;
     const finalItem = dragStart
       ? layout.find((item) => item.i === dragStart.item.i)
@@ -473,10 +652,10 @@ function WorkspaceCanvas({
         skipPostDropLayoutChangeRef.current = false;
       }, 250);
       persist(
-        autoFitDroppedPanel(layout, WORKSPACE_GRID_COLS, previousDropItem),
+        autoFitDroppedPanel(layout, colsRef.current, previousDropItem),
       );
     }
-  }, [persist]);
+  }, [persist, layoutId, moveTileToLayout]);
   const onResizeStop = useCallback((
     layout: Layout,
     oldItem: LayoutItem | null,
@@ -494,7 +673,7 @@ function WorkspaceCanvas({
     window.setTimeout(() => {
       skipPostDropLayoutChangeRef.current = false;
     }, 250);
-    persist(resolveResizeOverlaps(layout, resizedId, WORKSPACE_GRID_COLS));
+    persist(resolveResizeOverlaps(layout, resizedId, colsRef.current));
   }, [persist]);
   const handleLayoutChange = useCallback(
     (next: Layout) => {
@@ -514,14 +693,12 @@ function WorkspaceCanvas({
   const rglLayouts = useMemo(
     () => ({
       lg: tiles.map((t) => {
-        const def = getPanelDef(t.panelId, pluginPanelKey);
+        const def = getPanelDef(t.panelId);
         const tileLocked = workspaceLocked || t.locked === true;
-        // Geometry comes from the derived render layout: locked tiles stay at
-        // their authored size while unlocked tiles shrink to fit (see
-        // deriveWorkspaceLayout). The placement is already clamped to the
-        // panel's maxW/maxH (deriveTiles does the clamp before solving), so a
-        // tile saved wider than its cap snaps back here and the next persist
-        // writes the fix.
+        // Geometry is the stored placement, already clamped to the panel's
+        // maxW/maxH (placementByUid does the clamp), so a tile saved wider than
+        // its cap snaps back here and the next persist writes the fix. Cells are
+        // a constant size, so a locked tile holds its pixel height automatically.
         const placement = placementByUid.get(t.uid);
         const w = placement?.w ?? t.w;
         const h = placement?.h ?? t.h;
@@ -534,9 +711,8 @@ function WorkspaceCanvas({
           w,
           h,
           // Per-panel legibility floor when the panel declares one, else the
-          // workspace-global minimum. RGL clamps drag-resize to these and
-          // refuses to compact a tile below them, so the viewport auto-fit
-          // can shrink the grid only until a dense panel hits its floor.
+          // workspace-global minimum. RGL clamps drag-resize to these so a tile
+          // can never be sized below its readable footprint.
           minW: def?.minW ?? WORKSPACE_TILE_MIN_W,
           minH: def?.minH ?? WORKSPACE_TILE_MIN_H,
           ...(def?.maxW !== undefined ? { maxW: def.maxW } : {}),
@@ -566,10 +742,30 @@ function WorkspaceCanvas({
           }`}
           width={gridWidth}
           breakpoints={{ lg: 0 }}
-          cols={{ lg: WORKSPACE_GRID_COLS }}
+          cols={{ lg: cols }}
+          // Hard vertical bound of the field — the VISIBLE workspace height in
+          // rows (above the footer). RGL's default gridBounds constraint clamps
+          // every drag/resize to 0..maxRows-h, so a panel can move or grow
+          // anywhere within the current view but never below it — dragging never
+          // pushes content past the footer into scroll. Width is bounded the
+          // same way by `cols` (0..cols-w). Left unset (Infinity) until the
+          // height is measured so nothing is clamped against a bogus early-mount
+          // field. Maximize and the bound grows with the window; shrink it and a
+          // layout authored larger simply scrolls to reach the rest.
+          {...(visibleRows > 0 ? { maxRows: visibleRows } : {})}
           rowHeight={rowHeight}
           margin={[WORKSPACE_GRID_MARGIN_PX, rowMargin]}
           containerPadding={[0, 0]}
+          // Resize handles on the sides and bottom — NOT the top edge.
+          // 'n'/'ne'/'nw' would overlay the tile header and steal the
+          // mousedown that drags the panel (a header-grab would start a resize
+          // instead of a move). 'e'/'w' reach any width, 's' any height, and
+          // the bottom corners cover diagonal — enough for "any size" while the
+          // header stays grabbable. all-panels.css styles each handle
+          // per-direction so they don't stack in the SE corner.
+          resizeConfig={{
+            handles: ['s', 'e', 'w', 'se', 'sw'],
+          }}
           compactor={workspaceCompactor}
           // Position tiles via top/left rather than transform: translate3d.
           // RGL's default `transformStrategy` uses CSS transforms, which
@@ -696,7 +892,24 @@ const PanelTile = memo(function PanelTile({
         onToggleLock={handleToggleLock}
       />
       <div className="workspace-tile-body">
-        <PanelBody tile={tile} layoutId={layoutId} />
+        {!def.fillNative &&
+        (def.scaleToFit === true ||
+          (def.designW !== undefined && def.designH !== undefined)) ? (
+          // Explicit design size wins; otherwise auto-measure mode (the
+          // scaleToFit opt-in renders ScaleToFitTile with no design props so
+          // it measures the content's intrinsic footprint itself).
+          def.designW !== undefined && def.designH !== undefined ? (
+            <ScaleToFitTile designW={def.designW} designH={def.designH}>
+              <PanelBody tile={tile} layoutId={layoutId} />
+            </ScaleToFitTile>
+          ) : (
+            <ScaleToFitTile>
+              <PanelBody tile={tile} layoutId={layoutId} />
+            </ScaleToFitTile>
+          )
+        ) : (
+          <PanelBody tile={tile} layoutId={layoutId} />
+        )}
       </div>
     </div>
   );
@@ -746,6 +959,18 @@ function PanelBody({
   if (tile.panelId === 'urlembed') {
     return (
       <UrlEmbedTileBody
+        tile={tile}
+        layoutId={layoutId}
+        onRemove={onRemove}
+        tileLocked={tileLocked}
+        workspaceLocked={workspaceLocked}
+        onToggleLock={onToggleLock}
+      />
+    );
+  }
+  if (tile.panelId === 'lanbrowser') {
+    return (
+      <LanBrowserTileBody
         tile={tile}
         layoutId={layoutId}
         onRemove={onRemove}
@@ -934,6 +1159,49 @@ function UrlEmbedTileBody({
 
   return (
     <UrlEmbedPanel
+      config={config}
+      setConfig={setConfig}
+      onRemove={onRemove}
+      tileLocked={tileLocked}
+      workspaceLocked={workspaceLocked}
+      onToggleLock={onToggleLock}
+    />
+  );
+}
+
+// LAN Browser shares the URL-embed per-tile config shape (url + title); only the
+// rendered component differs (it frames the server-side LAN proxy).
+function LanBrowserTileBody({
+  tile,
+  layoutId,
+  onRemove,
+  tileLocked,
+  workspaceLocked,
+  onToggleLock,
+}: {
+  tile: WorkspaceTile;
+  layoutId: string;
+  onRemove?: () => void;
+  tileLocked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
+}) {
+  const updateTileInstanceConfig = useLayoutStore(
+    (s) => s.updateTileInstanceConfigInLayout,
+  );
+  const config: LanBrowserConfig = useMemo(
+    () => parseLanBrowserConfig(tile.instanceConfig),
+    [tile.instanceConfig],
+  );
+  const setConfig = useCallback(
+    (next: LanBrowserConfig) => {
+      updateTileInstanceConfig(layoutId, tile.uid, next);
+    },
+    [layoutId, tile.uid, updateTileInstanceConfig],
+  );
+
+  return (
+    <LanBrowserPanel
       config={config}
       setConfig={setConfig}
       onRemove={onRemove}

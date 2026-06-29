@@ -1,0 +1,306 @@
+{
+   "ActiveEmotionalView":"Default View",
+   "Default View_Layers":"",
+   "Default View_Layout":"",
+   "Default View_ScaleFactor":"1.0",
+   "Default View_TopLeft":"1205,1277",
+   "ExpandedHierarchyInLayout":"",
+   "comment_0":"unused pins for PCIe bus configuration",
+   "comment_1":"unused pins for PCIe bus configuration",
+   "comment_2":"unused pins for PCIe bus configuration",
+   "comment_3":"Unused Alex input pins",
+   "commentid":"comment_0|comment_1|comment_2|comment_3|",
+   "fillcolor_comment_1":"",
+   "font_comment_0":"14",
+   "font_comment_1":"14",
+   "font_comment_2":"14",
+   "font_comment_3":"14",
+   "guistr":"# # String gsaved with Nlview 7.5.8 2022-09-21 7111 VDI=41 GEI=38 GUI=JA:10.0
+#  -string -flagsOSRD
+preplace port PROM_SPI -pg 1 -lvl 11 -x 5610 -y 680 -defaultsOSRD
+preplace port pcie_7x_mgt_rtl_0 -pg 1 -lvl 11 -x 5610 -y 700 -defaultsOSRD
+preplace port pcie_diff_clock_rtl -pg 1 -lvl 0 -x -10 -y 760 -defaultsOSRD
+preplace port port-id_ADC1Ovr_In_N -pg 1 -lvl 0 -x -10 -y 1290 -defaultsOSRD
+preplace port port-id_ADC1Ovr_In_P -pg 1 -lvl 0 -x -10 -y 1310 -defaultsOSRD
+preplace port port-id_ADC1_ATTEN_CLK -pg 1 -lvl 11 -x 5610 -y 60 -defaultsOSRD
+preplace port port-id_ADC1_ATTEN_DAT -pg 1 -lvl 11 -x 5610 -y 80 -defaultsOSRD
+preplace port port-id_ADC1_ATTEN_LE -pg 1 -lvl 11 -x 5610 -y 100 -defaultsOSRD
+preplace port port-id_ADC1_CLKin_N -pg 1 -lvl 0 -x -10 -y 1210 -defaultsOSRD
+preplace port port-id_ADC1_CLKin_P -pg 1 -lvl 0 -x -10 -y 1230 -defaultsOSRD
+preplace port port-id_ADC2Ovr_In_N -pg 1 -lvl 0 -x -10 -y 1410 -defaultsOSRD
+preplace port port-id_ADC2Ovr_In_P -pg 1 -lvl 0 -x -10 -y 1430 -defaultsOSRD
+preplace port port-id_ADC2_ATTEN_CLK -pg 1 -lvl 11 -x 5610 -y 120 -defaultsOSRD
+preplace port port-id_ADC2_ATTEN_DAT -pg 1 -lvl 11 -x 5610 -y 140 -defaultsOSRD
+preplace port port-id_ADC2_ATTEN_LE -pg 1 -lvl 11 -x 5610 -y 160 -defaultsOSRD
+preplace port port-id_ADC2_CLKin_N -pg 1 -lvl 0 -x -10 -y 1330 -defaultsOSRD
+preplace port port-id_ADC2_CLKin_P -pg 1 -lvl 0 -x -10 -y 1350 -defaultsOSRD
+preplace port port-id_ADC_MISO -pg 1 -lvl 0 -x -10 -y 820 -defaultsOSRD
+preplace port port-id_BCLK -pg 1 -lvl 11 -x 5610 -y 1860 -defaultsOSRD
+preplace port port-id_BUFF_Alex_Pin1 -pg 1 -lvl 0 -x -10 -y 260 -defaultsOSRD
+preplace port port-id_BUFF_Alex_Pin8 -pg 1 -lvl 0 -x -10 -y 280 -defaultsOSRD
+preplace port port-id_CTRL_TRSW -pg 1 -lvl 11 -x 5610 -y 240 -defaultsOSRD
+preplace port port-id_DRIVER_PA_EN -pg 1 -lvl 11 -x 5610 -y 600 -defaultsOSRD
+preplace port port-id_EMC_CLK -pg 1 -lvl 0 -x -10 -y 1700 -defaultsOSRD
+preplace port port-id_LRCLK -pg 1 -lvl 11 -x 5610 -y 1880 -defaultsOSRD
+preplace port port-id_MCLK -pg 1 -lvl 11 -x 5610 -y 1900 -defaultsOSRD
+preplace port port-id_MOX_strobe -pg 1 -lvl 11 -x 5610 -y 380 -defaultsOSRD
+preplace port port-id_PCIe_T_SMBCLK -pg 1 -lvl 0 -x -10 -y 840 -defaultsOSRD
+preplace port port-id_PCIe_T_SMBDAT -pg 1 -lvl 0 -x -10 -y 860 -defaultsOSRD
+preplace port port-id_RF_SPI_CK -pg 1 -lvl 11 -x 5610 -y 400 -defaultsOSRD
+preplace port port-id_RF_SPI_DATA -pg 1 -lvl 11 -x 5610 -y 420 -defaultsOSRD
+preplace port port-id_RF_SPI_RX_LOAD -pg 1 -lvl 11 -x 5610 -y 440 -defaultsOSRD
+preplace port port-id_RF_SPI_TX_LOAD -pg 1 -lvl 11 -x 5610 -y 460 -defaultsOSRD
+preplace port port-id_TX_DAC_PWM -pg 1 -lvl 11 -x 5610 -y 500 -defaultsOSRD
+preplace port port-id_TX_ENABLE -pg 1 -lvl 0 -x -10 -y 1790 -defaultsOSRD
+preplace port port-id_clock_122_in_n -pg 1 -lvl 0 -x -10 -y 1560 -defaultsOSRD
+preplace port port-id_clock_122_in_p -pg 1 -lvl 0 -x -10 -y 1580 -defaultsOSRD
+preplace port port-id_i2srxd -pg 1 -lvl 0 -x -10 -y 2030 -defaultsOSRD
+preplace port port-id_i2stxd -pg 1 -lvl 11 -x 5610 -y 1920 -defaultsOSRD
+preplace port port-id_pcie_reset_n -pg 1 -lvl 0 -x -10 -y 960 -defaultsOSRD
+preplace port port-id_pll_cr -pg 1 -lvl 11 -x 5610 -y 2100 -defaultsOSRD
+preplace port port-id_CODEC_SPI_DATA -pg 1 -lvl 11 -x 5610 -y 880 -defaultsOSRD
+preplace port port-id_CODEC_SPI_CLK -pg 1 -lvl 11 -x 5610 -y 860 -defaultsOSRD
+preplace port port-id_CODEC_CS -pg 1 -lvl 11 -x 5610 -y 900 -defaultsOSRD
+preplace port port-id_CODEC_MISO -pg 1 -lvl 0 -x -10 -y 1100 -defaultsOSRD
+preplace port port-id_ref_in_10 -pg 1 -lvl 0 -x -10 -y 1600 -defaultsOSRD
+preplace portBus ADC1_In_N -pg 1 -lvl 0 -x -10 -y 1250 -defaultsOSRD
+preplace portBus ADC1_In_P -pg 1 -lvl 0 -x -10 -y 1270 -defaultsOSRD
+preplace portBus ADC2_In_N -pg 1 -lvl 0 -x -10 -y 1370 -defaultsOSRD
+preplace portBus ADC2_In_P -pg 1 -lvl 0 -x -10 -y 1390 -defaultsOSRD
+preplace portBus ADC_CLK -pg 1 -lvl 11 -x 5610 -y 720 -defaultsOSRD
+preplace portBus ADC_MOSI -pg 1 -lvl 11 -x 5610 -y 740 -defaultsOSRD
+preplace portBus ATU_TUNE -pg 1 -lvl 11 -x 5610 -y 200 -defaultsOSRD
+preplace portBus BLINK_LED -pg 1 -lvl 11 -x 5610 -y 2040 -defaultsOSRD
+preplace portBus BUF_Out_FPGA -pg 1 -lvl 11 -x 5610 -y 220 -defaultsOSRD
+preplace portBus DAC_Out_N -pg 1 -lvl 11 -x 5610 -y 1670 -defaultsOSRD
+preplace portBus DAC_Out_P -pg 1 -lvl 11 -x 5610 -y 1690 -defaultsOSRD
+preplace portBus Dac_Atten -pg 1 -lvl 11 -x 5610 -y 260 -defaultsOSRD
+preplace portBus Dac_Atten_Clk -pg 1 -lvl 11 -x 5610 -y 280 -defaultsOSRD
+preplace portBus Dac_Atten_Data -pg 1 -lvl 11 -x 5610 -y 300 -defaultsOSRD
+preplace portBus Dac_Atten_LE -pg 1 -lvl 11 -x 5610 -y 320 -defaultsOSRD
+preplace portBus Dac_Atten_Mode -pg 1 -lvl 11 -x 5610 -y 340 -defaultsOSRD
+preplace portBus FPGA_CM4_EN -pg 1 -lvl 11 -x 5610 -y 760 -defaultsOSRD
+preplace portBus GPIO_OUT -pg 1 -lvl 11 -x 5610 -y 360 -defaultsOSRD
+preplace portBus LEDOutputs -pg 1 -lvl 11 -x 5610 -y 780 -defaultsOSRD
+preplace portBus PCIECLKREQN -pg 1 -lvl 11 -x 5610 -y 800 -defaultsOSRD
+preplace portBus PCI_LINK_LED -pg 1 -lvl 11 -x 5610 -y 820 -defaultsOSRD
+preplace portBus TXRX_RELAY -pg 1 -lvl 11 -x 5610 -y 480 -defaultsOSRD
+preplace portBus nADC_CS -pg 1 -lvl 11 -x 5610 -y 840 -defaultsOSRD
+preplace portBus status_in -pg 1 -lvl 0 -x -10 -y 420 -defaultsOSRD
+preplace portBus pcb_version_id -pg 1 -lvl 0 -x -10 -y 1040 -defaultsOSRD
+preplace portBus CODEC_RESETN -pg 1 -lvl 11 -x 5610 -y 1750 -defaultsOSRD
+preplace portBus HPF_SEL1 -pg 1 -lvl 11 -x 5610 -y 1200 -defaultsOSRD
+preplace portBus HPF_SEL2 -pg 1 -lvl 11 -x 5610 -y 1480 -defaultsOSRD
+preplace inst ADC_LVDS_Pins -pg 1 -lvl 2 -x 754 -y 1350 -defaultsOSRD
+preplace inst DAC_LVDS_Pins -pg 1 -lvl 10 -x 5285 -y 1680 -defaultsOSRD
+preplace inst FIFO_Interfaces -pg 1 -lvl 7 -x 3860 -y 1460 -defaultsOSRD -resize 448 539
+preplace inst PCIe -pg 1 -lvl 3 -x 1450 -y 930 -defaultsOSRD
+preplace inst RF_interfaces -pg 1 -lvl 10 -x 5285 -y 340 -defaultsOSRD
+preplace inst Receiver -pg 1 -lvl 6 -x 3140 -y 1030 -defaultsOSRD
+preplace inst Transmitter -pg 1 -lvl 8 -x 4390 -y 1140 -defaultsOSRD
+preplace inst audio_codec_0 -pg 1 -lvl 10 -x 5285 -y 1880 -defaultsOSRD
+preplace inst clock_generator -pg 1 -lvl 1 -x 300 -y 1580 -defaultsOSRD
+preplace inst xlslice_0 -pg 1 -lvl 9 -x 4788 -y 1420 -defaultsOSRD
+preplace inst xlslice_1 -pg 1 -lvl 6 -x 3140 -y 1966 -defaultsOSRD
+preplace inst xlslice_2 -pg 1 -lvl 6 -x 3140 -y 1860 -defaultsOSRD
+preplace inst xlslice_3 -pg 1 -lvl 3 -x 1450 -y 1490 -defaultsOSRD
+preplace inst xlslice_4 -pg 1 -lvl 9 -x 4788 -y 1760 -defaultsOSRD
+preplace inst IambicKeyer -pg 1 -lvl 7 -x 3860 -y 1010 -defaultsOSRD
+preplace inst axis_data_fifo_0 -pg 1 -lvl 9 -x 4788 -y 1290 -defaultsOSRD
+preplace inst util_vector_logic_0 -pg 1 -lvl 10 -x 5285 -y 2040 -defaultsOSRD
+preplace inst axis_data_fifo_1 -pg 1 -lvl 6 -x 3140 -y 1360 -defaultsOSRD
+preplace inst clock_monitor_0 -pg 1 -lvl 2 -x 754 -y 1670 -defaultsOSRD
+preplace inst byteswap_64_0 -pg 1 -lvl 5 -x 2513 -y 1280 -defaultsOSRD
+preplace inst Wideband_Collect_0 -pg 1 -lvl 4 -x 2169 -y 1040 -defaultsOSRD
+preplace netloc ADC1Ovr_In_N_1 1 0 2 NJ 1290 NJ
+preplace netloc ADC1Ovr_In_P_1 1 0 2 NJ 1310 NJ
+preplace netloc ADC1_CLKin_N_1 1 0 2 NJ 1210 NJ
+preplace netloc ADC1_CLKin_P_1 1 0 2 NJ 1230 NJ
+preplace netloc ADC1_In_N_1 1 0 2 NJ 1250 NJ
+preplace netloc ADC1_In_P_1 1 0 2 NJ 1270 NJ
+preplace netloc ADC1_Overrange_1 1 2 4 1180 410 N 410 N 410 2950
+preplace netloc ADC2Ovr_In_N_1 1 0 2 NJ 1410 NJ
+preplace netloc ADC2Ovr_In_P_1 1 0 2 NJ 1430 NJ
+preplace netloc ADC2_CLKin_N_1 1 0 2 NJ 1330 NJ
+preplace netloc ADC2_CLKin_P_1 1 0 2 NJ 1350 NJ
+preplace netloc ADC2_In_N_1 1 0 2 NJ 1370 NJ
+preplace netloc ADC2_In_P_1 1 0 2 NJ 1390 NJ
+preplace netloc ADC2_Overrange_1 1 2 4 1210 420 N 420 N 420 2930
+preplace netloc ADC_Ctrl_1 1 3 7 1640 560 NJ 560 NJ 560 NJ 560 NJ 560 NJ 560 4940J
+preplace netloc ADC_LVDS_Pins_ADC1_SingleEnded 1 2 4 1240 490 1919 850 NJ 850 2730
+preplace netloc ADC_LVDS_Pins_ADC2_SingleEnded 1 2 4 1230 470 1939 860 NJ 860 2720
+preplace netloc ADC_MISO_0_1 1 0 3 NJ 820 NJ 820 1160J
+preplace netloc BUFF_Alex_Pin1_0_1 1 0 10 NJ 260 NJ 260 NJ 260 NJ 260 NJ 260 NJ 260 NJ 260 NJ 260 NJ 260 NJ
+preplace netloc BUFF_Alex_Pin8_0_1 1 0 10 NJ 280 NJ 280 NJ 280 NJ 280 NJ 280 NJ 280 NJ 280 NJ 280 NJ 280 NJ
+preplace netloc Byteswap_1 1 3 7 NJ 1190 2383 1150 2980 1210 3340J 1760 4210 1770 4610J 1890 4910J
+preplace netloc CODEC_MISO_1 1 0 3 NJ 1100 NJ 1100 1250J
+preplace netloc CodecConfig_1 1 3 7 NJ 830 NJ 830 2680J 720 3570J 730 NJ 730 NJ 730 5025
+preplace netloc CodecMicResetn_1 1 3 4 1630J 1570 NJ 1570 NJ 1570 3330
+preplace netloc CodecSpkResetn_1 1 3 4 1999J 1160 NJ 1160 2880J 1220 3350
+preplace netloc DAC_Ctrl_1 1 3 7 1650J 350 NJ 350 NJ 350 NJ 350 NJ 350 NJ 350 4910
+preplace netloc DAC_LVDS_Pins_DAC_Out_N 1 10 1 NJ 1670
+preplace netloc DAC_LVDS_Pins_DAC_Out_P 1 10 1 NJ 1690
+preplace netloc DAC_SingleEnded_1 1 8 2 NJ 1090 5085
+preplace netloc EMC_CLK_1 1 0 2 NJ 1700 NJ
+preplace netloc IambicConfig_1 1 3 4 1929J 640 NJ 640 NJ 640 3510
+preplace netloc IambicKeyer_CW_Key_Down 1 7 1 4150 1000n
+preplace netloc PCIe_ADC_CLK 1 3 8 1660J 720 NJ 720 2670J 730 3560J 740 NJ 740 NJ 740 NJ 740 5560J
+preplace netloc PCIe_ADC_MOSI 1 3 8 1680J 730 NJ 730 2660J 740 3550J 750 NJ 750 NJ 750 5055J 730 5570J
+preplace netloc PCIe_FPGA_CM4_EN 1 3 8 NJ 870 NJ 870 2710J 750 3540J 760 NJ 760 NJ 760 NJ 760 NJ
+preplace netloc PCIe_LEDDrivers 1 3 8 1690J 760 NJ 760 NJ 760 3530J 770 NJ 770 NJ 770 NJ 770 5570J
+preplace netloc PCIe_PCIECLKREQN 1 3 8 1700J 770 NJ 770 NJ 770 3520J 780 NJ 780 NJ 780 NJ 780 5560J
+preplace netloc PCIe_PCI_LINK_LED 1 3 8 1730J 880 NJ 880 2700J 690 NJ 690 NJ 690 NJ 690 5065J 830 5570J
+preplace netloc PCIe_RFGPIOData 1 3 7 1670J 370 NJ 370 NJ 370 NJ 370 NJ 370 4580J 360 4930
+preplace netloc PCIe_TXTestFreqData 1 3 5 1999J 890 NJ 890 2750J 860 3340J 880 4170
+preplace netloc PCIe_T_SMBCLK_0_1 1 0 3 NJ 840 NJ 840 1170J
+preplace netloc PCIe_T_SMBDAT_0_1 1 0 3 NJ 860 NJ 860 1200J
+preplace netloc PCIe_aresetn12 1 3 5 1710 710 NJ 710 NJ 710 3400 1740 4170
+preplace netloc PCIe_axi_aclk_125 1 1 6 544 1150 1220J 1360 1680 1380 NJ 1380 2980 1270 3360J
+preplace netloc PCIe_axi_resetn 1 2 7 1280 1420 1640 1420 NJ 1420 2800 1780 NJ 1780 NJ 1780 4668
+preplace netloc PCIe_codec_cs 1 3 8 1979J 780 NJ 780 NJ 780 3500J 790 NJ 790 NJ 790 NJ 790 5540J
+preplace netloc PCIe_codecspiclk 1 3 8 1969J 800 NJ 800 2690J 790 3460J 800 NJ 800 NJ 800 NJ 800 5550J
+preplace netloc PCIe_codecspidata 1 3 8 1989J 810 NJ 810 2720J 800 3450J 810 NJ 810 NJ 810 NJ 810 5520J
+preplace netloc PCIe_nADC_CS 1 3 8 2009J 900 NJ 900 2740J 810 3440J 820 NJ 820 NJ 820 NJ 820 5530J
+preplace netloc PWM_DAC_0_DAC_bit 1 10 1 NJ 500
+preplace netloc RF_interfaces_BUF_Out_FPGA 1 10 1 NJ 220
+preplace netloc RF_interfaces_Dac_Atten_Clk 1 10 1 NJ 280
+preplace netloc RF_interfaces_Dac_Atten_Data 1 10 1 NJ 300
+preplace netloc RF_interfaces_Dac_Atten_LE 1 10 1 NJ 320
+preplace netloc RF_interfaces_Dac_Atten_Mode 1 10 1 NJ 340
+preplace netloc RF_interfaces_Dbounced_Key_Dash 1 6 5 3600 860 NJ 860 NJ 860 NJ 860 5480
+preplace netloc RF_interfaces_Debounced_Key_Dot 1 6 5 3590 890 NJ 890 NJ 890 NJ 890 5500
+preplace netloc RF_interfaces_Driver_PA_En 1 7 4 4210 710 NJ 710 5095J 680 5560
+preplace netloc RF_interfaces_IO8 1 6 5 3610 900 NJ 900 NJ 900 NJ 900 5470
+preplace netloc RF_interfaces_MOX_strobe 1 10 1 NJ 380
+preplace netloc RF_interfaces_status_out 1 2 9 1260 -10 NJ -10 NJ -10 NJ -10 NJ -10 NJ -10 NJ -10 NJ -10 5470
+preplace netloc RX_FIFO_aresetn_1 1 3 4 2009 1170 NJ 1170 2830J 1230 3380J
+preplace netloc SPI_0_Rx_load_strobe 1 10 1 NJ 440
+preplace netloc SPI_0_SPI_clock 1 10 1 NJ 400
+preplace netloc SPI_0_SPI_data 1 10 1 NJ 420
+preplace netloc SPI_0_Tx_load_strobe 1 10 1 NJ 460
+preplace netloc SerialAtten_0_ATTN_CLK 1 10 1 NJ 60
+preplace netloc SerialAtten_0_ATTN_DATA 1 10 1 NJ 80
+preplace netloc SerialAtten_0_ATTN_LE 1 10 1 NJ 100
+preplace netloc SerialAtten_1_ATTN_CLK 1 10 1 NJ 120
+preplace netloc SerialAtten_1_ATTN_DATA 1 10 1 NJ 140
+preplace netloc SerialAtten_1_ATTN_LE 1 10 1 NJ 160
+preplace netloc TXConfig_1 1 3 5 1620 820 NJ 820 NJ 820 3430J 830 4190J
+preplace netloc TXEnable_1 1 7 3 4130J 450 NJ 450 4950
+preplace netloc TXLOTune_1 1 3 5 1949 840 NJ 840 NJ 840 3410J 850 4180J
+preplace netloc TX_ENABLE_0_1 1 0 8 10J 930 NJ 930 1140 450 NJ 450 NJ 450 NJ 450 NJ 450 4110J
+preplace netloc TX_FIFO_aresetn_1 1 3 4 1620 1200 2393J 1190 2810J 1240 3370J
+preplace netloc Transmitter_HPF_SEL1 1 8 3 4638J 1180 NJ 1180 5570
+preplace netloc Transmitter_HPF_SEL2 1 8 3 4658J 1190 NJ 1190 5550
+preplace netloc Transmitter_cw_ptt1 1 2 8 1280 430 NJ 430 NJ 430 NJ 430 NJ 430 NJ 430 4580 380 NJ
+preplace netloc Transmitter_txmux_reset 1 6 3 3600 1750 NJ 1750 4570
+preplace netloc Watchdog_TXEN_1 1 2 9 1270 0 NJ 0 NJ 0 NJ 0 NJ 0 NJ 0 NJ 0 NJ 0 5490
+preplace netloc Watchdog_override_1 1 8 2 4590 460 NJ
+preplace netloc aclk_1 1 1 9 534J 1540 1270J 1430 NJ 1430 NJ 1430 2970J 1250 3410J 1170 4110J 1320 4628J 1200 5035
+preplace netloc adcrand_1 1 1 10 554 1790 NJ 1790 NJ 1790 NJ 1790 NJ 1790 NJ 1790 NJ 1790 4570J 1820 4995J 1760 5510
+preplace netloc aresetn_125_1 1 1 6 564 1550 NJ 1550 1650 1510 NJ 1510 NJ 1510 NJ
+preplace netloc audio_codec_0_BCLK 1 10 1 NJ 1860
+preplace netloc audio_codec_0_LRCLK 1 10 1 NJ 1880
+preplace netloc audio_codec_0_MCLK 1 10 1 NJ 1900
+preplace netloc audio_codec_0_i2stxd 1 10 1 NJ 1920
+preplace netloc axis_data_fifo_1_axis_wr_data_count 1 3 4 2029 1180 NJ 1180 2850J 1190 3300
+preplace netloc clk_wiz_0_clk_out2 1 1 9 450J 940 1150 460 NJ 460 NJ 460 NJ 460 3490 1150 4190 1330 4648 1170 5105
+preplace netloc clock_122_1 1 0 1 NJ 1580
+preplace netloc clock_122_in_n_1 1 0 1 NJ 1560
+preplace netloc clock_generator_clock_122_out 1 1 9 514 950 1190 480 1959 930 2373 1000 2910 1260 3320 1160 4120 1340 4618 370 4970J
+preplace netloc clock_generator_clock_122_out_ADC 1 1 1 460 1450n
+preplace netloc clock_generator_pll_lock 1 1 2 470 970 1260J
+preplace netloc clock_mon_1 1 2 1 1260 980n
+preplace netloc clock_monitor_0_LED 1 2 8 NJ 1680 NJ 1680 NJ 1680 NJ 1680 3300J 2040 NJ 2040 NJ 2040 NJ
+preplace netloc is2rxd_1 1 0 10 20J 1800 NJ 1800 NJ 1800 NJ 1800 NJ 1800 NJ 1800 3310J 1810 4210J 1830 NJ 1830 4920J
+preplace netloc keyer_config_1 1 3 5 1720 910 NJ 910 2760J 830 3420J 840 4160J
+preplace netloc pcb_version_id_0_1 1 0 3 NJ 1040 NJ 1040 1250J
+preplace netloc ref_in_10_1 1 0 2 150 1680 NJ
+preplace netloc regmux_2_1_1_dout 1 10 1 NJ 260
+preplace netloc reset_rtl_0_1 1 0 3 NJ 960 NJ 960 1220J
+preplace netloc status_in_1 1 0 10 NJ 420 NJ 420 950J 440 NJ 440 NJ 440 2940J 420 NJ 420 NJ 420 NJ 420 NJ
+preplace netloc tx_samples_1 1 5 4 2980 850 3390J 870 NJ 870 4570
+preplace netloc util_reduced_logic_0_Res 1 1 10 524J 1560 NJ 1560 NJ 1560 NJ 1560 NJ 1560 3320J 2100 NJ 2100 NJ 2100 NJ 2100 NJ
+preplace netloc util_reduced_logic_2_Res 1 10 1 NJ 240
+preplace netloc util_reduced_logic_3_Res 1 10 1 NJ 480
+preplace netloc util_vector_logic_0_Res 1 10 1 NJ 2040
+preplace netloc xlslice_0_Dout 1 10 1 NJ 360
+preplace netloc xlslice_0_Dout1 1 9 1 5045J 400n
+preplace netloc xlslice_1_Dout1 1 6 3 3570 1800 4150 1350 4668J
+preplace netloc xlslice_2_Dout 1 6 4 3440 1880 NJ 1880 NJ 1880 NJ
+preplace netloc xlslice_3_Dout 1 3 3 2019 1290 2363 1370 2800
+preplace netloc xlslice_4_Dout 1 9 2 4985 1750 NJ
+preplace netloc xlslice_5_Dout 1 10 1 NJ 200
+preplace netloc AXIS00_WB_1 1 6 1 N 1350
+preplace netloc FIFO_Interfaces_M_AXIS_codec 1 7 3 NJ 1460 4620J 1480 5005
+preplace netloc PCIe_M03_AXI_0 1 3 4 NJ 590 NJ 590 NJ 590 3480
+preplace netloc PCIe_M08_AXI_0 1 3 5 NJ 610 NJ 610 NJ 610 NJ 610 4200
+preplace netloc PCIe_M09_AXI 1 3 3 1620J 740 NJ 740 2650
+preplace netloc PCIe_M12_AXI_WB 1 3 1 1630 730n
+preplace netloc PCIe_M_AXI_Alex 1 3 7 1620 220 NJ 220 NJ 220 NJ 220 NJ 220 NJ 220 NJ
+preplace netloc PCIe_M_AXI_full_0 1 3 4 NJ 650 NJ 650 NJ 650 3470
+preplace netloc PCIe_SPI_0_0 1 3 8 1979J 690 NJ 690 2670J 700 NJ 700 NJ 700 NJ 700 5075J 690 5570J
+preplace netloc PCIe_pcie_7x_mgt_rtl_0 1 3 8 1660J 680 NJ 680 NJ 680 NJ 680 NJ 680 NJ 680 5085J 700 NJ
+preplace netloc Receiver_RX_Data 1 6 1 3390 1030n
+preplace netloc S_AXIS_codec_1 1 6 5 3580 720 NJ 720 NJ 720 NJ 720 5490
+preplace netloc TX_IQ_In_1 1 7 1 4140 1030n
+preplace netloc Transmitter_m_axis_sidetoneampl 1 8 1 4668 1050n
+preplace netloc Wideband_Collect_0_m_axis 1 4 1 2310 1030n
+preplace netloc axis_data_fifo_0_M_AXIS 1 9 1 5015 1290n
+preplace netloc byteswap_64_0_m_axis 1 5 1 2810 1280n
+preplace netloc diff_clock_rtl_0_1 1 0 3 NJ 760 NJ 760 1220J
+preplace netloc s_axi_0_1 1 3 3 NJ 550 NJ 550 2970
+preplace netloc s_axi_1_1 1 3 3 1979J 600 NJ 600 2960
+preplace netloc s_axi_adcovr_1 1 3 3 1730J 790 NJ 790 2640
+preplace cgraphic comment_3 place left 328 -10 textcolor 4 linecolor 3
+preplace cgraphic comment_2 place top -100 454 textcolor 4 linecolor 3
+preplace cgraphic comment_1 place left -71 -409 textcolor 4 linecolor 3
+preplace cgraphic comment_0 place left 301 84 textcolor 4 linecolor 3
+levelinfo -pg 1 -10 300 754 1450 2169 2513 3140 3860 4390 4788 5285 5610
+pagesize -pg 1 -db -bbox -sgen -200 -20 12860 9340
+",
+   "linecolor_comment_1":"",
+   "linecolor_comment_10":"",
+   "linecolor_comment_7":"",
+   "linecolor_comment_8":"",
+   "linecolor_comment_9":"",
+   "linktoobj_comment_0":"/PCIe/PCIe_T_SMBDAT",
+   "linktoobj_comment_1":"/PCIe/PCIe_T_SMBDAT",
+   "linktoobj_comment_10":"/PCIe/PCIe_T_SMBDAT",
+   "linktoobj_comment_12":"",
+   "linktoobj_comment_13":"",
+   "linktoobj_comment_14":"",
+   "linktoobj_comment_2":"/PCIe/PCIe_T_SMBDAT",
+   "linktoobj_comment_3":"/RF_interfaces/BUFF_Alex_Pin1",
+   "linktoobj_comment_4":"",
+   "linktoobj_comment_5":"",
+   "linktoobj_comment_6":"",
+   "linktoobj_comment_7":"/PCIe/PCIe_T_SMBDAT",
+   "linktoobj_comment_8":"/RF_interfaces/BUFF_Alex_Pin1",
+   "linktoobj_comment_9":"/PCIe/PCIe_T_SMBDAT",
+   "linktotype_comment_0":"bd_design",
+   "linktotype_comment_1":"bd_port",
+   "linktotype_comment_10":"bd_port",
+   "linktotype_comment_12":"bd_design",
+   "linktotype_comment_13":"bd_design",
+   "linktotype_comment_14":"bd_design",
+   "linktotype_comment_2":"bd_design",
+   "linktotype_comment_3":"bd_design",
+   "linktotype_comment_4":"bd_design",
+   "linktotype_comment_5":"bd_design",
+   "linktotype_comment_6":"bd_design",
+   "linktotype_comment_7":"bd_port",
+   "linktotype_comment_8":"bd_port",
+   "linktotype_comment_9":"bd_port",
+   "textcolor_comment_1":"",
+   "textcolor_comment_10":"",
+   "textcolor_comment_7":"",
+   "textcolor_comment_8":"",
+   "textcolor_comment_9":""
+}
+0
+{
+   "/PCIe/PCIe_T_SMBDAT/comment_0":"comment_0",
+   "/PCIe/PCIe_T_SMBDAT/comment_5":"comment_1",
+   "/PCIe/PCIe_T_SMBDAT/comment_6":"comment_2",
+   "/RF_interfaces/BUFF_Alex_Pin1/comment_4":"comment_3"
+}

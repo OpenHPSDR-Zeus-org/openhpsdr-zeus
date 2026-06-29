@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
@@ -78,7 +79,7 @@ public sealed class ActivationSpotsService : BackgroundService
     {
         var c = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
         // POTA/SOTA APIs reject requests without a User-Agent.
-        c.DefaultRequestHeaders.UserAgent.ParseAdd("Zeus-HPSDR/1.0 (+https://github.com/Kb2uka/openhpsdr-zeus)");
+        c.DefaultRequestHeaders.UserAgent.ParseAdd("Zeus-HPSDR/1.0 (+https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus)");
         c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
         return c;
     }

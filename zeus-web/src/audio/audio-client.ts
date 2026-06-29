@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -128,7 +129,13 @@ const STATS_INTERVAL_MS = 500;
 class AudioClient {
   private context: AudioContext | null = null;
   private gain: GainNode | null = null;
-  private nextPlayTime = 0;
+  // Per-receiver playback timeline keyed by rxId. Hardware mixes every RX into
+  // ONE server stream (RxId 0), but the Kiwi slice is a SECOND independent
+  // stream (RxId 7). Scheduling both on one shared timeline made their frames
+  // concatenate instead of mix → chopped audio. Each rxId now advances its own
+  // contiguous schedule; all sources fan into the shared gain node below, so
+  // Web Audio mixes the streams.
+  private streams = new Map<number, { nextPlayTime: number }>();
   private pending = new Set<AudioBufferSourceNode>();
   private state: AudioClientState = { kind: 'idle' };
   private stats: AudioStats | null = null;
@@ -227,7 +234,7 @@ class AudioClient {
       if (ctx.state === 'suspended') await ctx.resume();
       this.context = ctx;
       this.gain = gain;
-      this.nextPlayTime = 0;
+      this.streams.clear();
       this.underruns = 0;
       this.dropped = 0;
       this.targetSecs = BUFFER_TARGET_START_SECS;
@@ -279,7 +286,13 @@ class AudioClient {
       try { src.disconnect(); } catch { /* ignore */ }
     }
     this.pending.clear();
-    this.nextPlayTime = 0;
+    this.streams.clear();
+  }
+
+  private streamFor(rxId: number): { nextPlayTime: number } {
+    let s = this.streams.get(rxId);
+    if (!s) { s = { nextPlayTime: 0 }; this.streams.set(rxId, s); }
+    return s;
   }
 
   async stop(): Promise<void> {
@@ -319,6 +332,9 @@ class AudioClient {
     if (ctx.state !== 'running') return;
 
     const now = ctx.currentTime;
+    // This receiver's own contiguous schedule (mixed with the others downstream).
+    const sched = this.streamFor(frame.rxId);
+    let np = sched.nextPlayTime;
 
     // #299 Step 2 probe — wall-clock gap since previous push, used below
     // to attribute the cause of any underrun the schedule re-anchor catches.
@@ -328,7 +344,7 @@ class AudioClient {
 
     // Drop if we've already scheduled more than the max ahead — prevents
     // unbounded drift when the producer is faster than real time.
-    if (this.nextPlayTime > now + BUFFER_MAX_SECS) {
+    if (np > now + BUFFER_MAX_SECS) {
       this.dropped += frame.sampleCount;
       return;
     }
@@ -343,10 +359,10 @@ class AudioClient {
     // performed INSERTED that much silence each time → the crackle. Riding the
     // buffer low is fine: contiguous scheduling (nextPlayTime += frame
     // duration) keeps audio seamless until it genuinely runs dry.
-    if (this.nextPlayTime === 0) {
+    if (np === 0) {
       // First frame after start/reset — seed the jitter cushion.
-      this.nextPlayTime = now + this.targetSecs;
-    } else if (this.nextPlayTime < now) {
+      np = now + this.targetSecs;
+    } else if (np < now) {
       this.underruns++;
       // A real underrun — grow the buffer target so we carry more cushion.
       // Decays back toward the floor during clean playback (emitStats).
@@ -361,12 +377,12 @@ class AudioClient {
         );
       } else {
         this.latenessVsScheduleCount++;
-        const behindMs = (now - this.nextPlayTime) * 1000;
+        const behindMs = (now - np) * 1000;
         console.warn(
           `audio.underrun.latenessVsSchedule dtMs=${dtSinceLastPushMs.toFixed(1)} behindMs=${behindMs.toFixed(1)} totalSched=${this.latenessVsScheduleCount}`,
         );
       }
-      this.nextPlayTime = now + this.targetSecs;
+      np = now + this.targetSecs;
     }
 
     const buffer = ctx.createBuffer(1, frame.sampleCount, frame.sampleRateHz);
@@ -386,7 +402,7 @@ class AudioClient {
       try { source.disconnect(); } catch { /* ignore */ }
     };
     this.pending.add(source);
-    source.start(this.nextPlayTime);
+    source.start(np);
     // PERF_PASS_3_DEBUG: t4 — first audio frame after MOX-off. Uncommitted.
     {
       const w = window as unknown as {
@@ -403,11 +419,11 @@ class AudioClient {
         };
       };
       if (w.__zeusFirstAudioAfterMox) {
-        const delta_ms = (this.nextPlayTime - now) * 1000;
+        const delta_ms = (np - now) * 1000;
         console.log(
           'audio.scheduled',
           performance.now(),
-          'nextPlayTime=', this.nextPlayTime,
+          'nextPlayTime=', np,
           'now=', now,
           'delta_ms=', delta_ms,
         );
@@ -416,7 +432,7 @@ class AudioClient {
           const last = arr[arr.length - 1];
           if (last && last.t4_audio_scheduled === undefined) {
             last.t4_audio_scheduled = performance.now();
-            last.nextPlayTime = this.nextPlayTime;
+            last.nextPlayTime = np;
             last.now = now;
             last.delta_ms = delta_ms;
           }
@@ -425,7 +441,8 @@ class AudioClient {
       }
     }
 
-    this.nextPlayTime += frame.sampleCount / frame.sampleRateHz;
+    np += frame.sampleCount / frame.sampleRateHz;
+    sched.nextPlayTime = np;
   }
 
   private emitStats() {
@@ -438,7 +455,9 @@ class AudioClient {
       this.targetSecs = Math.max(BUFFER_TARGET_MIN_SECS, this.targetSecs - BUFFER_DECAY_SECS_PER_TICK);
     }
     this.underrunsAtLastTick = this.underruns;
-    const ahead = Math.max(0, this.nextPlayTime - ctx.currentTime);
+    let furthest = 0;
+    for (const s of this.streams.values()) furthest = Math.max(furthest, s.nextPlayTime);
+    const ahead = Math.max(0, furthest - ctx.currentTime);
     this.stats = {
       available: Math.round(ahead * ctx.sampleRate),
       underrunCount: this.underruns,

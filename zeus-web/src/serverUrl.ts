@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 // See LICENSE / ATTRIBUTIONS.md at the repository root.
 
 // Configurable server base URL. The web build defaults to relative paths
@@ -95,14 +96,6 @@ export function isCapacitorRuntime(): boolean {
     // ignore
   }
   return false;
-}
-
-/** Apply the configured base to a request path. Passes absolute URLs through. */
-export function apiUrl(path: string): string {
-  if (/^[a-z][a-z0-9+.-]*:/i.test(path)) return path; // already absolute
-  const base = getServerBaseUrl();
-  if (!base) return path;
-  return base + (path.startsWith('/') ? path : '/' + path);
 }
 
 /**

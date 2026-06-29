@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -45,6 +46,7 @@
 using System.Buffers;
 using System.Diagnostics;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
@@ -86,11 +88,35 @@ public sealed class Protocol1Client : IProtocol1Client
     private int _preamp;       // 0 / 1
     private int _attenDb;      // 0..31 dB (HpsdrAtten value)
     private int _antenna = (int)HpsdrAntenna.Ant1;
+    // RX-antenna relay change deferred while keyed (external-ports plan —
+    // antenna slice, #804). SAFETY: the Alex relay matrix must never be
+    // hot-switched under power. While MOX is on, SetAntennaRx stashes the
+    // desired antenna here (-1 = nothing pending) instead of mutating the live
+    // _antenna; it is flushed on the unkey edge in SetMox(false). -1 = none.
+    private int _pendingAntenna = -1;
+    // TX-antenna relay select (Config-frame C4[1:0]) — external-port parity audit
+    // (GAP-P1-1). Same MOX-deferred discipline as the RX antenna: while keyed the
+    // desired TX antenna is stashed in _pendingTxAntenna and applied on the unkey
+    // edge so the Alex relay matrix never hot-switches under power. Default ANT1.
+    private int _txAntenna = (int)HpsdrAntenna.Ant1;
+    private int _pendingTxAntenna = -1;
+    // HL2 user GPIO 4-bit user_dig_out mask (external-ports plan, Phase 5; re-
+    // ported in the external-port parity audit). Rides C3[3:0] of the 0x14 frame
+    // on HL2. Default 0 → byte-identical. RadioService gates this behind the
+    // HasHl2UserGpio capability so it never reaches a non-HL2 board.
+    private int _userDigOut;   // 0..15
     // HL2 Band Volts PWM enable. Wire encoding is C3 bit 3 of the Config
     // frame — same bit that legacy HPSDR boards used for ADC DITHER, which
     // HL2's AD9866 doesn't need (see hermes-lite2-protocol.md line 39 and
     // mi0bot's HL2 fork, which exposes this in the UI as "Band Volts").
     private int _enableHl2BandVolts;
+    // LT2208 ADC dither / digital-output randomizer (Config-frame C3 bits 3/4
+    // on non-HL2 boards). Default off — matches Thetis netInterface.c init and
+    // keeps the Config frame byte-identical until an operator opts in. Gated to
+    // LT2208 boards at the wire layer (WriteConfigPayload); RadioService only
+    // pushes these for a connected non-HL2 P1 board.
+    private int _adcDither;     // 0 / 1
+    private int _adcRandom;     // 0 / 1
     private int _boardKind = (int)HpsdrBoardKind.HermesLite2;
     private int _hasN2adr;      // 0 / 1
     private int _mox;           // 0 / 1
@@ -101,6 +127,10 @@ public sealed class Protocol1Client : IProtocol1Client
     private int _driveByteOverride = -1;
     private int _ocTxMask;      // user OC pin mask for TX (low 7 bits)
     private int _ocRxMask;      // user OC pin mask for RX (low 7 bits)
+    // ATU auto-tune deadline (Environment.TickCount64). While now < this, the
+    // DriveFilter frame asserts the auto-tune-start bit (C2[4]). 0 = idle.
+    // Momentary so the tune request auto-releases without a second API call.
+    private long _atuTuneUntilTicks;
     // PureSignal master arm. When set on HL2 the C0=0x14 (Attenuator) frame
     // also writes puresignal_run into C2 bit 6, the predistortion register
     // is added to the rotation, and (when MOX is on) two receivers are
@@ -123,6 +153,16 @@ public sealed class Protocol1Client : IProtocol1Client
     // a no-op until the operator opts into iambic. See zeus-bks.
     private int _cwKeyerSpeedWpm;
     private int _cwKeyerMode; // CwKeyerMode as int for Interlocked
+    // TX audio front-end (external-audio-jacks re-port). mic_boost / mic_linein
+    // ride the 0x12 frame on codec boards; mic_trs / mic_bias / line_in_gain
+    // ride the 0x14 frame on HL2 (read-modify-write — see ControlFrame). All
+    // default to the off / zero state so an untouched radio is byte-identical
+    // to today. mic_bias defaults OFF (floating-connector PTT-hang guard).
+    private int _micBoost;     // 0 / 1
+    private int _micLineIn;    // 0 / 1
+    private int _micTrs;       // 0 / 1
+    private int _micBias;      // 0 / 1
+    private int _lineInGain;   // 0..31 (5-bit HL2 line_in_gain)
     private long _droppedFrames;
     private long _totalFrames;
 
@@ -137,11 +177,16 @@ public sealed class Protocol1Client : IProtocol1Client
     // the built-in test-tone when caller wants a bring-up carrier. Default is
     // the tone so legacy callers (tests, tools/zeus-dump) keep working.
     private readonly ITxIqSource _txIqSource;
+    // Optional RX-audio source for the EP2 L/R slots. Null = never carry RX audio
+    // to the radio codec (legacy behaviour). Drained only during RX in
+    // ControlFrame.WriteUsbFrame; see RxAudioRing.
+    private readonly IRxAudioSource? _rxAudioSource;
 
-    public Protocol1Client(ILogger<Protocol1Client>? logger = null, ITxIqSource? iqSource = null)
+    public Protocol1Client(ILogger<Protocol1Client>? logger = null, ITxIqSource? iqSource = null, IRxAudioSource? rxAudioSource = null)
     {
         _log = logger ?? NullLogger<Protocol1Client>.Instance;
         _txIqSource = iqSource ?? new TestToneGenerator();
+        _rxAudioSource = rxAudioSource;
         _channel = Channel.CreateBounded<IqFrame>(new BoundedChannelOptions(DefaultFrameChannelCapacity)
         {
             FullMode = BoundedChannelFullMode.DropOldest,
@@ -154,6 +199,7 @@ public sealed class Protocol1Client : IProtocol1Client
     public long DroppedFrames => Interlocked.Read(ref _droppedFrames);
     public long TotalFrames => Interlocked.Read(ref _totalFrames);
 
+    public event Action? Disconnected;
     public event Action<TelemetryReading>? TelemetryReceived;
     public event Action<AdcOverloadStatus>? AdcOverloadObserved;
     public event Action<bool>? HardwarePttChanged;
@@ -256,6 +302,27 @@ public sealed class Protocol1Client : IProtocol1Client
 
     /// <inheritdoc />
     public void DetachRxSink() => Interlocked.Exchange(ref _rxSink, null);
+
+    // ---- Codec radio-mic / line-in relay (issue #992) ---------------------
+    // The radio's TLV320 codec digitises the selected analog input (mic jack
+    // for RadioMic source, line-in jack for RadioLineIn) and ships those 16-bit
+    // samples inside every EP6 packet at offsets 6..7 of each 8-byte sample
+    // group. We drop them by default; if a handler is attached (set when a
+    // radio audio source is armed on a board with HasOnboardCodec) the RxLoop
+    // extracts them per packet and invokes the handler synchronously. volatile
+    // so a host-thread Attach/Detach is observed by the RX thread without a
+    // lock.
+    private volatile P1MicSampleHandler? _radioMicHandler;
+
+    /// <inheritdoc />
+    public void AttachRadioMicHandler(P1MicSampleHandler handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        _radioMicHandler = handler;
+    }
+
+    /// <inheritdoc />
+    public void DetachRadioMicHandler() => _radioMicHandler = null;
 
     /// <summary>
     /// Decode an HL2 4-DDC PS-armed EP6 packet — mi0bot's canonical layout
@@ -461,12 +528,51 @@ public sealed class Protocol1Client : IProtocol1Client
             SendBufferSize = 64 * 1024,
             ReceiveTimeout = RxSocketTimeoutMs,
         };
-        sock.Bind(new IPEndPoint(IPAddress.Any, 0));
+        sock.Bind(new IPEndPoint(LocalAddressForRemote(radioEndpoint.Address), 0));
 
         _socket = sock;
         _remote = radioEndpoint;
         _log.LogInformation("Protocol1 bound local={Local} remote={Remote}", sock.LocalEndPoint, radioEndpoint);
         return Task.CompletedTask;
+    }
+
+    // When the radio is on a link-local address (169.254.0.0/16, direct-connect
+    // without a router), IPAddress.Any lets the OS pick the bind address — which
+    // on macOS is the default-route interface (Wi-Fi), a different subnet from the
+    // direct Ethernet link. The radio then streams IQ back to that unreachable
+    // address and Zeus gets nothing. Find the local link-local unicast on the same
+    // /16 and bind there instead so the Metis start command carries a reachable
+    // return address.
+    private static IPAddress LocalAddressForRemote(IPAddress remote)
+    {
+        if (!IsLinkLocal(remote)) return IPAddress.Any;
+        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (nic.OperationalStatus != OperationalStatus.Up) continue;
+            foreach (var uni in nic.GetIPProperties().UnicastAddresses)
+            {
+                if (uni.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                if (!IsLinkLocal(uni.Address)) continue;
+                if (SameSubnet(remote, uni.Address, uni.IPv4Mask)) return uni.Address;
+            }
+        }
+        return IPAddress.Any;
+    }
+
+    private static bool IsLinkLocal(IPAddress a)
+    {
+        var b = a.GetAddressBytes();
+        return b[0] == 169 && b[1] == 254;
+    }
+
+    private static bool SameSubnet(IPAddress a, IPAddress b, IPAddress mask)
+    {
+        var ab = a.GetAddressBytes();
+        var bb = b.GetAddressBytes();
+        var mb = mask.GetAddressBytes();
+        for (int i = 0; i < 4; i++)
+            if ((ab[i] & mb[i]) != (bb[i] & mb[i])) return false;
+        return true;
     }
 
     public Task StartAsync(StreamConfig config, CancellationToken ct)
@@ -565,13 +671,79 @@ public sealed class Protocol1Client : IProtocol1Client
 
     public void SetSampleRate(HpsdrSampleRate rate) => Interlocked.Exchange(ref _rate, (int)rate);
     public void SetPreamp(bool on) => Interlocked.Exchange(ref _preamp, on ? 1 : 0);
+    /// <summary>
+    /// Enable/disable the LT2208 ADC dither and digital-output randomizer
+    /// (Config-frame C3 bits 3/4 on non-HL2 boards). Mirrors the Protocol-2
+    /// <c>SetAdcDitherRandom</c> API. The bits ride the next periodic Config
+    /// frame; no immediate send is needed because the Config register is on the
+    /// round-robin emitted every TX tick. Wire gating to LT2208 boards lives in
+    /// <see cref="ControlFrame.WriteConfigPayload"/>.
+    /// </summary>
+    public void SetAdcDitherRandom(bool ditherEnabled, bool randomEnabled)
+    {
+        Interlocked.Exchange(ref _adcDither, ditherEnabled ? 1 : 0);
+        Interlocked.Exchange(ref _adcRandom, randomEnabled ? 1 : 0);
+    }
     public void SetAttenuator(HpsdrAtten atten) => Interlocked.Exchange(ref _attenDb, atten.ClampedDb);
-    public void SetAntennaRx(HpsdrAntenna ant) => Interlocked.Exchange(ref _antenna, (int)ant);
+    /// <summary>
+    /// Select the RX antenna relay (ANT1/2/3). SAFETY (external-ports plan —
+    /// antenna slice, #804): while keyed, the Alex/relay matrix must not be
+    /// hot-switched, so the selection is stashed into <see cref="_pendingAntenna"/>
+    /// and applied on the unkey edge in <see cref="SetMox"/>(false). At idle it
+    /// is applied immediately. The HL2 single-jack clamp lives at the wire layer
+    /// (<c>ControlFrame.EncodeRxAntennaC3Bits</c>), so this method stores the raw
+    /// selection on every board.
+    /// </summary>
+    public void SetAntennaRx(HpsdrAntenna ant)
+    {
+        if (Volatile.Read(ref _mox) != 0)
+        {
+            Interlocked.Exchange(ref _pendingAntenna, (int)ant);
+            return;
+        }
+        Interlocked.Exchange(ref _antenna, (int)ant);
+    }
+
+    /// <summary>
+    /// Select the TX antenna relay (ANT1/2/3) — Config-frame C4[1:0], external-
+    /// port parity audit (GAP-P1-1). SAFETY: like <see cref="SetAntennaRx"/>, the
+    /// Alex/relay matrix must not be hot-switched while keyed, so the selection is
+    /// stashed into <see cref="_pendingTxAntenna"/> during MOX and applied on the
+    /// unkey edge in <see cref="SetMox"/>(false). At idle it is applied
+    /// immediately. The wire-layer clamp (force ANT1 on boards without full Alex
+    /// TX relays) lives in <c>ControlFrame.EncodeTxAntennaC4Bits</c>, so this
+    /// method stores the raw selection on every board.
+    /// </summary>
+    public void SetAntennaTx(HpsdrAntenna ant)
+    {
+        if (Volatile.Read(ref _mox) != 0)
+        {
+            Interlocked.Exchange(ref _pendingTxAntenna, (int)ant);
+            return;
+        }
+        Interlocked.Exchange(ref _txAntenna, (int)ant);
+    }
     public void SetBoardKind(HpsdrBoardKind board) => Interlocked.Exchange(ref _boardKind, (int)board);
 
     public HpsdrBoardKind BoardKind => (HpsdrBoardKind)Volatile.Read(ref _boardKind);
     public void SetHasN2adr(bool hasN2adr) => Interlocked.Exchange(ref _hasN2adr, hasN2adr ? 1 : 0);
-    public void SetMox(bool on) => Interlocked.Exchange(ref _mox, on ? 1 : 0);
+    public void SetMox(bool on)
+    {
+        Interlocked.Exchange(ref _mox, on ? 1 : 0);
+        // Unkey edge: apply any RX-antenna change deferred while keyed
+        // (external-ports plan — antenna slice, #804) so the relay matrix
+        // switches at idle, never under power.
+        if (!on)
+        {
+            int pending = Interlocked.Exchange(ref _pendingAntenna, -1);
+            if (pending >= 0) Interlocked.Exchange(ref _antenna, pending);
+            // Apply any TX-antenna change deferred while keyed (GAP-P1-1) on the
+            // same unkey edge so the relay matrix switches at idle, never under
+            // power.
+            int pendingTx = Interlocked.Exchange(ref _pendingTxAntenna, -1);
+            if (pendingTx >= 0) Interlocked.Exchange(ref _txAntenna, pendingTx);
+        }
+    }
     public void SetDrive(int percent) =>
         Interlocked.Exchange(ref _drivePct, Math.Clamp(percent, 0, 100));
 
@@ -582,6 +754,16 @@ public sealed class Protocol1Client : IProtocol1Client
     {
         Interlocked.Exchange(ref _ocTxMask, txMask & 0x7F);
         Interlocked.Exchange(ref _ocRxMask, rxMask & 0x7F);
+    }
+
+    /// <summary>Request an ATU tune cycle: assert the Apollo/Alex auto-tune-start
+    /// bit (DriveFilter C2[4]) on every outgoing frame for <paramref name="durationMs"/>
+    /// milliseconds, then auto-release. The C&amp;C round-robin picks the new
+    /// CcState on its next tick, so no explicit re-send is needed.</summary>
+    public void RequestAtuTune(int durationMs)
+    {
+        long until = Environment.TickCount64 + Math.Max(1, durationMs);
+        Interlocked.Exchange(ref _atuTuneUntilTicks, until);
     }
 
     /// <summary>
@@ -629,6 +811,36 @@ public sealed class Protocol1Client : IProtocol1Client
         Interlocked.Exchange(ref _cwKeyerSpeedWpm, wpm);
         Interlocked.Exchange(ref _cwKeyerMode, (int)mode);
     }
+
+    /// <summary>
+    /// Set the TX audio front-end (external-audio-jacks re-port). Global,
+    /// per-radio — not per-band. <paramref name="micBoost"/> /
+    /// <paramref name="micLineIn"/> ride the 0x12 frame on Hermes-class codec
+    /// boards; <paramref name="micTrs"/> / <paramref name="micBias"/> /
+    /// <paramref name="lineInGain"/> ride the 0x14 frame on HL2. Which fields
+    /// actually reach the wire is gated per-board in ControlFrame, so a value
+    /// for the wrong board is simply ignored. mic_bias defaults OFF and the
+    /// caller (RadioService / REST) guards the gate; passing it true is the
+    /// operator's explicit opt-in.
+    /// </summary>
+    public void SetAudioFrontEnd(bool micBoost, bool micLineIn, bool micTrs, bool micBias, int lineInGain)
+    {
+        Interlocked.Exchange(ref _micBoost, micBoost ? 1 : 0);
+        Interlocked.Exchange(ref _micLineIn, micLineIn ? 1 : 0);
+        Interlocked.Exchange(ref _micTrs, micTrs ? 1 : 0);
+        Interlocked.Exchange(ref _micBias, micBias ? 1 : 0);
+        Interlocked.Exchange(ref _lineInGain, Math.Clamp(lineInGain, 0, 31));
+    }
+
+    /// <summary>
+    /// Set the HL2 4-bit user GPIO mask (user_dig_out → C3[3:0] of the 0x14
+    /// frame; external-ports plan, Phase 5 / external-port parity audit). Low
+    /// nibble only. HL2-only on the wire (RadioService gates it behind
+    /// HasHl2UserGpio); a value pushed to a non-HL2 client never reaches the wire
+    /// because ControlFrame only writes C3[3:0] for HermesLite2.
+    /// </summary>
+    public void SetUserDigOut(int mask) =>
+        Interlocked.Exchange(ref _userDigOut, mask & 0x0F);
 
     public void SetHl2TxStepAttenuationDb(int db)
     {
@@ -693,6 +905,8 @@ public sealed class Protocol1Client : IProtocol1Client
             RxAntenna: (HpsdrAntenna)Volatile.Read(ref _antenna),
             Mox: Volatile.Read(ref _mox) != 0,
             EnableHl2BandVolts: Volatile.Read(ref _enableHl2BandVolts) != 0,
+            AdcDitherEnabled: Volatile.Read(ref _adcDither) != 0,
+            AdcRandomEnabled: Volatile.Read(ref _adcRandom) != 0,
             Board: (HpsdrBoardKind)Volatile.Read(ref _boardKind),
             HasN2adr: Volatile.Read(ref _hasN2adr) != 0,
             DriveLevel: drive,
@@ -708,7 +922,15 @@ public sealed class Protocol1Client : IProtocol1Client
             // untouched, fall through to the RX-side encoding above.
             Hl2TxAttnDb: Volatile.Read(ref _hl2TxAttnDb),
             CwKeyerSpeedWpm: Volatile.Read(ref _cwKeyerSpeedWpm),
-            CwKeyerMode: (CwKeyerMode)Volatile.Read(ref _cwKeyerMode));
+            CwKeyerMode: (CwKeyerMode)Volatile.Read(ref _cwKeyerMode),
+            MicBoost: Volatile.Read(ref _micBoost) != 0,
+            MicLineIn: Volatile.Read(ref _micLineIn) != 0,
+            MicTrs: Volatile.Read(ref _micTrs) != 0,
+            MicBias: Volatile.Read(ref _micBias) != 0,
+            LineInGain: (byte)Volatile.Read(ref _lineInGain),
+            AtuTune: Volatile.Read(ref _atuTuneUntilTicks) > Environment.TickCount64,
+            TxAntenna: (HpsdrAntenna)Volatile.Read(ref _txAntenna),
+            UserDigOut: (byte)Volatile.Read(ref _userDigOut));
     }
 
     private void RxLoop()
@@ -716,6 +938,11 @@ public sealed class Protocol1Client : IProtocol1Client
         var sock = _socket!;
         var ct = _loopCts!.Token;
         var buffer = new byte[PacketParser.PacketLength];
+        // Per-call scratch for codec mic / line-in extraction (issue #992). Sized
+        // to one EP6 packet's worth of mic samples; allocated once outside the
+        // loop (CA2014 — stackalloc inside the per-packet hot path triggers a
+        // potential stack-overflow warning). Reused per packet.
+        var micScratch = new short[PacketParser.ComplexSamplesPerPacket];
         // perf3: reuse one SocketAddress across receives. The pre-.NET-8
         // `ReceiveFrom(..., ref EndPoint)` overload allocates a fresh
         // IPEndPoint via EndPoint.Create() on every call (per .NET runtime
@@ -746,7 +973,19 @@ public sealed class Protocol1Client : IProtocol1Client
                 {
                     if (++consecutiveTimeouts >= ConsecutiveTimeoutsBeforeGiveUp)
                     {
-                        _log.LogWarning("RX: {N} consecutive socket timeouts — radio gone", consecutiveTimeouts);
+                        if (OperatingSystem.IsWindows())
+                            _log.LogWarning(
+                                "p1.rx.timeout count={N} — no RX packets from radio. " +
+                                "If TX works but RX is silent, Windows Firewall may be blocking " +
+                                "inbound UDP. This is common when Tailscale or another VPN is " +
+                                "installed (it reclassifies the LAN adapter as Public network). " +
+                                "Temporarily disable Windows Firewall to confirm, then add a " +
+                                "permanent inbound rule for OpenhpsdrZeus.exe.",
+                                consecutiveTimeouts);
+                        else
+                            _log.LogWarning("p1.rx.timeout count={N} — no RX packets from radio", consecutiveTimeouts);
+                        try { Disconnected?.Invoke(); }
+                        catch (Exception handlerEx) { _log.LogWarning(handlerEx, "p1.rx Disconnected handler threw"); }
                         return;
                     }
                     continue;
@@ -861,6 +1100,21 @@ public sealed class Protocol1Client : IProtocol1Client
                     HpsdrSampleRate.Rate384k => 384_000,
                     _ => 48_000,
                 };
+
+                // Codec mic / line-in relay (issue #992) — only when a radio audio
+                // source is armed (handler attached). Reuses the per-RxLoop scratch
+                // (above), no per-packet alloc, no work when the handler is null
+                // (Host source).
+                var micHandlerSnap = _radioMicHandler;
+                if (micHandlerSnap is not null)
+                {
+                    int micCount = PacketParser.ExtractMicSamples(buffer.AsSpan(0, n), micScratch);
+                    if (micCount > 0)
+                    {
+                        try { micHandlerSnap(new ReadOnlySpan<short>(micScratch, 0, micCount), rateHz); }
+                        catch (Exception ex) { _log.LogWarning(ex, "p1.rx radio-mic handler threw"); }
+                    }
+                }
 
                 // Pace the TX loop off the HL2's own clock. HL2 emits RX
                 // packets at (rateHz / 126) pkt/s; we want TX at (48_000/126)
@@ -1073,7 +1327,7 @@ public sealed class Protocol1Client : IProtocol1Client
                 bool psArmed = state.PsEnabled && state.Board == HpsdrBoardKind.HermesLite2;
                 var (first, second) = PhaseRegisters(phase, state.Mox, psArmed);
                 phase = psArmed ? ((phase + 1) & 0xF) : ((phase + 1) % 5);
-                ControlFrame.BuildDataPacket(buf, sendSeq++, first, second, in state, _txIqSource);
+                ControlFrame.BuildDataPacket(buf, sendSeq++, first, second, in state, _txIqSource, _rxAudioSource);
                 rateWindowPkts++;
                 var nowUtc = DateTime.UtcNow;
                 var elapsed = nowUtc - rateWindowStart;

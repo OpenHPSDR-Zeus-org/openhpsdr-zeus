@@ -23,6 +23,22 @@
                                        codesign pass, so in theory this could be
                                        removed — keep it on defensively so a single
                                        missed dylib doesn't brick the app.
+
+                                       *** ALSO REQUIRED for in-process Audio Unit (AU)
+                                       hosting *** — RELEASE SIGN-OFF NEEDED. The AU
+                                       plugin bridge (libzeus-au-bridge.dylib) loads
+                                       THIRD-PARTY AudioComponent dylibs (signed by a
+                                       DIFFERENT Team ID) into this process at runtime.
+                                       Under the hardened runtime, loading another
+                                       vendor's dylib in-process is BLOCKED unless this
+                                       flag is set — without it the AU load fails
+                                       silently and the slot degrades to passthrough.
+                                       This is the same security-posture relaxation the
+                                       VST3 bridge needs and is gated behind the SAME
+                                       opt-in (ZEUS_ENABLE_VST_LOAD, off by default);
+                                       it widens the in-process-load surface to
+                                       non-Team-ID code, so it is a maintainer release
+                                       decision, not an autonomous change.
   - allow-dyld-environment-variables   LOAD-BEARING. Contents/MacOS/launch.sh exports
                                        DYLD_LIBRARY_PATH to pin the bundled
                                        libwdsp.dylib ahead of any stale system copy

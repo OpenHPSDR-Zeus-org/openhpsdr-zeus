@@ -9,15 +9,21 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   fetchBandMemory,
   saveBandMemory,
-  setMode,
-  setVfo,
-  setVfoB,
   type BandMemoryEntry,
   type RadioStateDto,
   type RxMode,
-  type TxVfo,
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
+import {
+  getReceiverMode,
+  getReceiverVfoHz,
+  optimisticSetReceiverMode,
+  optimisticSetReceiverVfo,
+  postReceiverMode,
+  postReceiverVfo,
+  rxIndexOf,
+  type ReceiverKey,
+} from '../../state/receiver-state';
 import { viewCenterFor } from '../../state/view-center';
 import {
   BAND_MEMORY_UPDATED_EVENT,
@@ -48,21 +54,22 @@ const BAND_OPTIONS: readonly ToolbarOption[] = HF_BANDS.map((b) => ({
 
 const SAVE_DEBOUNCE_MS = 500;
 
-function withRestoredMode(state: RadioStateDto, receiver: TxVfo, mode: RxMode): RadioStateDto {
-  return receiver === 'B' ? { ...state, modeB: mode } : { ...state, mode };
+function withRestoredMode(state: RadioStateDto, receiver: ReceiverKey, mode: RxMode): RadioStateDto {
+  const idx = rxIndexOf(receiver);
+  if (idx === 0) return { ...state, mode };
+  // Every secondary receiver (RX2 = index 1, RX3+) lives in receivers[].
+  return {
+    ...state,
+    receivers: state.receivers?.map((r) => (r.index === idx ? { ...r, mode } : r)) ?? state.receivers,
+  };
 }
 
 export function BandFavorites() {
-  const vfoHz = useConnectionStore((s) => s.vfoHz);
-  const vfoBHz = useConnectionStore((s) => s.vfoBHz);
-  const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
-  const rxFocus = useConnectionStore((s) => s.rxFocus);
-  const mode = useConnectionStore((s) => s.mode);
-  const modeB = useConnectionStore((s) => s.modeB);
+  // Follow the focused receiver (0=RX1, 1=RX2, >=2=RX3+) so band selection tunes
+  // whichever receiver the operator is working in.
+  const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
+  const activeVfoHz = useConnectionStore((s) => getReceiverVfoHz(s, focusedRxIndex));
   const applyState = useConnectionStore((s) => s.applyState);
-  const activeReceiver: TxVfo = rxFocus === 'B' && rx2Enabled ? 'B' : 'A';
-  const activeVfoHz = activeReceiver === 'B' ? vfoBHz : vfoHz;
-  const activeMode = activeReceiver === 'B' ? modeB : mode;
 
   const [currentBand, setCurrentBand] = useState<string>(() => bandOf(activeVfoHz));
   const memoryRef = useRef<Map<string, BandMemoryEntry>>(new Map());
@@ -148,45 +155,54 @@ export function BandFavorites() {
       const targetHz = stored?.hz ?? band.centerHz;
       const targetMode: RxMode | null = stored?.mode ?? null;
 
-      viewCenterFor(activeReceiver).markOptimisticTune();
-      useConnectionStore.setState(
-        activeReceiver === 'B'
-          ? targetMode && targetMode !== activeMode
-            ? { vfoBHz: targetHz, modeB: targetMode }
-            : { vfoBHz: targetHz }
-          : targetMode && targetMode !== activeMode
-          ? { vfoHz: targetHz, mode: targetMode }
-          : { vfoHz: targetHz },
-      );
-      const postVfo = activeReceiver === 'B' ? setVfoB : setVfo;
+      // Ganged: a band selection retunes EVERY selected receiver to the
+      // remembered (hz, mode) for that band; the store is reconciled only from
+      // the focused receiver's responses (the others' are ignored so they can't
+      // clobber the focused view — the next state poll reconciles them). With a
+      // single-receiver selection this is identical to the focused-only path.
+      const { selectedRxIndices, focusedRxIndex: focused } = useConnectionStore.getState();
 
-      void (async () => {
-        let modeRestored = !targetMode || targetMode === activeMode;
-        if (targetMode && targetMode !== activeMode) {
+      for (const idx of selectedRxIndices) {
+        const curMode = getReceiverMode(useConnectionStore.getState(), idx);
+        const isFocused = idx === focused;
+
+        viewCenterFor(idx).markOptimisticTune();
+        optimisticSetReceiverVfo(idx, targetHz);
+        if (targetMode && targetMode !== curMode) {
+          optimisticSetReceiverMode(idx, targetMode);
+        }
+
+        void (async () => {
+          let modeRestored = !targetMode || targetMode === curMode;
+          if (targetMode && targetMode !== curMode) {
+            try {
+              const res = withRestoredMode(
+                await postReceiverMode(idx, targetMode),
+                idx,
+                targetMode,
+              );
+              if (isFocused) applyState(res);
+              modeRestored = true;
+            } catch {
+              /* next state poll reconciles */
+            }
+          }
           try {
-            applyState(withRestoredMode(
-              await setMode(targetMode, undefined, activeReceiver),
-              activeReceiver,
-              targetMode,
-            ));
-            modeRestored = true;
+            const next = await postReceiverVfo(idx, targetHz);
+            if (isFocused) {
+              applyState(
+                targetMode && modeRestored
+                  ? withRestoredMode(next, idx, targetMode)
+                  : next,
+              );
+            }
           } catch {
             /* next state poll reconciles */
           }
-        }
-        try {
-          const next = await postVfo(targetHz);
-          applyState(
-            targetMode && modeRestored
-              ? withRestoredMode(next, activeReceiver, targetMode)
-              : next,
-          );
-        } catch {
-          /* next state poll reconciles */
-        }
-      })();
+        })();
+      }
     },
-    [activeReceiver, activeMode, applyState, currentBand, flushPendingSave],
+    [applyState, currentBand, flushPendingSave],
   );
 
   return (

@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
@@ -86,6 +87,11 @@ internal static class BoardCapabilitiesTable
             // keeps SupportsAnvelinaDxOc=false so the wire path stays
             // closed on G2 / 7000DLE / Apache OrionMkII original / etc.
             OrionMkIIVariant.AnvelinaPro3 => SaturnAnvelinaPro3,
+            // Red Pitaya — Saturn-class hardware but Thetis DISABLES the Orion
+            // mic-bias panel there (HasMicBias=false) and it has no balanced XLR.
+            OrionMkIIVariant.RedPitaya    => SaturnRedPitaya,
+            // 7000DLE and the default 0x0A fall to the Saturn baseline: analog
+            // line-in + Orion mic bias, NO balanced XLR (G2 / G2-1K only).
             _                             => Saturn,
         },
         // --- ANAN-G2E (HermesC10, N1GP) ---
@@ -114,7 +120,16 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: false, // single-RX: RX2 doesn't exist
         SupportsPathIllustrator: true,
-        MaxPowerWatts: 10);
+        MaxPowerWatts: 10,
+        // Hermes-class boards carry the Alex/filter RX-antenna relays (C3[7:5])
+        // and the full EXT1/EXT2/XVTR/BYPASS aux set — antenna slice (#804). No
+        // TX-antenna relay (P1, ANT1-hardwired on transmit); single RX → no RX2
+        // antenna path.
+        HasRxAntennaRelays: true,
+        RxAuxInputs: RxAuxInputs.All,
+        // Hermes-class codec board: radio mic jack selectable. No line-in / XLR
+        // / mic-bias surface (Hermes/ANAN-10/100 line-in is scoped OUT).
+        HasOnboardCodec: true);
 
     // ANAN-10E (HermesII firmware) — same Hermes-class fingerprint but the
     // 10E hardware is rated to ~30 W, so its meter axis gets the bigger top.
@@ -128,7 +143,14 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: false,
         SupportsPathIllustrator: true,
-        MaxPowerWatts: 30);
+        MaxPowerWatts: 30,
+        HasRxAntennaRelays: true,
+        RxAuxInputs: RxAuxInputs.All,
+        // ANAN-10E (HermesII): codec + analog line-in jack (issue #667 fix is
+        // HermesII-only; Hermes/ANAN-10/100 line-in stays scoped OUT). No XLR /
+        // mic-bias.
+        HasOnboardCodec: true,
+        HasRadioLineIn: true);
 
     // ANAN-100D — 100 W class. Meter axis 120 W gives some headroom past
     // the rated rail without truncating PEP overshoots.
@@ -142,7 +164,21 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: true,
         SupportsPathIllustrator: true,
-        MaxPowerWatts: 120);
+        MaxPowerWatts: 120,
+        // Dual-ADC DDC board: full Alex — TX + RX antenna relays, full aux set,
+        // and a dedicated RX2 antenna path — antenna slice (#804). The ANAN-100D
+        // runs Protocol 1, where the Alex TX antenna rides Config-frame C4[1:0]
+        // (Thetis networkproto1.c:463-468); the wire-layer encode + clamp live in
+        // ControlFrame.EncodeTxAntennaC4Bits / P1BoardHasTxAntennaRelays (external-
+        // port parity audit, GAP-P1-1). Default ANT1 → byte-identical.
+        HasTxAntennaRelays: true,
+        HasRxAntennaRelays: true,
+        RxAuxInputs: RxAuxInputs.All,
+        HasRx2AntennaPath: true,
+        // ANAN-100D: codec + analog line-in jack + Orion mic bias. No XLR.
+        HasOnboardCodec: true,
+        HasRadioLineIn: true,
+        HasMicBias: true);
 
     // ANAN-200D — 200 W class but axis matches the 100/200/G2 family at
     // 120 W: half-axis at 100 W is the natural reading point.
@@ -156,7 +192,20 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: true,
         SupportsPathIllustrator: true,
-        MaxPowerWatts: 120);
+        MaxPowerWatts: 120,
+        // Full-Alex dual-ADC P1 board: TX antenna relay (Config-frame C4[1:0],
+        // Thetis networkproto1.c:463-468) + RX relays + full aux + RX2 path —
+        // antenna slice (#804) / external-port parity audit (GAP-P1-1). Default
+        // ANT1 → byte-identical.
+        HasTxAntennaRelays: true,
+        HasRxAntennaRelays: true,
+        RxAuxInputs: RxAuxInputs.All,
+        HasRx2AntennaPath: true,
+        // ANAN-200D (Orion): codec + analog line-in jack + Orion mic bias
+        // (Thetis ORION bias panel Enabled). No balanced XLR.
+        HasOnboardCodec: true,
+        HasRadioLineIn: true,
+        HasMicBias: true);
 
     // 0x0A family conservative baseline (7000DLE / 8000DLE / OrionMkII /
     // ANVELINA-PRO3 / Red Pitaya). Saturn-class facts. 100–200 W typical →
@@ -172,20 +221,44 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: true,
         HasSteppedAttenuationRx2: true,
         SupportsPathIllustrator: false,
-        MaxPowerWatts: 120);
+        MaxPowerWatts: 120,
+        // 0x0A / Saturn family: switchable TX antenna relays (alex0[26:24], P2),
+        // RX-antenna relays, full EXT1/EXT2/XVTR/BYPASS aux set, and an RX2
+        // antenna path — antenna slice (#804). All Saturn variants ('with'
+        // derivations below) inherit these.
+        HasTxAntennaRelays: true,
+        HasRxAntennaRelays: true,
+        RxAuxInputs: RxAuxInputs.All,
+        HasRx2AntennaPath: true,
+        // 0x0A Saturn baseline (7000DLE / 8000DLE / default): codec + analog
+        // line-in + Orion mic bias. NO balanced XLR — that is G2 / G2-1K only.
+        HasOnboardCodec: true,
+        HasRadioLineIn: true,
+        HasMicBias: true);
 
     // ANAN-G2 — local Thetis parity notes pin RX1/RX2 at
-    // 48/96/192/384/768/1536 kHz over Protocol 2.
+    // 48/96/192/384/768/1536 kHz over Protocol 2. Saturn-FPGA G2 / G2-1K
+    // additionally carry the switchable balanced-XLR mic input.
     private static readonly BoardCapabilities SaturnG2 = Saturn with
     {
         MaxRxSampleRateHz = 1_536_000,
         SupportsG2AdcOptions = true,
+        HasBalancedXlr = true,
     };
 
-    // ANAN-8000DLE — 250 W per Apache spec; axis snaps to that.
+    // ANAN-8000DLE — 250 W per Apache spec; axis snaps to that. Saturn-class
+    // audio (line-in + mic bias), NO balanced XLR (G2 / G2-1K only).
     private static readonly BoardCapabilities Saturn8000DLE = Saturn with
     {
         MaxPowerWatts = 250,
+    };
+
+    // Red Pitaya (DH1KLM) — Saturn-class hardware but Thetis DISABLES the Orion
+    // mic-bias panel for it (DIY connector foot-gun) and it has no balanced XLR.
+    // Analog line-in only.
+    private static readonly BoardCapabilities SaturnRedPitaya = Saturn with
+    {
+        HasMicBias = false,
     };
 
     // ANAN-G2-1K — kilowatt-class with internal 1 kW PA. Same Saturn fingerprint
@@ -199,9 +272,12 @@ internal static class BoardCapabilitiesTable
     // extension (USEROUT7..10) wired into P2 byte 1397 bits [4:1] —
     // issue #407, EU2AV's Open_Collector_Anvelina_DX for Thetis spec.
     // This is the only variant where SupportsAnvelinaDxOc flips true.
+    // ANVELINA-PRO3 (EU2AV) — Saturn-class plus DX OC. Thetis disables the Orion
+    // mic-bias panel here (DIY connector), so HasMicBias is forced false; no XLR.
     private static readonly BoardCapabilities SaturnAnvelinaPro3 = Saturn with
     {
         SupportsAnvelinaDxOc = true,
+        HasMicBias = false,
     };
 
     private static readonly BoardCapabilities HermesC10 = new(
@@ -214,7 +290,15 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: true,
         HasSteppedAttenuationRx2: false, // single-RX: RX2 doesn't exist
         SupportsPathIllustrator: false,
-        MaxPowerWatts: 120);
+        MaxPowerWatts: 120,
+        // ANAN-G2E (HermesC10) runs Protocol 1 with the MkII BPF board: RX-antenna
+        // relays + full aux set, but ANT1-hardwired on transmit (no P2 Alex word)
+        // and single-RX (no RX2 antenna path) — antenna slice (#804).
+        HasRxAntennaRelays: true,
+        RxAuxInputs: RxAuxInputs.All,
+        // ANAN-G2E: codec board (radio mic). No line-in / XLR (Thetis hard-gates
+        // balanced to G2 / G2-1K and excludes G2E) / mic-bias surface in v1.
+        HasOnboardCodec: true);
 
     // Apache OrionMkII original (Orion-MkII firmware, 100 W) — Saturn-class
     // hardware fingerprint but without on-board telemetry / audio amp per
@@ -230,7 +314,20 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: true,
         SupportsPathIllustrator: false,
-        MaxPowerWatts: 120);
+        MaxPowerWatts: 120,
+        // Apache OrionMkII original is a 0x0A / P2 board: TX + RX antenna relays,
+        // full aux set, RX2 antenna path — antenna slice (#804). Same antenna
+        // semantics as the Saturn baseline; only the telemetry/audio-amp facts
+        // differ.
+        HasTxAntennaRelays: true,
+        HasRxAntennaRelays: true,
+        RxAuxInputs: RxAuxInputs.All,
+        HasRx2AntennaPath: true,
+        // Apache OrionMkII original: codec + analog line-in jack, NO balanced
+        // XLR (Saturn-FPGA G2 / G2-1K only) and HasMicBias stays FALSE per
+        // clsHardwareSpecific (ORIONMKII excluded from the bias panel).
+        HasOnboardCodec: true,
+        HasRadioLineIn: true);
 
     // HermesLite2 — rated 5 W stock but operators routinely run to 10 W with
     // adequate cooling, so the meter axis is 10 W to cover the realistic
@@ -252,5 +349,25 @@ internal static class BoardCapabilitiesTable
         HasSteppedAttenuationRx2: false,
         SupportsPathIllustrator: false,
         MaxPowerWatts: 10,
-        HasHl2OptionalToggles: true);
+        HasHl2OptionalToggles: true,
+        // HL2 4-bit user GPIO (user_dig_out → 0x0a/wire-0x14 C3[3:0] → MCP23008
+        // on the IO connector). HL2-only; gates the Radio Settings "User GPIO"
+        // card + the /api/radio/hl2-gpio endpoint. External-port parity audit
+        // (re-port of external-ports plan Phase 5). Default mask 0.
+        HasHl2UserGpio: true,
+        // HL2 has a SINGLE antenna jack forwarding to the N2ADR pad: NO RX
+        // antenna relays, NO TX antenna relays, NO aux inputs — antenna slice
+        // (#804). Explicit (not just defaulted) because the wire-layer clamp in
+        // ControlFrame.EncodeRxAntennaC3Bits depends on this being false: a stale
+        // per-band ANT2/3 (shared band rows are board-agnostic) must collapse to
+        // ANT1 so the N2ADR pad never flips.
+        HasTxAntennaRelays: false,
+        HasRxAntennaRelays: false,
+        RxAuxInputs: RxAuxInputs.None,
+        HasRx2AntennaPath: false,
+        // HL2 has no stream codec, so HasOnboardCodec stays false — the Radio
+        // Mic / Line-In / XLR options are gated OFF. It DOES have a 0x14 mic
+        // front-end, exposed only as inert plumbing in v1 (default Host); the
+        // frontend surfaces nothing for it until confirmed on hardware.
+        HermesLite2MicFrontEnd: true);
 }

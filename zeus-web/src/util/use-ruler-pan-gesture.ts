@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -11,12 +12,20 @@
 // repository for the full text, or https://www.gnu.org/licenses/.
 
 import { useEffect, type RefObject } from 'react';
-import { setRadioLo, setVfoB } from '../api/client';
+import { setRadioLo } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
+import {
+  getReceiverVfoFromState,
+  getReceiverVfoHz,
+  isSecondaryReceiver,
+  optimisticSetReceiverVfo,
+  postReceiverVfo,
+  type ReceiverKey,
+} from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
 
-type SpectrumReceiver = 'A' | 'B';
+type SpectrumReceiver = ReceiverKey;
 
 const MAX_HZ = 60_000_000;
 const CLICK_SLOP_PX = 3;
@@ -54,16 +63,18 @@ export function useRulerPanGesture(
     // RX2's DDC follows VFO B with no separate "radio LO", so the B ruler
     // retunes VFO B (setVfoB / vfoBHz) — mirroring the B body-drag in
     // use-pan-tune-gesture. Each receiver glides its OWN view-centre instance.
-    const receiverIsB = receiver === 'B';
+    const secondary = isSecondaryReceiver(receiver);
     const vc = viewCenter.viewCenterFor(receiver);
     const fallbackCenterHz = () =>
-      receiverIsB
-        ? useConnectionStore.getState().vfoBHz
+      secondary
+        ? getReceiverVfoHz(useConnectionStore.getState(), receiver)
         : Number(selectDisplaySlice(useDisplayStore.getState(), receiver).centerHz);
-    const writeCenter = (hz: number) =>
-      useConnectionStore.setState(receiverIsB ? { vfoBHz: hz } : { radioLoHz: hz });
+    const writeCenter = (hz: number) => {
+      if (secondary) optimisticSetReceiverVfo(receiver, hz);
+      else useConnectionStore.setState({ radioLoHz: hz });
+    };
     const postCenter = (hz: number, signal?: AbortSignal) =>
-      receiverIsB ? setVfoB(hz, signal) : setRadioLo(hz, signal);
+      secondary ? postReceiverVfo(receiver, hz, signal) : setRadioLo(hz, signal);
 
     type Drag = {
       pointerId: number;
@@ -114,7 +125,7 @@ export function useRulerPanGesture(
         .then((state) => {
           if (ctrl.signal.aborted) return;
           useConnectionStore.getState().applyState(state, { trustVfo: false });
-          reconcileAppliedLo(receiverIsB ? state.vfoBHz : state.radioLoHz);
+          reconcileAppliedLo(secondary ? getReceiverVfoFromState(state, receiver) : state.radioLoHz);
         })
         .catch(() => {});
     };

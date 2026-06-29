@@ -1,0 +1,10 @@
+PLL_Name	C10_PLL:PLL2_inst|altpll:altpll_component|C10_PLL_altpll:auto_generated|pll1
+PLLJITTER	44
+PLLSPEmax	84
+PLLSPEmin	-53
+
+PLL_Name	C122_PLL:PLL_inst|altpll:altpll_component|C122_PLL_altpll:auto_generated|pll1
+PLLJITTER	28
+PLLSPEmax	84
+PLLSPEmin	-53
+

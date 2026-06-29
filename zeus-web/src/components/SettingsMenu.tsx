@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -27,9 +28,11 @@ import { CalibrationPanel } from './CalibrationPanel';
 import { DisplayPanel } from './DisplayPanel';
 import { QrzSettingsPanel } from './QrzSettingsPanel';
 import { RadioOptionsPanel } from './RadioOptionsPanel';
+import { RadioSettingsPanel } from './RadioSettingsPanel';
+import { ReceiversPanel } from './ReceiversPanel';
 import { RotatorSettingsPanel } from './RotatorSettingsPanel';
 import { ServerUrlPanel } from './ServerUrlPanel';
-import { TciSettingsPanel } from './TciSettingsPanel';
+import { NetworkSettingsPanel } from './NetworkSettingsPanel';
 import { RadioSelector } from './RadioSelector';
 import { usePaStore } from '../state/pa-store';
 import { useRadioStore } from '../state/radio-store';
@@ -39,7 +42,9 @@ import { TxAudioToolsPanel } from './TxAudioToolsPanel';
 import { DspSettingsPanel } from './DspSettingsPanel';
 import { PluginsPanel } from '../plugins/components/PluginsPanel';
 import { HamClockSettingsPanel } from './HamClockSettingsPanel';
+import { KiwiSettingsPanel } from './KiwiSettingsPanel';
 import { SpotsSettingsPanel } from './SpotsSettingsPanel';
+import { ZeusDigitalSettingsPanel } from './ZeusDigitalSettingsPanel';
 import { UpdatesPanel } from './UpdatesPanel';
 import { HardwareDiagnosticsPanel } from './HardwareDiagnosticsPanel';
 
@@ -52,13 +57,16 @@ export type SettingsTabId =
   | 'bandplan'
   | 'qrz'
   | 'rotator'
-  | 'tci'
+  | 'network'
   | 'display'
   | 'plugins'
   | 'hamclock'
+  | 'kiwi'
   | 'spots'
+  | 'zeus-digital'
   | 'server'
   | 'radio'
+  | 'receivers'
   | 'calibration'
   | 'updates'
   | 'about';
@@ -72,13 +80,16 @@ const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
   { id: 'bandplan', label: 'BAND PLAN' },
   { id: 'qrz', label: 'QRZ' },
   { id: 'rotator', label: 'ROTATOR' },
-  { id: 'tci', label: 'TCI' },
+  { id: 'network', label: 'NETWORK' },
   { id: 'display', label: 'DISPLAY' },
   { id: 'plugins', label: 'PLUGINS' },
   { id: 'hamclock', label: 'HAMCLOCK' },
+  { id: 'kiwi', label: 'KIWI SDR' },
   { id: 'spots', label: 'SPOTS' },
+  { id: 'zeus-digital', label: 'ZEUS DIGITAL' },
   { id: 'server', label: 'SERVER' },
   { id: 'radio', label: 'RADIO' },
+  { id: 'receivers', label: 'RECEIVERS' },
   { id: 'calibration', label: 'CALIBRATION' },
   { id: 'updates', label: 'UPDATES' },
   { id: 'about', label: 'ABOUT' },
@@ -98,9 +109,12 @@ export function SettingsView({ initialTab, onClose }: Props) {
   const savePa = usePaStore((s) => s.save);
   const loadPa = usePaStore((s) => s.load);
   const paInflight = usePaStore((s) => s.inflight);
-  // RADIO tab is board-option-only. Hidden unless the active capability
-  // fingerprint advertises an option surface that writes a real firmware
-  // field (HL2 Band Volts or ANAN-G2 ADC dither/random).
+  // RADIO tab hosts the always-relevant radio settings (PTT-IN, TX audio
+  // source, antenna relays — RadioSettingsPanel) and, when the connected board
+  // advertises a firmware-option surface (HL2 Band Volts or ANAN-G2 ADC
+  // dither/random), the per-board RadioOptionsPanel below them. The tab itself
+  // is always visible because RadioSettingsPanel applies to every board;
+  // `hasRadioOptions` only gates the optional board-options section within it.
   const hasHl2OptionalToggles = useRadioStore(
     (s) => s.capabilities.hasHl2OptionalToggles,
   );
@@ -113,29 +127,15 @@ export function SettingsView({ initialTab, onClose }: Props) {
   // so a fresh session never lists it.
   const hardwareUnlocked = useEasterEggStore((s) => s.hardwareUnlocked);
   const visibleTabs = useMemo(
-    () =>
-      TABS.filter(
-        (t) =>
-          (t.id !== 'radio' || hasRadioOptions) &&
-          (t.id !== 'hardware' || hardwareUnlocked),
-      ),
-    [hasRadioOptions, hardwareUnlocked],
+    () => TABS.filter((t) => t.id !== 'hardware' || hardwareUnlocked),
+    [hardwareUnlocked],
   );
 
-  // If the operator was sitting on the RADIO tab and the board changed
-  // (re-discovery now reports no radio options), bounce them back to PA so they
-  // don't get stuck on an empty tabpanel.
-  useEffect(() => {
-    if (active === 'radio' && !hasRadioOptions) {
-      setActive('pa');
-    }
-  }, [active, hasRadioOptions]);
-
   // Effective tab for rendering. If the stored `active` tab isn't currently
-  // visible — a hidden HARDWARE folder, or RADIO opened via initialTab without
-  // board options — fall back to PA so the operator never lands on a hidden
-  // tabpanel. Deriving this (rather than bouncing in an effect) avoids racing
-  // the initialTab effect, which could otherwise re-select a hidden tab.
+  // visible — e.g. a hidden HARDWARE folder — fall back to PA so the operator
+  // never lands on a hidden tabpanel. Deriving this (rather than bouncing in an
+  // effect) avoids racing the initialTab effect, which could otherwise
+  // re-select a hidden tab.
   const activeTab = visibleTabs.some((t) => t.id === active) ? active : 'pa';
 
   useEffect(() => {
@@ -211,13 +211,21 @@ export function SettingsView({ initialTab, onClose }: Props) {
           {activeTab === 'bandplan' && <BandPlanEditor />}
           {activeTab === 'qrz' && <QrzSettingsPanel />}
           {activeTab === 'rotator' && <RotatorSettingsPanel />}
-          {activeTab === 'tci' && <TciSettingsPanel />}
+          {activeTab === 'network' && <NetworkSettingsPanel />}
           {activeTab === 'display' && <DisplayPanel />}
           {activeTab === 'plugins' && <PluginsPanel />}
           {activeTab === 'hamclock' && <HamClockSettingsPanel />}
+          {activeTab === 'kiwi' && <KiwiSettingsPanel />}
           {activeTab === 'spots' && <SpotsSettingsPanel />}
+          {activeTab === 'zeus-digital' && <ZeusDigitalSettingsPanel />}
           {activeTab === 'server' && <ServerUrlPanel />}
-          {activeTab === 'radio' && hasRadioOptions && <RadioOptionsPanel />}
+          {activeTab === 'receivers' && <ReceiversPanel />}
+          {activeTab === 'radio' && (
+            <>
+              <RadioSettingsPanel />
+              {hasRadioOptions && <RadioOptionsPanel />}
+            </>
+          )}
           {activeTab === 'calibration' && <CalibrationPanel />}
           {activeTab === 'updates' && <UpdatesPanel />}
           {activeTab === 'about' && <AboutPanel />}

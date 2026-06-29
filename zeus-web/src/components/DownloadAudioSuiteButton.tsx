@@ -2,16 +2,17 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // "Download Audio Suite" — one-click install of the six audio chain
 // plugins (Noise Gate → EQ → Compressor → Exciter → Bass → Reverb) from
-// the Kb2uka/openhpsdr-zeus-plugins GitHub releases. The plugin host can't
+// the OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins GitHub releases. The plugin host can't
 // register new endpoints / load new assemblies into the live process, so
 // after install finishes we show a modal telling the operator to restart
 // Zeus. No auto-restart — operator decides.
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { installPlugin } from '../plugins/api/plugins';
 import { fetchInstalledPlugins } from '../plugins/api/plugins';
 import type { PluginDto } from '../plugins/api/plugins';
@@ -22,7 +23,7 @@ interface SuitePlugin {
   id: string;
   /** Human-readable display name shown in progress + result rows. */
   label: string;
-  /** Release zip URL on Kb2uka/openhpsdr-zeus-plugins. */
+  /** Release zip URL on OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins. */
   url: string;
 }
 
@@ -30,32 +31,32 @@ const AUDIO_SUITE: ReadonlyArray<SuitePlugin> = [
   {
     id: 'com.openhpsdr.zeus.samples.noisegate',
     label: 'Noise Gate',
-    url: 'https://github.com/Kb2uka/openhpsdr-zeus-plugins/releases/download/noisegate-v0.1.0/noisegate-0.1.0.zip',
+    url: 'https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins/releases/download/noisegate-v0.1.0/noisegate-0.1.0.zip',
   },
   {
     id: 'com.openhpsdr.zeus.samples.eq',
     label: 'EQ (10-band parametric)',
-    url: 'https://github.com/Kb2uka/openhpsdr-zeus-plugins/releases/download/eq-v0.2.0/eq-0.2.0.zip',
+    url: 'https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins/releases/download/eq-v0.2.0/eq-0.2.0.zip',
   },
   {
     id: 'com.openhpsdr.zeus.samples.compressor',
     label: 'Compressor',
-    url: 'https://github.com/Kb2uka/openhpsdr-zeus-plugins/releases/download/compressor-v0.1.2/compressor-0.1.2.zip',
+    url: 'https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins/releases/download/compressor-v0.1.2/compressor-0.1.2.zip',
   },
   {
     id: 'com.openhpsdr.zeus.samples.exciter',
     label: 'Aural-Exciter',
-    url: 'https://github.com/Kb2uka/openhpsdr-zeus-plugins/releases/download/exciter-v0.2.0/exciter-0.2.0.zip',
+    url: 'https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins/releases/download/exciter-v0.2.0/exciter-0.2.0.zip',
   },
   {
     id: 'com.openhpsdr.zeus.samples.bass',
     label: 'Bass Enhancer',
-    url: 'https://github.com/Kb2uka/openhpsdr-zeus-plugins/releases/download/bass-v0.2.0/bass-0.2.0.zip',
+    url: 'https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins/releases/download/bass-v0.2.0/bass-0.2.0.zip',
   },
   {
     id: 'com.openhpsdr.zeus.samples.reverb',
     label: 'Reverb',
-    url: 'https://github.com/Kb2uka/openhpsdr-zeus-plugins/releases/download/reverb-v0.2.0/reverb-0.2.0.zip',
+    url: 'https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins/releases/download/reverb-v0.2.0/reverb-0.2.0.zip',
   },
 ];
 
@@ -84,6 +85,25 @@ export function DownloadAudioSuiteButton() {
   const [rows, setRows] = useState<ProgressRow[]>([]);
   const [restartModalOpen, setRestartModalOpen] = useState(false);
   const [showProgress, setShowProgress] = useState(false);
+  // Hide the affordance once every suite plugin is already on disk — there's
+  // nothing left to download. Probed on mount; re-probed after our own install.
+  // Fail-open: if the probe errors we keep the button so the operator isn't
+  // blocked from installing.
+  const [allInstalled, setAllInstalled] = useState(false);
+
+  const probeInstalled = useCallback(async () => {
+    try {
+      const listing = await fetchInstalledPlugins();
+      const ids = new Set(listing.plugins.map((p: PluginDto) => p.id));
+      setAllInstalled(AUDIO_SUITE.every((p) => ids.has(p.id)));
+    } catch {
+      setAllInstalled(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void probeInstalled();
+  }, [probeInstalled]);
 
   const totals = useMemo(() => {
     let ok = 0; let skipped = 0; let errors = 0;
@@ -152,7 +172,11 @@ export function DownloadAudioSuiteButton() {
     // landed — skipped-only runs don't need a restart.
     const anyInstalled = working.some((r) => r.state === 'ok');
     if (anyInstalled) setRestartModalOpen(true);
-  }, []);
+    void probeInstalled();
+  }, [probeInstalled]);
+
+  // Already fully installed and nothing in flight → nothing to offer.
+  if (allInstalled && !busy && !showProgress) return null;
 
   return (
     <>

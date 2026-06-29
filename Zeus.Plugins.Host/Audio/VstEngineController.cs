@@ -128,6 +128,16 @@ public sealed class VstEngineController : IAsyncDisposable
     public event Action? Reconnected;
 
     /// <summary>
+    /// Raised when a downstream watchdog finds the engine has gone "alive but TX
+    /// output dead" and asks owners to re-push their <c>load_chain</c> into the
+    /// STILL-RUNNING engine (re-instantiating plugins) — the same recovery a manual
+    /// audio-profile change performs, without a process recycle. Tier-1 self-heal
+    /// for the post-long-TX wedge the seq/exit health model can't see. See
+    /// <see cref="RequestChainReload"/>. (zeus-umt6)
+    /// </summary>
+    public event Action? ChainReloadRequested;
+
+    /// <summary>
     /// Raised when the supervisor gives up hot-relaunching (crash-loop cap hit or
     /// engine unavailable) and falls back to slow-retry passthrough. Carries a
     /// human-readable reason for the operator log.
@@ -170,6 +180,14 @@ public sealed class VstEngineController : IAsyncDisposable
     /// </summary>
     public static string? FindEngineExe() => VstEngineProcess.FindEngineExe();
 
+    /// <summary>
+    /// The Zeus-managed engine location
+    /// (<c>%LOCALAPPDATA%\Zeus\vst-engine\VSTHostEngine.exe</c> on Windows), or
+    /// null on non-Windows. Where the in-app "Get VST Engine" provisioning flow
+    /// stages a downloaded engine so VST mode works without a manual install.
+    /// </summary>
+    public static string? ManagedEnginePath() => VstEngineProcess.ManagedEnginePath();
+
     /// <summary>True while the realtime tap routes audio through the engine.</summary>
     public bool IsActive => _active;
 
@@ -192,6 +210,18 @@ public sealed class VstEngineController : IAsyncDisposable
     /// total; treat the public value as a lifetime diagnostic, not a live health bar.
     /// </summary>
     public long DegradedBlocks => _bridge?.DegradedBlocks ?? 0;
+
+    /// <summary>
+    /// Engine-written lifecycle state from the SHM header (0=init, 1=running,
+    /// 2=draining), or 0 when no bridge exists yet. Diagnostics only.
+    /// </summary>
+    public uint EngineState => _bridge?.EngineState ?? 0;
+
+    /// <summary>
+    /// Engine-written flags from the SHM header (bit0 = bypassed / empty chain),
+    /// or 0 when no bridge exists yet. Diagnostics only.
+    /// </summary>
+    public uint EngineFlags => _bridge?.EngineFlags ?? 0;
 
     /// <summary>The engine exe resolved on the last activation attempt, if any.</summary>
     public string? ResolvedEnginePath { get; private set; }
@@ -283,6 +313,44 @@ public sealed class VstEngineController : IAsyncDisposable
         cts?.Cancel();
         cts?.Dispose();
         if (proc is not null) DisposeProcess(proc);
+    }
+
+    /// <summary>
+    /// Tier-1 recovery for the "engine alive but TX output dead" wedge: ask owners
+    /// to re-push their chain into the running engine (re-instantiating every
+    /// plugin), exactly as a manual audio-profile change does — but WITHOUT killing
+    /// the process. No-op unless the engine is the live route. Invoked off the
+    /// realtime path by the TX-liveness watchdog; escalate via
+    /// <see cref="ForceRecycle"/> if it doesn't take. (zeus-umt6)
+    /// </summary>
+    public void RequestChainReload(string reason)
+    {
+        bool active;
+        lock (_lifecycleLock) active = _active && !_disposed && _proc is not null;
+        if (!active) return;
+        OnStdErr("vst-engine: " + reason);
+        try { ChainReloadRequested?.Invoke(); } catch { /* owner replay is best-effort */ }
+    }
+
+    /// <summary>
+    /// Tier-2 recovery: force-recycle the engine process (Kill → Exited → relaunch →
+    /// <see cref="Reconnected"/> → owners replay) when a Tier-1
+    /// <see cref="RequestChainReload"/> failed to clear a TX-output wedge. Routes
+    /// through the normal exit/relaunch path, so the crash-loop cap and backoff
+    /// still apply (a genuinely broken plugin ends in clean passthrough, not a kill
+    /// loop). No-op unless the engine is live. (zeus-umt6)
+    /// </summary>
+    public void ForceRecycle(string reason)
+    {
+        IVstEngineProcess? victim;
+        lock (_lifecycleLock)
+        {
+            if (_disposed || !_active || _proc is null) return;
+            victim = _proc;
+        }
+        LastFault = reason;
+        OnStdErr("vst-engine: " + reason);
+        victim.Kill(); // → Exited → OnProcessExited → ScheduleRelaunch → Reconnected
     }
 
     /// <summary>

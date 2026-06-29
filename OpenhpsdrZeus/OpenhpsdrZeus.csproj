@@ -10,6 +10,15 @@
          and the /run skill don't have to special-case per-project layouts. -->
     <AssemblyName>OpenhpsdrZeus</AssemblyName>
     <RootNamespace>Zeus.Server</RootNamespace>
+    <!-- GUI subsystem (WinExe), not console (Exe). The Web SDK defaults to a
+         console-subsystem binary, so on Windows launching the desktop / server
+         shell pops up a console window alongside the Photino frame. WinExe stops
+         Windows from ever allocating that console, so there is nothing to show.
+         Headless service mode still logs: when launched from a
+         terminal we re-attach to the parent console (AttachParentConsoleOnWindows
+         in Program.cs) so the banner / stdout reaches the launching shell. The
+         flag is a Windows-only PE subsystem byte and is a no-op on macOS / Linux. -->
+    <OutputType>WinExe</OutputType>
     <SpaRoot>$(MSBuildThisFileDirectory)..\zeus-web</SpaRoot>
     <SpaBuildOutput>$(MSBuildThisFileDirectory)..\Zeus.Server.Hosting\wwwroot\index.html</SpaBuildOutput>
     <!-- ASP.NET Core defaults to Server GC (one GC thread per logical core),
@@ -31,6 +40,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Zeus.Server.Hosting\Zeus.Server.Hosting.csproj" />
+    <!-- The support sidecar is a separate executable the desktop host launches
+         detached so it survives a backend crash. Referencing it co-locates
+         Zeus.SupportAgent(.exe) in this host's output dir for SupportSidecarLauncher
+         to spawn; the host does not use its types. -->
+    <ProjectReference Include="..\Zeus.SupportAgent\Zeus.SupportAgent.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -39,6 +53,10 @@
          reference here (not in a conditional ItemGroup) keeps the single
          binary self-contained across both modes. -->
     <PackageReference Include="Photino.NET" Version="4.0.16" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Zeus.Server.Tests" />
   </ItemGroup>
 
   <!-- Ship zeus.png + zeus.ico next to the binary so Photino's SetIconFile

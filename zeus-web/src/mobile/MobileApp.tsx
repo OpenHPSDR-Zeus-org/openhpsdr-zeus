@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // Mobile single-column shell. Renders the same widgets and stores the
 // desktop layout uses, in a vertical stack tuned for a touch viewport.
@@ -32,6 +32,7 @@ import { Panadapter } from '../components/Panadapter';
 import { WaterfallSurface } from '../components/WaterfallSurface';
 import { MobilePttButton } from '../components/MobilePttButton';
 import { MobileFrequencyTrackpad } from './MobileFrequencyTrackpad';
+import { MobileInstallPrompt } from './MobileInstallPrompt';
 import { TunButton } from '../components/TunButton';
 import { PsToggleButton } from '../components/PsToggleButton';
 import { AudioToggle } from '../components/AudioToggle';
@@ -58,7 +59,7 @@ import {
 } from '../layout/spectrum-split';
 import './mobile.css';
 
-const MODES: readonly RxMode[] = ['LSB', 'USB', 'CWL', 'CWU', 'AM', 'FM', 'DIGU'];
+const MODES: readonly RxMode[] = ['LSB', 'USB', 'CWL', 'CWU', 'AM', 'FM', 'DIGU', 'FREEDV'];
 
 const MOBILE_VIEWPORT_LOCK =
   'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover';
@@ -270,9 +271,10 @@ export function MobileApp() {
       )}
 
       <main className="m-stack">
+        <MobileInstallPrompt />
         {activeTab === 'radio' ? (
           <>
-            <Section label="Frequency" meta="VFO A">
+            <Section label="Frequency" meta="RX1">
               <div className="m-vfo-grid">
                 <div className="m-vfo-wrap">
                   <VfoDisplay />
@@ -760,7 +762,7 @@ const TOOL_META: Record<MobileToolId, { name: string; desc: string; sub: string;
   tx: {
     name: 'TX Controls',
     desc: 'Step, AGC-T, drive, tune, mic gain',
-    sub: 'VFO A',
+    sub: 'RX1',
     icon: (
       <svg viewBox="0 0 24 24" aria-hidden>
         <circle cx="12" cy="12" r="3" />

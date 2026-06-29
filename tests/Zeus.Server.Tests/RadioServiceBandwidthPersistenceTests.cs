@@ -2,7 +2,8 @@
 //
 // Zeus - OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 
 using Microsoft.Extensions.Logging.Abstractions;
 using Zeus.Contracts;
@@ -173,6 +174,81 @@ public sealed class RadioServiceBandwidthPersistenceTests : IDisposable
         Assert.Equal(950, entry.TxFilterHighHz);
         Assert.Equal(350, entry.CwTxFilterLoAbs);
         Assert.Equal(950, entry.CwTxFilterHiAbs);
+    }
+
+    // Operator drove the filter to zero width by some path (likely a TCI/CAT
+    // peer, a stored preset edge, or a passband-drag race) — WDSP's bandpass
+    // then passed nothing and the receiver went silent with no error anywhere.
+    // SetFilter must floor the signed width at MinFilterWidthHz, preserving
+    // sideband orientation. Issue #1028.
+    [Fact]
+    public void SetFilter_ZeroWidthUsb_ClampsToMinFilterWidth()
+    {
+        using var store = NewStateStore();
+        using var radio = NewRadio(store);
+
+        radio.SetMode(RxMode.USB);
+        var snap = radio.SetFilter(1500, 1500, "VAR1");
+
+        Assert.True(snap.FilterHighHz - snap.FilterLowHz >= RadioService.MinFilterWidthHz);
+        Assert.Equal(1500, (snap.FilterLowHz + snap.FilterHighHz) / 2);
+        Assert.True(snap.FilterLowHz > 0);
+        Assert.True(snap.FilterHighHz > 0);
+    }
+
+    [Fact]
+    public void SetFilter_ZeroWidthLsb_KeepsSidebandOrientation()
+    {
+        using var store = NewStateStore();
+        using var radio = NewRadio(store);
+
+        radio.SetMode(RxMode.LSB);
+        var snap = radio.SetFilter(-1500, -1500, "VAR1");
+
+        Assert.True(snap.FilterHighHz - snap.FilterLowHz >= RadioService.MinFilterWidthHz);
+        Assert.True(snap.FilterLowHz < 0);
+        Assert.True(snap.FilterHighHz < 0);
+    }
+
+    [Fact]
+    public void SetFilter_NormalWidth_PassesThroughUnchanged()
+    {
+        using var store = NewStateStore();
+        using var radio = NewRadio(store);
+
+        radio.SetMode(RxMode.USB);
+        var snap = radio.SetFilter(100, 2800, "F6");
+
+        Assert.Equal(100, snap.FilterLowHz);
+        Assert.Equal(2800, snap.FilterHighHz);
+    }
+
+    [Fact]
+    public void SetFilter_NarrowCwWidth_PassesThroughUnchanged()
+    {
+        using var store = NewStateStore();
+        using var radio = NewRadio(store);
+
+        radio.SetMode(RxMode.CWU);
+        // CW F10 (25 Hz) — narrowest shipped preset, sits well above the
+        // panic floor so it must be byte-identical.
+        var snap = radio.SetFilter(587, 613);
+
+        Assert.Equal(587, snap.FilterLowHz);
+        Assert.Equal(613, snap.FilterHighHz);
+    }
+
+    [Fact]
+    public void SetTxFilter_ZeroWidth_ClampsToMinFilterWidth()
+    {
+        using var store = NewStateStore();
+        using var radio = NewRadio(store);
+
+        radio.SetMode(RxMode.USB);
+        var snap = radio.SetTxFilter(1500, 1500);
+
+        Assert.True(snap.TxFilterHighHz - snap.TxFilterLowHz >= RadioService.MinFilterWidthHz);
+        Assert.Equal(1500, (snap.TxFilterLowHz + snap.TxFilterHighHz) / 2);
     }
 
     [Fact]

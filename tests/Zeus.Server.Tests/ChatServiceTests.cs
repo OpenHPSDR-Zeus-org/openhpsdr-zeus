@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 
 using System.Net.Http;
 using System.Text.Json;
@@ -127,6 +128,60 @@ public class ChatServiceTests : IDisposable
         Assert.Equal("hello", msg.Text);
         Assert.True(msg.Ts > 0); // synthesised
         Assert.Equal("lobby", msg.Room); // defaulted
+        Assert.Null(msg.Attachment); // plain message has no attachment
+    }
+
+    [Fact]
+    public void ParseMessage_ReadsImageAttachment()
+    {
+        using var doc = JsonDocument.Parse(
+            """{"t":"msg","from":"N9WAR","text":"look","room":"lobby","attachment":{"kind":"image","mime":"image/jpeg","dataUrl":"data:image/jpeg;base64,/9j/AA==","name":"rig.jpg","width":1024,"height":768,"size":4096}}""");
+        var msg = ChatService.ParseMessage(doc.RootElement);
+
+        Assert.NotNull(msg.Attachment);
+        Assert.Equal("image", msg.Attachment!.Kind);
+        Assert.Equal("image/jpeg", msg.Attachment.Mime);
+        Assert.StartsWith("data:image/jpeg;base64,", msg.Attachment.DataUrl);
+        Assert.Equal("rig.jpg", msg.Attachment.Name);
+        Assert.Equal(1024, msg.Attachment.Width);
+        Assert.Equal(768, msg.Attachment.Height);
+        Assert.Equal("look", msg.Text); // text rides alongside the image (caption)
+    }
+
+    [Fact]
+    public void ParseMessage_ReadsAudioAttachment()
+    {
+        using var doc = JsonDocument.Parse(
+            """{"t":"msg","from":"N9WAR","text":"","room":"lobby","attachment":{"kind":"audio","mime":"audio/webm","dataUrl":"data:audio/webm;base64,GkXfAA==","name":"voice-message.webm","size":2048}}""");
+        var msg = ChatService.ParseMessage(doc.RootElement);
+
+        Assert.NotNull(msg.Attachment);
+        Assert.Equal("audio", msg.Attachment!.Kind);
+        Assert.Equal("audio/webm", msg.Attachment.Mime);
+        Assert.StartsWith("data:audio/webm;base64,", msg.Attachment.DataUrl);
+        Assert.Equal("voice-message.webm", msg.Attachment.Name);
+    }
+
+    [Fact]
+    public void ParseAttachment_DropsNonImageOrOversize()
+    {
+        // Non-image / non-audio data URL → dropped (message degrades to text-only).
+        using var bad = JsonDocument.Parse(
+            """{"t":"msg","from":"N9WAR","text":"x","attachment":{"kind":"image","mime":"application/pdf","dataUrl":"data:application/pdf;base64,AAAA"}}""");
+        Assert.Null(ChatService.ParseMessage(bad.RootElement).Attachment);
+
+        // Mismatched family (audio MIME but image data scheme) → dropped.
+        using var mismatch = JsonDocument.Parse(
+            """{"t":"msg","from":"N9WAR","text":"x","attachment":{"kind":"audio","mime":"audio/webm","dataUrl":"data:image/png;base64,AAAA"}}""");
+        Assert.Null(ChatService.ParseMessage(mismatch.RootElement).Attachment);
+
+        // Oversized data URL → dropped.
+        var huge = new string('A', ChatAttachment.MaxDataUrlLength + 1);
+        var bigJson =
+            "{\"t\":\"msg\",\"from\":\"N9WAR\",\"attachment\":{\"kind\":\"image\"," +
+            "\"mime\":\"image/png\",\"dataUrl\":\"data:image/png;base64," + huge + "\"}}";
+        using var big = JsonDocument.Parse(bigJson);
+        Assert.Null(ChatService.ParseMessage(big.RootElement).Attachment);
     }
 
     [Fact]
@@ -150,6 +205,18 @@ public class ChatServiceTests : IDisposable
         Assert.Null(roster[1].Grid);
         Assert.Null(roster[1].FreqHz);
         Assert.Equal("tx", roster[1].Status);
+    }
+
+    [Fact]
+    public void ParseRoster_ReadsAdminFlag_DefaultingFalse()
+    {
+        using var doc = JsonDocument.Parse(
+            """{"t":"roster","roster":[{"callsign":"N9WAR","admin":true,"since":1},{"callsign":"EI6LF","since":2}]}""");
+
+        var roster = ChatService.ParseRoster(doc.RootElement, "roster");
+        Assert.NotNull(roster);
+        Assert.True(roster![0].Admin);  // explicit admin:true
+        Assert.False(roster[1].Admin);  // absent → default false
     }
 
     [Fact]
@@ -268,11 +335,27 @@ public class ChatServiceTests : IDisposable
         var status = chat.GetStatus();
         Assert.False(status.Enabled);   // opt-in default OFF
         Assert.False(status.Connected); // worker never ran a connection
+        Assert.False(status.SeeAllFreq); // admin see-all override default OFF
         Assert.Equal(ChatService.DefaultRelayUrl, status.RelayUrl);
 
         // Send must fail with 409-mapped exception when not connected.
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => chat.SendMessageAsync("hello", null, CancellationToken.None));
+            () => chat.SendMessageAsync("hello", null, null, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task SetSeeAllFreq_ReflectsInStatus_WhenDisconnected()
+    {
+        using var chat = BuildChat();
+
+        // Toggling the override while offline persists the session flag and shows
+        // in status (no relay frame is sent — there's no socket), so the admin
+        // console reflects their choice immediately.
+        await chat.SetSeeAllFreqAsync(true, CancellationToken.None);
+        Assert.True(chat.GetStatus().SeeAllFreq);
+
+        await chat.SetSeeAllFreqAsync(false, CancellationToken.None);
+        Assert.False(chat.GetStatus().SeeAllFreq);
     }
 
     [Fact]
@@ -289,7 +372,7 @@ public class ChatServiceTests : IDisposable
         Assert.True(store.GetEnabled());
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => chat.SendMessageAsync("hi", null, CancellationToken.None));
+            () => chat.SendMessageAsync("hi", null, null, CancellationToken.None));
 
         chat.SetEnabled(false);
         Assert.False(store.GetEnabled());
@@ -300,7 +383,7 @@ public class ChatServiceTests : IDisposable
     {
         using var chat = BuildChat();
         await Assert.ThrowsAsync<ArgumentException>(
-            () => chat.SendMessageAsync("   ", null, CancellationToken.None));
+            () => chat.SendMessageAsync("   ", null, null, CancellationToken.None));
     }
 
     [Fact]
@@ -335,7 +418,7 @@ public class ChatServiceTests : IDisposable
 
     private QrzService NewLoggedOutQrz() =>
         new(new SingleClientFactory(), NullLogger<QrzService>.Instance,
-            new CredentialStore(NullLogger<CredentialStore>.Instance, _root));
+            new CredentialStore(NullLogger<CredentialStore>.Instance, Path.Combine(_root, "creds.db")));
 
     private RadioService NewRadio() =>
         new(NullLoggerFactory.Instance,

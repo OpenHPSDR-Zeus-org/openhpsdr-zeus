@@ -2,6 +2,7 @@
 
 import {
   saveBandMemory,
+  type ReceiverDto,
   type RxMode,
   type TxVfo,
 } from '../api/client';
@@ -10,12 +11,13 @@ import { useConnectionStore } from '../state/connection-store';
 
 export const BAND_MEMORY_UPDATED_EVENT = 'zeus-band-memory-updated';
 
+// Accepts both the live connection store and a server RadioStateDto. RX2 reads
+// prefer the canonical receivers[] entry and fall back to the flat *B fields.
 type BandMemoryState = {
   vfoHz: number;
-  vfoBHz: number;
   rx2Enabled: boolean;
   mode: RxMode;
-  modeB: RxMode;
+  receivers?: readonly ReceiverDto[];
 };
 
 export type BandMemoryUpdatedDetail = {
@@ -50,7 +52,10 @@ export function saveReceiverBandModeMemory(
   state: BandMemoryState = useConnectionStore.getState(),
 ): void {
   const targetB = receiver === 'B' && state.rx2Enabled;
-  const hz = targetB ? state.vfoBHz : state.vfoHz;
-  const mode = modeOverride ?? (targetB ? state.modeB : state.mode);
+  const entry = targetB ? state.receivers?.find((r) => r.index === 1) : undefined;
+  // RX2 (index 1) reads from receivers[1]; RX1 (and RX2-absent) use the flat
+  // primary VFO/mode. The flat *B fields no longer exist on the client.
+  const hz = entry?.vfoHz ?? state.vfoHz;
+  const mode = modeOverride ?? entry?.mode ?? state.mode;
   saveBandModeMemory(hz, mode);
 }

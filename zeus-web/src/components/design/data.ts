@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -66,21 +67,6 @@ export const BANDS: BandSpec[] = [
   { n: '6', range: [50000000, 54000000], center: 50110000 },
 ];
 
-export const MODES = ['LSB', 'USB', 'CW', 'AM', 'FM', 'DIGI'] as const;
-export type Mode = (typeof MODES)[number];
-
-export const AGC_VALUES = ['OFF', 'SLOW', 'MED', 'FAST'] as const;
-export const FILTER_VALUES = [
-  '50 Hz',
-  '250 Hz',
-  '500 Hz',
-  '1.8 kHz',
-  '2.4 kHz',
-  '2.8 kHz',
-  '6 kHz',
-] as const;
-export const POWER_VALUES = ['0.5W', '1W', '5W', '10W', '20W', '50W'] as const;
-
 export function bandOf(hz: number): string {
   for (const b of BANDS) if (hz >= b.range[0] && hz <= b.range[1]) return b.n + 'm';
   return '—';
@@ -94,8 +80,11 @@ export type Contact = {
   cq: string;
   itu: string;
   latlon: string;
-  lat: number;
-  lon: number;
+  // QRZ returns records without map coordinates for callsigns that haven't
+  // verified an address or chosen to publish a pin; render the rest of the
+  // card anyway and just skip the lat/lon-dependent fields.
+  lat: number | null;
+  lon: number | null;
   local: string;
   qsl: string;
   licensed: string;
@@ -311,39 +300,4 @@ export const CONTACTS: Record<string, Contact> = {
   },
 };
 
-export type LogEntry = {
-  time: string;
-  call: string;
-  freq: string;
-  mode: string;
-  rst: string;
-  name: string;
-};
 
-export const SAMPLE_LOG: LogEntry[] = [
-  { time: '19:27', call: 'IU2ABC', freq: '14.210', mode: 'USB', rst: '59', name: 'Marco' },
-  { time: '19:14', call: 'JA3XYZ', freq: '14.214', mode: 'USB', rst: '57', name: 'Hiro' },
-  { time: '18:58', call: 'VK4PQR', freq: '21.285', mode: 'USB', rst: '55', name: 'Dale' },
-  { time: '18:41', call: 'LU1DEF', freq: '14.205', mode: 'USB', rst: '59', name: 'Diego' },
-  { time: '18:22', call: 'EA3GHI', freq: '7.074', mode: 'FT8', rst: '-12', name: 'Carla' },
-  { time: '17:55', call: 'K2LMN', freq: '14.195', mode: 'USB', rst: '59', name: 'Rob' },
-  { time: '17:31', call: 'DL9OPQ', freq: '3.573', mode: 'FT8', rst: '-08', name: 'Ute' },
-];
-
-export type MemoryChannel = {
-  n: number;
-  f: number;
-  m: string;
-  name: string;
-};
-
-export const MEMS: MemoryChannel[] = [
-  { n: 1, f: 14.21, m: 'USB', name: 'DX Window' },
-  { n: 2, f: 14.074, m: 'FT8', name: 'FT8 20m' },
-  { n: 3, f: 7.074, m: 'FT8', name: 'FT8 40m' },
-  { n: 4, f: 3.573, m: 'FT8', name: 'FT8 80m' },
-  { n: 5, f: 14.1, m: 'CW', name: 'NCDXF Bcn' },
-  { n: 6, f: 28.4, m: 'USB', name: '10m DX' },
-  { n: 7, f: 144.2, m: 'USB', name: '2m SSB' },
-  { n: 8, f: 50.11, m: 'USB', name: '6m DX' },
-];

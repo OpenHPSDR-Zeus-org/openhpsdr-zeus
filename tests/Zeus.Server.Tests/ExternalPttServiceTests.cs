@@ -1,0 +1,320 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF),
+//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//
+// Hardware PTT-IN → MOX, both protocols.
+//
+// These tests drive the SHARED debounce/hang/_owned engine through the P1 and
+// P2 entry-point seams and assert:
+//   • P2 PttIn rising → MOX-on with MoxSource.Hardware.
+//   • P2 PttIn falling in a CW mode → 250 ms hang → MOX-off.
+//   • P2 PttIn falling in a voice / data mode → immediate MOX-off (issue
+//     #870): the hang exists to bridge CW inter-character gaps and must NOT
+//     stretch SSB / AM / FM / DIG TX→RX transitions.
+//   • P1 path behaviour unchanged (rising→MOX, falling→hang/immediate→off).
+//   • The lamp tracks the raw input per protocol.
+//   • A re-key inside the hang window (CW) cancels the release.
+//   • Hardware can never drop a UI/CWX-owned MOX (arbitration preserved → PS
+//     keying untouched).
+//   • The Enable gate stops MOX promotion but the lamp still tracks the input.
+
+using Microsoft.Extensions.Logging.Abstractions;
+using Zeus.Contracts;
+using Zeus.Protocol2;
+using Zeus.Server;
+
+namespace Zeus.Server.Tests;
+
+public class ExternalPttServiceTests : IDisposable
+{
+    private readonly string _dbPath =
+        Path.Combine(Path.GetTempPath(), $"zeus-prefs-extptt-{Guid.NewGuid():N}.db");
+    private readonly string _pttDbPath =
+        Path.Combine(Path.GetTempPath(), $"zeus-prefs-extptt-ptt-{Guid.NewGuid():N}.db");
+
+    public void Dispose()
+    {
+        foreach (var p in new[] { _dbPath, _dbPath + ".pa", _pttDbPath })
+        {
+            try { if (File.Exists(p)) File.Delete(p); } catch { }
+        }
+    }
+
+    private sealed class Harness : IDisposable
+    {
+        public RadioService Radio { get; }
+        public TxService Tx { get; }
+        public StreamingHub Hub { get; }
+        public PttSettingsStore Settings { get; }
+        public ExternalPttService Service { get; }
+        private readonly DspSettingsStore _dspStore;
+        private readonly PaSettingsStore _paStore;
+
+        public Harness(string dbPath, string pttDbPath, bool enabled = true)
+        {
+            var loggerFactory = NullLoggerFactory.Instance;
+            _dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, dbPath);
+            _paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, dbPath + ".pa");
+            var dspStore = _dspStore;
+            var paStore = _paStore;
+            Radio = new RadioService(loggerFactory, dspStore, paStore);
+            // Connect P2 so TrySetMox's "not connected" interlock passes —
+            // exactly how a live G2 looks to the service.
+            Radio.MarkProtocol2Connected("127.0.0.1:1024", 48_000);
+            Hub = new StreamingHub(new NullLogger<StreamingHub>());
+            var pipeline = new DspPipelineService(Radio, Hub, Array.Empty<IRxAudioSink>(), loggerFactory);
+            Tx = new TxService(Radio, pipeline, Hub, NullBandPlanService.Instance, new NullLogger<TxService>());
+            Settings = new PttSettingsStore(NullLogger<PttSettingsStore>.Instance, pttDbPath);
+            // Set explicitly (PTT-IN defaults OFF / opt-in) so the harness is
+            // deterministic regardless of the store's power-on default.
+            Settings.Set(enabled);
+            Service = new ExternalPttService(Radio, Tx, Hub, Settings, new NullLogger<ExternalPttService>());
+        }
+
+        public void Dispose()
+        {
+            // Order matters: stop the service (its hang timer / event wiring)
+            // and the RadioService first, THEN release the LiteDB leases the
+            // stores hold. Closing the shared engines here — before the test
+            // class deletes the temp prefs files — means the files are flushed
+            // and closed, not deleted out from under an open handle.
+            Service.Dispose();
+            Radio.Dispose();
+            Settings.Dispose();
+            _paStore.Dispose();
+            _dspStore.Dispose();
+        }
+    }
+
+    // The MOX takeover/release run on Task.Run; poll briefly for the expected
+    // state instead of racing the ThreadPool.
+    private static bool WaitFor(Func<bool> cond, int timeoutMs = 2000)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            if (cond()) return true;
+            Thread.Sleep(5);
+        }
+        return cond();
+    }
+
+    private static P2TelemetryReading Ptt(bool on) =>
+        new P2TelemetryReading(FwdAdc: 0, RevAdc: 0, ExciterAdc: 0, PttIn: on, PllLocked: true);
+
+    [Fact]
+    public void P2Connect_Snapshot_ReportsAvailableAndProtocolP2()
+    {
+        // Regression for the bench finding on a G2: a P2-connected radio must
+        // surface in the PTT status (available + protocol "P2"), driven by the
+        // protocol-agnostic raw level — not the P1-only client.
+        using var h = new Harness(_dbPath, _pttDbPath);
+        using var p2 = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
+
+        h.Service.TestP2Connect(p2);
+
+        var snap = h.Service.Snapshot();
+        Assert.True(snap.Available);
+        Assert.Equal("P2", snap.Protocol);
+        Assert.Equal(false, snap.HardwarePtt); // idle until an edge
+
+        h.Service.TestP2Telemetry(Ptt(true));  // footswitch press
+        Assert.True(h.Service.Snapshot().HardwarePtt == true);
+    }
+
+    [Fact]
+    public void Snapshot_Recommendation_ReflectsEnableGate()
+    {
+        using var h = new Harness(_dbPath, _pttDbPath, enabled: true);
+        using var p2 = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
+        h.Service.TestP2Connect(p2);
+
+        var on = h.Service.Snapshot();
+        Assert.True(on.Enabled);
+        Assert.DoesNotContain("will not key MOX", on.DiagnosticRecommendation);
+
+        h.Settings.Set(false);
+        var off = h.Service.Snapshot();
+        Assert.False(off.Enabled);
+        Assert.Contains("will not key MOX", off.DiagnosticRecommendation);
+    }
+
+    [Fact]
+    public void P2_PttInRising_KeysMox_WithHardwareSource()
+    {
+        using var h = new Harness(_dbPath, _pttDbPath);
+
+        h.Service.TestP2Telemetry(Ptt(true));
+
+        Assert.True(WaitFor(() => h.Tx.IsMoxOn));
+        Assert.Equal(MoxSource.Hardware, h.Tx.MoxOwner);
+        Assert.True(h.Service.IsKeyed);
+    }
+
+    [Fact]
+    public void P2_PttInFalling_CwMode_HoldsForHang_ThenReleases()
+    {
+        using var h = new Harness(_dbPath, _pttDbPath);
+        h.Radio.SetMode(RxMode.CWU);
+
+        h.Service.TestP2Telemetry(Ptt(true));
+        Assert.True(WaitFor(() => h.Tx.IsMoxOn));
+
+        h.Service.TestP2Telemetry(Ptt(false));
+        // Within the 250 ms hang MOX must still be up (bridges CW gaps).
+        Assert.True(h.Tx.IsMoxOn, "MOX dropped before the 250 ms hang elapsed");
+        Assert.False(h.Service.IsKeyed); // lamp tracks the raw input immediately
+
+        // After the hang the release fires (timer → Task on the ThreadPool).
+        Assert.True(WaitFor(() => !h.Tx.IsMoxOn, timeoutMs: 2000));
+        Assert.Null(h.Tx.MoxOwner);
+    }
+
+    [Fact]
+    public void P2_PttInFalling_VoiceMode_ReleasesImmediately()
+    {
+        // Issue #870: in SSB / AM / FM / DIG the hang must NOT apply — the
+        // operator wants TX→RX (and the sequenced external PTT line) to drop
+        // on the edge, the same way Thetis and deskHPSDR behave. Default mode
+        // on a fresh harness is USB so no SetMode call is needed; this also
+        // exercises the post-fix default.
+        using var h = new Harness(_dbPath, _pttDbPath);
+        Assert.Equal(RxMode.USB, h.Radio.Snapshot().Mode);
+
+        h.Service.TestP2Telemetry(Ptt(true));
+        Assert.True(WaitFor(() => h.Tx.IsMoxOn));
+
+        h.Service.TestP2Telemetry(Ptt(false));
+        // No hang in voice modes — MOX must drop without waiting 250 ms.
+        Assert.True(WaitFor(() => !h.Tx.IsMoxOn, timeoutMs: 200),
+            "voice-mode falling edge must release MOX without the CW hang");
+        Assert.Null(h.Tx.MoxOwner);
+        Assert.False(h.Service.IsKeyed);
+    }
+
+    [Fact]
+    public void P2_ReKeyInsideHang_CwMode_CancelsRelease()
+    {
+        using var h = new Harness(_dbPath, _pttDbPath);
+        h.Radio.SetMode(RxMode.CWU);
+
+        h.Service.TestP2Telemetry(Ptt(true));
+        Assert.True(WaitFor(() => h.Tx.IsMoxOn));
+
+        h.Service.TestP2Telemetry(Ptt(false)); // arm hang
+        Thread.Sleep(50);
+        h.Service.TestP2Telemetry(Ptt(true));  // re-key inside the window
+
+        // MOX must stay up well past the hang window — the release was cancelled.
+        Thread.Sleep(350);
+        Assert.True(h.Tx.IsMoxOn);
+        Assert.True(h.Service.IsKeyed);
+    }
+
+    [Fact]
+    public void P2_LevelSampled_NoEdge_DoesNotReKey()
+    {
+        // P2 telemetry is level-sampled at high rate; repeated identical levels
+        // must not be treated as edges (no MOX churn, no ownership reseat).
+        using var h = new Harness(_dbPath, _pttDbPath);
+
+        h.Service.TestP2Telemetry(Ptt(true));
+        Assert.True(WaitFor(() => h.Tx.IsMoxOn));
+
+        // Many redundant "still keyed" samples — must remain a single claim.
+        for (int i = 0; i < 20; i++) h.Service.TestP2Telemetry(Ptt(true));
+        Assert.True(h.Tx.IsMoxOn);
+        Assert.Equal(MoxSource.Hardware, h.Tx.MoxOwner);
+    }
+
+    [Fact]
+    public void P1_PttInRising_CwMode_KeysMox_WithHardwareSource_Unchanged()
+    {
+        using var h = new Harness(_dbPath, _pttDbPath);
+        h.Radio.SetMode(RxMode.CWU);
+
+        h.Service.TestRawPttP1(true);
+
+        Assert.True(WaitFor(() => h.Tx.IsMoxOn));
+        Assert.Equal(MoxSource.Hardware, h.Tx.MoxOwner);
+        Assert.True(h.Service.IsKeyed);
+
+        h.Service.TestRawPttP1(false);
+        Assert.True(h.Tx.IsMoxOn, "P1 MOX dropped before the hang elapsed");
+        Assert.True(WaitFor(() => !h.Tx.IsMoxOn, timeoutMs: 2000));
+    }
+
+    [Fact]
+    public void P1_PttInFalling_VoiceMode_ReleasesImmediately()
+    {
+        // Mirror of the P2 voice-mode test through the P1 entry-point seam:
+        // a footswitch release in SSB must drop MOX on the edge so the
+        // external PTT / amplifier sequencing lines drop with it (issue #870).
+        using var h = new Harness(_dbPath, _pttDbPath);
+        Assert.Equal(RxMode.USB, h.Radio.Snapshot().Mode);
+
+        h.Service.TestRawPttP1(true);
+        Assert.True(WaitFor(() => h.Tx.IsMoxOn));
+
+        h.Service.TestRawPttP1(false);
+        Assert.True(WaitFor(() => !h.Tx.IsMoxOn, timeoutMs: 200),
+            "voice-mode P1 falling edge must release MOX without the CW hang");
+        Assert.Null(h.Tx.MoxOwner);
+    }
+
+    [Fact]
+    public void Hardware_CannotDrop_UiOwnedMox_ArbitrationPreserved()
+    {
+        // PURESIGNAL / UI keying is paramount: a footswitch release must never
+        // truncate a UI-keyed transmission. The hardware path goes through the
+        // EXISTING TrySetMox(MoxSource.Hardware) arbitration.
+        using var h = new Harness(_dbPath, _pttDbPath);
+
+        Assert.True(h.Tx.TrySetMox(true, MoxSource.UI, out _));
+        Assert.Equal(MoxSource.UI, h.Tx.MoxOwner);
+
+        // Hardware rising while UI owns: the IsMoxOn gate ignores the echo, so
+        // no takeover and ownership stays UI.
+        h.Service.TestP2Telemetry(Ptt(true));
+        Thread.Sleep(50);
+        Assert.True(h.Tx.IsMoxOn);
+        Assert.Equal(MoxSource.UI, h.Tx.MoxOwner);
+
+        // Hardware falling + full hang: the release is attempted but rejected by
+        // the arbitration (foreign source can't drop UI's MOX).
+        h.Service.TestP2Telemetry(Ptt(false));
+        Thread.Sleep(350);
+        Assert.True(h.Tx.IsMoxOn);
+        Assert.Equal(MoxSource.UI, h.Tx.MoxOwner);
+    }
+
+    [Fact]
+    public void EnableGate_Off_SuppressesMox_ButLampStillTracks()
+    {
+        using var h = new Harness(_dbPath, _pttDbPath, enabled: false);
+
+        h.Service.TestP2Telemetry(Ptt(true));
+        Thread.Sleep(50);
+
+        // No MOX promotion when the gate is off…
+        Assert.False(h.Tx.IsMoxOn);
+        // …but the lamp still reflects the physical footswitch press.
+        Assert.True(h.Service.IsKeyed);
+
+        h.Service.TestP2Telemetry(Ptt(false));
+        Assert.False(h.Service.IsKeyed);
+    }
+
+    [Fact]
+    public void EnableGate_On_PromotesToMox()
+    {
+        using var h = new Harness(_dbPath, _pttDbPath, enabled: true);
+
+        h.Service.TestP2Telemetry(Ptt(true));
+
+        Assert.True(WaitFor(() => h.Tx.IsMoxOn));
+        Assert.Equal(MoxSource.Hardware, h.Tx.MoxOwner);
+    }
+}

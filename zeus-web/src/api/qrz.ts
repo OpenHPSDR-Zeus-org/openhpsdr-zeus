@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -75,6 +76,24 @@ export type QrzStation = {
   observesDst: boolean | null;
   born: number | null;
 };
+
+/**
+ * Compose the operator's full display name from a QRZ lookup. QRZ splits the
+ * operator into `firstName` (<fname>) and `name` (<name> = surname), so logging
+ * `name` alone dropped the first name — and read blank for records where QRZ
+ * only carries the first name. Returns "First Last", a single available part,
+ * or null when neither is present.
+ */
+export function qrzFullName(
+  station: { firstName?: string | null; name?: string | null } | null | undefined,
+): string | null {
+  if (!station) return null;
+  const full = [station.firstName, station.name]
+    .map((p) => (p ?? '').trim())
+    .filter((p) => p.length > 0)
+    .join(' ');
+  return full.length > 0 ? full : null;
+}
 
 export type QrzStatus = {
   connected: boolean;

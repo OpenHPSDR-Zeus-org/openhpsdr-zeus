@@ -1,0 +1,2 @@
+2019  Jan 19 - (VK6PH) change clock for Rx Attenuator from CMCLK (12.288MHz) to  CBCLK(3.072MHz)
+                    since new version of DAT-33A-SP+ attenuator chip is not reliable at faster clock speed.

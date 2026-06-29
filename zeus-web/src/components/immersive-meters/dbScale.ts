@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // Shared dB ↔ fraction mapping for the immersive Meters panel. Mirrors the
 // design prototype's helpers so all three widget primitives (BigArc /
@@ -21,10 +21,6 @@ export function clamp01(t: number): number {
 export function dbToFrac(db: number): number {
   if (!isFinite(db)) return 0;
   return clamp01((db - DB_MIN) / (DB_MAX - DB_MIN));
-}
-
-export function fracToDb(f: number): number {
-  return DB_MIN + clamp01(f) * (DB_MAX - DB_MIN);
 }
 
 export function fmtDb(db: number): string {

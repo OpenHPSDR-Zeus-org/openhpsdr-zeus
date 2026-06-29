@@ -1,0 +1,12 @@
+PLEASE NOTE: 
+
+This is Beta test code for the ANAN-10E and 100B using Protocol 2.
+Whilst this has been through a limited Alpha test phase successfully,
+given the large number of options and features, to date it has not been subjected to rigorous  testing.
+
+Ethernet runs at a Gigabit.  Due to the fact that the FPGA is 99% full a number of features are not supported:
+
+1. DHCP is not supported, in which case you need to use a fixed IP address.
+2. ICMP (ping) is not supported.
+3. You must use the Bootloader to load new FPGA code. 
+

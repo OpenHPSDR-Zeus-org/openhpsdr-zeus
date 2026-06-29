@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // Desktop-mode RX audio sink: drains demodulated audio (mono float32 48 kHz,
 // produced by DspPipelineService) directly into the selected OS playback
@@ -93,6 +93,10 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     // (History: 20 ms underran badly, 60 ms underran under load — both #733/#742.)
     private const int PlaybackPrebufferSamples = 5760;
 
+    // Keep selected/default playback opens bounded for the same reason as native
+    // mic capture: stale OS audio endpoints must not block desktop startup.
+    private static readonly TimeSpan DeviceOpenTimeout = TimeSpan.FromSeconds(5);
+
     // Effective prebuffer cushion actually in force — max(floor, 4×callbackFrames),
     // recomputed per callback once the device's real period is known. Reported in
     // diagnostics so a report shows the cushion that was active.
@@ -129,6 +133,7 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
 
     private MiniAudioOutput? _output;
     private string? _activeOutputDeviceId;
+    private bool _shutdown;
     private bool _disposed;
 
     // Mute flag for the Photino-side Mute/Unmute button. Read on the DSP
@@ -245,11 +250,19 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     /// </summary>
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        lock (_deviceSync)
+        var thread = new Thread(() =>
         {
-            if (_output != null) return Task.CompletedTask;
-            OpenOutputLocked(ConfiguredOutputDeviceId);
-        }
+            lock (_deviceSync)
+            {
+                if (_shutdown || _output != null) return;
+                OpenOutputLocked(ConfiguredOutputDeviceId);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "zeus-output-start",
+        };
+        thread.Start();
 
         // Subscribe to TX-active edges so we can drain the ring on TX-on.
         // The radio sample clock and the WASAPI playback clock drift relative
@@ -281,6 +294,7 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
         }
         lock (_deviceSync)
         {
+            _shutdown = true;
             try { _output?.Stop(); }
             catch (Exception ex) { _log.LogWarning(ex, "audio.native.rx stop threw"); }
         }
@@ -306,43 +320,82 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
 
     private void OpenOutputLocked(string? requestedDeviceId)
     {
-        try
+        var selected = !string.IsNullOrWhiteSpace(requestedDeviceId);
+        var output = OpenOutputTimeboxed(requestedDeviceId, out var failure);
+        if (output != null)
         {
-            _output = CreateOutput(requestedDeviceId);
-            _output.Start();
-            _activeOutputDeviceId = NormalizeDeviceId(requestedDeviceId);
-            _log.LogInformation(
-                "audio.native.rx open device={Device} rate={Rate}Hz channels={Channels} version={Version}",
-                _activeOutputDeviceId is null ? "default" : "selected",
-                _output.SampleRate, _output.Channels, MiniAudioInterop.Version());
-            return;
-        }
-        catch (Exception ex) when (!string.IsNullOrWhiteSpace(requestedDeviceId))
-        {
-            _log.LogWarning(ex, "audio.native.rx selected output open failed; falling back to default");
-            CloseOutputLocked(dispose: true);
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "audio.native.rx open failed; RX audio output disabled");
-            CloseOutputLocked(dispose: true);
+            AdoptOutputLocked(output, requestedDeviceId);
             return;
         }
 
-        try
+        LogOpenGaveUp(selected ? "selected" : "default", failure);
+        if (!selected)
         {
-            _output = CreateOutput(null);
-            _output.Start();
-            _activeOutputDeviceId = null;
-            _log.LogInformation(
-                "audio.native.rx open device=default rate={Rate}Hz channels={Channels} version={Version}",
-                _output.SampleRate, _output.Channels, MiniAudioInterop.Version());
+            _log.LogWarning("audio.native.rx RX audio output disabled (no usable playback device)");
+            return;
         }
-        catch (Exception fallbackEx)
+
+        var fallback = OpenOutputTimeboxed(null, out var fallbackFailure);
+        if (fallback != null)
         {
-            _log.LogWarning(fallbackEx, "audio.native.rx default fallback open failed; RX audio output disabled");
-            CloseOutputLocked(dispose: true);
+            AdoptOutputLocked(fallback, null);
+            return;
         }
+
+        LogOpenGaveUp("default fallback", fallbackFailure);
+        _log.LogWarning("audio.native.rx RX audio output disabled (no usable playback device)");
+    }
+
+    private MiniAudioOutput? OpenOutputTimeboxed(string? requestedDeviceId, out Exception? failure) =>
+        TimeboxedNativeOpen.Run(
+            () =>
+            {
+                MiniAudioOutput? output = null;
+                try
+                {
+                    output = CreateOutput(requestedDeviceId);
+                    output.Start();
+                    return output;
+                }
+                catch
+                {
+                    if (output != null)
+                    {
+                        try { output.Stop(); } catch { /* best effort */ }
+                        output.Dispose();
+                    }
+                    throw;
+                }
+            },
+            static output =>
+            {
+                try { output.Stop(); } catch { /* best effort */ }
+                output.Dispose();
+            },
+            DeviceOpenTimeout,
+            out failure);
+
+    private void AdoptOutputLocked(MiniAudioOutput output, string? requestedDeviceId)
+    {
+        _output = output;
+        _activeOutputDeviceId = NormalizeDeviceId(requestedDeviceId);
+        _log.LogInformation(
+            "audio.native.rx open device={Device} rate={Rate}Hz channels={Channels} version={Version}",
+            _activeOutputDeviceId is null ? "default" : "selected",
+            output.SampleRate, output.Channels, MiniAudioInterop.Version());
+    }
+
+    private void LogOpenGaveUp(string which, Exception? failure)
+    {
+        if (failure != null)
+        {
+            _log.LogWarning(failure, "audio.native.rx {Which} output open failed", which);
+            return;
+        }
+
+        _log.LogWarning(
+            "audio.native.rx {Which} output open timed out after {Timeout:0.#}s; not blocking host startup",
+            which, DeviceOpenTimeout.TotalSeconds);
     }
 
     private MiniAudioOutput CreateOutput(string? deviceId) =>
@@ -599,6 +652,7 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
         _disposed = true;
         lock (_deviceSync)
         {
+            _shutdown = true;
             CloseOutputLocked(dispose: true);
         }
     }

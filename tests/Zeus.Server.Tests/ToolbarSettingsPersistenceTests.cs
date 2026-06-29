@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -49,6 +50,14 @@ public class ToolbarSettingsPersistenceTests : IDisposable
         Assert.Null(dto.Band);
         Assert.Null(dto.Step);
         Assert.Null(dto.StepHz);
+    }
+
+    [Fact]
+    public void FreshDb_CurrentStepHz_ReturnsFrontendDefault()
+    {
+        using var store = BuildStore();
+
+        Assert.Equal(ToolbarSettingsStore.DefaultStepHz, store.CurrentStepHz);
     }
 
     [Fact]
@@ -110,6 +119,19 @@ public class ToolbarSettingsPersistenceTests : IDisposable
 
         var dto = store.Get();
         Assert.Equal(1000, dto.StepHz);
+        Assert.Equal(1000, store.CurrentStepHz);
+    }
+
+    [Theory]
+    [InlineData(null, 500)]
+    [InlineData(0, 500)]
+    [InlineData(-1, 500)]
+    [InlineData(5_001, 500)]
+    [InlineData(1, 1)]
+    [InlineData(5_000, 5_000)]
+    public void NormalizeStepHz_RejectsInvalidValues(int? raw, int expected)
+    {
+        Assert.Equal(expected, ToolbarSettingsStore.NormalizeStepHz(raw));
     }
 
     [Fact]

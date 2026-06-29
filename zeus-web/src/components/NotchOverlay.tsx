@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -105,7 +106,8 @@ export function NotchOverlay({ interactive = false, resizable = false, container
             key={n.id}
             className="pointer-events-none absolute inset-y-0 z-[6]"
             style={{
-              ...bandStyle(n.centerHz, n.widthHz),
+              left: `${left}%`,
+              width: `${w}%`,
               // Indicator band: a soft scrim + TX-red edges marking where WDSP
               // is notching. The audio (and post-notch trace) are already cut by
               // the real filter; this just shows the operator where.

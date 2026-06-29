@@ -94,7 +94,11 @@ if(ZEUS_USE_VST3SDK)
             ${VST3SDK_DIR}/public.sdk/source/vst/hosting/module_mac.mm
             PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     elseif(UNIX AND NOT APPLE)
-        target_link_libraries(zeus-vst-bridge PRIVATE dl pthread)
+        # X11 hosts the plug-in editor window + run loop on Linux (bridge.cpp,
+        # __linux__ path). find_package surfaces include dirs/libs portably.
+        find_package(X11 REQUIRED)
+        target_include_directories(zeus-vst-bridge PRIVATE ${X11_INCLUDE_DIR})
+        target_link_libraries(zeus-vst-bridge PRIVATE dl pthread ${X11_LIBRARIES})
     endif()
 
     if(WIN32)

@@ -130,6 +130,54 @@ BACKEND_PORT=$BACKEND_PORT npm --prefix zeus-web run dev -- --port $FRONTEND_POR
 - `BACKEND_PORT` tells the Vite proxy where to forward `/api` and `/ws`.
 - `--strictPort` makes Vite fail loudly rather than silently picking another port.
 
+### 4b. (desktop mode only) Clear the stale webview bundle cache
+
+Skip this step entirely in web mode (Vite serves fresh assets with HMR).
+
+**Why:** the desktop webview (WebKit on macOS/Linux, WebView2 on Windows) registers a
+service worker that **precaches the built bundle and serves it stale across restarts**
+— so a freshly rebuilt `wwwroot` does NOT show up until that precache is cleared. This
+is the #1 "my frontend change isn't showing" trap in desktop mode. Clear it on every
+desktop `/run` so the webview always loads the bundle just built in step 3.
+
+The app must be stopped first (step 2 already freed `:6443`; this also `pkill`s any
+straggler so the webview isn't holding the cache files). This is a **surgical** clear:
+remove only the bundle caches (the service-worker precache + HTTP cache, where the
+stale bytes live). **Do NOT** touch `LocalStorage` (UI prefs) or `IndexedDB` — and the
+layout/PS/calibration state is server-side (LiteDB) regardless, so nothing is lost; the
+only cost is the webview re-fetching the bundle from the local backend on next launch.
+
+**macOS:**
+
+```bash
+pkill -f 'OpenhpsdrZeus' 2>/dev/null; sleep 1
+CA="$HOME/Library/Caches/OpenhpsdrZeus/WebKit"
+# The stale bundle lives in the HTTP cache (NetworkCache, ~tens of MB) + the
+# service-worker Cache-Storage API. Clearing just these forces a fresh bundle;
+# the origin store (IndexedDB, SW registration) and LocalStorage are left intact.
+rm -rf "$CA/NetworkCache" "$CA/CacheStorage" 2>/dev/null
+echo "cleared desktop webview bundle cache (LocalStorage + IndexedDB preserved)"
+```
+
+**Windows / Linux** (adapt — same intent, different cache home; keep `Local Storage`
+and `IndexedDB`):
+
+- **Windows (WebView2):** find the `EBWebView` user-data folder for `OpenhpsdrZeus`
+  (next to the executable as `OpenhpsdrZeus.exe.WebView2\EBWebView`; for `dotnet run`
+  that's under `OpenhpsdrZeus\bin\Debug\net10.0\`, for an installed build next to the
+  installed exe — otherwise search `%LOCALAPPDATA%` for `EBWebView`). Inside
+  `EBWebView\Default\`, delete only `Service Worker`, `Cache`, and `Code Cache`. **Keep
+  `Local Storage` and `IndexedDB`.**
+- **Linux (WebKitGTK):** clear only the app's WebKit HTTP/Cache-Storage cache under
+  `~/.cache/OpenhpsdrZeus` (leave `~/.local/share/OpenhpsdrZeus`, which holds
+  LocalStorage / IndexedDB).
+
+If a stale bundle ever *survives* this surgical clear, the heavier fallback is to also
+remove the origin store (`~/Library/WebKit/OpenhpsdrZeus/WebsiteData/Default` on macOS)
+— that drops IndexedDB too, so only reach for it if needed.
+
+After clearing, the next launch re-fetches the freshly built bundle from the backend.
+
 ### 5. Start the .NET backend (background)
 
 **Desktop mode:**

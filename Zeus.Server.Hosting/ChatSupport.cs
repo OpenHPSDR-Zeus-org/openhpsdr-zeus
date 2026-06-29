@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -47,6 +48,12 @@ public sealed class ChatMessageRing
             _items.Enqueue(message);
             while (_items.Count > _capacity) _items.Dequeue();
         }
+    }
+
+    /// <summary>Drops all retained messages (e.g. after an admin clears the room).</summary>
+    public void Clear()
+    {
+        lock (_sync) _items.Clear();
     }
 
     /// <summary>

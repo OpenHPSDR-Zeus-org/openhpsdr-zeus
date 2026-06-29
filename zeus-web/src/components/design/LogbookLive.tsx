@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -98,6 +99,9 @@ export function LogbookLive({ searchText, hideQrzPublished }: LogbookLiveProps) 
   const lastPublishResult = useLoggerStore((s) => s.lastPublishResult);
   const publishError = useLoggerStore((s) => s.publishError);
   const clearPublishResult = useLoggerStore((s) => s.clearPublishResult);
+  const lastExportResult = useLoggerStore((s) => s.lastExportResult);
+  const exportError = useLoggerStore((s) => s.exportError);
+  const clearExportResult = useLoggerStore((s) => s.clearExportResult);
   const selectedIds = useLoggerStore((s) => s.selectedIds);
   const toggleSelected = useLoggerStore((s) => s.toggleSelected);
   const setSelectedIds = useLoggerStore((s) => s.setSelectedIds);
@@ -117,15 +121,19 @@ export function LogbookLive({ searchText, hideQrzPublished }: LogbookLiveProps) 
   const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected;
 
   useEffect(() => {
-    // Self-clear import/publish feedback (shown in the Logbook header) after a few seconds.
-    if (lastImportResult || importError || lastPublishResult || publishError) {
+    // Self-clear import/publish/export feedback (shown in the Logbook header) after a few seconds.
+    if (lastImportResult || importError || lastPublishResult || publishError || lastExportResult || exportError) {
       const timer = setTimeout(() => {
         clearImportResult();
         clearPublishResult();
+        clearExportResult();
       }, 4000);
       return () => clearTimeout(timer);
     }
-  }, [lastImportResult, importError, lastPublishResult, publishError, clearImportResult, clearPublishResult]);
+  }, [
+    lastImportResult, importError, lastPublishResult, publishError, lastExportResult, exportError,
+    clearImportResult, clearPublishResult, clearExportResult,
+  ]);
 
   useEffect(() => {
     if (selectAllRef.current) {

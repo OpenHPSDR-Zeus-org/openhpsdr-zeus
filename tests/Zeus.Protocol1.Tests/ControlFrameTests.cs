@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -174,14 +175,91 @@ public class ControlFrameTests
     }
 
     [Fact]
-    public void ControlFrame_Preamp_On_SetsC3Bit4()
+    public void ControlFrame_Preamp_On_SetsC3Bit2_OnLt2208Board()
     {
         Span<byte> cc = stackalloc byte[5];
-        var s = BaseState() with { PreampOn = true };
+        // LT2208 board (Hermes): preamp/gain → C3 bit 2. Verified against ramdor
+        // Thetis networkproto1.c case 0 (`(rx[0].preamp << 2)`) and piHPSDR
+        // old_protocol.c (`LT2208_GAIN_ON = 0x04`). Was previously emitted at
+        // bit 4 (the RANDOM bit) — the move frees bit 4 for the randomizer.
+        var s = BaseState() with { Board = HpsdrBoardKind.Hermes, PreampOn = true };
         ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, s);
 
-        // C3[4] = preamp bit (doc 02 §4.1)
+        Assert.Equal(1 << 2, cc[3] & (1 << 2));     // preamp bit 2 set
+        Assert.Equal(0, cc[3] & (1 << 4));          // RANDOM bit 4 NOT set by preamp
+        Assert.Equal(1 << 2, cc[3]);                // only preamp; antenna ANT1, no dither/random
+    }
+
+    [Fact]
+    public void ControlFrame_Preamp_On_Hl2_SetsNoC3Bit()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        // HL2's AD9866 has no LT2208 preamp; C3 bit 2 is VNA gain and bit 4 is
+        // the FPGA PSU switching clock. The operator's preamp toggle must NOT
+        // touch C3 on HL2 (HL2 RX gain is the LNA register 0x0a). This pins the
+        // fix for the prior bug where preamp-on disabled the HL2 PSU clock.
+        var s = BaseState() with { PreampOn = true }; // BaseState board = HL2
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, s);
+
+        Assert.Equal(0, cc[3]);
+    }
+
+    [Fact]
+    public void ControlFrame_AdcDither_On_SetsC3Bit3_OnLt2208Board()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        // LT2208 ADC dither → C3 bit 3 (Thetis networkproto1.c case 0
+        // `(adc[0].dither << 3)`; piHPSDR `LT2208_DITHER_ON = 0x08`).
+        var s = BaseState() with { Board = HpsdrBoardKind.Hermes, AdcDitherEnabled = true };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, s);
+
+        Assert.Equal(1 << 3, cc[3] & (1 << 3));
+        Assert.Equal(1 << 3, cc[3]); // only dither; no random/preamp/antenna
+    }
+
+    [Fact]
+    public void ControlFrame_AdcRandom_On_SetsC3Bit4_OnLt2208Board()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        // LT2208 ADC randomizer → C3 bit 4 (Thetis `(adc[0].random << 4)`;
+        // piHPSDR `LT2208_RANDOM_ON = 0x10`).
+        var s = BaseState() with { Board = HpsdrBoardKind.Hermes, AdcRandomEnabled = true };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, s);
+
         Assert.Equal(1 << 4, cc[3] & (1 << 4));
+        Assert.Equal(1 << 4, cc[3]); // only random; no dither/preamp/antenna
+    }
+
+    [Fact]
+    public void ControlFrame_AdcDitherRandomAndPreamp_CoexistOnC3()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        // Preamp (bit 2), dither (bit 3) and random (bit 4) are independent
+        // bits and must coexist — this is the regression guard for the old
+        // preamp/random collision at bit 4.
+        var s = BaseState() with
+        {
+            Board = HpsdrBoardKind.Hermes,
+            PreampOn = true,
+            AdcDitherEnabled = true,
+            AdcRandomEnabled = true,
+        };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, s);
+
+        Assert.Equal((1 << 2) | (1 << 3) | (1 << 4), cc[3]);
+    }
+
+    [Fact]
+    public void ControlFrame_AdcDitherRandom_On_Hl2_DoesNotTouchC3()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        // Defence in depth: even if dither/random are somehow set on an HL2
+        // state, the wire layer must not light C3 bits 3/4 there — bit 3 is
+        // reserved for Band Volts (off here) and HL2 has no LT2208.
+        var s = BaseState() with { AdcDitherEnabled = true, AdcRandomEnabled = true };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, s);
+
+        Assert.Equal(0, cc[3]);
     }
 
     [Fact]
@@ -228,11 +306,27 @@ public class ControlFrameTests
     [Fact]
     public void ControlFrame_AntennaSelection_Ant2_SetsC3UpperBits()
     {
+        // RX-antenna C3[7:5] is emitted only on relay-capable boards. BaseState
+        // is HL2 (single jack → clamped to ANT1, see the clamp test below), so
+        // use a relay board (Hermes) to exercise the antenna-select math itself.
         Span<byte> cc = stackalloc byte[5];
-        var s = BaseState() with { RxAntenna = HpsdrAntenna.Ant2 };
+        var s = BaseState() with { RxAntenna = HpsdrAntenna.Ant2, Board = HpsdrBoardKind.Hermes };
         ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, s);
         // C3 [7:5] = antenna select; ANT2 = 0b001 → value 0x20.
         Assert.Equal(0b001 << 5, cc[3] & 0b11100000);
+    }
+
+    [Fact]
+    public void ControlFrame_AntennaSelection_Hl2_ClampedToAnt1()
+    {
+        // External-ports plan — antenna slice (#804): HL2 has a single antenna
+        // jack — C3[5] forwards to the N2ADR antenna pad, not an ANT1/2/3 relay
+        // — so a non-ANT1 RX-antenna selection MUST be clamped to ANT1 at the
+        // wire layer (ControlFrame.EncodeRxAntennaC3Bits).
+        Span<byte> cc = stackalloc byte[5];
+        var s = BaseState() with { RxAntenna = HpsdrAntenna.Ant3 }; // HL2
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, s);
+        Assert.Equal(0x00, cc[3] & 0b11100000);
     }
 
     [Fact]
@@ -335,6 +429,42 @@ public class ControlFrameTests
         Span<byte> cc = stackalloc byte[5];
         ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.DriveFilter, client.SnapshotState());
         Assert.Equal(expectedC1, cc[1]);
+    }
+
+    [Fact]
+    public void Protocol1Client_SetAdcDitherRandom_FlowsToConfigC3_OnLt2208Board()
+    {
+        // Full client plumbing: the setter lands in SnapshotState and the
+        // Config encoder lights C3 bits 3 (dither) and 4 (random) for a
+        // non-HL2 board.
+        using var client = new Protocol1Client();
+        client.SetBoardKind(HpsdrBoardKind.Hermes);
+        client.SetAdcDitherRandom(ditherEnabled: true, randomEnabled: true);
+
+        var state = client.SnapshotState();
+        Assert.True(state.AdcDitherEnabled);
+        Assert.True(state.AdcRandomEnabled);
+
+        Span<byte> cc = stackalloc byte[5];
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, state);
+        Assert.Equal((1 << 3) | (1 << 4), cc[3]);
+    }
+
+    [Fact]
+    public void Protocol1Client_AdcDitherRandom_DefaultOff_LeavesConfigC3Clean()
+    {
+        // Default (operator never opted in) → no C3 dither/random bits, on a
+        // non-HL2 board. Guards the "byte-identical until enabled" promise.
+        using var client = new Protocol1Client();
+        client.SetBoardKind(HpsdrBoardKind.Hermes);
+
+        var state = client.SnapshotState();
+        Assert.False(state.AdcDitherEnabled);
+        Assert.False(state.AdcRandomEnabled);
+
+        Span<byte> cc = stackalloc byte[5];
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, state);
+        Assert.Equal(0, cc[3]);
     }
 
     [Fact]
@@ -542,6 +672,102 @@ public class ControlFrameTests
             peak = Math.Max(peak, Math.Max(Math.Abs(i), Math.Abs(q)));
         }
         return (peak, firstI, firstQ);
+    }
+
+    private static (int peak, int firstL, int firstR) FirstFrameAudioStats(ReadOnlySpan<byte> packet)
+    {
+        const int payloadStart = 16;
+        int peak = 0;
+        int firstL = (short)((packet[payloadStart + 0] << 8) | packet[payloadStart + 1]);
+        int firstR = (short)((packet[payloadStart + 2] << 8) | packet[payloadStart + 3]);
+        for (int s = 0; s < 63; s++)
+        {
+            int off = payloadStart + s * 8;
+            int l = (short)((packet[off + 0] << 8) | packet[off + 1]);
+            int r = (short)((packet[off + 2] << 8) | packet[off + 3]);
+            peak = Math.Max(peak, Math.Max(Math.Abs(l), Math.Abs(r)));
+        }
+        return (peak, firstL, firstR);
+    }
+
+    // Fills every requested slot with a constant s16, returning the full count —
+    // the steady-state "ring has plenty of audio" case.
+    private sealed class ConstRxAudioSource : IRxAudioSource
+    {
+        private readonly short _v;
+        public ConstRxAudioSource(short v) { _v = v; }
+        public int Read(Span<short> dest) { dest.Fill(_v); return dest.Length; }
+    }
+
+    // Always empty — models a ring that has nothing buffered (feature off / HL2 /
+    // underrun). Must leave the L/R slots zero, byte-identical to legacy behaviour.
+    private sealed class EmptyRxAudioSource : IRxAudioSource
+    {
+        public int Read(Span<short> dest) => 0;
+    }
+
+    [Fact]
+    public void BuildDataPacket_MoxOff_WithRxAudio_FillsLrAndLeavesIqZero()
+    {
+        // RX (not transmitting): demodulated audio rides the EP2 L/R slots so the
+        // radio codec drives its speaker jacks; the I/Q slots carry no carrier.
+        var buf = new byte[1032];
+        var state = BaseState() with { Board = HpsdrBoardKind.Hermes, Mox = false };
+        var rx = new ConstRxAudioSource(0x1234);
+
+        ControlFrame.BuildDataPacket(
+            buf, 1,
+            ControlFrame.CcRegister.Config,
+            ControlFrame.CcRegister.RxFreq,
+            state, iqSource: null, rxAudioSource: rx);
+
+        var (audioPeak, firstL, firstR) = FirstFrameAudioStats(buf);
+        var (iqPeak, _, _) = FirstFrameIqStats(buf);
+        Assert.Equal(0x1234, firstL);
+        Assert.Equal(0x1234, firstR);   // mono duplicated to both channels
+        Assert.Equal(0x1234, audioPeak);
+        Assert.Equal(0, iqPeak);        // no carrier while receiving
+    }
+
+    [Fact]
+    public void BuildDataPacket_MoxOff_EmptyRxAudio_KeepsPayloadZero()
+    {
+        // Empty ring (feature off / HL2 / underrun) → L/R stay zero, byte-identical
+        // to a radio that carries no RX audio at all.
+        var buf = new byte[1032];
+        var state = BaseState() with { Board = HpsdrBoardKind.Hermes, Mox = false };
+
+        ControlFrame.BuildDataPacket(
+            buf, 1,
+            ControlFrame.CcRegister.Config,
+            ControlFrame.CcRegister.RxFreq,
+            state, iqSource: null, rxAudioSource: new EmptyRxAudioSource());
+
+        var (audioPeak, _, _) = FirstFrameAudioStats(buf);
+        Assert.Equal(0, audioPeak);
+    }
+
+    [Fact]
+    public void BuildDataPacket_MoxOn_IgnoresRxAudio_LeavesLrZero()
+    {
+        // While transmitting, the L/R slots stay zero even if an RX-audio source
+        // is plumbed — the radio is keyed, not monitoring, and the I/Q path owns
+        // the frame. Guards against feeding TX-monitor audio to the radio speaker.
+        var buf = new byte[1032];
+        var state = BaseState() with { Board = HpsdrBoardKind.Hermes, Mox = true, DriveLevel = 0x80 };
+        var iq = new ConstIqSource(0x2000, -0x2000);
+        var rx = new ConstRxAudioSource(0x7FFF);
+
+        ControlFrame.BuildDataPacket(
+            buf, 1,
+            ControlFrame.CcRegister.Config,
+            ControlFrame.CcRegister.RxFreq,
+            state, iqSource: iq, rxAudioSource: rx);
+
+        var (audioPeak, _, _) = FirstFrameAudioStats(buf);
+        var (iqPeak, _, _) = FirstFrameIqStats(buf);
+        Assert.Equal(0, audioPeak);   // no RX audio on the wire during TX
+        Assert.True(iqPeak > 0);      // IQ path unchanged
     }
 
     [Theory]

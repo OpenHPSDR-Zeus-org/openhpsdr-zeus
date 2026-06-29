@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -54,11 +55,19 @@ import {
 import { useConnectionStore } from '../state/connection-store';
 import { useLiveSlider } from '../hooks/useLiveSlider';
 
-// AGC top (max gain) in dB. 80 is the Thetis AGC_MEDIUM default; the WDSP
-// docs call this the upper gain limit before compression kicks in.
-// 0-120 mirrors the range Thetis exposes on its AGC-T slider.
-const MIN = 0;
-const MAX = 120;
+// AGC top (max gain) in dB. 90 is the loudest the AGC drives (the Thetis
+// rx_agc_max_gain default, radio.cs:1021); 30 is the quietest useful baseline.
+// The slider is linear across this 30..90 window — the old 0..120 span was
+// mostly dead travel the operator never used. The backend enforces the same
+// bounds (RadioService.MinAgcTopDb/MaxAgcTopDb).
+const MIN = 30;
+const MAX = 90;
+// Auto-AGC adds an offset on top of the baseline, so the EFFECTIVE value the
+// readout shows can roam outside 30..80. Clamp the readout to the wider
+// effective range the server allows (RadioService AgcMin/MaxEffectiveAgcT =
+// 20..100) so Auto's real authority isn't visually clipped.
+const EFF_MIN = 20;
+const EFF_MAX = 100;
 
 // AGC mode dropdown order matches Thetis (enums.cs:152-162).
 const AGC_MODES: readonly AgcMode[] = ['Fixed', 'Long', 'Slow', 'Med', 'Fast', 'Custom'];
@@ -135,7 +144,7 @@ export function AgcSlider() {
   // Slider thumb edits the user baseline (agcTopDb); the displayed number shows
   // the effective AGC on the DSP so the user can watch the auto ramp.
   const sliderValue = dragValue ?? userAgc;
-  const effective = Math.round(Math.max(MIN, Math.min(MAX, sliderValue + offsetDb)));
+  const effective = Math.round(Math.max(EFF_MIN, Math.min(EFF_MAX, sliderValue + offsetDb)));
   const sliderDisabled = !connected || autoEnabled;
 
   const autoAbort = useRef<AbortController | null>(null);

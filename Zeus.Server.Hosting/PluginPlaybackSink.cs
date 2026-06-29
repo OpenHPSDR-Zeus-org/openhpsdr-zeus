@@ -3,7 +3,7 @@
 // PluginPlaybackSink — host implementation of IAudioPlaybackSink. Lets a
 // plugin (e.g. the Recorder) play a clip locally (mixed into RX audio via the
 // preview sink) or inject it into the TX chain to go on the air. Mirrors how
-// the built-in WavRecorderService plays back: on-air goes through
+// the Recorder plugin plays back: on-air goes through
 // TxAudioIngest.OnMicPcmBytesFromWav (processed by the normal TX chain) and
 // only reaches the air under operator MOX; local goes through the preview
 // sink. This wrapper NEVER keys the radio.

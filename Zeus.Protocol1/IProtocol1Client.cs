@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -79,8 +80,23 @@ public interface IProtocol1Client : IDisposable
     void SetVfoAHz(long hz);
     void SetSampleRate(HpsdrSampleRate rate);
     void SetPreamp(bool on);
+    /// <summary>
+    /// Enable/disable the LT2208 ADC dither and digital-output randomizer
+    /// (Config-frame C3 bits 3/4). No-op on the wire for HL2 (gated in
+    /// <c>ControlFrame.WriteConfigPayload</c>). Mirrors the Protocol-2
+    /// <c>Protocol2Client.SetAdcDitherRandom</c> shape.
+    /// </summary>
+    void SetAdcDitherRandom(bool ditherEnabled, bool randomEnabled);
     void SetAttenuator(HpsdrAtten atten);
     void SetAntennaRx(HpsdrAntenna ant);
+    /// <summary>
+    /// Select the TX antenna relay (ANT1/2/3) — Config-frame C4[1:0], external-
+    /// port parity audit (GAP-P1-1). Deferred while keyed and applied on the
+    /// unkey edge (no hot-switching the Alex matrix under power). Honoured on the
+    /// wire only for P1 boards with full Alex TX relays (ANAN-100D/200D); clamped
+    /// to ANT1 elsewhere by <c>ControlFrame.EncodeTxAntennaC4Bits</c>.
+    /// </summary>
+    void SetAntennaTx(HpsdrAntenna ant);
 
     /// <summary>
     /// Flip the outgoing C&amp;C MOX bit (C0 LSB on every register). Read from
@@ -110,6 +126,16 @@ public interface IProtocol1Client : IDisposable
     /// MOX is on; <paramref name="rxMask"/> otherwise.
     /// </summary>
     void SetOcMasks(byte txMask, byte rxMask);
+
+    /// <summary>
+    /// Raised once from the RX loop when consecutive receive timeouts exhaust the
+    /// <c>ConsecutiveTimeoutsBeforeGiveUp</c> threshold — the radio has stopped
+    /// sending. Fires at most once per <see cref="StartAsync"/> / <see cref="StopAsync"/>
+    /// cycle and is NOT raised on a clean <see cref="StopAsync"/> call. Handlers run
+    /// synchronously on the RX thread; use <c>Task.Run</c> for any async work to
+    /// avoid blocking the thread or deadlocking on <see cref="StopAsync"/>.
+    /// </summary>
+    event Action? Disconnected;
 
     /// <summary>
     /// Raised from the RX loop whenever a successfully parsed EP6 packet carried
@@ -250,6 +276,27 @@ public interface IProtocol1Client : IDisposable
     void SetCwKeyerConfig(int wpm, CwKeyerMode mode);
 
     /// <summary>
+    /// Set the TX audio front-end (external-audio-jacks re-port). Global
+    /// per-radio. <paramref name="micBoost"/> / <paramref name="micLineIn"/>
+    /// ride the 0x12 codec frame on Hermes-class boards; <paramref name="micTrs"/>
+    /// / <paramref name="micBias"/> / <paramref name="lineInGain"/> (0..31) ride
+    /// the 0x14 frame on HL2 via read-modify-write (PureSignal bit + C4 step-att
+    /// preserved). Per-board gating lives in <see cref="ControlFrame"/>, so a
+    /// value for the wrong board is ignored on the wire. All-zero/false is the
+    /// default and is byte-identical to today. mic_bias defaults OFF
+    /// (floating-connector PTT-hang guard).
+    /// </summary>
+    void SetAudioFrontEnd(bool micBoost, bool micLineIn, bool micTrs, bool micBias, int lineInGain);
+
+    /// <summary>
+    /// Set the HL2 4-bit user GPIO mask (user_dig_out → C3[3:0] of the 0x14
+    /// frame; external-ports plan, Phase 5 / external-port parity audit). Low
+    /// nibble only; HL2-only on the wire. RadioService gates this behind the
+    /// HasHl2UserGpio capability so it never reaches a non-HL2 board.
+    /// </summary>
+    void SetUserDigOut(int mask);
+
+    /// <summary>
     /// 1024-sample paired feedback blocks decoded from the EP6 stream when
     /// PS is armed. TX side comes from the in-flight TX-IQ ring (the
     /// samples we just wrote to the wire); RX side is DDC1, the dedicated
@@ -292,4 +339,33 @@ public interface IProtocol1Client : IDisposable
     /// the change is observed.
     /// </summary>
     void DetachRxSink();
+
+    /// <summary>
+    /// Attach the codec radio-mic / line-in handler (issue #992). While set, the
+    /// RX loop calls the handler synchronously with the 126 int16 mic samples
+    /// embedded in every standard EP6 packet (offsets 6..7 of each 8-byte sample
+    /// group). The samples are always 48 kHz at the radio's codec; at higher IQ
+    /// rates the gateware duplicates each sample N = rate/48 kHz times, so the
+    /// handler is responsible for decimating to 48 kHz. The handler runs on the
+    /// RX thread and must not block; the span is valid only for the call. Until
+    /// this is set, mic extraction is skipped entirely (no added per-packet cost
+    /// for radios in Host mode). Used by <c>DspPipelineService</c> to relay the
+    /// codec input (mic jack / line-in jack) into the TX audio chain when a
+    /// radio audio source is armed.
+    /// </summary>
+    void AttachRadioMicHandler(P1MicSampleHandler handler);
+
+    /// <summary>Detach the codec radio-mic handler; reverts to no extraction.</summary>
+    void DetachRadioMicHandler();
 }
+
+/// <summary>
+/// Synchronous handler for one EP6 packet's worth of codec mic / line-in
+/// samples (issue #992). The radio's codec digitises whichever input is
+/// selected (mic jack on RadioMic, line-in jack on RadioLineIn) and embeds the
+/// 16-bit samples in the same EP6 frame as the IQ stream. <paramref name="samples"/>
+/// carries the raw int16 mic samples in USB-frame order; the codec rate is
+/// fixed at 48 kHz, so at IQ rates above 48 kHz consecutive samples are
+/// duplicates and the handler must decimate by <c>iqRateHz / 48000</c>.
+/// </summary>
+public delegate void P1MicSampleHandler(ReadOnlySpan<short> samples, int iqRateHz);

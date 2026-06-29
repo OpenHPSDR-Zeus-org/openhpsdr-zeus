@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -136,6 +137,13 @@ public sealed class WdspDspEngine : IDspEngine
         nameof(NativeMethods.SetRXASBNRnoiseScalingType),
     ];
 
+    private static readonly string[] Nr3RnnrRequiredExports =
+    [
+        nameof(NativeMethods.SetRXARNNRRun),
+        nameof(NativeMethods.SetRXARNNRPosition),
+        nameof(NativeMethods.RNNRloadModel),
+    ];
+
     private static bool AllNativeExportsAvailable(string[] symbolNames)
     {
         if (!WdspNativeLoader.TryProbe()) return false;
@@ -152,6 +160,8 @@ public sealed class WdspDspEngine : IDspEngine
     public static bool EmnrPost2Available => AllNativeExportsAvailable(EmnrPost2RequiredExports);
 
     public static bool Nr4SbnrAvailable => AllNativeExportsAvailable(SbnrRequiredExports);
+
+    public static bool Nr3RnnrAvailable => AllNativeExportsAvailable(Nr3RnnrRequiredExports);
 
     private static double FiniteOrZero(double value) =>
         double.IsFinite(value) ? value : 0.0;
@@ -178,6 +188,31 @@ public sealed class WdspDspEngine : IDspEngine
     // consumer: ReadAudio caller on pipeline thread). Drops oldest when over capacity.
     private const int AudioRingCapacity = OutputRate;
 
+    /// <summary>
+    /// Per-RX-channel ingest health, latched once per ~1 s window by
+    /// <see cref="EmitRxDiag"/> and read lock-free by the diagnostics provider
+    /// (immutable record swapped behind a volatile field). All "PerWindow"
+    /// counts are over the last completed ~1 s window. This is the realtime
+    /// overflow/underrun signal for high-sample-rate / multi-DDC operation:
+    /// <c>DroppedPerWindow &gt; 0</c> means the worker fell behind and IQ frames
+    /// were dropped (drop-oldest); <c>WorkerMaxMs</c> approaching the per-frame
+    /// budget (1000·InSize/SampleRateHz) means the channel is CPU-bound.
+    /// </summary>
+    public sealed record RxChannelHealth(
+        int ChannelId,
+        int SampleRateHz,
+        int QueueDepth,
+        int QueueCapacity,
+        long FramesInPerWindow,
+        long QueueFullPerWindow,
+        long DroppedPerWindow,
+        long WorkerFramesPerWindow,
+        double WorkerAvgMs,
+        double WorkerMaxMs,
+        int AudioRingDepth,
+        long AudioOverrunPerWindow,
+        long AgeMs);
+
     private sealed class ChannelState
     {
         public required int Id;
@@ -187,6 +222,9 @@ public sealed class WdspDspEngine : IDspEngine
         public required int OutDoubles;
         public required Thread Worker;
         public required BlockingCollection<double[]> InQueue;
+        // Rate-scaled bound of InQueue (frames). Captured so diagnostics can show
+        // depth-vs-capacity; see ComputeInQueueCapacity.
+        public required int InQueueCapacity;
         public readonly ConcurrentQueue<double[]> FreeFrames = new();
         public double[] PartialFrame = new double[2 * InSize];
         public int PartialFill;
@@ -203,9 +241,10 @@ public sealed class WdspDspEngine : IDspEngine
         public int FilterLowAbsHz = 150;
         public int FilterHighAbsHz = 2850;
         public RxaMode CurrentMode = RxaMode.USB;
-        // Thetis "AGC Top" max-gain setting in dB. 80 matches the Thetis
-        // AGC_MEDIUM default; the /api/agcGain endpoint can override at runtime.
-        public double AgcTopDb = 80.0;
+        // Thetis "AGC Top" max-gain setting in dB. 90 matches the Thetis
+        // default (radio.cs:1021 rx_agc_max_gain); the /api/agcGain endpoint can
+        // override at runtime.
+        public double AgcTopDb = 90.0;
         // AGC mode last applied via SetAgc / ApplyAgcDefaults. MED matches the
         // open-time default; surfaced so callers / tests can read back the mode.
         public AgcMode CurrentAgcMode = AgcMode.Med;
@@ -226,22 +265,55 @@ public sealed class WdspDspEngine : IDspEngine
         public int ZoomLevel = 1;
         public readonly object AnalyzerLock = new();
 
-        // --- TEMP diagnostics for RX2 crackle/lag (issue zeus-gdc7) ---
-        // All counters are reset each 1 Hz emit in ReadAudio. Cheap Interlocked
-        // increments on the hot paths; no allocation. Remove once the dual-RX
-        // realtime stall is root-caused.
+        // --- RX ingest health telemetry (issue zeus-gdc7; now permanent) ---
+        // Live overflow/underrun counters for high-sample-rate operation, reset
+        // each 1 Hz emit in EmitRxDiag. Cheap Interlocked increments on the hot
+        // paths; no allocation. These are the realtime signal that the worker is
+        // keeping up with the IQ frame rate at 768/1536 kHz with all DDCs active.
         public long DiagFramesIn;          // frames handed to InQueue this window
-        public long DiagEnqueueFull;       // enqueues where the bounded InQueue was already full (Add would block the RX net thread)
+        public long DiagEnqueueFull;       // enqueues that found the bounded InQueue full (worker fell behind)
+        public long DiagDroppedOldest;     // frames dropped (oldest evicted) to keep the RX thread non-blocking — bounded, deliberate glitch
         public long DiagWorkerFrames;      // frames the worker processed this window
         public long DiagWorkerTotalTicks;  // Σ per-frame fexchange0+Spectrum0 Stopwatch ticks
         public long DiagWorkerMaxTicks;    // max single-frame processing ticks
         public long DiagAudioOverrun;      // PushAudio writes that overwrote an unread sample (ring full → discontinuity)
         public long DiagLastLogTicks;      // Stopwatch timestamp of last 1 Hz emit
+        // Latched once per ~1 s by EmitRxDiag; read lock-free by the diagnostics
+        // provider via SnapshotRxChannels. Immutable record behind a volatile
+        // reference → no torn reads, no lock on the snapshot path.
+        public volatile RxChannelHealth? LastHealth;
     }
 
-    // Bounded depth of each channel's InQueue — mirrors the boundedCapacity
-    // passed at construction so the diagnostic "would-block" check matches.
-    private const int InQueueCapacity = 32;
+    // Each RX channel hands 1024-sample IQ frames from the realtime RX sink
+    // thread to its WDSP worker through a bounded queue. The frame RATE scales
+    // with the RX sample rate (≈47/s at 48 kHz … ≈1500/s at 1536 kHz), so a
+    // fixed frame count gave a 32× smaller TIME cushion at the top of the
+    // ladder. ComputeInQueueCapacity sizes the queue to hold ~InQueueTargetMs
+    // of IQ regardless of rate, floored at the legacy 32 frames and capped to
+    // bound memory/latency (each frame is 2*InSize doubles ≈ 16 KB, so the
+    // ceiling is ≈4 MB per channel — comfortable even with all DDCs running).
+    private const int InQueueFloorFrames = 32;
+    private const int InQueueCeilFrames = 256;
+    private const double InQueueTargetMs = 80.0;
+
+    private static int ComputeInQueueCapacity(int sampleRateHz)
+    {
+        double framesPerSec = (double)sampleRateHz / InSize;
+        int target = (int)Math.Ceiling(framesPerSec * (InQueueTargetMs / 1000.0));
+        return Math.Clamp(target, InQueueFloorFrames, InQueueCeilFrames);
+    }
+
+    /// <summary>
+    /// Feed policy for <see cref="FeedIq"/> when a channel's hand-off queue is
+    /// full. Default (<c>false</c>) is non-blocking <b>drop-oldest</b>: the
+    /// realtime RX sink thread must never block, because a stall cascades into
+    /// kernel UDP drops. Set <c>true</c> only for <b>offline / faster-than-realtime
+    /// bulk feeders</b> (unit tests, file/fixture replay) that push IQ with no
+    /// network pacing and need <b>lossless</b> delivery — it restores the
+    /// self-pacing blocking back-pressure the realtime path deliberately avoids.
+    /// MUST stay <c>false</c> for any live radio.
+    /// </summary>
+    public bool BlockingIqFeed { get; init; }
 
     private readonly ConcurrentDictionary<int, ChannelState> _channels = new();
     private readonly object _nativeSlotLock = new();
@@ -550,6 +622,7 @@ public sealed class WdspDspEngine : IDspEngine
         ConfigureAnalyzer(id, sampleRateHz, InSize, pixelWidth, zoomLevel: 1, AnalyzerFftSize, AnalyzerWindow, AnalyzerKaiserPi);
         ConfigureDisplayAveraging(id);
 
+        int inQueueCapacity = ComputeInQueueCapacity(sampleRateHz);
         var state = new ChannelState
         {
             Id = id,
@@ -557,7 +630,8 @@ public sealed class WdspDspEngine : IDspEngine
             SampleRateHz = sampleRateHz,
             PixelWidth = pixelWidth,
             OutDoubles = outDoubles,
-            InQueue = new BlockingCollection<double[]>(boundedCapacity: InQueueCapacity),
+            InQueue = new BlockingCollection<double[]>(boundedCapacity: inQueueCapacity),
+            InQueueCapacity = inQueueCapacity,
             Worker = null!,
         };
 
@@ -623,15 +697,45 @@ public sealed class WdspDspEngine : IDspEngine
                     state.PartialFill = 0;
                     if (!state.InQueue.IsAddingCompleted)
                     {
-                        // TEMP diag (zeus-gdc7): a full bounded InQueue means the
-                        // next Add BLOCKS this thread — and FeedIq runs on the
-                        // realtime P2/P1 RX sink thread, so a stalled worker
-                        // stalls UDP intake (crackle + UI lag at modest CPU).
                         state.DiagFramesIn++;
-                        if (state.InQueue.Count >= InQueueCapacity)
-                            state.DiagEnqueueFull++;
-                        try { state.InQueue.Add(frame); }
-                        catch (InvalidOperationException) { state.FreeFrames.Enqueue(frame); }
+                        try
+                        {
+                            if (BlockingIqFeed)
+                            {
+                                // Lossless back-pressure for offline / faster-than-
+                                // realtime bulk feeders (tests, fixture/file replay):
+                                // block until the worker makes room so no frame is
+                                // dropped. NEVER used on the realtime RX path — see
+                                // BlockingIqFeed.
+                                state.InQueue.Add(frame);
+                            }
+                            // Non-blocking hand-off with drop-OLDEST (default). FeedIq
+                            // runs on the realtime P1/P2 RX sink thread; a blocking Add
+                            // would stall UDP intake whenever the worker falls behind,
+                            // and a stalled intake lets the kernel socket buffer
+                            // overflow → dropped packets → sequence gaps (the cascading
+                            // failure this guard prevents). Instead, when the queue is
+                            // full we evict the OLDEST queued frame and keep the newest,
+                            // so display/audio latency stays bounded and the glitch is a
+                            // single counted dropped frame rather than a stall. Pairs
+                            // with the rate-scaled capacity (ComputeInQueueCapacity).
+                            else if (!state.InQueue.TryAdd(frame))
+                            {
+                                state.DiagEnqueueFull++;
+                                if (state.InQueue.TryTake(out var stale))
+                                {
+                                    state.DiagDroppedOldest++;
+                                    state.FreeFrames.Enqueue(stale);
+                                }
+                                if (!state.InQueue.TryAdd(frame))
+                                    state.FreeFrames.Enqueue(frame);
+                            }
+                        }
+                        catch (InvalidOperationException)
+                        {
+                            // CompleteAdding raced the enqueue — recycle.
+                            state.FreeFrames.Enqueue(frame);
+                        }
                     }
                     else
                     {
@@ -836,6 +940,7 @@ public sealed class WdspDspEngine : IDspEngine
             case NrMode.Anr:
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
                 TrySetSbnrRun(channelId, 0);
+                TrySetRnnrRun(channelId, 0);
                 NativeMethods.SetRXAANRVals(channelId, NrDefaults.AnrTaps, NrDefaults.AnrDelay, NrDefaults.AnrGain, NrDefaults.AnrLeakage);
                 NativeMethods.SetRXAANRPosition(channelId, NrDefaults.Position);
                 NativeMethods.SetRXAANRRun(channelId, 1);
@@ -843,6 +948,7 @@ public sealed class WdspDspEngine : IDspEngine
             case NrMode.Emnr:
                 NativeMethods.SetRXAANRRun(channelId, 0);
                 TrySetSbnrRun(channelId, 0);
+                TrySetRnnrRun(channelId, 0);
                 // Core EMNR algorithm selectors (gain method, NPE method, AE
                 // filter) plus the optional Trained-method T1/T2 tuning. All
                 // operator-tunable; null fields fall back to NrDefaults so the
@@ -865,13 +971,31 @@ public sealed class WdspDspEngine : IDspEngine
                 NativeMethods.SetRXAANRRun(channelId, 0);
                 TrySetEmnrPost2Run(channelId, 0);
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
+                TrySetRnnrRun(channelId, 0);
                 ApplyNr4Sbnr(channelId, cfg);
+                break;
+            case NrMode.Rnnr:
+                // NR3 — RNNoise. Disable the other post-RXA NR paths, then
+                // enable RNNR. The model is loaded process-globally via
+                // RNNRloadModel at install/startup (LoadNr3Model), NOT here —
+                // a per-channel call would thrash the shared model. Guarded by
+                // TrySetRnnr* so a libwdsp without NR3 exports (WDSP_WITH_NR3
+                // OFF) leaves the channel NR-off instead of crashing. If no
+                // model is loaded, rnnr.c's create_rnnr left rnnoise_create
+                // NULL, so xrnnr passes audio through untouched — inert, safe.
+                NativeMethods.SetRXAANRRun(channelId, 0);
+                TrySetEmnrPost2Run(channelId, 0);
+                NativeMethods.SetRXAEMNRRun(channelId, 0);
+                TrySetSbnrRun(channelId, 0);
+                TrySetRnnrPosition(channelId, NrDefaults.Position);
+                TrySetRnnrRun(channelId, 1);
                 break;
             default:
                 NativeMethods.SetRXAANRRun(channelId, 0);
                 TrySetEmnrPost2Run(channelId, 0);
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
                 TrySetSbnrRun(channelId, 0);
+                TrySetRnnrRun(channelId, 0);
                 break;
         }
         state.CurrentNrMode = cfg.NrMode;
@@ -929,6 +1053,7 @@ public sealed class WdspDspEngine : IDspEngine
             channelId, cfg.NrMode, cfg.AnfEnabled, cfg.SnbEnabled, cfg.NbpNotchesEnabled,
             cfg.NbMode, scaledThreshold);
     }
+
 
     public void SetNotches(IReadOnlyList<NotchDto> notches)
     {
@@ -1105,6 +1230,69 @@ public sealed class WdspDspEngine : IDspEngine
         catch (EntryPointNotFoundException) { /* libwdsp lacks post2; nothing to turn off */ }
     }
 
+    // NR3 (RNNoise) Run/Position guards — same shape as the SBNR ones. A
+    // libwdsp built with WDSP_WITH_NR3=OFF (the stub) does not export RNNR
+    // symbols, so every call is wrapped: NR3 then behaves as a no-op rather
+    // than crashing the worker.
+    private void TrySetRnnrRun(int channelId, int run)
+    {
+        try { NativeMethods.SetRXARNNRRun(channelId, run); }
+        catch (EntryPointNotFoundException) { /* libwdsp lacks NR3; nothing to toggle */ }
+    }
+
+    private void TrySetRnnrPosition(int channelId, int position)
+    {
+        try { NativeMethods.SetRXARNNRPosition(channelId, position); }
+        catch (EntryPointNotFoundException) { /* libwdsp lacks NR3; position is moot */ }
+    }
+
+    // Loads (or, with a null/empty path, clears) the process-global RNNoise
+    // model used by every RNNR channel. Called by the server when the operator
+    // installs/removes a model and once at startup if one is already installed.
+    // Returns false when libwdsp lacks NR3 support so the caller can surface
+    // "NR3 unavailable on this build" instead of silently succeeding. Zeus
+    // builds rnnoise without a baked-in model, so clearing the path leaves NR3
+    // inert (audio passes through) rather than falling back to a stock model.
+    public Nr3ModelLoadResult LoadNr3Model(string? modelFilePath)
+    {
+        try
+        {
+            NativeMethods.RNNRloadModel(modelFilePath ?? string.Empty);
+        }
+        catch (EntryPointNotFoundException ex)
+        {
+            _log.LogWarning(
+                "wdsp.rnnr.unavailable reason=\"libwdsp build does not export RNNR symbols (WDSP_WITH_NR3=OFF — xiph/rnnoise not vendored)\" detail={Msg}",
+                ex.Message);
+            return Nr3ModelLoadResult.Unavailable;
+        }
+
+        if (string.IsNullOrEmpty(modelFilePath))
+        {
+            _log.LogInformation("wdsp.rnnr.loadModel path=\"(none — NR3 inert)\"");
+            return Nr3ModelLoadResult.Cleared;
+        }
+
+        // Verify the model actually parsed. RNNRmodelLoaded is an additive export;
+        // older libwdsp builds lack it, in which case we can't verify and assume
+        // success (the prior behaviour — no regression).
+        bool? loaded = null;
+        try { loaded = NativeMethods.RNNRmodelLoaded() != 0; }
+        catch (EntryPointNotFoundException) { /* old libwdsp — can't verify */ }
+
+        if (loaded == false)
+        {
+            _log.LogWarning(
+                "wdsp.rnnr.loadModel.failed path=\"{Path}\" reason=\"rnnoise_model_from_filename returned NULL (incompatible/corrupt weights)\"",
+                modelFilePath);
+            return Nr3ModelLoadResult.LoadFailed;
+        }
+
+        _log.LogInformation("wdsp.rnnr.loadModel path=\"{Path}\" verified={Verified}",
+            modelFilePath, loaded.HasValue);
+        return Nr3ModelLoadResult.Loaded;
+    }
+
     // Post-RXA NR defaults — sourced from Thetis setup.designer.cs + radio.cs.
     // UI-space scaling (gain × 1e-6, leakage × 1e-3) is already resolved: these
     // are the post-scale values WDSP actually receives. See docs/prd/10-noise-reduction.md.
@@ -1123,11 +1311,16 @@ public sealed class WdspDspEngine : IDspEngine
         public const int EmnrAeRun = 1;
         public const int Position = 1;
 
-        // Thetis Setup → DSP "Trained" T1/T2 NUDs (setup.designer.cs:43244,
-        // 43276). Defaults match Thetis exactly; only consulted by WDSP when
+        // Thetis Setup → DSP "Trained" T1/T2 NUDs (setup.designer.cs:43330 /
+        // 43298). Pushed raw via SetRXAEMNRtrainZetaThresh / SetRXAEMNRtrainT2
+        // (setup.cs:29384 / 32308). Only consulted by WDSP when
         // EmnrGainMethod=3 (Trained gain method).
+        //   T1: udDSPNR2trainThresh.Value = -0.5  (range -5..5, step 0.1)
+        //   T2: udDSPNR2trainT2.Value     =  0.2  (range 0.02..0.3, step 0.01)
+        // NB: Thetis packs the T2 NUD as decimal{2,0,0,scale=1} = 0.2 — earlier
+        // Zeus read it as 2.0 (a 10× error). It is 0.2.
         public const double EmnrTrainT1 = -0.5;
-        public const double EmnrTrainT2 = 2.0;
+        public const double EmnrTrainT2 = 0.2;
 
         // post2 defaults sourced from Thetis radio.cs:2103/2122/2160 (raw
         // NumericUpDown values 0..100, default 15/15/12). The /100 scaling
@@ -1136,6 +1329,13 @@ public sealed class WdspDspEngine : IDspEngine
         // ends up storing. (post2Rate has no /100 in WDSP, so 5.0 is correct
         // as-is.) Earlier Zeus defaults of 0.15 were 100× too small once WDSP
         // divided again, leaving comfort-noise effectively silent.
+        //
+        // Run defaults ON — this is a DELIBERATE Zeus divergence, not Thetis
+        // parity: Thetis's "Noise post proc" checkbox ships OFF
+        // (setup.designer.cs chkNR2PostProc_enable_rx1, no Checked=true). Zeus
+        // enables post2 by default because the comfort-noise injection masks
+        // the musical-warble artifacts of frequency-domain EMNR, which the
+        // maintainers consider an improvement over the Thetis baseline.
         public const int EmnrPost2Run = 1;
         public const double EmnrPost2Factor = 15.0;
         public const double EmnrPost2Nlevel = 15.0;
@@ -1183,7 +1383,10 @@ public sealed class WdspDspEngine : IDspEngine
             return 0;
         }
 
-        EmitRxDiag(state);
+        // RX ingest health is emitted from the channel worker (RunWorker) now,
+        // not here — so a receiver whose audio isn't read out (e.g. RX3+ in
+        // multi-DDC, where only RX1/RX2 audio is currently mixed) still reports
+        // per-DDC health. Emitting here would gate health on audio consumption.
 
         lock (state.AudioGate)
         {
@@ -1218,6 +1421,7 @@ public sealed class WdspDspEngine : IDspEngine
 
         long framesIn = Interlocked.Exchange(ref state.DiagFramesIn, 0);
         long enqueueFull = Interlocked.Exchange(ref state.DiagEnqueueFull, 0);
+        long droppedOldest = Interlocked.Exchange(ref state.DiagDroppedOldest, 0);
         long workerFrames = Interlocked.Exchange(ref state.DiagWorkerFrames, 0);
         long workerTotalTicks = Interlocked.Exchange(ref state.DiagWorkerTotalTicks, 0);
         long workerMaxTicks = Interlocked.Exchange(ref state.DiagWorkerMaxTicks, 0);
@@ -1231,12 +1435,53 @@ public sealed class WdspDspEngine : IDspEngine
         lock (state.AudioGate) audioRingDepth = state.AudioCount;
 
         _log.LogInformation(
-            "wdsp.rxdiag ch={Id} framesIn={FramesIn} queueDepth={QueueDepth} queueFull={QueueFull} " +
-            "workerFrames={WorkerFrames} workerAvgMs={WorkerAvgMs:F2} workerMaxMs={WorkerMaxMs:F2} " +
-            "audioRingDepth={AudioRingDepth} audioOverrun={AudioOverrun}",
-            state.Id, framesIn, queueDepth, enqueueFull,
-            workerFrames, workerAvgMs, workerMaxMs,
+            "wdsp.rxdiag ch={Id} rate={RateHz} framesIn={FramesIn} queueDepth={QueueDepth}/{QueueCap} " +
+            "queueFull={QueueFull} dropped={Dropped} workerFrames={WorkerFrames} workerAvgMs={WorkerAvgMs:F2} " +
+            "workerMaxMs={WorkerMaxMs:F2} audioRingDepth={AudioRingDepth} audioOverrun={AudioOverrun}",
+            state.Id, state.SampleRateHz, framesIn, queueDepth, state.InQueueCapacity,
+            enqueueFull, droppedOldest, workerFrames, workerAvgMs, workerMaxMs,
             audioRingDepth, audioOverrun);
+
+        // Latch the same window for on-demand diagnostics (live /api/diagnostics
+        // surface + 0x36 health push). Immutable record swap — lock-free read.
+        state.LastHealth = new RxChannelHealth(
+            ChannelId: state.Id,
+            SampleRateHz: state.SampleRateHz,
+            QueueDepth: queueDepth,
+            QueueCapacity: state.InQueueCapacity,
+            FramesInPerWindow: framesIn,
+            QueueFullPerWindow: enqueueFull,
+            DroppedPerWindow: droppedOldest,
+            WorkerFramesPerWindow: workerFrames,
+            WorkerAvgMs: workerAvgMs,
+            WorkerMaxMs: workerMaxMs,
+            AudioRingDepth: audioRingDepth,
+            AudioOverrunPerWindow: audioOverrun,
+            AgeMs: 0);
+    }
+
+    /// <summary>
+    /// Lock-free snapshot of every open RX channel's latest ingest-health window
+    /// (see <see cref="RxChannelHealth"/>). Allocation-light and free of any
+    /// realtime/WDSP work — safe to call from the diagnostics request thread.
+    /// <c>AgeMs</c> is filled in here from the latch timestamp so callers can
+    /// tell a live window from a stalled one. Channels with no completed window
+    /// yet are omitted.
+    /// </summary>
+    public IReadOnlyList<RxChannelHealth> SnapshotRxChannels()
+    {
+        long nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        double ticksToMs = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        var list = new List<RxChannelHealth>(_channels.Count);
+        foreach (var kv in _channels)
+        {
+            var h = kv.Value.LastHealth;
+            if (h is null) continue;
+            long stamp = kv.Value.DiagLastLogTicks;
+            long ageMs = stamp != 0 ? (long)((nowTicks - stamp) * ticksToMs) : 0;
+            list.Add(h with { AgeMs = ageMs });
+        }
+        return list;
     }
 
     private static void PushAudio(ChannelState state, ReadOnlySpan<double> interleavedStereo, int monoSampleCount)
@@ -2031,7 +2276,13 @@ public sealed class WdspDspEngine : IDspEngine
         lock (_txaLock)
         {
             if (_txaChannelId is not int txa) return;
-            NativeMethods.SetTXABandpassFreqs(txa, lowHz, highHz);
+            // Same zero-width guard as the RX path (issue #1028): TX passes its
+            // signed pair straight to WDSP with no abs-fold, so a degenerate
+            // width would silence the on-air signal. The monitor mirror below
+            // routes through SetFilter -> ApplyBandpassForMode, which floors on
+            // its own.
+            var (txLow, txHigh) = FloorPassbandWidth(lowHz, highHz);
+            NativeMethods.SetTXABandpassFreqs(txa, txLow, txHigh);
         }
         // Mirror the filter onto the monitor channel so the preview stays at
         // the same bandwidth as the on-air signal. Stash the values regardless
@@ -2047,6 +2298,64 @@ public sealed class WdspDspEngine : IDspEngine
             }
         }
         _log.LogInformation("wdsp.setTxFilter low={Low} high={High}", lowHz, highHz);
+    }
+
+    // SSB filter rectangularity (issue #871). The audible shoulder/skirt
+    // steepness of the SSB bandpass is governed by the FIR *tap count* (nc),
+    // NOT by the fir.c window family (Blackman-Harris 4- vs 7-term, which differ
+    // only ~90 dB down in the stopband — inaudible on voice; that was the
+    // original #883 mechanism and the operator heard no change). More taps =>
+    // narrower transition => harder/rectangular shoulder (Icom-like); fewer
+    // taps => wider transition => rounder/flat shoulder (Yaesu-like). This is
+    // exactly Thetis's "Filter Size" lever. The window family stays at WDSP's
+    // open-time BH-7 default for best stopband. SetRX/TXABandpassNC rebuild the
+    // FIR impulse in-place inside csDSP, so it is safe during live audio.
+    //
+    // The preset -> nc map (resolved against the channel's WDSP block 'size'):
+    //   Soft   -> size            (legal floor; widest transition)
+    //   Normal -> max(2048, size) (== the WDSP create_bandpass open value, so a
+    //                              fresh/default session is byte-identical to
+    //                              pre-#871 RF — no default drift)
+    //   Sharp  -> 2 * Normal      (narrowest transition, ~Thetis 4096 default)
+    // nc is clamped to WDSP's legality rule: nc >= size and an integer multiple
+    // of size (bandpass.c NOTE; firmin nfor = nc/size).
+    internal static int ResolveBandpassNc(BandpassWindow shape, int size)
+    {
+        int openNc = Math.Max(2048, size);
+        int nc = shape switch
+        {
+            BandpassWindow.Soft => size,
+            BandpassWindow.Normal => openNc,
+            BandpassWindow.Sharp => openNc * 2,
+            _ => openNc,
+        };
+        if (nc < size) nc = size;
+        if (nc % size != 0) nc = (nc / size) * size;
+        if (nc < size) nc = size;
+        return nc;
+    }
+
+    public void SetRxBandpassWindow(int channelId, BandpassWindow window)
+    {
+        if (_disposed != 0) return;
+        if (!_channels.TryGetValue(channelId, out _)) return;
+        int nc = ResolveBandpassNc(window, RxaDspSize);
+        NativeMethods.SetRXABandpassNC(channelId, nc);
+        _log.LogInformation("wdsp.setRxBandpassShape ch={Ch} shape={Win} nc={Nc} size={Size}",
+            channelId, window, nc, RxaDspSize);
+    }
+
+    public void SetTxBandpassWindow(BandpassWindow window)
+    {
+        if (_disposed != 0) return;
+        lock (_txaLock)
+        {
+            if (_txaChannelId is not int txa) return;
+            int nc = ResolveBandpassNc(window, _txaDspSize);
+            NativeMethods.SetTXABandpassNC(txa, nc);
+            _log.LogInformation("wdsp.setTxBandpassShape txa={Txa} shape={Win} nc={Nc} size={Size}",
+                txa, window, nc, _txaDspSize);
+        }
     }
 
     /// <summary>Operator-facing TX-monitor toggle. When true, the engine opens
@@ -3239,7 +3548,7 @@ public sealed class WdspDspEngine : IDspEngine
         }
     }
 
-    private static void RunWorker(ChannelState state)
+    private void RunWorker(ChannelState state)
     {
         double[] audio = new double[state.OutDoubles];
         double[] spectrumIq = new double[2 * InSize];
@@ -3299,6 +3608,13 @@ public sealed class WdspDspEngine : IDspEngine
                 state.DiagWorkerFrames++;
                 state.DiagWorkerTotalTicks += frameTicks;
                 if (frameTicks > state.DiagWorkerMaxTicks) state.DiagWorkerMaxTicks = frameTicks;
+
+                // Latch per-DDC ingest health from the worker (the single thread
+                // that processes this channel's IQ). Self-gated to ~1 Hz. Doing it
+                // here rather than in ReadAudio means every fed receiver reports
+                // health — including RX3+ whose audio isn't read out — which is
+                // the realtime overflow/underrun signal for multi-DDC operation.
+                EmitRxDiag(state);
             }
         }
         catch (OperationCanceledException) { }
@@ -3337,16 +3653,17 @@ public sealed class WdspDspEngine : IDspEngine
     private static void ApplyAgcDefaults(int id)
     {
         ApplyAgcCore(id, new AgcConfig(AgcMode.Med));
-        NativeMethods.SetRXAAGCTop(id, 80.0);            // max gain, dB
+        NativeMethods.SetRXAAGCTop(id, 90.0);            // max gain, dB (Thetis radio.cs:1021 default)
     }
 
-    // Canned-mode presets (Thetis console.cs:27960+; design §4.4). Hang/Decay in
-    // ms, HangThreshold 0..100. Custom returns the Med baseline so a null custom
-    // field falls back somewhere sane.
+    // Canned-mode presets, verbatim from Thetis console.cs:27958-28024. Hang/Decay
+    // in ms. HangThreshold: MED/FAST hard-set 100 (slider disabled); LONG/SLOW
+    // leave it at the Thetis slider/init default (0). Custom returns the Med
+    // baseline so a null custom field falls back somewhere sane.
     private static (int HangMs, int DecayMs, int HangThreshold) AgcPreset(AgcMode mode) => mode switch
     {
-        AgcMode.Long => (2000, 2000, 100),
-        AgcMode.Slow => (1000, 500, 100),
+        AgcMode.Long => (2000, 2000, 0),
+        AgcMode.Slow => (1000, 500, 0),
         AgcMode.Med => (0, 250, 100),
         AgcMode.Fast => (0, 50, 100),
         AgcMode.Fixed => (0, 250, 100),
@@ -3356,12 +3673,14 @@ public sealed class WdspDspEngine : IDspEngine
     // Pushes the AGC mode + custom/fixed params to WDSP. Shared by ApplyAgcDefaults
     // (channel open, before the ChannelState is registered) and SetAgc (runtime),
     // so both paths produce identical WDSP state. Does NOT touch SetRXAAGCTop —
-    // the max-gain has its own path. Attack is bound to the Thetis-default 2
-    // (decay serves as rise-time; Thetis doesn't wire attack to the UI — §4.5).
+    // the max-gain has its own path. Attack is the WDSP create-time default of
+    // 1 ms (RXA.c: tau_attack = 0.001): Thetis NEVER calls SetRXAAGCAttack, so it
+    // runs every mode at the 1 ms default — its "Attack 2ms" UI tooltip is label
+    // text the code never applies. We set it explicitly to 1 to match exactly.
     private static void ApplyAgcCore(int id, AgcConfig cfg)
     {
         NativeMethods.SetRXAAGCMode(id, (int)cfg.Mode);
-        NativeMethods.SetRXAAGCAttack(id, 2);
+        NativeMethods.SetRXAAGCAttack(id, 1);
 
         int hangMs, decayMs, hangThreshold;
         if (cfg.Mode == AgcMode.Custom)
@@ -3378,9 +3697,13 @@ public sealed class WdspDspEngine : IDspEngine
         NativeMethods.SetRXAAGCDecay(id, decayMs);
         NativeMethods.SetRXAAGCHangThreshold(id, hangThreshold);
 
-        // WDSP wants slope ×10 (Thetis setup.cs:9088). Custom uses the operator
-        // slope; every canned mode uses the Thetis MED slope (35) verbatim.
-        int slope = cfg.Mode == AgcMode.Custom ? (cfg.Slope ?? 0) * 10 : 35;
+        // Thetis's default slope is 0 (radio.cs:1110 rx_agc_slope; the
+        // udDSPAGCSlope UI default is 0) and the canned-mode switch never sets
+        // it, so every non-custom mode runs at slope 0 — a flat-output AGC that
+        // holds all signals at the same loudness. Custom applies the operator
+        // slope ×10 (Thetis setup.cs:9088). The old hard-coded 35 made every
+        // mode let stronger signals stay louder, which is NOT Thetis behaviour.
+        int slope = cfg.Mode == AgcMode.Custom ? (cfg.Slope ?? 0) * 10 : 0;
         NativeMethods.SetRXAAGCSlope(id, slope);
 
         if (cfg.Mode == AgcMode.Fixed)
@@ -3513,12 +3836,40 @@ public sealed class WdspDspEngine : IDspEngine
                 // AM/SAM/DSB/FM/DRM/SPEC: symmetric around 0.
                 low = -hi; high = hi; break;
         }
+        // Last-line guard against a zero/sub-floor-width passband reaching WDSP
+        // (issue #1028). A centre-zero filter that was clamped to a tiny signed
+        // width upstream can still abs-fold back to low == high here, which WDSP
+        // accepts and then passes nothing through — silent receiver, no error
+        // path anywhere. See FloorPassbandWidth.
+        (low, high) = FloorPassbandWidth(low, high);
         // Thetis rxa.cs:110-124: every filter change updates all three stages.
         // SetRXABandpassFreqs alone only affects bp1, which is bypassed for SSB.
         // nbp0 (RXANBPSetFreqs) is what actually carries the SSB passband.
         NativeMethods.SetRXABandpassFreqs(state.Id, low, high);
         NativeMethods.RXANBPSetFreqs(state.Id, low, high);
         NativeMethods.SetRXASNBAOutputBandwidth(state.Id, low, high);
+    }
+
+    // WDSP's bandpass stages silently pass NOTHING for a zero-width passband
+    // (low == high), taking the RX — or the TX/monitor chain — dead with no
+    // diagnostic anywhere (issue #1028: an operator's bandwidth slid to zero and
+    // audio dropped while every health check looked fine). This is the single
+    // point every RX / RX2 / monitor / channel-open filter push funnels through
+    // (and SetTxFilter applies the same guard to the TX bandpass), so flooring
+    // the FINAL signed width here makes the guarantee airtight regardless of
+    // mode, centre, or upstream caller — including a centre-zero filter that an
+    // upstream symmetric clamp left at low == high after abs-folding. Expands
+    // symmetrically about the centre so sideband placement is preserved. A no-op
+    // for every legitimate width (the narrowest shipped preset, CW at 25 Hz,
+    // sits well above this floor), so real filters reach WDSP byte-identical.
+    internal const double MinPassbandWidthHz = 10.0;
+
+    internal static (double low, double high) FloorPassbandWidth(double low, double high)
+    {
+        if (high - low >= MinPassbandWidthHz) return (low, high);
+        double center = (low + high) / 2.0;
+        double half = MinPassbandWidthHz / 2.0;
+        return (center - half, center + half);
     }
 
     private static RxaMode MapMode(RxMode mode) => mode switch

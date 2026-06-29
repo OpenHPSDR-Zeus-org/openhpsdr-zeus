@@ -2,6 +2,8 @@
   <Folder Name="/tests/">
     <Project Path="tests/Zeus.Contracts.Tests/Zeus.Contracts.Tests.csproj" />
     <Project Path="tests/Zeus.Dsp.Tests/Zeus.Dsp.Tests.csproj" />
+    <Project Path="tests/Zeus.Dsp.FreeDv.Tests/Zeus.Dsp.FreeDv.Tests.csproj" />
+    <Project Path="tests/Zeus.Dsp.Ft8.Tests/Zeus.Dsp.Ft8.Tests.csproj" />
     <Project Path="tests/Zeus.Plugins.Contracts.Tests/Zeus.Plugins.Contracts.Tests.csproj" />
     <Project Path="tests/Zeus.Plugins.Host.Tests/Zeus.Plugins.Host.Tests.csproj" />
     <Project Path="tests/Zeus.Protocol1.Tests/Zeus.Protocol1.Tests.csproj" />
@@ -9,7 +11,11 @@
     <Project Path="tests/Zeus.Server.Tests/Zeus.Server.Tests.csproj" />
   </Folder>
   <Project Path="Zeus.Contracts/Zeus.Contracts.csproj" />
+  <Project Path="Zeus.Support.Contracts/Zeus.Support.Contracts.csproj" />
+  <Project Path="Zeus.SupportAgent/Zeus.SupportAgent.csproj" />
   <Project Path="Zeus.Dsp/Zeus.Dsp.csproj" />
+  <Project Path="Zeus.Dsp.FreeDv/Zeus.Dsp.FreeDv.csproj" />
+  <Project Path="Zeus.Dsp.Ft8/Zeus.Dsp.Ft8.csproj" />
   <Project Path="Zeus.Plugins.Contracts/Zeus.Plugins.Contracts.csproj" />
   <Project Path="Zeus.Plugins.Host/Zeus.Plugins.Host.csproj" />
   <Project Path="Zeus.Plugins.VstHostStub/Zeus.Plugins.VstHostStub.csproj" />
@@ -17,4 +23,5 @@
   <Project Path="Zeus.Protocol2/Zeus.Protocol2.csproj" />
   <Project Path="OpenhpsdrZeus/OpenhpsdrZeus.csproj" />
   <Project Path="Zeus.Server.Hosting/Zeus.Server.Hosting.csproj" />
+  <Project Path="Zeus.Diagnostics.TestGen/Zeus.Diagnostics.TestGen.csproj" />
 </Solution>

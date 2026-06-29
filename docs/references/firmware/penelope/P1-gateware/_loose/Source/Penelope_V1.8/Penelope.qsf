@@ -1,0 +1,164 @@
+# Copyright (C) 1991-2006 Altera Corporation
+# Your use of Altera Corporation's design tools, logic functions 
+# and other software and tools, and its AMPP partner logic 
+# functions, and any output files from any of the foregoing 
+# (including device programming or simulation files), and any 
+# associated documentation or information are expressly subject 
+# to the terms and conditions of the Altera Program License 
+# Subscription Agreement, Altera MegaCore Function License 
+# Agreement, or other applicable license agreement, including, 
+# without limitation, that your use is for the sole purpose of 
+# programming logic devices manufactured by Altera and sold by 
+# Altera or its authorized distributors.  Please refer to the 
+# applicable agreement for further details.
+
+
+# The default values for assignments are stored in the file
+#		Penelope_assignment_defaults.qdf
+# If this file doesn't exist, and for assignments not listed, see file
+#		assignment_defaults.qdf
+
+# Altera recommends that you do not modify this file. This
+# file is updated automatically by the Quartus II software
+# and any changes you make may be lost or overwritten.
+
+
+set_global_assignment -name DEVICE EP2C8Q208C8
+set_global_assignment -name FAMILY "Cyclone II"
+set_global_assignment -name TOP_LEVEL_ENTITY Penelope
+set_global_assignment -name ORIGINAL_QUARTUS_VERSION 6.1
+set_global_assignment -name PROJECT_CREATION_TIME_DATE "14:58:14  FEBRUARY 17, 2007"
+set_global_assignment -name LAST_QUARTUS_VERSION 12.1
+set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -section_id Top
+set_global_assignment -name FMAX_REQUIREMENT "123 MHz"
+set_global_assignment -name FMAX_REQUIREMENT "10 MHz" -section_id "10MHz clock"
+set_instance_assignment -name CLOCK_SETTINGS "10MHz clock" -to _10MHZ
+set_global_assignment -name RESERVE_ALL_UNUSED_PINS "AS INPUT TRI-STATED"
+set_global_assignment -name RESERVE_ASDO_AFTER_CONFIGURATION "AS INPUT TRI-STATED"
+set_global_assignment -name CYCLONEII_RESERVE_NCEO_AFTER_CONFIGURATION "USE AS REGULAR IO"
+set_location_assignment PIN_131 -to _10MHZ
+set_location_assignment PIN_115 -to A5
+set_location_assignment PIN_97 -to A11
+set_location_assignment PIN_145 -to ADCCLK
+set_location_assignment PIN_146 -to ADCMISO
+set_location_assignment PIN_147 -to ADCMOSI
+set_location_assignment PIN_169 -to CMODE
+set_location_assignment PIN_173 -to DAC[0]
+set_location_assignment PIN_175 -to DAC[1]
+set_location_assignment PIN_176 -to DAC[2]
+set_location_assignment PIN_179 -to DAC[3]
+set_location_assignment PIN_180 -to DAC[4]
+set_location_assignment PIN_181 -to DAC[5]
+set_location_assignment PIN_182 -to DAC[6]
+set_location_assignment PIN_185 -to DAC[7]
+set_location_assignment PIN_187 -to DAC[8]
+set_location_assignment PIN_188 -to DAC[9]
+set_location_assignment PIN_189 -to DAC[10]
+set_location_assignment PIN_191 -to DAC[11]
+set_location_assignment PIN_192 -to DAC[12]
+set_location_assignment PIN_193 -to DAC[13]
+set_location_assignment PIN_134 -to FPGA_PTT
+set_location_assignment PIN_197 -to FPGA_PLL
+set_location_assignment PIN_199 -to LVDSTXE
+set_location_assignment PIN_171 -to PTT
+set_location_assignment PIN_149 -to PWM0
+set_location_assignment PIN_150 -to PWM1
+set_location_assignment PIN_151 -to PWM2
+set_location_assignment PIN_143 -to USEROUT0
+set_location_assignment PIN_142 -to USEROUT1
+set_location_assignment PIN_141 -to USEROUT2
+set_location_assignment PIN_139 -to USEROUT3
+set_location_assignment PIN_138 -to USEROUT4
+set_location_assignment PIN_137 -to USEROUT5
+set_location_assignment PIN_135 -to USEROUT6
+set_location_assignment PIN_144 -to nADCCS
+set_location_assignment PIN_170 -to nCS
+set_location_assignment PIN_200 -to nLVDSRXE
+set_location_assignment PIN_82 -to ext_10MHZ
+set_location_assignment PIN_86 -to PTT_in
+set_location_assignment PIN_208 -to LED2
+set_location_assignment PIN_206 -to LED3
+set_location_assignment PIN_205 -to LED4
+set_location_assignment PIN_203 -to LED5
+set_location_assignment PIN_107 -to LED6
+set_location_assignment PIN_108 -to LED7
+set_global_assignment -name STRATIX_DEVICE_IO_STANDARD "3.3-V LVTTL"
+set_location_assignment PIN_70 -to CC
+set_global_assignment -name MESSAGE_SUPPRESSION_RULE_FILE Penelope.srf
+set_global_assignment -name ALLOW_POWER_UP_DONT_CARE OFF
+set_global_assignment -name PARTITION_COLOR 14622752 -section_id Top
+set_global_assignment -name LL_ROOT_REGION ON -section_id "Root Region"
+set_global_assignment -name LL_MEMBER_STATE LOCKED -section_id "Root Region"
+set_global_assignment -name ROUTER_TIMING_OPTIMIZATION_LEVEL MAXIMUM
+set_global_assignment -name NUMBER_OF_SOURCES_PER_DESTINATION_TO_REPORT 50
+set_global_assignment -name NUMBER_OF_PATHS_TO_REPORT 1000
+set_global_assignment -name NUMBER_OF_DESTINATION_TO_REPORT 50
+set_global_assignment -name CYCLONEII_OPTIMIZATION_TECHNIQUE BALANCED
+set_global_assignment -name SAFE_STATE_MACHINE OFF
+set_global_assignment -name REMOVE_REDUNDANT_LOGIC_CELLS ON
+set_global_assignment -name ADV_NETLIST_OPT_SYNTH_GATE_RETIME OFF
+set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP OFF
+set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
+set_global_assignment -name OPTIMIZE_HOLD_TIMING OFF
+set_global_assignment -name FITTER_EFFORT "AUTO FIT"
+set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON
+set_global_assignment -name PHYSICAL_SYNTHESIS_EFFORT NORMAL
+set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC ON
+set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC_FOR_AREA OFF
+set_global_assignment -name PHYSICAL_SYNTHESIS_MAP_LOGIC_TO_MEMORY_FOR_AREA OFF
+set_global_assignment -name STATE_MACHINE_PROCESSING "USER-ENCODED"
+set_location_assignment PIN_161 -to TLV320_CLRCIN
+set_location_assignment PIN_152 -to TLV320_CLRCOUT
+set_location_assignment PIN_164 -to TLV320_CMCLK
+set_location_assignment PIN_163 -to TLV320_CBCLK
+set_location_assignment PIN_160 -to TLV320_CDOUT
+set_location_assignment PIN_162 -to TLV320_CDIN
+set_global_assignment -name FMAX_REQUIREMENT "48 kHz" -section_id CLRCLK
+set_global_assignment -name FMAX_REQUIREMENT "12.288 MHz" -section_id CBCLK
+set_global_assignment -name FMAX_REQUIREMENT "122.88 MHz" -section_id CLK_122MHz
+set_instance_assignment -name CLOCK_SETTINGS CLRCLK -to CLRCLK
+set_global_assignment -name ENABLE_SIGNALTAP OFF
+set_instance_assignment -name CLOCK_SETTINGS CLK_122MHz -to C122_clk
+set_location_assignment PIN_132 -to C122_clk
+set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -from C122_clk -to *
+set_instance_assignment -name MULTICYCLE 4 -from C122_frequency_HZ -to C122_phase_word
+set_instance_assignment -name MULTICYCLE 4 -from C122_res_i -to C122_ALC_i
+set_instance_assignment -name MULTICYCLE 4 -from C122_res_q -to C122_ALC_q
+set_instance_assignment -name CLOCK_SETTINGS CBCLK -to C122_CBCLK
+set_instance_assignment -name MULTICYCLE 4 -from * -to ALC_out
+set_instance_assignment -name MULTICYCLE 4 -from ALC_out -to *
+set_location_assignment PIN_74 -to C19
+set_location_assignment PIN_64 -to C22
+set_location_assignment PIN_201 -to DAC_ALC
+set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -section_id Top
+set_global_assignment -name EDA_SIMULATION_TOOL "ModelSim-Altera (Verilog)"
+set_global_assignment -name EDA_OUTPUT_DATA_FORMAT "VERILOG HDL" -section_id eda_simulation
+set_global_assignment -name EDA_TIME_SCALE "1 ps" -section_id eda_simulation
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 85
+set_global_assignment -name POWER_PRESET_COOLING_SOLUTION "23 MM HEAT SINK WITH 200 LFPM AIRFLOW"
+set_global_assignment -name POWER_BOARD_THERMAL_MODEL "NONE (CONSERVATIVE)"
+set_global_assignment -name ON_CHIP_BITSTREAM_DECOMPRESSION ON
+set_location_assignment PIN_76 -to C18
+set_global_assignment -name GENERATE_RBF_FILE ON
+set_global_assignment -name USE_CONFIGURATION_DEVICE ON
+set_global_assignment -name SYNTH_TIMING_DRIVEN_SYNTHESIS ON
+set_global_assignment -name RESERVE_ALL_UNUSED_PINS_NO_OUTPUT_GND "AS INPUT TRI-STATED"
+set_location_assignment PIN_67 -to A22
+set_global_assignment -name SEARCH_PATH common/ -tag from_archive
+set_location_assignment PIN_72 -to SCL
+set_location_assignment PIN_69 -to SDA
+set_global_assignment -name VERILOG_FILE cpl_cordic.v
+set_global_assignment -name VERILOG_FILE PLL_clock_detector.v
+set_global_assignment -name SDC_FILE Penelope.sdc
+set_global_assignment -name VERILOG_FILE common/I2S_xmit.v
+set_global_assignment -name VERILOG_FILE common/NWire_rcv.v
+set_global_assignment -name VERILOG_FILE common/NWire_xmit.v
+set_global_assignment -name VERILOG_FILE common/clk_lrclk_gen.v
+set_global_assignment -name VERILOG_FILE common/clk_div.v
+set_global_assignment -name VERILOG_FILE oddClockDiv.v
+set_global_assignment -name VERILOG_FILE ADC.v
+set_global_assignment -name VERILOG_FILE cicint.v
+set_global_assignment -name VERILOG_FILE Penelope.v
+set_global_assignment -name VERILOG_FILE common/I2S_rcv.v
+set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top

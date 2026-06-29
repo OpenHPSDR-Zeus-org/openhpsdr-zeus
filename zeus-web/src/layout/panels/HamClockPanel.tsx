@@ -10,7 +10,7 @@
 // then shows the iframe; otherwise it shows install/start state and points the
 // operator at Settings → HamClock.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ActivationSpotDto } from '../../api/client';
 import { hamclockIframeUrl, useHamClockStore } from '../../state/hamclock-store';
 import { useSpotsStore } from '../../state/spots-store';
@@ -68,6 +68,13 @@ export function HamClockPanel() {
   const loadSpotSettings = useSpotsStore((s) => s.loadSettings);
   const tuneToSpot = useSpotsStore((s) => s.tuneToSpot);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  // Bumped to force a one-time iframe remount after a cold start (see below).
+  const [reloadNonce, setReloadNonce] = useState(0);
+  // false once we know HamClock was NOT already running when this panel
+  // mounted (i.e. this panel cold-started the sidecar). null until status
+  // first resolves; true means a returning session that needs no reload.
+  const wasRunningOnMountRef = useRef<boolean | null>(null);
+  const didColdStartReloadRef = useRef(false);
 
   // Auto-start the sidecar on mount if it's installed but not running, then
   // poll until it reaches Running so the iframe appears. Faster tick while an
@@ -78,6 +85,7 @@ export function HamClockPanel() {
       await loadStatus();
       if (cancelled) return;
       const s = useHamClockStore.getState().status;
+      wasRunningOnMountRef.current = s.running && s.port > 0;
       if (s.installed && !s.running && !s.busy && s.phase !== 'Starting') {
         await start();
       }
@@ -98,6 +106,22 @@ export function HamClockPanel() {
 
   const running = status.running && status.port > 0;
   const url = running ? hamclockIframeUrl(status.port) : '';
+
+  // Cold-start fix: on a brand-new install the backend reports Running as soon
+  // as the sidecar's TCP socket accepts (HamClockService.WaitForHealthAsync) —
+  // before OpenHamClock has fetched the upstream data/imagery it renders, so the
+  // first paint shows broken content (a stray weather glyph). Returning sessions
+  // have that data cached. When this panel cold-started the sidecar, do the one
+  // reload the operator would otherwise do by hand, a few seconds after it goes
+  // Running, by remounting the iframe via its key.
+  useEffect(() => {
+    if (!running) return;
+    if (didColdStartReloadRef.current) return;
+    if (wasRunningOnMountRef.current !== false) return; // already running → no reload needed
+    didColdStartReloadRef.current = true;
+    const id = window.setTimeout(() => setReloadNonce((n) => n + 1), 3000);
+    return () => window.clearTimeout(id);
+  }, [running]);
 
   useEffect(() => {
     if (!running || !url) return;
@@ -130,6 +154,7 @@ export function HamClockPanel() {
   if (running) {
     return (
       <iframe
+        key={reloadNonce}
         ref={iframeRef}
         title="HamClock"
         src={url}

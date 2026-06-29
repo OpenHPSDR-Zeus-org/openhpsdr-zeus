@@ -2,7 +2,8 @@
 //
 // Zeus - OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -259,10 +260,19 @@ export function AdcProtectionSettingsSection() {
           label="Warn Level"
           value={draft.warningThreshold}
           min={0}
-          max={5}
+          max={4}
           disabled={!draft.enabled}
-          onChange={(v) => update({ warningThreshold: clampInt(v, 0, 5) })}
+          onChange={(v) => update({ warningThreshold: clampInt(v, 0, 4) })}
           formatValue={(v) => `${Math.round(v)}`}
+        />
+        <Slider
+          label="Release Hold"
+          value={draft.releaseHoldMs}
+          min={0}
+          max={10000}
+          disabled={!draft.enabled}
+          onChange={(v) => update({ releaseHoldMs: clampInt(v, 0, 10000) })}
+          formatValue={(v) => `${Math.round(v)} ms`}
         />
       </div>
 

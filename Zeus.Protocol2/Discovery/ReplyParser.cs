@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -109,16 +110,28 @@ public static class ReplyParser
         return true;
     }
 
+    // Protocol-2 discovery device byte (reply offset 11). This is the
+    // NEW-protocol numbering and is DIFFERENT from Protocol 1: the dual-ADC
+    // family is shifted by one. Authoritative sources agree —
+    // piHPSDR discovered.h (NEW_DEVICE_*), Thetis network.h / enums.cs,
+    // NereusSDR HpsdrModel.h:
+    //   P2: 0x03 Angelia(100D), 0x04 Orion(200D), 0x05 OrionMkII(7000/8000)
+    //   P1: 0x04 Angelia,       0x05 Orion,       0x0A OrionMkII
+    // Reusing the P1 numbers here was the cause of issue #780 (a real
+    // ANAN-200D sends P2 byte 0x04 and was mis-classified as Angelia/100D).
+    // DO NOT copy these values into Zeus.Protocol1.Discovery.ReplyParser —
+    // its 0x04/0x05/0x0A mapping is correct for the P1 wire and must stay.
     private static HpsdrBoardKind MapBoard(byte raw) => raw switch
     {
-        0x00 => HpsdrBoardKind.Metis,
+        0x00 => HpsdrBoardKind.Metis,        // Atlas
         0x01 => HpsdrBoardKind.Hermes,
         0x02 => HpsdrBoardKind.HermesII,
-        0x04 => HpsdrBoardKind.Angelia,
-        0x05 => HpsdrBoardKind.Orion,
+        0x03 => HpsdrBoardKind.Angelia,      // ANAN-100D
+        0x04 => HpsdrBoardKind.Orion,        // ANAN-200D (issue #780)
+        0x05 => HpsdrBoardKind.OrionMkII,    // ANAN-7000DLE / 8000DLE (Orion2)
         0x06 => HpsdrBoardKind.HermesLite2,
-        0x0A => HpsdrBoardKind.OrionMkII,
-        0x14 => HpsdrBoardKind.HermesC10,
+        0x0A => HpsdrBoardKind.OrionMkII,    // Saturn / ANAN-G2
+        0x14 => HpsdrBoardKind.HermesC10,    // ANAN-G2E
         _ => HpsdrBoardKind.Unknown,
     };
 

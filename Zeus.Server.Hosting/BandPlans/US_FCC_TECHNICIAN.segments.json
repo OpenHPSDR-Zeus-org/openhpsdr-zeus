@@ -1,0 +1,25 @@
+{
+  "$comment": "US FCC Technician class privileges. Sources cross-checked 2026-06: eCFR 47 CFR §97.301(e), §97.305, §97.313(c) + ARRL US Amateur Radio Bands chart. Technician holds the legacy Novice HF sub-bands (CW on 80/40/15m, CW+data/phone on 10m) at 200 W PEP, plus FULL privileges on 6 m and up. Fully specified (overrides the IARU_R2 parent) so bands without Technician privilege render as no-privilege rather than inheriting the parent's amateur allocation. CW is legal in any segment the operator may use (§97.305(a)); phone segments are tagged PhoneOnly per the project's existing modelling convention.",
+  "regionId": "US_FCC_TECHNICIAN",
+  "segments": [
+    { "lowHz": 1800000,  "highHz": 2000000,  "label": "160M — no Technician privilege", "allocation": "Reserved", "modeRestriction": "Any",         "maxPowerW": null, "notes": "Technician has no 160 m privileges" },
+    { "lowHz": 3500000,  "highHz": 3525000,  "label": "80M — no Technician privilege",  "allocation": "Reserved", "modeRestriction": "Any",         "maxPowerW": null, "notes": null },
+    { "lowHz": 3525000,  "highHz": 3600000,  "label": "80M CW (Technician)",            "allocation": "Amateur",  "modeRestriction": "CwOnly",       "maxPowerW": 200,  "notes": "Tech/Novice CW only, 200 W PEP (§97.313(c))" },
+    { "lowHz": 3600000,  "highHz": 4000000,  "label": "75M — no Technician privilege",  "allocation": "Reserved", "modeRestriction": "Any",         "maxPowerW": null, "notes": null },
+    { "lowHz": 7000000,  "highHz": 7025000,  "label": "40M — no Technician privilege",  "allocation": "Reserved", "modeRestriction": "Any",         "maxPowerW": null, "notes": null },
+    { "lowHz": 7025000,  "highHz": 7125000,  "label": "40M CW (Technician)",            "allocation": "Amateur",  "modeRestriction": "CwOnly",       "maxPowerW": 200,  "notes": "Tech/Novice CW only, 200 W PEP" },
+    { "lowHz": 7125000,  "highHz": 7300000,  "label": "40M — no Technician privilege",  "allocation": "Reserved", "modeRestriction": "Any",         "maxPowerW": null, "notes": null },
+    { "lowHz": 10100000, "highHz": 10150000, "label": "30M — no Technician privilege",  "allocation": "Reserved", "modeRestriction": "Any",         "maxPowerW": null, "notes": null },
+    { "lowHz": 14000000, "highHz": 14350000, "label": "20M — no Technician privilege",  "allocation": "Reserved", "modeRestriction": "Any",         "maxPowerW": null, "notes": null },
+    { "lowHz": 18068000, "highHz": 18168000, "label": "17M — no Technician privilege",  "allocation": "Reserved", "modeRestriction": "Any",         "maxPowerW": null, "notes": null },
+    { "lowHz": 21000000, "highHz": 21025000, "label": "15M — no Technician privilege",  "allocation": "Reserved", "modeRestriction": "Any",         "maxPowerW": null, "notes": null },
+    { "lowHz": 21025000, "highHz": 21200000, "label": "15M CW (Technician)",            "allocation": "Amateur",  "modeRestriction": "CwOnly",       "maxPowerW": 200,  "notes": "Tech/Novice CW only, 200 W PEP" },
+    { "lowHz": 21200000, "highHz": 21450000, "label": "15M — no Technician privilege",  "allocation": "Reserved", "modeRestriction": "Any",         "maxPowerW": null, "notes": null },
+    { "lowHz": 24890000, "highHz": 24990000, "label": "12M — no Technician privilege",  "allocation": "Reserved", "modeRestriction": "Any",         "maxPowerW": null, "notes": null },
+    { "lowHz": 28000000, "highHz": 28300000, "label": "10M CW/Data (Technician)",       "allocation": "Amateur",  "modeRestriction": "CwAndDigital", "maxPowerW": 200,  "notes": "Tech/Novice CW + RTTY/data, 200 W PEP" },
+    { "lowHz": 28300000, "highHz": 28500000, "label": "10M Phone (Technician)",         "allocation": "Amateur",  "modeRestriction": "PhoneOnly",    "maxPowerW": 200,  "notes": "Tech/Novice SSB phone (CW also permitted), 200 W PEP" },
+    { "lowHz": 28500000, "highHz": 29700000, "label": "10M >28.5 — no Technician privilege", "allocation": "Reserved", "modeRestriction": "Any",     "maxPowerW": null, "notes": null },
+    { "lowHz": 50000000, "highHz": 50100000, "label": "6M CW",                          "allocation": "Amateur",  "modeRestriction": "CwOnly",       "maxPowerW": null, "notes": "Technician: full 6 m privileges" },
+    { "lowHz": 50100000, "highHz": 54000000, "label": "6M",                             "allocation": "Amateur",  "modeRestriction": "Any",          "maxPowerW": null, "notes": "Technician: full 6 m privileges" }
+  ]
+}

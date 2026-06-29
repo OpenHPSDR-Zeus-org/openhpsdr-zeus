@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -39,6 +40,7 @@ namespace Zeus.Server;
 // no output power, or hardware damage. Only use if you understand your hardware.
 public sealed class PreferredRadioStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<PreferredRadioEntry> _entries;
     private readonly ILogger<PreferredRadioStore> _log;
@@ -54,7 +56,8 @@ public sealed class PreferredRadioStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _entries = _db.GetCollection<PreferredRadioEntry>("preferred_radio");
 
         _log.LogInformation("PreferredRadioStore initialized at {Path}", dbPath);
@@ -281,6 +284,32 @@ public sealed class PreferredRadioStore : IDisposable
         }
     }
 
+    /// <summary>
+    /// Raw (nullable) ADC dither preference — <c>null</c> when the operator has
+    /// never set it. Lets the caller apply a protocol-specific default: the
+    /// Protocol-2 G2 path defaults on (<see cref="GetG2AdcDitherEnabled"/>),
+    /// while the Protocol-1 LT2208 path defaults off (Thetis netInterface.c).
+    /// </summary>
+    public bool? GetG2AdcDitherEnabledRaw()
+    {
+        lock (_sync)
+        {
+            return _entries.FindAll().FirstOrDefault()?.G2AdcDitherEnabled;
+        }
+    }
+
+    /// <summary>
+    /// Raw (nullable) ADC randomizer preference. See
+    /// <see cref="GetG2AdcDitherEnabledRaw"/> for the default-by-protocol rule.
+    /// </summary>
+    public bool? GetG2AdcRandomEnabledRaw()
+    {
+        lock (_sync)
+        {
+            return _entries.FindAll().FirstOrDefault()?.G2AdcRandomEnabled;
+        }
+    }
+
     public int GetG2Rx1AttenuatorDb()
     {
         lock (_sync)
@@ -307,8 +336,13 @@ public sealed class PreferredRadioStore : IDisposable
                 {
                     Board = HpsdrBoardKind.Unknown,
                     OverrideDetection = false,
-                    G2AdcDitherEnabled = ditherEnabled ?? true,
-                    G2AdcRandomEnabled = randomEnabled ?? true,
+                    // Store exactly what the operator set; leave unspecified
+                    // options null so the resolver can apply the correct
+                    // default for the active protocol (P2 on / P1 off). The
+                    // shipped GetG2Adc*Enabled() getters still collapse null →
+                    // true for the P2 path, so this is byte-identical there.
+                    G2AdcDitherEnabled = ditherEnabled,
+                    G2AdcRandomEnabled = randomEnabled,
                     G2Rx1AttenuatorDb = clampedRx1Atten ?? 0,
                     UpdatedUtc = DateTime.UtcNow,
                 });
@@ -384,7 +418,7 @@ public sealed class PreferredRadioStore : IDisposable
         Changed?.Invoke();
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
 }
 

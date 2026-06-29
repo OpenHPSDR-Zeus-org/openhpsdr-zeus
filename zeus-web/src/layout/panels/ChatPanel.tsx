@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -16,20 +17,27 @@
 // rooms get a warm golden glow as the signature premium cue. Hydrated on mount
 // via chat-store REST calls and kept live by 0x35 push frames.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import {
   useChatStore,
   dmOther,
   PUBLIC_ROOM,
   type ChatMessage,
   type ChatOperator,
+  type ChatAttachment,
 } from '../../state/chat-store';
+import {
+  compressImageToAttachment,
+  ChatImageError,
+  CHAT_IMAGE_ACCEPT,
+} from '../../util/chat-image';
+import { useVoiceRecorder, fmtDuration, MAX_VOICE_MS } from '../../util/chat-audio';
+import { isAudioAttachment } from '../../api/chat';
 import { useQrzStore } from '../../state/qrz-store';
+import { useProfileOverlayStore } from '../../state/profile-overlay-store';
+import { useDisplaySettingsStore } from '../../state/display-settings-store';
 import { ConfirmDialog } from '../ConfirmDialog';
-import { QrzCard } from '../../components/design/QrzCard';
-import { qrzStationToContact } from '../../components/design/qrz-contact';
-import type { Contact } from '../../components/design/data';
-import type { QrzStation } from '../../api/qrz';
 
 const MAX_MESSAGE_CHARS = 2000;
 
@@ -204,18 +212,24 @@ function CallsignButton({
   onOpen,
   prominent,
   own,
+  admin,
 }: {
   callsign: string;
   onOpen: (callsign: string) => void;
   prominent?: boolean;
   own?: boolean;
+  /** Relay moderator — callsign is painted gold (takes priority over `own`). */
+  admin?: boolean;
 }) {
+  // Admins are gold network-wide; otherwise your own callsign reads in the
+  // accent blue, and everyone else in the default foreground.
+  const color = admin ? 'var(--power)' : own ? 'var(--accent-bright)' : 'var(--fg-0)';
   return (
     <button
       type="button"
       className="mono"
       onClick={() => onOpen(callsign)}
-      title={`Open ${callsign} on QRZ`}
+      title={admin ? `Open ${callsign} on QRZ · ZeusChat moderator` : `Open ${callsign} on QRZ`}
       style={{
         background: 'none',
         border: 'none',
@@ -225,7 +239,7 @@ function CallsignButton({
         fontWeight: prominent ? 700 : 600,
         fontSize: prominent ? 12.5 : 12,
         letterSpacing: '0.04em',
-        color: own ? 'var(--accent-bright)' : 'var(--fg-0)',
+        color,
         textAlign: 'left',
       }}
       onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
@@ -312,7 +326,7 @@ function RosterRow({
     >
       <StatusDot status={op.status} />
       <div style={{ minWidth: 0, flex: 1 }}>
-        <CallsignButton callsign={op.callsign} onOpen={onOpen} prominent />
+        <CallsignButton callsign={op.callsign} onOpen={onOpen} prominent admin={op.admin} />
         {/* Frequency / mode — only present for friends sharing their freq
             (the relay strips freqHz for everyone else). */}
         {freq !== '—' && (
@@ -501,15 +515,68 @@ function RequestRow({
   );
 }
 
+/** Small microphone glyph for the voice-record button (inherits text color). */
+function MicIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ display: 'block' }}
+    >
+      <rect x="9" y="2" width="6" height="11" rx="3" />
+      <path d="M5 10v1a7 7 0 0 0 14 0v-1" />
+      <line x1="12" y1="18" x2="12" y2="22" />
+    </svg>
+  );
+}
+
+/** Small paperclip glyph for the attach button (inherits text color). */
+function PaperclipIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ display: 'block' }}
+    >
+      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </svg>
+  );
+}
+
 function MessageRow({
   msg,
   own,
+  fromAdmin,
   onOpen,
+  onExpandImage,
 }: {
   msg: ChatMessage;
   own: boolean;
+  /** Sender is a relay moderator — paint their callsign gold. */
+  fromAdmin: boolean;
   onOpen: (callsign: string) => void;
+  onExpandImage: (att: ChatAttachment) => void;
 }) {
+  const att = msg.attachment;
+  const hasText = msg.text.trim().length > 0;
+  const audio = isAudioAttachment(att);
+  // Constrain the thumbnail to the message's native aspect when known so the
+  // bubble doesn't jump as the image decodes.
+  const ratio = att && att.width && att.height ? att.width / att.height : undefined;
   return (
     <div
       style={{
@@ -521,7 +588,7 @@ function MessageRow({
       }}
     >
       <div style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
-        <CallsignButton callsign={msg.from} onOpen={onOpen} own={own} />
+        <CallsignButton callsign={msg.from} onOpen={onOpen} own={own} admin={fromAdmin} />
         <span
           className="mono"
           title={fmtClock(msg.ts)}
@@ -532,116 +599,155 @@ function MessageRow({
       </div>
       <div
         style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: own ? 'flex-end' : 'flex-start',
+          gap: 4,
           maxWidth: '85%',
-          padding: '5px 10px',
-          borderRadius: 'var(--r-lg)',
-          background: own ? 'var(--accent-soft)' : 'var(--bg-2)',
-          border: own ? '1px solid var(--accent-line)' : '1px solid var(--line)',
-          color: 'var(--fg-1)',
-          fontSize: 12.5,
-          lineHeight: 1.45,
-          wordBreak: 'break-word',
-          whiteSpace: 'pre-wrap',
         }}
       >
-        {msg.text}
+        {att && audio ? (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '6px 10px',
+              borderRadius: 'var(--r-lg)',
+              border: own ? '1px solid var(--accent-line)' : '1px solid var(--line)',
+              background: own ? 'var(--accent-soft)' : 'var(--bg-2)',
+              maxWidth: '100%',
+            }}
+          >
+            <span
+              aria-hidden
+              style={{ display: 'flex', alignItems: 'center', color: own ? 'var(--accent-bright)' : 'var(--fg-2)', flexShrink: 0 }}
+            >
+              <MicIcon />
+            </span>
+            <audio
+              src={att.dataUrl}
+              controls
+              preload="metadata"
+              style={{ height: 32, maxWidth: 220 }}
+            />
+          </div>
+        ) : att ? (
+          <button
+            type="button"
+            onClick={() => onExpandImage(att)}
+            title={att.name ?? 'Open image'}
+            style={{
+              display: 'block',
+              padding: 0,
+              margin: 0,
+              border: own ? '1px solid var(--accent-line)' : '1px solid var(--line)',
+              borderRadius: 'var(--r-lg)',
+              background: 'var(--bg-2)',
+              cursor: 'zoom-in',
+              overflow: 'hidden',
+              lineHeight: 0,
+              maxWidth: '100%',
+            }}
+          >
+            <img
+              src={att.dataUrl}
+              alt={att.name ?? 'Shared photo'}
+              loading="lazy"
+              style={{
+                display: 'block',
+                maxWidth: 280,
+                maxHeight: 280,
+                width: 'auto',
+                height: 'auto',
+                aspectRatio: ratio ? String(ratio) : undefined,
+                objectFit: 'cover',
+              }}
+            />
+          </button>
+        ) : null}
+        {hasText ? (
+          <div
+            style={{
+              padding: '5px 10px',
+              borderRadius: 'var(--r-lg)',
+              background: own ? 'var(--accent-soft)' : 'var(--bg-2)',
+              border: own ? '1px solid var(--accent-line)' : '1px solid var(--line)',
+              color: 'var(--fg-1)',
+              fontSize: 12.5,
+              lineHeight: 1.45,
+              wordBreak: 'break-word',
+              whiteSpace: 'pre-wrap',
+            }}
+          >
+            {msg.text}
+          </div>
+        ) : null}
       </div>
     </div>
   );
 }
 
-function ProfileOverlay({
-  callsign,
-  onClose,
-}: {
-  callsign: string;
-  onClose: () => void;
-}) {
-  const lookupCached = useQrzStore((s) => s.lookupCached);
-  const qrzConnected = useQrzStore((s) => s.connected);
-  const qrzHome = useQrzStore((s) => s.home);
-  const [station, setStation] = useState<QrzStation | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
+/**
+ * Full-size image viewer. A dim backdrop with the photo centered; click anywhere
+ * (or Esc) to close. Kept deliberately simple — no zoom/pan, just "see it big".
+ */
+function ImageLightbox({ att, onClose }: { att: ChatAttachment; onClose: () => void }) {
   useEffect(() => {
-    let live = true;
-    setLoading(true);
-    setError(null);
-    void lookupCached(callsign)
-      .then((s) => {
-        if (!live) return;
-        if (s) setStation(s);
-        else setError(qrzConnected ? 'No QRZ record' : 'Log into QRZ to view profiles');
-      })
-      .finally(() => {
-        if (live) setLoading(false);
-      });
-    return () => {
-      live = false;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
     };
-  }, [callsign, lookupCached, qrzConnected]);
-
-  const contact: Contact | null = useMemo(
-    () => qrzStationToContact(station, qrzHome),
-    [station, qrzHome],
-  );
-
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
   return (
     <div
+      role="dialog"
+      aria-modal="true"
       onClick={onClose}
       style={{
         position: 'absolute',
         inset: 0,
-        background: 'rgba(0,0,0,0.55)',
+        zIndex: 30,
         display: 'flex',
+        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 30,
+        gap: 8,
         padding: 16,
+        background: 'rgba(0,0,0,0.82)',
+        cursor: 'zoom-out',
       }}
     >
-      <div
+      <img
+        src={att.dataUrl}
+        alt={att.name ?? 'Shared photo'}
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: 'var(--panel-top)',
-          border: '1px solid var(--panel-border)',
-          borderRadius: 'var(--r-lg)',
-          boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
-          width: 340,
           maxWidth: '100%',
-          maxHeight: '90%',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
+          maxHeight: 'calc(100% - 56px)',
+          objectFit: 'contain',
+          borderRadius: 'var(--r-sm)',
+          cursor: 'default',
         }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '6px 10px',
-            borderBottom: '1px solid var(--panel-border)',
-          }}
-        >
-          <span
-            className="mono"
-            style={{ fontWeight: 700, letterSpacing: '0.06em', color: 'var(--fg-0)' }}
-          >
-            {callsign}
+      />
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        {att.name ? (
+          <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-2)' }}>
+            {att.name}
           </span>
-          <button type="button" className="btn sm" onClick={onClose} title="Close">
-            ✕
-          </button>
-        </div>
-        <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
-          <QrzCard
-            contact={contact}
-            enriching={loading}
-            lookupError={!loading && !contact ? (error ?? 'No QRZ record') : null}
-          />
-        </div>
+        ) : null}
+        <a
+          href={att.dataUrl}
+          download={att.name ?? 'photo.jpg'}
+          onClick={(e) => e.stopPropagation()}
+          className="btn sm"
+        >
+          Download
+        </a>
+        <button type="button" className="btn sm" onClick={onClose}>
+          Close
+        </button>
       </div>
     </div>
   );
@@ -683,6 +789,37 @@ function EyeIcon({ open }: { open: boolean }) {
   );
 }
 
+// Panadapter chat-roster overlay toggle — a spectrum baseline with an operator
+// marker pin, echoing how the overlay paints callsigns on the panadapter. The
+// `open` (slashed) variant marks the overlay hidden, mirroring the EyeIcon.
+function RosterOverlayIcon({ on }: { on: boolean }) {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 16 16"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      {/* spectrum baseline */}
+      <path
+        d="M1.5 12.5 L4 12.5 L5.5 9 L7 12.5 L11 12.5"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {/* operator marker pin + dot */}
+      <line x1="11.5" y1="12.5" x2="11.5" y2="4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <circle cx="11.5" cy="3.5" r="1.6" fill="currentColor" />
+      {!on && (
+        <line x1="2" y1="14" x2="14" y2="2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      )}
+    </svg>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Tab bar sub-components
 // ---------------------------------------------------------------------------
@@ -698,10 +835,46 @@ const GOLD_RING_HOVER =
 const GOLD_RING_ACTIVE =
   'inset 0 0 0 1px rgba(255,177,60,0.40), 0 0 14px rgba(255,177,60,0.20)';
 
+// Violet glow for group rooms — the same soft-ring treatment as the gold DM
+// glow, in the dedicated group hue (--chat-group, #b07cff) so a group tab reads
+// as visually distinct from a DM at a glance.
+const VIOLET_RING_IDLE =
+  'inset 0 0 0 1px rgba(176,124,255,0.22), 0 0 8px rgba(176,124,255,0.10)';
+const VIOLET_RING_HOVER =
+  'inset 0 0 0 1px rgba(176,124,255,0.35), 0 0 12px rgba(176,124,255,0.16)';
+const VIOLET_RING_ACTIVE =
+  'inset 0 0 0 1px rgba(176,124,255,0.40), 0 0 14px rgba(176,124,255,0.20)';
+
+/** Per-tab tone: which channel kind drives the accent color/glow. */
+type TabTone = 'public' | 'group' | 'dm';
+
+/**
+ * Whether `me` is a member of `room` (case-insensitive). Returns true when our
+ * callsign is unknown (pre-connect) so a group never shows as locked before we
+ * know who we are.
+ */
+function isRoomMember(room: { members: string[] }, me: string | null): boolean {
+  const meUp = (me ?? '').toUpperCase();
+  if (!meUp) return true;
+  return room.members.some((m) => m.toUpperCase() === meUp);
+}
+
+/** A small padlock, shown on a group tab the viewer isn't a member of. */
+function LockGlyph() {
+  return (
+    <svg width="9" height="9" viewBox="0 0 12 12" fill="none" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <rect x="2.5" y="5.5" width="7" height="5" rx="1" stroke="currentColor" strokeWidth="1.1" />
+      <path d="M4 5.5V4a2 2 0 0 1 4 0v1.5" stroke="currentColor" strokeWidth="1.1" />
+    </svg>
+  );
+}
+
 interface TabItemProps {
   id: string;
   label: string;
-  isPrivate: boolean;
+  tone: TabTone;
+  /** Group the viewer isn't a member of: discoverable but locked until added. */
+  locked?: boolean;
   isActive: boolean;
   unread: number;
   closable?: boolean;
@@ -709,22 +882,23 @@ interface TabItemProps {
   onClose?: () => void;
 }
 
-function TabItem({ id: _id, label, isPrivate, isActive, unread, closable, onClick, onClose }: TabItemProps) {
+function TabItem({ id: _id, label, tone, locked, isActive, unread, closable, onClick, onClose }: TabItemProps) {
   const [hovered, setHovered] = useState(false);
 
-  const boxShadow = isPrivate
-    ? isActive
-      ? GOLD_RING_ACTIVE
-      : hovered
-      ? GOLD_RING_HOVER
-      : GOLD_RING_IDLE
-    : 'none';
+  const ring = (idle: string, hover: string, active: string) =>
+    isActive ? active : hovered ? hover : idle;
+  const boxShadow =
+    tone === 'dm'
+      ? ring(GOLD_RING_IDLE, GOLD_RING_HOVER, GOLD_RING_ACTIVE)
+      : tone === 'group'
+      ? ring(VIOLET_RING_IDLE, VIOLET_RING_HOVER, VIOLET_RING_ACTIVE)
+      : 'none';
 
-  const borderBottom = isActive
-    ? isPrivate
-      ? '2px solid var(--power)'
-      : '2px solid var(--accent-bright)'
-    : '2px solid transparent';
+  // Accent per channel kind: public=blue, group=violet, dm=gold.
+  const accent =
+    tone === 'dm' ? 'var(--power)' : tone === 'group' ? 'var(--chat-group)' : 'var(--accent-bright)';
+
+  const borderBottom = isActive ? `2px solid ${accent}` : '2px solid transparent';
 
   return (
     <div
@@ -749,16 +923,22 @@ function TabItem({ id: _id, label, isPrivate, isActive, unread, closable, onClic
         flexShrink: 0,
       }}
     >
+      {locked && (
+        <span style={{ color: accent, display: 'inline-flex', opacity: 0.85 }} title="Invite-only — an admin must add you">
+          <LockGlyph />
+        </span>
+      )}
       <span
         style={{
           fontSize: 11,
           fontWeight: isActive ? 700 : 500,
           letterSpacing: '0.04em',
           color: isActive
-            ? isPrivate
-              ? 'var(--power)'
-              : 'var(--fg-0)'
+            ? tone === 'public'
+              ? 'var(--fg-0)'
+              : accent
             : 'var(--fg-2)',
+          opacity: locked && !isActive ? 0.7 : 1,
           transition: `color var(--dur-fast) var(--ease-out)`,
           maxWidth: 88,
           overflow: 'hidden',
@@ -778,7 +958,8 @@ function TabItem({ id: _id, label, isPrivate, isActive, unread, closable, onClic
             height: 15,
             padding: '0 4px',
             borderRadius: 8,
-            background: isPrivate ? 'var(--power)' : 'var(--accent)',
+            background:
+              tone === 'dm' ? 'var(--power)' : tone === 'group' ? 'var(--chat-group)' : 'var(--accent)',
             color: '#fff',
             fontSize: 9,
             fontWeight: 700,
@@ -814,6 +995,58 @@ function TabItem({ id: _id, label, isPrivate, isActive, unread, closable, onClic
         </button>
       )}
     </div>
+  );
+}
+
+/**
+ * Chevron button that scrolls the tab bar when the tabs overflow horizontally —
+ * mirrors the topbar-controls scroll affordance. Both arrows appear together
+ * whenever overflow exists (`show`); the direction with nothing left to scroll
+ * keeps its column reserved (visibility) so the tab strip doesn't reflow as you
+ * page through it.
+ */
+function TabScrollButton({
+  direction,
+  show,
+  enabled,
+  onClick,
+}: {
+  direction: -1 | 1;
+  show: boolean;
+  enabled: boolean;
+  onClick: () => void;
+}) {
+  const left = direction < 0;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!enabled}
+      aria-label={left ? 'Scroll tabs left' : 'Scroll tabs right'}
+      title={left ? 'Scroll tabs left' : 'Scroll tabs right'}
+      style={{
+        display: show ? 'inline-flex' : 'none',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flex: '0 0 22px',
+        width: 22,
+        height: '100%',
+        padding: 0,
+        background: 'var(--bg-1)',
+        border: 'none',
+        borderRight: left ? '1px solid var(--line)' : 'none',
+        borderLeft: left ? 'none' : '1px solid var(--line)',
+        color: enabled ? 'var(--fg-0)' : 'var(--fg-4)',
+        cursor: enabled ? 'pointer' : 'default',
+        visibility: enabled ? 'visible' : 'hidden',
+      }}
+    >
+      {left ? (
+        <ChevronLeft size={14} strokeWidth={2.25} aria-hidden />
+      ) : (
+        <ChevronRight size={14} strokeWidth={2.25} aria-hidden />
+      )}
+    </button>
   );
 }
 
@@ -987,6 +1220,503 @@ function GroupManagementStrip({
 }
 
 // ---------------------------------------------------------------------------
+// Admin console (relay moderators only — N9WAR / KB2UKA)
+// ---------------------------------------------------------------------------
+
+// Inline icons — kept local to the admin console so it reads as a self-contained
+// premium control surface rather than emoji-decorated buttons.
+function MegaphoneIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M2.5 6.2 11 2.8v10.4L2.5 9.8H2a1 1 0 0 1-1-1V7.2a1 1 0 0 1 1-1h.5Z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path d="M4 10v2.2a1 1 0 0 0 1 1h.6a1 1 0 0 0 1-1V10.6" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+      <path d="M13 6.2a2.4 2.4 0 0 1 0 3.6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ClearIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M2.5 4h11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M6 4V2.6a.8.8 0 0 1 .8-.8h2.4a.8.8 0 0 1 .8.8V4" stroke="currentColor" strokeWidth="1.3" />
+      <path
+        d="M4 4.6 4.6 13a1 1 0 0 0 1 .9h4.8a1 1 0 0 0 1-.9L12 4.6"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path d="M6.6 6.8v4.6M9.4 6.8v4.6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function UnbanIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M5.3 8.2 7 9.9 10.8 6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ShieldIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M8 1.6 13 3.4v4.2c0 3.2-2.1 5.6-5 6.8-2.9-1.2-5-3.6-5-6.8V3.4L8 1.6Z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path d="M5.8 8 7.4 9.6 10.4 6.2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+const ADMIN_GOLD_RING = 'inset 0 0 0 1px rgba(255,177,60,0.22), 0 0 10px rgba(255,177,60,0.07)';
+
+/**
+ * A single action in the admin console: an icon, a title, a one-line description
+ * of exactly what it does and who it touches, and the trigger button. The verbose
+ * description is deliberate — these are network-wide, irreversible actions and the
+ * operator should never have to guess at the blast radius.
+ */
+function AdminAction({
+  icon,
+  title,
+  description,
+  actionLabel,
+  danger,
+  onClick,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  actionLabel: string;
+  danger?: boolean;
+  onClick: () => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const accent = danger ? 'var(--tx)' : 'var(--power)';
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '7px 9px',
+        borderRadius: 'var(--r-sm)',
+        background: hovered ? 'var(--bg-2)' : 'var(--bg-2)',
+        border: '1px solid var(--line)',
+        boxShadow: hovered ? ADMIN_GOLD_RING : 'none',
+        transition: 'box-shadow var(--dur-fast) var(--ease-out)',
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 26,
+          height: 26,
+          flexShrink: 0,
+          borderRadius: 'var(--r-sm)',
+          background: danger ? 'var(--tx-soft)' : 'var(--power-soft)',
+          color: accent,
+        }}
+      >
+        {icon}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--fg-0)', letterSpacing: '0.02em' }}>
+          {title}
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--fg-3)', lineHeight: 1.35, marginTop: 1 }}>
+          {description}
+        </div>
+      </div>
+      <button
+        type="button"
+        className="btn sm"
+        onClick={onClick}
+        style={
+          danger
+            ? { flexShrink: 0, color: 'var(--tx)', borderColor: 'var(--tx)' }
+            : { flexShrink: 0 }
+        }
+      >
+        {actionLabel}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * A toggle row in the admin console: icon + title + one-line description and a
+ * pill switch on the right. Mirrors AdminAction's layout but drives an on/off
+ * state rather than a one-shot action.
+ */
+function AdminToggle({
+  icon,
+  title,
+  description,
+  on,
+  onToggle,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  on: boolean;
+  onToggle: (next: boolean) => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const accent = 'var(--power)';
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '7px 9px',
+        borderRadius: 'var(--r-sm)',
+        background: 'var(--bg-2)',
+        border: '1px solid var(--line)',
+        boxShadow: on || hovered ? ADMIN_GOLD_RING : 'none',
+        transition: 'box-shadow var(--dur-fast) var(--ease-out)',
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 26,
+          height: 26,
+          flexShrink: 0,
+          borderRadius: 'var(--r-sm)',
+          background: 'var(--power-soft)',
+          color: accent,
+        }}
+      >
+        {icon}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--fg-0)', letterSpacing: '0.02em' }}>
+          {title}
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--fg-3)', lineHeight: 1.35, marginTop: 1 }}>
+          {description}
+        </div>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={title}
+        onClick={() => onToggle(!on)}
+        style={{
+          flexShrink: 0,
+          position: 'relative',
+          width: 34,
+          height: 18,
+          borderRadius: 9,
+          border: '1px solid var(--line-strong)',
+          background: on ? 'var(--power)' : 'var(--bg-3)',
+          cursor: 'pointer',
+          padding: 0,
+          transition: 'background var(--dur-fast) var(--ease-out)',
+        }}
+      >
+        <span
+          aria-hidden
+          style={{
+            position: 'absolute',
+            top: 1,
+            left: on ? 17 : 1,
+            width: 14,
+            height: 14,
+            borderRadius: '50%',
+            background: on ? '#1a1205' : 'var(--fg-2)',
+            transition: 'left var(--dur-fast) var(--ease-out)',
+          }}
+        />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The unban surface: a live list of every currently-banned callsign (relay-
+ * authoritative, persisted across relay restarts). Each row lifts that ban; the
+ * relay echoes the updated list back so the dialog updates in place and stays
+ * open for unbanning several at once.
+ */
+function BanListDialog({
+  bans,
+  onUnban,
+  onClose,
+}: {
+  bans: string[];
+  onUnban: (callsign: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <ConfirmDialog
+      title="Banned operators"
+      confirmLabel="Done"
+      cancelLabel="Close"
+      intent="primary"
+      onConfirm={onClose}
+      onCancel={onClose}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 248 }}>
+        <div style={{ fontSize: 11, color: 'var(--fg-3)', lineHeight: 1.4 }}>
+          Bans are stored on the relay and persist across restarts. Lift one to let
+          that callsign reconnect to ZeusChat.
+        </div>
+        {bans.length === 0 ? (
+          <div
+            style={{
+              padding: '12px 8px',
+              textAlign: 'center',
+              fontSize: 12,
+              color: 'var(--fg-3)',
+              border: '1px dashed var(--line)',
+              borderRadius: 'var(--r-sm)',
+            }}
+          >
+            No operators are currently banned.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 260, overflowY: 'auto' }}>
+            {bans.map((call) => (
+              <div
+                key={call}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '5px 8px',
+                  borderRadius: 'var(--r-sm)',
+                  background: 'var(--bg-2)',
+                  border: '1px solid var(--line)',
+                }}
+              >
+                <span
+                  className="mono"
+                  style={{
+                    flex: 1,
+                    fontWeight: 700,
+                    fontSize: 12.5,
+                    color: 'var(--fg-0)',
+                    letterSpacing: '0.04em',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {call}
+                </span>
+                <button
+                  type="button"
+                  className="btn sm"
+                  onClick={() => onUnban(call)}
+                  title={`Unban ${call}`}
+                  style={{ flexShrink: 0, color: 'var(--power)', borderColor: 'var(--power)' }}
+                >
+                  Unban
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </ConfirmDialog>
+  );
+}
+
+/**
+ * Collapsible strip of network-wide moderator tools, shown only to operators the
+ * relay flagged as admins (N9WAR / KB2UKA). Gathers the actions that aren't tied
+ * to a single roster row or room: global announcement, clear the public lobby,
+ * and unban. Per-row ban and per-group management live with their row/tab.
+ */
+function AdminConsole() {
+  const [open, setOpen] = useState(false);
+  const [dialog, setDialog] = useState<null | 'broadcast' | 'clear' | 'unban'>(null);
+  const broadcast = useChatStore((s) => s.broadcast);
+  const clearRoom = useChatStore((s) => s.clearRoom);
+  const unban = useChatStore((s) => s.unban);
+  const listBans = useChatStore((s) => s.listBans);
+  const bannedUsers = useChatStore((s) => s.bannedUsers);
+  const ownCall = useChatStore((s) => s.callsign);
+  const seeAllFreq = useChatStore((s) => s.seeAllFreq);
+  const setSeeAll = useChatStore((s) => s.setSeeAll);
+
+  // Refresh the ban list whenever the console is opened, so the count + list are
+  // current without waiting for the next ban/unban push.
+  useEffect(() => {
+    if (open) void listBans();
+  }, [open, listBans]);
+
+  const banCount = bannedUsers.length;
+
+  return (
+    <div
+      style={{
+        borderBottom: '1px solid var(--panel-border)',
+        background: 'var(--bg-1)',
+        boxShadow: open ? 'inset 0 0 0 1px rgba(255,177,60,0.10)' : 'none',
+        flexShrink: 0,
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 7,
+          width: '100%',
+          padding: '5px 10px',
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          fontSize: 9.5,
+          fontWeight: 700,
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+          color: 'var(--power)',
+        }}
+      >
+        <span style={{ fontSize: 9, opacity: 0.7 }}>{open ? '▼' : '▶'}</span>
+        <span style={{ display: 'flex', alignItems: 'center', color: 'var(--power)' }}>
+          <ShieldIcon />
+        </span>
+        Admin Console
+        <span
+          style={{
+            marginLeft: 'auto',
+            padding: '1px 6px',
+            borderRadius: 'var(--r-lg)',
+            background: 'var(--power-soft)',
+            color: 'var(--power)',
+            fontSize: 8.5,
+            fontWeight: 700,
+            letterSpacing: '0.10em',
+          }}
+        >
+          MODERATOR
+        </span>
+      </button>
+      {open && (
+        <div style={{ padding: '0 10px 9px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div
+            style={{
+              fontSize: 10,
+              color: 'var(--fg-3)',
+              lineHeight: 1.4,
+              padding: '0 1px 3px',
+            }}
+          >
+            Network-wide moderation for the public relay. You are signed in as{' '}
+            <span className="mono" style={{ color: 'var(--accent-bright)', fontWeight: 700 }}>
+              {ownCall ?? '—'}
+            </span>
+            . These actions affect <strong style={{ color: 'var(--fg-1)' }}>every connected operator</strong>.
+          </div>
+
+          <AdminToggle
+            icon={<EyeIcon open />}
+            title="See all frequencies"
+            description="Reveal every operator's frequency on your roster and panadapter — regardless of friendship or their eye toggle. Visible to you only."
+            on={seeAllFreq}
+            onToggle={(next) => void setSeeAll(next)}
+          />
+          <AdminAction
+            icon={<MegaphoneIcon />}
+            title="Global message"
+            description="Broadcast a one-off announcement banner to every operator, in any room."
+            actionLabel="Compose"
+            onClick={() => setDialog('broadcast')}
+          />
+          <AdminAction
+            icon={<UnbanIcon />}
+            title="Unban operator"
+            description={
+              banCount === 0
+                ? 'No operators are currently banned.'
+                : `${banCount} operator${banCount === 1 ? '' : 's'} banned — open the list to lift a ban.`
+            }
+            actionLabel="Manage"
+            onClick={() => {
+              void listBans();
+              setDialog('unban');
+            }}
+          />
+          <AdminAction
+            icon={<ClearIcon />}
+            title="Clear public chat"
+            description="Permanently wipe the public lobby history for everyone. Cannot be undone."
+            actionLabel="Clear"
+            danger
+            onClick={() => setDialog('clear')}
+          />
+        </div>
+      )}
+
+      {dialog === 'broadcast' && (
+        <PromptDialog
+          title="Global message"
+          label="Announcement broadcast to every operator"
+          placeholder="e.g. Net starting now on 7.200"
+          confirmLabel="Send"
+          onSubmit={(v) => {
+            void broadcast(v);
+            setDialog(null);
+          }}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog === 'unban' && (
+        <BanListDialog
+          bans={bannedUsers}
+          onUnban={(call) => void unban(call)}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog === 'clear' && (
+        <ConfirmDialog
+          title="Clear public chat"
+          confirmLabel="Clear"
+          intent="danger"
+          onConfirm={() => {
+            void clearRoom(PUBLIC_ROOM);
+            setDialog(null);
+          }}
+          onCancel={() => setDialog(null)}
+        >
+          Permanently delete <strong>all messages</strong> in the public lobby for everyone? This
+          cannot be undone.
+        </ConfirmDialog>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main panel
 // ---------------------------------------------------------------------------
 
@@ -1005,9 +1735,12 @@ export function ChatPanel() {
   const acceptedFriends = useChatStore((s) => s.acceptedFriends);
   const incomingRequests = useChatStore((s) => s.incomingRequests);
   const outgoingRequests = useChatStore((s) => s.outgoingRequests);
+  const announcement = useChatStore((s) => s.announcement);
+  const dismissAnnouncement = useChatStore((s) => s.dismissAnnouncement);
 
   const refreshStatus = useChatStore((s) => s.refreshStatus);
   const setEnabled = useChatStore((s) => s.setEnabled);
+  const setPanelVisible = useChatStore((s) => s.setPanelVisible);
   const send = useChatStore((s) => s.send);
   const loadHistory = useChatStore((s) => s.loadHistory);
   const loadRoster = useChatStore((s) => s.loadRoster);
@@ -1026,11 +1759,69 @@ export function ChatPanel() {
   const ban = useChatStore((s) => s.ban);
 
   const qrzConnected = useQrzStore((s) => s.connected);
+  const showRosterOverlay = useDisplaySettingsStore((s) => s.showChatRosterOverlay);
+  const setShowRosterOverlay = useDisplaySettingsStore((s) => s.setShowChatRosterOverlay);
 
   const [draft, setDraft] = useState('');
-  const [profileCall, setProfileCall] = useState<string | null>(null);
+  // Whether the composer field has keyboard focus — drives the accent focus
+  // ring/glow on the unified input field (inline styles can't use :focus-within).
+  const [composerFocused, setComposerFocused] = useState(false);
+  // Pending inline photo: compressed and ready to send, shown as a preview chip
+  // above the composer until the operator sends or removes it.
+  const [pendingAttachment, setPendingAttachment] = useState<ChatAttachment | null>(null);
+  const [attaching, setAttaching] = useState(false);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  // The image currently open full-size in the lightbox, if any.
+  const [lightbox, setLightbox] = useState<ChatAttachment | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Horizontal scroll affordance for the room tab bar — when the tabs overflow,
+  // page them with chevron buttons just like the topbar-controls strip.
+  const tabBarRef = useRef<HTMLDivElement | null>(null);
+  const [tabScroll, setTabScroll] = useState({ canLeft: false, canRight: false });
+
+  const syncTabScroll = useCallback(() => {
+    const el = tabBarRef.current;
+    if (!el) return;
+    const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
+    const next = {
+      canLeft: el.scrollLeft > 1,
+      canRight: maxScroll > 1 && el.scrollLeft < maxScroll - 1,
+    };
+    setTabScroll((prev) =>
+      prev.canLeft === next.canLeft && prev.canRight === next.canRight ? prev : next,
+    );
+  }, []);
+
+  const scrollTabs = useCallback(
+    (direction: -1 | 1) => {
+      const el = tabBarRef.current;
+      if (!el) return;
+      const amount = Math.max(120, Math.floor(el.clientWidth * 0.75));
+      el.scrollBy({ left: direction * amount, behavior: 'smooth' });
+      window.setTimeout(syncTabScroll, 180);
+    },
+    [syncTabScroll],
+  );
+
+  // Re-evaluate the arrows every render (tabs are added/removed as DMs and
+  // groups open/close) and on container resize.
+  useEffect(() => {
+    syncTabScroll();
+  });
+  useEffect(() => {
+    const el = tabBarRef.current;
+    if (!el) return;
+    window.addEventListener('resize', syncTabScroll);
+    const ro =
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(syncTabScroll) : null;
+    ro?.observe(el);
+    return () => {
+      window.removeEventListener('resize', syncTabScroll);
+      ro?.disconnect();
+    };
+  }, [syncTabScroll]);
 
   // Auto-grow textarea
   useEffect(() => {
@@ -1049,6 +1840,18 @@ export function ChatPanel() {
     void loadFriends();
   }, [refreshStatus, loadHistory, loadRoster, loadRooms, loadFriends]);
 
+  // Presence is gated on the operator actually showing this panel: heartbeat
+  // "visible" while mounted (re-pinged so a closed browser lapses on the
+  // backend timeout) and "hidden" on unmount, which drops us off the roster.
+  useEffect(() => {
+    void setPanelVisible(true);
+    const id = window.setInterval(() => void setPanelVisible(true), 15_000);
+    return () => {
+      window.clearInterval(id);
+      void setPanelVisible(false);
+    };
+  }, [setPanelVisible]);
+
   // Auto-scroll to newest message in the active room
   const activeMessages = messagesByRoom[activeRoom] ?? [];
   useEffect(() => {
@@ -1056,9 +1859,7 @@ export function ChatPanel() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [activeMessages.length, activeRoom]);
 
-  const openProfile = useCallback((callsign: string) => {
-    setProfileCall(callsign.trim().toUpperCase());
-  }, []);
+  const openProfile = useProfileOverlayStore((s) => s.open);
 
   // Sorted roster
   const sortedRoster = useMemo(() => {
@@ -1074,6 +1875,12 @@ export function ChatPanel() {
   const friendSet = useMemo(() => new Set(acceptedFriends.map((c) => c.toUpperCase())), [acceptedFriends]);
   const outgoingSet = useMemo(() => new Set(outgoingRequests.map((c) => c.toUpperCase())), [outgoingRequests]);
   const incomingSet = useMemo(() => new Set(incomingRequests.map((c) => c.toUpperCase())), [incomingRequests]);
+  // Callsigns the relay flagged as moderators — drives the gold callsign paint
+  // for message authors (roster rows read op.admin directly).
+  const adminCalls = useMemo(
+    () => new Set(roster.filter((op) => op.admin).map((op) => op.callsign.toUpperCase())),
+    [roster],
+  );
 
   const friendsOnline = useMemo(
     () => sortedRoster.filter((op) => friendSet.has(op.callsign.toUpperCase())),
@@ -1131,12 +1938,20 @@ export function ChatPanel() {
     [rooms, activeRoom],
   );
 
-  const isPrivateRoom = activeRoomObj ? activeRoomObj.kind !== 'public' : false;
+  // Tone of the active room drives the thread/composer accent (group=violet, dm=gold).
+  const activeTone: TabTone =
+    activeRoomObj?.kind === 'group' ? 'group' : activeRoomObj?.kind === 'dm' ? 'dm' : 'public';
+  // The active room is a group the operator hasn't been added to: discoverable
+  // but invite-only — show a locked body and block the composer until an admin
+  // adds them. (Admins still get the management strip below to add members.)
+  const lockedActive =
+    !!activeRoomObj && activeRoomObj.kind === 'group' && !isRoomMember(activeRoomObj, ownCall);
 
   // Placeholder label for the composer
   const composerPlaceholder = (() => {
     if (!connected) return 'Not connected';
     if (!activeRoomObj) return 'Message… (Enter to send)';
+    if (lockedActive) return 'Invite-only group — an admin must add you to post';
     if (activeRoomObj.kind === 'dm') {
       const other = dmOther(activeRoomObj.id, ownCall);
       return `Message @${other ?? activeRoomObj.name} (Enter to send, Shift+Enter for newline)`;
@@ -1147,15 +1962,59 @@ export function ChatPanel() {
     return 'Message everyone (Enter to send, Shift+Enter for newline)';
   })();
 
-  const canSend = enabled && connected && draft.trim().length > 0 && draft.length <= MAX_MESSAGE_CHARS;
+  // Sendable when connected and there's either text within the limit or a
+  // pending photo (image-only messages are allowed).
+  const canSend =
+    enabled &&
+    connected &&
+    !lockedActive &&
+    draft.length <= MAX_MESSAGE_CHARS &&
+    (draft.trim().length > 0 || pendingAttachment !== null);
 
   const doSend = useCallback(async () => {
     const text = draft.trim();
-    if (!text || !connected || text.length > MAX_MESSAGE_CHARS) return;
+    const att = pendingAttachment;
+    if (!connected || text.length > MAX_MESSAGE_CHARS) return;
+    if (!text && !att) return;
+    // Clear optimistically; restore on failure so nothing is silently lost.
     setDraft('');
-    const ok = await send(text);
-    if (!ok) setDraft(text);
-  }, [draft, connected, send]);
+    setPendingAttachment(null);
+    const ok = await send(text, att);
+    if (!ok) {
+      setDraft(text);
+      setPendingAttachment(att);
+    }
+  }, [draft, pendingAttachment, connected, send]);
+
+  // Compress a chosen/pasted/dropped image and stage it for sending.
+  const attachFile = useCallback(async (file: File | null | undefined) => {
+    if (!file) return;
+    setAttachError(null);
+    setAttaching(true);
+    try {
+      const att = await compressImageToAttachment(file);
+      setPendingAttachment(att);
+      // Return focus to the composer so a caption can be typed immediately.
+      inputRef.current?.focus();
+    } catch (err) {
+      setAttachError(
+        err instanceof ChatImageError ? err.message : "Couldn't attach that image.",
+      );
+    } finally {
+      setAttaching(false);
+    }
+  }, []);
+
+  // Voice snippet capture — a finished recording stages exactly like a photo
+  // (pendingAttachment), so the operator can add a caption then Send.
+  const onVoiceComplete = useCallback((att: ChatAttachment) => {
+    setAttachError(null);
+    setPendingAttachment(att);
+    inputRef.current?.focus();
+  }, []);
+  const voice = useVoiceRecorder(onVoiceComplete);
+  // Surface either the photo-attach error or the recorder error in one slot.
+  const composerError = attachError ?? voice.error;
 
   // Status pill
   const statusPill = (() => {
@@ -1174,10 +2033,34 @@ export function ChatPanel() {
   // Admin: create group room
   const handleCreateRoom = () => setCreatingRoom(true);
 
-  // Golden thread border for private rooms
-  const threadTopBorder = isPrivateRoom
-    ? '2px solid rgba(255,177,60,0.30)'
-    : '1px solid transparent';
+  // Accent thread/composer border for private rooms — violet for groups, gold
+  // for DMs, none for the public lobby.
+  const threadTopBorder =
+    activeTone === 'group'
+      ? '2px solid rgba(176,124,255,0.30)'
+      : activeTone === 'dm'
+      ? '2px solid rgba(255,177,60,0.30)'
+      : '1px solid transparent';
+  const composerBorder =
+    activeTone === 'group'
+      ? '1px solid rgba(176,124,255,0.28)'
+      : activeTone === 'dm'
+      ? '1px solid rgba(255,177,60,0.28)'
+      : '1px solid var(--line-strong)';
+  // Tone-matched accent used for the composer field's focus ring/glow and the
+  // border colour it brightens to while focused.
+  const composerAccent =
+    activeTone === 'group'
+      ? '176,124,255'
+      : activeTone === 'dm'
+      ? '255,177,60'
+      : '78,166,255';
+  const composerFieldBorder = composerFocused
+    ? `1px solid rgba(${composerAccent},0.65)`
+    : composerBorder;
+  const composerFieldShadow = composerFocused
+    ? `0 0 0 3px rgba(${composerAccent},0.14), inset 0 1px 0 rgba(255,255,255,0.03)`
+    : 'inset 0 1px 0 rgba(255,255,255,0.03)';
 
   return (
     <div
@@ -1249,6 +2132,39 @@ export function ChatPanel() {
         ) : null}
 
         <div style={{ flex: 1 }} />
+
+        {/* Panadapter chat-roster overlay toggle — show/hide operators on the
+            panadapter, mirroring the frequency-visibility eye next to it. */}
+        {enabled && (
+          <button
+            type="button"
+            onClick={() => setShowRosterOverlay(!showRosterOverlay)}
+            aria-label={
+              showRosterOverlay
+                ? 'Operators are shown on the panadapter — click to hide'
+                : 'Operators are hidden from the panadapter — click to show'
+            }
+            aria-pressed={showRosterOverlay}
+            title={
+              showRosterOverlay
+                ? 'Showing operators on the panadapter'
+                : 'Operators hidden from the panadapter'
+            }
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: '2px 4px',
+              cursor: 'pointer',
+              color: showRosterOverlay ? 'var(--accent-bright)' : 'var(--fg-3)',
+              display: 'flex',
+              alignItems: 'center',
+              borderRadius: 'var(--r-sm)',
+              transition: 'color var(--dur-fast) var(--ease-out)',
+            }}
+          >
+            <RosterOverlayIcon on={showRosterOverlay} />
+          </button>
+        )}
 
         {/* Freq visibility eye toggle */}
         {enabled && connected && (
@@ -1357,6 +2273,59 @@ export function ChatPanel() {
         </div>
       )}
 
+      {/* ── Global announcement banner (admin broadcast) ── */}
+      {announcement && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 8,
+            padding: '7px 10px',
+            borderBottom: '1px solid var(--panel-border)',
+            background: 'var(--accent-soft)',
+            fontSize: 11.5,
+            color: 'var(--fg-1)',
+            lineHeight: 1.4,
+            flexShrink: 0,
+          }}
+        >
+          <span
+            aria-hidden
+            style={{ display: 'flex', alignItems: 'center', color: 'var(--accent-bright)', marginTop: 1 }}
+          >
+            <MegaphoneIcon />
+          </span>
+          <div style={{ flex: 1, minWidth: 0, wordBreak: 'break-word' }}>
+            {announcement.from && (
+              <span className="mono" style={{ fontWeight: 700, color: 'var(--accent-bright)', marginRight: 6 }}>
+                {announcement.from}
+              </span>
+            )}
+            <span>{announcement.text}</span>
+          </div>
+          <button
+            type="button"
+            onClick={dismissAnnouncement}
+            aria-label="Dismiss announcement"
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: 2,
+              cursor: 'pointer',
+              color: 'var(--fg-3)',
+              fontSize: 11,
+              lineHeight: 1,
+              flexShrink: 0,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* ── Admin console (relay moderators only) ── */}
+      {isAdmin && <AdminConsole />}
+
       {/* ── Body: sidebar + right column ── */}
       <div style={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
 
@@ -1460,45 +2429,74 @@ export function ChatPanel() {
         </div>
 
         {/* ── Right column: tab bar + thread + composer ── */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        {/* minWidth:0 is load-bearing — without it this flex child keeps its
+            content's intrinsic min-content width (the tab strip's TabItems are
+            flexShrink:0), so the whole column overflows the body and gets clipped
+            instead of the inner tab bar scrolling. That left scrollWidth ===
+            clientWidth, so the overflow arrows never lit up. */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0 }}>
 
           {/* ── Tab bar ── */}
           <div
-            role="tablist"
-            aria-label="Chat rooms"
             style={{
               display: 'flex',
               alignItems: 'stretch',
               height: 30,
               borderBottom: '1px solid var(--panel-border)',
               background: 'var(--bg-1)',
-              overflowX: 'auto',
-              overflowY: 'hidden',
               flexShrink: 0,
             }}
           >
-            {orderedRooms.map((room) => {
-              const isDm = room.kind === 'dm';
-              const isPrivate = room.kind !== 'public';
-              const label = isDm
-                ? (dmOther(room.id, ownCall) ?? room.name)
-                : room.name;
-              return (
-                <TabItem
-                  key={room.id}
-                  id={room.id}
-                  label={label}
-                  isPrivate={isPrivate}
-                  isActive={activeRoom === room.id}
-                  unread={unreadByRoom[room.id] ?? 0}
-                  closable={isDm}
-                  onClick={() => setActiveRoom(room.id)}
-                  onClose={isDm ? () => handleTabClose(room.id) : undefined}
-                />
-              );
-            })}
+            <TabScrollButton
+              direction={-1}
+              show={tabScroll.canLeft || tabScroll.canRight}
+              enabled={tabScroll.canLeft}
+              onClick={() => scrollTabs(-1)}
+            />
+            <div
+              ref={tabBarRef}
+              role="tablist"
+              aria-label="Chat rooms"
+              onScroll={syncTabScroll}
+              style={{
+                display: 'flex',
+                alignItems: 'stretch',
+                flex: 1,
+                minWidth: 0,
+                overflowX: 'auto',
+                overflowY: 'hidden',
+                scrollbarWidth: 'none',
+              }}
+            >
+              {orderedRooms.map((room) => {
+                const isDm = room.kind === 'dm';
+                const tone: TabTone =
+                  room.kind === 'public' ? 'public' : room.kind === 'group' ? 'group' : 'dm';
+                // A group the viewer isn't a member of: visible but locked. Only
+                // flagged once we know our own callsign (avoids a false lock pre-connect).
+                const locked = room.kind === 'group' && !isRoomMember(room, ownCall);
+                const label = isDm
+                  ? (dmOther(room.id, ownCall) ?? room.name)
+                  : room.name;
+                return (
+                  <TabItem
+                    key={room.id}
+                    id={room.id}
+                    label={label}
+                    tone={tone}
+                    locked={locked}
+                    isActive={activeRoom === room.id}
+                    unread={unreadByRoom[room.id] ?? 0}
+                    closable={isDm}
+                    onClick={() => setActiveRoom(room.id)}
+                    onClose={isDm ? () => handleTabClose(room.id) : undefined}
+                  />
+                );
+              })}
+            </div>
 
-            {/* Admin: create group room */}
+            {/* Admin: create group room — pinned so it stays reachable
+                regardless of how far the tab strip is scrolled. */}
             {isAdmin && (
               <button
                 type="button"
@@ -1507,14 +2505,14 @@ export function ChatPanel() {
                 title="Create group room"
                 style={{
                   flexShrink: 0,
-                  background: 'none',
+                  background: 'var(--bg-1)',
                   border: 'none',
+                  borderLeft: '1px solid var(--line)',
                   padding: '0 10px',
                   cursor: 'pointer',
                   fontSize: 16,
                   lineHeight: 1,
                   color: 'var(--fg-3)',
-                  alignSelf: 'center',
                   display: 'flex',
                   alignItems: 'center',
                 }}
@@ -1522,6 +2520,12 @@ export function ChatPanel() {
                 +
               </button>
             )}
+            <TabScrollButton
+              direction={1}
+              show={tabScroll.canLeft || tabScroll.canRight}
+              enabled={tabScroll.canRight}
+              onClick={() => scrollTabs(1)}
+            />
           </div>
 
           {/* Admin group management strip */}
@@ -1547,7 +2551,32 @@ export function ChatPanel() {
               transition: `border-color var(--dur-fast) var(--ease-out)`,
             }}
           >
-            {activeMessages.length === 0 ? (
+            {lockedActive ? (
+              <div
+                style={{
+                  margin: 'auto',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: 8,
+                  maxWidth: 260,
+                  textAlign: 'center',
+                  padding: 16,
+                  color: 'var(--fg-3)',
+                }}
+              >
+                <span style={{ color: 'var(--chat-group)', display: 'inline-flex' }}>
+                  <LockGlyph />
+                </span>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--chat-group)' }}>
+                  {activeRoomObj?.name}
+                </div>
+                <div style={{ fontSize: 11.5, lineHeight: 1.5 }}>
+                  This is an invite-only group. An admin must add you before you can
+                  read or post here.
+                </div>
+              </div>
+            ) : activeMessages.length === 0 ? (
               <div
                 style={{
                   margin: 'auto',
@@ -1569,7 +2598,9 @@ export function ChatPanel() {
                     key={m.id || `${m.from}-${m.ts}`}
                     msg={m}
                     own={own}
+                    fromAdmin={adminCalls.has(m.from.toUpperCase())}
                     onOpen={openProfile}
+                    onExpandImage={setLightbox}
                   />
                 );
               })
@@ -1587,52 +2618,260 @@ export function ChatPanel() {
               flexShrink: 0,
             }}
           >
-            <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-              <textarea
-                ref={inputRef}
-                className="mono"
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    void doSend();
-                  }
-                }}
-                placeholder={composerPlaceholder}
-                disabled={!connected}
-                rows={1}
-                maxLength={MAX_MESSAGE_CHARS + 64}
+            {/* Hidden file picker driven by the paperclip button. */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={CHAT_IMAGE_ACCEPT}
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                void attachFile(e.target.files?.[0]);
+                e.target.value = ''; // allow re-picking the same file
+              }}
+            />
+
+            {/* Pending attachment preview (photo or voice snippet) + error. */}
+            {pendingAttachment ? (
+              <div
                 style={{
-                  flex: 1,
-                  resize: 'none',
-                  overflowY: 'auto',
-                  maxHeight: 90,
-                  minHeight: 28,
-                  padding: '5px 8px',
-                  boxSizing: 'border-box',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: 4,
                   borderRadius: 'var(--r-sm)',
-                  border: isPrivateRoom
-                    ? '1px solid rgba(255,177,60,0.28)'
-                    : '1px solid var(--line-strong)',
-                  background: connected ? '#0c0c10' : 'var(--bg-1)',
-                  color: '#d8d8dc',
-                  fontSize: 12,
-                  lineHeight: 1.4,
-                  outline: 'none',
-                  transition: `border-color var(--dur-fast) var(--ease-out)`,
+                  background: 'var(--bg-2)',
+                  border: '1px solid var(--line)',
                 }}
-              />
-              <button
-                type="button"
-                className={`btn sm${canSend ? ' active' : ''}`}
-                disabled={!canSend}
-                onClick={() => void doSend()}
-                title={connected ? 'Send (Enter)' : 'Not connected'}
               >
-                Send
-              </button>
-            </div>
+                {isAudioAttachment(pendingAttachment) ? (
+                  <>
+                    <span
+                      aria-hidden
+                      style={{ display: 'flex', alignItems: 'center', color: 'var(--accent-bright)', flexShrink: 0, paddingLeft: 2 }}
+                    >
+                      <MicIcon />
+                    </span>
+                    <audio
+                      src={pendingAttachment.dataUrl}
+                      controls
+                      preload="metadata"
+                      style={{ flex: 1, minWidth: 0, height: 32 }}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <img
+                      src={pendingAttachment.dataUrl}
+                      alt={pendingAttachment.name ?? 'Attached photo'}
+                      style={{
+                        width: 40,
+                        height: 40,
+                        objectFit: 'cover',
+                        borderRadius: 'var(--r-sm)',
+                        flexShrink: 0,
+                      }}
+                    />
+                    <span
+                      className="mono"
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        fontSize: 10.5,
+                        color: 'var(--fg-2)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {pendingAttachment.name ?? 'photo.jpg'}
+                      {pendingAttachment.size
+                        ? ` · ${Math.max(1, Math.round(pendingAttachment.size / 1024))} KB`
+                        : ''}
+                    </span>
+                  </>
+                )}
+                <button
+                  type="button"
+                  className="btn sm"
+                  onClick={() => setPendingAttachment(null)}
+                  title={isAudioAttachment(pendingAttachment) ? 'Remove voice message' : 'Remove photo'}
+                  style={{ flexShrink: 0 }}
+                >
+                  ✕
+                </button>
+              </div>
+            ) : null}
+            {composerError ? (
+              <div className="mono" style={{ fontSize: 10, color: 'var(--tx)', paddingLeft: 2 }}>
+                {composerError}
+              </div>
+            ) : null}
+
+            {voice.recording ? (
+              /* Recording strip — replaces the input while capturing a voice
+                 snippet. Auto-stops at MAX_VOICE_MS; Stop stages it for sending. */
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '6px 8px',
+                  borderRadius: 'var(--r-sm)',
+                  border: '1px solid var(--tx)',
+                  background: 'var(--tx-soft)',
+                }}
+              >
+                <span
+                  aria-hidden
+                  style={{
+                    width: 9,
+                    height: 9,
+                    borderRadius: '50%',
+                    background: 'var(--tx)',
+                    boxShadow: '0 0 6px var(--tx)',
+                    flexShrink: 0,
+                  }}
+                />
+                <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--tx)', flexShrink: 0 }}>
+                  Recording
+                </span>
+                <span className="mono" style={{ fontSize: 11.5, color: 'var(--fg-1)', flexShrink: 0 }}>
+                  {fmtDuration(voice.elapsedMs)} / {fmtDuration(MAX_VOICE_MS)}
+                </span>
+                <div style={{ flex: 1 }} />
+                <button
+                  type="button"
+                  className="btn sm"
+                  onClick={voice.cancel}
+                  title="Discard recording"
+                  style={{ flexShrink: 0 }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn sm active"
+                  onClick={voice.stop}
+                  title="Stop and attach the recording"
+                  style={{ flexShrink: 0 }}
+                >
+                  Stop
+                </button>
+              </div>
+            ) : (
+              /* Unified composer field — mic + paperclip live inline on the
+                 left, the borderless textarea fills the middle, and the Send
+                 pill caps the right. The whole row is one rounded surface that
+                 lifts on focus (tone-matched accent ring), the way a modern
+                 chat composer reads. */
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-end',
+                  gap: 4,
+                  padding: '4px 4px 4px 5px',
+                  borderRadius: 'var(--r-lg)',
+                  border: composerFieldBorder,
+                  background: connected ? '#0c0c10' : 'var(--bg-1)',
+                  boxShadow: composerFieldShadow,
+                  transition: `border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)`,
+                }}
+              >
+                {/* Left action cluster: mic + paperclip as ghost icon buttons. */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
+                  {voice.supported && (
+                    <button
+                      type="button"
+                      className="chat-composer-icon"
+                      disabled={!connected || lockedActive || attaching || voice.preparing || pendingAttachment !== null}
+                      onClick={() => {
+                        setAttachError(null);
+                        voice.clearError();
+                        voice.start();
+                      }}
+                      title={
+                        !connected
+                          ? 'Not connected'
+                          : lockedActive
+                          ? 'Not a member of this group'
+                          : pendingAttachment !== null
+                          ? 'Remove the attachment first'
+                          : 'Record a voice message (max 60s)'
+                      }
+                      aria-label="Record a voice message"
+                      style={{ color: 'var(--tx)' }}
+                    >
+                      {voice.preparing ? '…' : <MicIcon />}
+                    </button>
+                  )}
+                  {/* Paperclip — attach a photo. */}
+                  <button
+                    type="button"
+                    className="chat-composer-icon"
+                    disabled={!connected || attaching || lockedActive}
+                    onClick={() => fileInputRef.current?.click()}
+                    title={connected ? (lockedActive ? 'Not a member of this group' : 'Attach a photo') : 'Not connected'}
+                    aria-label="Attach a photo"
+                  >
+                    {attaching ? '…' : <PaperclipIcon />}
+                  </button>
+                </div>
+                <textarea
+                  ref={inputRef}
+                  className="mono"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onFocus={() => setComposerFocused(true)}
+                  onBlur={() => setComposerFocused(false)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      void doSend();
+                    }
+                  }}
+                  onPaste={(e) => {
+                    // Paste an image straight from the clipboard, like texting.
+                    const item = Array.from(e.clipboardData.items).find((it) =>
+                      it.type.startsWith('image/'),
+                    );
+                    if (item) {
+                      e.preventDefault();
+                      void attachFile(item.getAsFile());
+                    }
+                  }}
+                  placeholder={composerPlaceholder}
+                  disabled={!connected || lockedActive}
+                  rows={1}
+                  maxLength={MAX_MESSAGE_CHARS + 64}
+                  style={{
+                    flex: 1,
+                    resize: 'none',
+                    overflowY: 'auto',
+                    maxHeight: 90,
+                    minHeight: 30,
+                    padding: '6px 4px',
+                    boxSizing: 'border-box',
+                    border: 'none',
+                    background: 'transparent',
+                    color: '#e4e4e8',
+                    fontSize: 12,
+                    lineHeight: 1.45,
+                    outline: 'none',
+                  }}
+                />
+                {/* Send — pill capping the right edge, sits on the field floor. */}
+                <button
+                  type="button"
+                  className={`btn sm${canSend ? ' active' : ''}`}
+                  disabled={!canSend}
+                  onClick={() => void doSend()}
+                  title={connected ? 'Send (Enter)' : 'Not connected'}
+                  style={{ flexShrink: 0, alignSelf: 'stretch', padding: '0 12px', borderRadius: 'var(--r-md)' }}
+                >
+                  Send
+                </button>
+              </div>
+            )}
             {/* Character counter when near limit */}
             {draft.length > MAX_MESSAGE_CHARS * 0.8 && (
               <div
@@ -1650,10 +2889,12 @@ export function ChatPanel() {
         </div>
       </div>
 
-      {/* ── QRZ profile overlay ── */}
-      {profileCall ? (
-        <ProfileOverlay callsign={profileCall} onClose={() => setProfileCall(null)} />
-      ) : null}
+      {/* QRZ profile overlay is mounted once at the app root (ProfileOverlayHost)
+          and opened via profile-overlay-store, so it's shared with the
+          panadapter chat-roster overlay. */}
+
+      {/* ── Full-size photo viewer ── */}
+      {lightbox ? <ImageLightbox att={lightbox} onClose={() => setLightbox(null)} /> : null}
 
       {/* ── Moderation / room dialogs (proper in-app, not window.*) ── */}
       {banTarget ? (

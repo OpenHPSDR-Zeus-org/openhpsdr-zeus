@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
@@ -100,5 +101,22 @@ public class PrefsDbPathTests : IDisposable
 
         Assert.True(File.Exists(_dbPath));
         Assert.Empty(CorruptBackups()); // load-bearing: a busy DB is NEVER wiped
+    }
+
+    // ---- Import validation (#: reject a corrupt/wrong-type upload up front) --
+
+    [Fact]
+    public void IsValidDatabase_TrueForRealDatabase()
+    {
+        WriteValidDb(_dbPath);
+        Assert.True(PrefsDbPath.IsValidDatabase(_dbPath));
+    }
+
+    [Fact]
+    public void IsValidDatabase_FalseForGarbage()
+    {
+        // What a user might accidentally pick in the file picker — a non-DB file.
+        File.WriteAllBytes(_dbPath, Enumerable.Repeat((byte)0xAB, 9000).ToArray());
+        Assert.False(PrefsDbPath.IsValidDatabase(_dbPath));
     }
 }

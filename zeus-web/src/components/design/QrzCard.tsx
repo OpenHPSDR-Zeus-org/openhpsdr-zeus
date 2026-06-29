@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -225,7 +226,9 @@ export function QrzCard({
   // Point-to-point propagation (you → contact). Hook is unconditional so it sits
   // above the early returns; it no-ops when there's no contact or home coords.
   const { data: prop } = useContactPropagation(
-    contact ? { lat: contact.lat, lon: contact.lon } : null,
+    contact && contact.lat != null && contact.lon != null
+      ? { lat: contact.lat, lon: contact.lon }
+      : null,
   );
 
   // Show "Not found" if there's a lookup error
@@ -253,7 +256,7 @@ export function QrzCard({
     return (
       <div className="qrz-empty">
         <div className="label-xs" style={{ opacity: 0.5 }}>
-          No callsign — click "Engage QRZ" or type a callsign
+          Type a callsign above and press Enter to look it up on QRZ.
         </div>
       </div>
     );
@@ -265,12 +268,17 @@ export function QrzCard({
   const dn = contact.dayNight ? DAY_NIGHT_GLYPH[contact.dayNight] : null;
   const rows: [string, string][] = [
     ['Grid', contact.grid],
-    ['Lat/Lon', contact.latlon],
-    ['CQ·ITU', `${contact.cq} · ${contact.itu}`],
   ];
+  if (contact.lat != null && contact.lon != null) {
+    rows.push(['Lat/Lon', contact.latlon]);
+  }
+  rows.push(['CQ·ITU', `${contact.cq} · ${contact.itu}`]);
   if (contact.distanceLabel) rows.push(['Distance', contact.distanceLabel]);
   // Short-/long-path beam headings from home → contact (independent of rotator).
-  if (qrzHome?.lat != null && qrzHome?.lon != null) {
+  if (
+    qrzHome?.lat != null && qrzHome?.lon != null
+    && contact.lat != null && contact.lon != null
+  ) {
     const sp = bearingDeg(qrzHome.lat, qrzHome.lon, contact.lat, contact.lon);
     rows.push(['Beam', `SP ${fmtBearing(sp)} · LP ${fmtBearing((sp + 180) % 360)}`]);
   }

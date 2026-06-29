@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Live Diagnostics API v2 — Layer 2 test framework: a Roslyn incremental source
+    generator that emits one named xUnit test class per IDiagnosticsProvider into
+    Zeus.Server.Tests. See DiagnosticsTestGenerator.cs.
+
+    This is a Roslyn ANALYZER and MUST be netstandard2.0. The repo's
+    Directory.Build.props targets net10 features (ImplicitUsings, version stamping)
+    and turns warnings into errors — several of those are inappropriate for a
+    standalone analyzer, so the properties that matter are pinned/neutralized
+    locally below. TreatWarningsAsErrors is kept TRUE on purpose: the analyzer
+    assembly itself stays 100% warning-clean.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+
+    <!-- Analyzers are never published or packed as a normal library. -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <IsPackable>false</IsPackable>
+
+    <!-- ImplicitUsings (inherited from Directory.Build.props) pulls in net10
+         implicit using sets that do not exist on netstandard2.0; disable it so
+         the analyzer compiles against the netstandard surface only. -->
+    <ImplicitUsings>disable</ImplicitUsings>
+
+    <!-- Keep warnings-as-errors (inherited) but silence the one warning that is
+         unavoidable for a netstandard2.0 analyzer referencing 4.x Roslyn:
+         NU1701 never applies here, but RS1041 (analyzer should target
+         netstandard2.0 only) is exactly what we already do. No suppressions are
+         needed today; this NoWarn is intentionally empty and left as a documented
+         seam. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 4.11.0 matches the version already vendored elsewhere in this repo
+         (tests/Zeus.Plugins.Host.Tests) and is compatible with the .NET 10 SDK
+         (10.0.301) in use. PrivateAssets=all keeps it out of consumer closure. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.11.0" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

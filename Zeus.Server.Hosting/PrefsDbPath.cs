@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
@@ -48,6 +49,50 @@ public static class PrefsDbPath
     public static string Get() =>
         Environment.GetEnvironmentVariable("ZEUS_PREFS_PATH")
         ?? Path.Combine(DataDir, ActiveRelativePath());
+
+    // The QSO logbook lives in its own plaintext DB (zeus-logbook.db), separate
+    // from the prefs profiles. It sits in the SAME directory as the active prefs
+    // file, so a ZEUS_PREFS_PATH override (dev `/run fresh`, CI, tests) isolates
+    // the logbook alongside the throwaway prefs. Unlike the prefs DB it does NOT
+    // fork per profile — there is exactly one logbook per data directory.
+    public static string LogbookPath()
+    {
+        var env = Environment.GetEnvironmentVariable("ZEUS_PREFS_PATH");
+        var dir = string.IsNullOrEmpty(env)
+            ? DataDir
+            : (Path.GetDirectoryName(Path.GetFullPath(env)) ?? DataDir);
+        return Path.Combine(dir, "zeus-logbook.db");
+    }
+
+    // Directory for the rolling on-disk runtime log (DiagnosticLogFileSink). Lives
+    // under DataDir/logs so it can be tailed by the out-of-process support sidecar
+    // after a backend crash. Follows the same ZEUS_PREFS_PATH override as the
+    // logbook so dev `/run fresh`, CI, and tests write their logs into the
+    // throwaway data dir instead of the operator's real %LOCALAPPDATA%/Zeus.
+    public static string LogDir()
+    {
+        var env = Environment.GetEnvironmentVariable("ZEUS_PREFS_PATH");
+        var dir = string.IsNullOrEmpty(env)
+            ? DataDir
+            : (Path.GetDirectoryName(Path.GetFullPath(env)) ?? DataDir);
+        return Path.Combine(dir, "logs");
+    }
+
+    // Full path of the active rolling runtime log file.
+    public static string AppLogPath() => Path.Combine(LogDir(), "zeus-app.log");
+
+    // Directory for support-sidecar artifacts: the per-PID clean-exit markers the
+    // backend drops at a deliberate shutdown and the crash records the sidecar
+    // writes when the backend dies unexpectedly. Same ZEUS_PREFS_PATH isolation as
+    // the logs so tests/dev never touch the operator's real data dir.
+    public static string CrashDir()
+    {
+        var env = Environment.GetEnvironmentVariable("ZEUS_PREFS_PATH");
+        var dir = string.IsNullOrEmpty(env)
+            ? DataDir
+            : (Path.GetDirectoryName(Path.GetFullPath(env)) ?? DataDir);
+        return Path.Combine(dir, "crashes");
+    }
 
     // Relative path (under DataDir) of the active profile. Reads the pointer
     // file; falls back to the legacy zeus-prefs.db when the pointer is absent,
@@ -207,7 +252,8 @@ public static class PrefsDbPath
 
     // Dual sink: ILogger when one is available (it usually isn't — the guard runs
     // before the DI container exists) AND Console.Error, because the desktop app
-    // calls FreeConsole() and would otherwise swallow the message entirely.
+    // is a GUI-subsystem binary with no console and would otherwise swallow the
+    // message entirely.
     private static void Warn(ILogger? log, string msg, Exception? ex = null)
     {
         if (ex is null) log?.LogWarning("{Msg}", msg);
@@ -286,10 +332,25 @@ public static class PrefsDbPath
         return ProfilesDirName + "/" + safe + ".db";
     }
 
+    // True when the file at <paramref name="path"/> opens as a real LiteDB
+    // database (header + every collection's first data page readable). Used to
+    // reject a corrupt or wrong-type file at IMPORT time, so a bad upload is
+    // refused up front with a clear message instead of silently becoming a reset
+    // database the next time the profile is activated (EnsureUsable would move
+    // it aside on launch — losing the operator's settings without warning).
+    public static bool IsValidDatabase(string path) =>
+        Probe(path, null) != ProbeResult.Corrupt;
+
+    // Delete a database file and its LiteDB -log sidecar, best effort.
+    private static void TryDeleteDbFiles(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch { /* best effort */ }
+        try { if (File.Exists(path + "-log")) File.Delete(path + "-log"); } catch { /* best effort */ }
+    }
+
     // Copy an existing .db into profiles/<name>.db. Derives the name from the
     // source file when name is null/blank. Refuses to overwrite an existing
-    // profile. The source is NOT validated as a real LiteDB — a bad file simply
-    // won't load when activated.
+    // profile, and rejects a file that is not a valid LiteDB database.
     public static string ImportProfile(string sourcePath, string? name)
     {
         if (string.IsNullOrWhiteSpace(sourcePath))
@@ -310,14 +371,19 @@ public static class PrefsDbPath
             throw new InvalidOperationException($"A profile named \"{safe}\" already exists.");
 
         File.Copy(sourcePath, target, overwrite: false);
+        if (!IsValidDatabase(target))
+        {
+            TryDeleteDbFiles(target);
+            throw new InvalidOperationException(
+                "That file is not a valid Zeus settings database (it may be corrupt or a different kind of file).");
+        }
         return ProfilesDirName + "/" + safe + ".db";
     }
 
     // Save an uploaded .db stream into profiles/<name>.db. Used by the file-
     // picker import in the UI, which uploads the chosen file's bytes (the
     // webview can't hand the server a filesystem path). Refuses to overwrite an
-    // existing profile; the stream is NOT validated as a real LiteDB — a bad
-    // file simply won't load when activated.
+    // existing profile, and rejects a file that is not a valid LiteDB database.
     public static string ImportProfileFromStream(Stream source, string name)
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -330,9 +396,37 @@ public static class PrefsDbPath
         if (File.Exists(target))
             throw new InvalidOperationException($"A profile named \"{safe}\" already exists.");
 
+        // Close the file handle before validating so the probe can open it.
         using (var dest = File.Create(target))
             source.CopyTo(dest);
+
+        if (!IsValidDatabase(target))
+        {
+            TryDeleteDbFiles(target);
+            throw new InvalidOperationException(
+                "That file is not a valid Zeus settings database (it may be corrupt or a different kind of file).");
+        }
         return ProfilesDirName + "/" + safe + ".db";
+    }
+
+    // Read a profile's raw bytes for export/download. Opens with
+    // FileShare.ReadWrite so the active (currently open) database can still be
+    // exported. Throws if the path escapes the data dir or the file is missing.
+    public static byte[] ReadProfileBytes(string relativePath, out string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            throw new ArgumentException("Relative path is required.", nameof(relativePath));
+
+        var full = ResolveUnderDataDir(relativePath)
+            ?? throw new ArgumentException("Path is outside the Zeus data directory.", nameof(relativePath));
+        if (!File.Exists(full))
+            throw new FileNotFoundException("Database does not exist.", full);
+
+        fileName = Path.GetFileName(full);
+        using var fs = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var ms = new MemoryStream();
+        fs.CopyTo(ms);
+        return ms.ToArray();
     }
 
     private static PrefsDatabaseInfo DescribeDefault(string active)

@@ -25,6 +25,7 @@ public sealed class TxAudioProfileServiceTests : IDisposable
     private readonly VstEngineController _engine;
     private readonly RadioService _radio;
     private readonly ChainOrderService _chainOrder;
+    private readonly AudioPluginBridge _bridge;
     private readonly AudioChainMasterBypassService _masterBypass;
     private readonly AudioProcessingModeService _mode;
     private readonly TxAudioProfileService _service;
@@ -55,11 +56,12 @@ public sealed class TxAudioProfileServiceTests : IDisposable
 
         var hub = new StreamingHub(NullLogger<StreamingHub>.Instance);
         _chainOrder = new ChainOrderService(_orderStore, hub, NullLogger<ChainOrderService>.Instance);
+        _bridge = new AudioPluginBridge(
+            isMoxOn: () => false, isMonitorOn: () => false,
+            log: NullLogger<AudioPluginBridge>.Instance);
         _masterBypass = new AudioChainMasterBypassService(
             _chainSettings,
-            new AudioPluginBridge(
-                isMoxOn: () => false, isMonitorOn: () => false,
-                log: NullLogger<AudioPluginBridge>.Instance),
+            _bridge,
             hub,
             NullLogger<AudioChainMasterBypassService>.Instance);
         _mode = new AudioProcessingModeService(
@@ -68,7 +70,7 @@ public sealed class TxAudioProfileServiceTests : IDisposable
 
         _service = new TxAudioProfileService(
             _profileStore, _radio, _chainOrder, _masterBypass, _mode, _fidelity,
-            _pluginManager, _pluginSettings,
+            _pluginManager, _pluginSettings, _bridge,
             NullLogger<TxAudioProfileService>.Instance);
     }
 
@@ -195,6 +197,153 @@ public sealed class TxAudioProfileServiceTests : IDisposable
         await _service.SaveCurrentAsync("Temp");
         Assert.True(_service.Delete("temp"));
         Assert.Null(_service.Get("temp"));
+    }
+
+    [Fact]
+    public async Task ExportImport_RoundTrips_FromJsonBytes()
+    {
+        await _mode.StartAsync(CancellationToken.None);
+        _radio.SetTxMicGain(-6);
+        var saved = await _service.SaveCurrentAsync("Roundtrip Voice");
+
+        var export = _service.ExportProfile(saved.Id);
+        Assert.NotNull(export);
+        var json = System.Text.Encoding.UTF8.GetString(export!.Value.Bytes);
+        Assert.Equal("roundtrip-voice.json", export.Value.FileName);
+
+        // Delete then re-import from the exported bytes — must restore the profile.
+        Assert.True(_service.Delete(saved.Id));
+        var imported = _service.ImportProfile(json, "ignored-fallback");
+        Assert.Equal("roundtrip-voice", imported.Id);
+        Assert.Equal("Roundtrip Voice", imported.Name);
+        Assert.Equal(-6, imported.MicGainDb);
+        Assert.NotNull(_service.Get("roundtrip-voice"));
+    }
+
+    [Fact]
+    public async Task Import_IsNonDestructive_UniquifiesNameOnSlugCollision()
+    {
+        await _mode.StartAsync(CancellationToken.None);
+        var saved = await _service.SaveCurrentAsync("Voice");
+        var json = System.Text.Encoding.UTF8.GetString(_service.ExportProfile(saved.Id)!.Value.Bytes);
+
+        // Re-import WITHOUT deleting: the existing profile must survive and the
+        // import lands under a bumped id/name.
+        var imported = _service.ImportProfile(json, null);
+        Assert.Equal("voice-2", imported.Id);
+        Assert.Equal("Voice 2", imported.Name);
+        Assert.NotNull(_service.Get("voice"));     // original intact
+        Assert.NotNull(_service.Get("voice-2"));   // import added
+    }
+
+    [Fact]
+    public void Import_RejectsUnparseableJson()
+    {
+        Assert.Throws<ArgumentException>(() => _service.ImportProfile("not a profile", null));
+    }
+
+    [Fact]
+    public void Import_ToleratesSparseFile_UsesFallbackName()
+    {
+        // A minimal hand-authored file: only a couple of fields, no name, no
+        // collections. Import must default the nullable members and name it from
+        // the fallback rather than throwing.
+        const string json = "{\"micGainDb\": -2, \"targetSpectralDensity\": 40}";
+        var imported = _service.ImportProfile(json, "My Import");
+
+        Assert.Equal("my-import", imported.Id);
+        Assert.Equal("My Import", imported.Name);
+        Assert.Equal(-2, imported.MicGainDb);
+        Assert.NotNull(imported.ChainOrder);
+        Assert.NotNull(imported.CfcConfig);
+        Assert.NotNull(imported.TxLeveling);
+    }
+
+    [Fact]
+    public void Import_NativeProfile_StripsVstEntriesFromActiveChain()
+    {
+        const string json = """
+        {
+          "id": "voodoo-4k",
+          "name": "VooDoo 4K",
+          "micGainDb": -1,
+          "levelerMaxGainDb": 7,
+          "txLeveling": { "levelerEnabled": true },
+          "cfcConfig": {
+            "enabled": true,
+            "postEqEnabled": true,
+            "preCompDb": 0.5,
+            "prePeqDb": 0,
+            "bands": [
+              { "freqHz": 80, "compLevelDb": 0.5, "postGainDb": -4 },
+              { "freqHz": 150, "compLevelDb": 1, "postGainDb": -2 },
+              { "freqHz": 250, "compLevelDb": 2, "postGainDb": -1 },
+              { "freqHz": 500, "compLevelDb": 3, "postGainDb": 0 },
+              { "freqHz": 900, "compLevelDb": 4, "postGainDb": 0.5 },
+              { "freqHz": 1500, "compLevelDb": 5, "postGainDb": 1 },
+              { "freqHz": 2200, "compLevelDb": 4.5, "postGainDb": 1.5 },
+              { "freqHz": 2800, "compLevelDb": 3.5, "postGainDb": 1.5 },
+              { "freqHz": 3500, "compLevelDb": 2, "postGainDb": -1 },
+              { "freqHz": 5000, "compLevelDb": 1, "postGainDb": -3 }
+            ]
+          },
+          "lowCutHz": 0,
+          "highCutHz": 4000,
+          "processingMode": "native",
+          "chainOrder": [
+            "com.openhpsdr.zeus.samples.noisegate",
+            "com.openhpsdr.zeus.vst.clear",
+            "com.openhpsdr.zeus.samples.eq"
+          ],
+          "chainParked": [ "com.openhpsdr.zeus.vst.clear" ],
+          "vstPluginStates": { "com.openhpsdr.zeus.vst.clear": "opaque" },
+          "nativePluginStates": {
+            "com.openhpsdr.zeus.samples.eq": { "bypass": "true" }
+          },
+          "targetSpectralDensity": 55
+        }
+        """;
+
+        var imported = _service.ImportProfile(json, "ignored");
+
+        Assert.Equal("voodoo-4k", imported.Id);
+        Assert.Equal("native", imported.ProcessingMode);
+        Assert.DoesNotContain("com.openhpsdr.zeus.vst.clear", imported.ChainOrder);
+        Assert.Contains("com.openhpsdr.zeus.samples.noisegate", imported.ChainOrder);
+        Assert.Contains("com.openhpsdr.zeus.samples.eq", imported.ChainOrder);
+        Assert.Empty(imported.VstPluginStates);
+        Assert.Equal("true", imported.NativePluginStates["com.openhpsdr.zeus.samples.eq"]["bypass"]);
+    }
+
+    [Fact]
+    public async Task Apply_NativeStoredProfile_DoesNotReplayVstChain()
+    {
+        await _mode.StartAsync(CancellationToken.None);
+        _profileStore.Upsert(new TxAudioProfileDto(
+            Id: "unsafe",
+            Name: "Unsafe",
+            MicGainDb: 0,
+            LevelerMaxGainDb: 8,
+            TxLeveling: new TxLevelingConfig(),
+            CfcConfig: CfcConfig.Default,
+            LowCutHz: 150,
+            HighCutHz: 2900,
+            ProcessingMode: "native",
+            MasterBypass: false,
+            ChainOrder: new List<string> { "com.openhpsdr.zeus.vst.clear", "com.openhpsdr.zeus.samples.eq" },
+            ChainParked: new List<string>(),
+            VstPluginStates: new Dictionary<string, string> { ["com.openhpsdr.zeus.vst.clear"] = "opaque" },
+            NativePluginStates: new Dictionary<string, Dictionary<string, string>>(),
+            TargetSpectralDensity: 55,
+            CreatedUtc: DateTime.UtcNow,
+            UpdatedUtc: DateTime.UtcNow));
+
+        var applied = await _service.ApplyAsync("unsafe");
+
+        Assert.NotNull(applied);
+        Assert.DoesNotContain("com.openhpsdr.zeus.vst.clear", applied!.ChainOrder);
+        Assert.Empty(applied.VstPluginStates);
+        Assert.Equal("unsafe", _service.LastLoadedId);
     }
 
     public void Dispose()

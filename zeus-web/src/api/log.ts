@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -189,6 +190,44 @@ export async function createLogEntry(
     signal,
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return await response.json();
+}
+
+export type AdifExportToFileResponse = {
+  path: string;
+  count: number;
+  bytes: number;
+};
+
+/**
+ * Export the logbook to an ADIF file in a directory on the machine running the
+ * backend (default: the operator's Downloads folder), returning the saved path.
+ * Preferred over {@link exportToAdif} because it works in the desktop webview —
+ * where a programmatic blob download silently does nothing — and confirms where
+ * the file landed instead of dropping it somewhere unseen.
+ */
+export async function exportAdifToDirectory(
+  directory?: string | null,
+  logEntryIds?: string[] | null,
+  signal?: AbortSignal,
+): Promise<AdifExportToFileResponse> {
+  const response = await fetch('/api/log/export/adif/file', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ directory: directory ?? null, logEntryIds: logEntryIds ?? null }),
+    signal,
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    let message = text;
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown };
+      if (typeof parsed.error === 'string') message = parsed.error;
+    } catch {
+      /* keep the raw response text */
+    }
+    throw new Error(message || `HTTP ${response.status}`);
+  }
   return await response.json();
 }
 

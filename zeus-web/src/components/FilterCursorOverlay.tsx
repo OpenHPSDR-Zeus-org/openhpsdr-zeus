@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -17,6 +18,14 @@ import { useEffect, useRef, type RefObject } from 'react';
 import { useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { useConnectionStore } from '../state/connection-store';
 import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
+import {
+  displayFilterEdgesHz,
+  getReceiverFilterHighHz,
+  getReceiverFilterLowHz,
+  getReceiverMode,
+  getReceiverVfoHz,
+  type ReceiverKey,
+} from '../state/receiver-state';
 import { resolvePanTuneTarget } from '../util/use-pan-tune-gesture';
 
 // Thetis-style click-tune cursor: a vertical guide line tracks the mouse
@@ -33,9 +42,10 @@ import { resolvePanTuneTarget } from '../util/use-pan-tune-gesture';
 type FilterCursorOverlayProps = {
   /** The positioned (relative) surface to track the pointer over. */
   containerRef: RefObject<HTMLElement | null>;
-  /** Which receiver's spectrum geometry + snap to preview against. Default 'A';
-   *  'B' drives the RX2 half so its hover crosshair tracks VFO B. */
-  receiver?: 'A' | 'B';
+  /** Which receiver's spectrum geometry + snap to preview against. Default 'A'
+   *  (RX1); any other index drives that receiver's half so its hover crosshair
+   *  tracks the matching VFO. */
+  receiver?: ReceiverKey;
 };
 
 // "14.074.00" — MHz with dot-grouped kHz/Hz, the readout style hams expect.
@@ -114,9 +124,16 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
       const band = bandRef.current;
       if (band) {
         if (hzPerPixel > 0 && len > 0 && rectW > 0) {
-          const filterLowHz = receiver === 'B' ? conn.filterLowHzB : conn.filterLowHz;
-          const filterHighHz = receiver === 'B' ? conn.filterHighHzB : conn.filterHighHz;
-          const mode = receiver === 'B' ? conn.modeB : conn.mode;
+          const mode = getReceiverMode(conn, receiver);
+          // FreeDV stores its passband USB-positive; re-sign to the convention
+          // sideband (LSB < 10 MHz) so the hover preview matches the real demod
+          // side. No-op for every other mode.
+          const { lowHz: filterLowHz, highHz: filterHighHz } = displayFilterEdgesHz(
+            mode,
+            getReceiverVfoHz(conn, receiver),
+            getReceiverFilterLowHz(conn, receiver),
+            getReceiverFilterHighHz(conn, receiver),
+          );
           const hzPerCssPx = (len * hzPerPixel) / rectW;
           const lowPx = filterLowHz / hzPerCssPx;
           const highPx = filterHighHz / hzPerCssPx;
@@ -198,10 +215,10 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
         visible &&
         (s.filterLowHz !== prev.filterLowHz ||
           s.filterHighHz !== prev.filterHighHz ||
-          s.filterLowHzB !== prev.filterLowHzB ||
-          s.filterHighHzB !== prev.filterHighHzB ||
           s.mode !== prev.mode ||
-          s.modeB !== prev.modeB)
+          // RX1 is the flat primary; every secondary (RX2 = index 1, RX3+) lives
+          // in the receivers[] array — its reference changes on any filter/mode edit.
+          s.receivers !== prev.receivers)
       ) {
         schedule();
       }

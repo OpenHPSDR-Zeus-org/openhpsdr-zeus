@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -52,30 +53,34 @@ import {
 import { planForFrame } from '../gl/frame-plan';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import { registerFrameConsumer, selectDisplaySlice, useDisplayStore } from '../state/display-store';
-import { useDisplaySettingsStore } from '../state/display-settings-store';
+import { useDisplaySettingsStore, shouldTxAutoRange } from '../state/display-settings-store';
 import { useConnectionStore } from '../state/connection-store';
 import { enhanceInto, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { normalizeStitchedBins, stitchFloorShiftDb } from '../dsp/stitch-normalizer';
+import { getReceiverVfoHz, receiverLabel, rxIndexOf, type ReceiverKey } from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
 import * as viewZoom from '../state/view-zoom';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture, type PanTuneGestureOptions } from '../util/use-pan-tune-gesture';
+import { BandOverlay } from './BandOverlay';
 import { FilterCursorOverlay } from './FilterCursorOverlay';
 import { FreqAxis } from './FreqAxis';
 import { PassbandOverlay } from './PassbandOverlay';
 import { ImdReadings } from './ImdReadings';
 import { DbScale } from './DbScale';
 import { SpotOverlay } from './SpotOverlay';
+import { ChatRosterOverlay } from './ChatRosterOverlay';
 import { PeakMarkerOverlay } from './PeakMarkerOverlay';
 import { NotchOverlay } from './NotchOverlay';
 import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
 
 type PanadapterProps = {
-  receiver?: 'A' | 'B';
+  receiver?: ReceiverKey;
   touchMode?: PanTuneGestureOptions['touchMode'];
   tuneReceiver?: PanTuneGestureOptions['tuneReceiver'];
   stitched?: boolean;
   foreground?: boolean;
+  multiRx?: boolean;
 };
 
 export function Panadapter({
@@ -84,11 +89,16 @@ export function Panadapter({
   tuneReceiver,
   stitched = false,
   foreground = true,
+  multiRx = false,
 }: PanadapterProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const vfoHz = useConnectionStore((s) =>
-    receiver === 'B' ? s.vfoBHz : s.vfoHz,
+  const rxIndex = rxIndexOf(receiver);
+  const vfoHz = useConnectionStore((s) => getReceiverVfoHz(s, receiver));
+  // Operator-facing label for the overlay. Hardware DDCs fall back to "RX{n}";
+  // the Kiwi slice receiver carries a name ("Kiwi") on its receivers[] entry.
+  const rxLabel = useConnectionStore((s) =>
+    receiverLabel({ index: rxIndex, name: s.receivers.find((r) => r.index === rxIndex)?.name }),
   );
   const popEnabled = useSignalEnhanceStore((s) => s.popEnabled);
   const popRenderIntensity = useSignalEnhanceStore((s) => s.popRenderIntensity);
@@ -223,9 +233,14 @@ export function Panadapter({
       // Draw-time zoom (view-zoom.ts): scale the trace about the view centre
       // when the animated display span lags the span this anchor was captured
       // at, so the trace scales in lock-step with the waterfall during a zoom.
+      // The Kiwi slice receiver self-scales to its OWN frame Hz/pixel (it has an
+      // independent span the RX1-driven global tween knows nothing about), which
+      // makes scaleX resolve to 1 (full width); every hardware DDC follows the
+      // shared zoom tween exactly as before. See displayedHzPerPixelFor.
+      const displayedHzPerPixel = viewZoom.displayedHzPerPixelFor(rxIndex, anchorHzPerPixel);
       const scaleX =
-        viewZoom.isInitialized() && anchorHzPerPixel > 0
-          ? anchorHzPerPixel / viewZoom.getDisplayedHzPerPixel()
+        displayedHzPerPixel > 0 && anchorHzPerPixel > 0
+          ? anchorHzPerPixel / displayedHzPerPixel
           : 1;
       renderer.draw(anchorPan, dbMin, dbMax, offsetPx, scaleX);
     };
@@ -294,7 +309,7 @@ export function Panadapter({
         centerHz: slice.centerHz,
         hzPerPixel: slice.hzPerPixel,
         width: slice.width,
-        planKey: receiver,
+        planKey: String(receiver),
       });
       const frameCenter = Number(slice.centerHz);
 
@@ -302,7 +317,7 @@ export function Panadapter({
       // matching block in Waterfall.tsx. Idempotent with the waterfall's call;
       // having both A surfaces drive it keeps zoom animating in layouts where
       // only one of them is mounted.
-      if (receiver === 'A' && slice.hzPerPixel > 0) {
+      if (rxIndex === 0 && slice.hzPerPixel > 0) {
         if (decision.kind === 'reset') viewZoom.snapTo(slice.hzPerPixel);
         else viewZoom.setTarget(slice.hzPerPixel);
       }
@@ -337,14 +352,17 @@ export function Panadapter({
         }
       }
 
-      // While keyed, fit the TX display windows to the live transmitted signal
-      // (no-op when TX auto-range is off). The panadapter is the always-present
-      // TX surface, so it drives the fit regardless of which waterfall renderer
-      // is active. Receiver A only — that's the slice the server feeds TX
-      // pixels into; RX2 (receiver B) keeps its own RX window during TX.
-      if (receiver === 'A' && slice.panValid && slice.panDb) {
-        const { moxOn, tunOn } = useTxStore.getState();
-        if (moxOn || tunOn) useDisplaySettingsStore.getState().updateTxAutoRange(slice.panDb);
+      // While transmitting voice (MOX/PTT), fit the TX display windows to the
+      // live signal. TUNE and two-tone are excluded — see shouldTxAutoRange();
+      // their narrow carrier would collapse the fit onto the noise floor. The
+      // panadapter is the always-present TX surface, so it drives the fit
+      // regardless of which waterfall renderer is active. Receiver A only —
+      // that's the slice the server feeds TX pixels into; RX2 (receiver B)
+      // keeps its own RX window during TX.
+      if (rxIndex === 0 && slice.panValid && slice.panDb) {
+        const tx = useTxStore.getState();
+        const ds = useDisplaySettingsStore.getState();
+        if (shouldTxAutoRange(tx, ds.txAutoRange)) ds.updateTxAutoRange(slice.panDb);
       }
 
       requestRedraw();
@@ -379,7 +397,11 @@ export function Panadapter({
     // Zoom motion → redraw while the display span eases (draw-time scale).
     const unsubViewZoom = viewZoom.subscribe(requestRedraw);
     const unsubConn = useConnectionStore.subscribe((state, prev) => {
-      if (receiver === 'B' && state.vfoBHz !== prev.vfoBHz) requestRedraw();
+      // Secondary receivers (RX2 / RX3+) center on their VFO, so redraw when it
+      // moves. Every secondary lives in the receivers[] array (RX2 = index 1),
+      // whose reference changes on any per-receiver update.
+      if (rxIndex === 0) return;
+      if (state.receivers !== prev.receivers) requestRedraw();
     });
 
     // Repaint on dB-range / trace-color updates so auto-range and the Display
@@ -406,7 +428,17 @@ export function Panadapter({
     // 50 Hz from the worklet, RxDbm at 5 Hz, PaTempC at 2 Hz, etc.), which
     // raises the floor on the redraw rate above the spectrum-tick rate.
     const unsubTx = useTxStore.subscribe((state, prev) => {
-      if (state.moxOn !== prev.moxOn || state.tunOn !== prev.tunOn) {
+      if (
+        state.moxOn !== prev.moxOn ||
+        state.tunOn !== prev.tunOn ||
+        state.twoToneOn !== prev.twoToneOn
+      ) {
+        // When auto-range isn't engaging for this TX type (TUNE / two-tone, or
+        // master off), snap the TX window back to the fixed/saved range so a
+        // carrier left narrow by a prior voice-MOX fit renders clean. Voice MOX
+        // lets the per-frame fit drive it instead.
+        const ds = useDisplaySettingsStore.getState();
+        if (!shouldTxAutoRange(state, ds.txAutoRange)) ds.restoreSavedTxWindows();
         // buildAnchor gates Pop off while keyed, so rebuild from the last raw
         // trace on the MOX/TUN edge to avoid a one-frame enhanced-vs-TX-range
         // mismap before the first TX frame adopts.
@@ -458,6 +490,7 @@ export function Panadapter({
       } as CSSProperties}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
+      {rxIndex === 0 && !multiRx && <BandOverlay receiver={receiver} />}
       <div
         className="pointer-events-none absolute z-[25] rounded-sm px-2 py-0.5 font-mono text-[10px]"
         style={{
@@ -468,7 +501,7 @@ export function Panadapter({
           border: '1px solid rgba(255,255,255,0.16)',
         }}
       >
-        {receiver === 'B' ? 'RX2 · VFO B' : 'RX1 · VFO A'} · {(vfoHz / 1e6).toFixed(6)}
+        {rxLabel} · {(vfoHz / 1e6).toFixed(6)}
         {stitched && foreground ? ' · FOCUS' : ''}
       </div>
       {/* Passband + hover crosshair render on BOTH halves (RX2), each tracking
@@ -476,16 +509,19 @@ export function Panadapter({
           points — not only on the focused half. Mirrors the WebGPU heightfield. */}
       <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
       <FilterCursorOverlay containerRef={containerRef} receiver={receiver} />
-      {receiver === 'A' && (!stitched || foreground) && (
+      {rxIndex === 0 && (!stitched || foreground) && (
         <>
           <SpotOverlay />
+          <ChatRosterOverlay />
           <PeakMarkerOverlay />
           <NotchOverlay interactive resizable containerRef={containerRef} />
           <ImdReadings />
         </>
       )}
       <FreqAxis receiver={receiver} stitched={stitched} />
-      {(!stitched || receiver === 'A') && <DbScale />}
+      {/* One global dB scale for the whole stack — only RX1 (leftmost) renders
+          it; every other pane (RX2 stitched half, RX3+ standalone) shares it. */}
+      {rxIndex === 0 && <DbScale />}
     </div>
   );
 }

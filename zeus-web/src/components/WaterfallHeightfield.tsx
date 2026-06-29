@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -29,11 +30,13 @@ import { probeWebGpu, resetWebGpuProbe } from '../gl/webgpu/caps';
 import { createHeightfieldRenderer, type HeightfieldRenderer } from '../gl/webgpu/heightfield';
 import { registerFrameConsumer, selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { enhanceInto, registerEstimatorConsumer, useSignalEnhanceStore } from '../dsp/signal-estimator';
-import { normalizeStitchedBins, stitchFloorShiftDb } from '../dsp/stitch-normalizer';
+import { estimateRowFloorDb, forgetReceiverFloor, reportReceiverFloorDb } from '../dsp/floor-normalization';
+import { effectiveRxWfWindow, useRxDbWindowStore } from '../state/rx-db-window-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
+import { getReceiverVfoHz, KIWI_RECEIVER_INDEX, rxIndexOf, type ReceiverKey } from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
 import * as viewZoom from '../state/view-zoom';
 import { usePanTuneGesture, type PanTuneGestureOptions } from '../util/use-pan-tune-gesture';
@@ -44,7 +47,7 @@ import { WfDbScale } from './WfDbScale';
 import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
 
 type Props = {
-  receiver?: 'A' | 'B';
+  receiver?: ReceiverKey;
   /** Dev overlay: a live frame-time / fps readout. Off by default (production). */
   showStats?: boolean;
   /** Stitched dual-RX (RX2) layout — gates which overlays render and applies the
@@ -55,6 +58,9 @@ type Props = {
   foreground?: boolean;
   touchMode?: PanTuneGestureOptions['touchMode'];
   tuneReceiver?: PanTuneGestureOptions['tuneReceiver'];
+  /** Render the in-tile dB scale on RX1. Off when the parent draws one scale
+   *  spanning the whole (possibly multi-row) waterfall grid instead. */
+  dbScale?: boolean;
   /** Called once if WebGPU is unavailable, the renderer fails to init, or the
    *  device is lost, so the parent (WaterfallSurface) falls back to the WebGL
    *  waterfall. */
@@ -70,6 +76,7 @@ export function WaterfallHeightfield({
   foreground = true,
   touchMode = 'normal',
   tuneReceiver,
+  dbScale = true,
   onUnavailable,
 }: Props = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -82,6 +89,7 @@ export function WaterfallHeightfield({
   const [status, setStatus] = useState<Status>('probing');
   const [reason, setReason] = useState<string>('');
   const [stats, setStats] = useState<{ fps: number; ms: number } | null>(null);
+  const rxIndex = rxIndexOf(receiver);
   const receiverFilterColor = spectrumReceiverFilterColor(receiver);
 
   useEffect(() => {
@@ -99,8 +107,6 @@ export function WaterfallHeightfield({
     // Signal-Pop enhance scratch (floor-subtracted 0..1 row + terrain evidence).
     let enhBuf: Float32Array | null = null;
     let terrainScratch: Float32Array | null = null;
-    // Stitched dual-RX per-half floor-normalisation scratch.
-    let stitchBuf: Float32Array | null = null;
     // Tracks the value domain ('pop' = 0..1, 'rx-db', 'tx-db') so a wholesale
     // domain change clears the history instead of rendering a clipped band.
     let valueDomain = '';
@@ -121,18 +127,20 @@ export function WaterfallHeightfield({
     const pushFrame = (wfDb: Float32Array, centerHz: bigint, hzPerPixel: number) => {
       if (!renderer) return;
       const dom = domainNow();
+      // Report this pane's noise floor for cross-band normalization (RX domain,
+      // i.e. not keyed). Cheap downsampled percentile, EMA-smoothed in the
+      // registry; consumed by draw() via effectiveRxWfWindow so every band's
+      // floor lands at the same colour and one dB slider fits them all. Measured
+      // on the RAW dB row, before any Pop floor-subtraction.
+      if (dom !== 'tx-db') {
+        const floorDb = estimateRowFloorDb(wfDb);
+        if (floorDb != null) reportReceiverFloorDb(rxIndex, floorDb);
+      }
       if (dom !== valueDomain) {
         valueDomain = dom;
         renderer.clearHistory();
       }
       let row = wfDb;
-      // Stitched dual-RX: normalise this half's floor so the two panels join
-      // seamlessly (parity with the WebGL waterfall). Skip while keyed (TX).
-      if (stitched && dom !== 'tx-db') {
-        const normalized = normalizeStitchedBins(row, stitchBuf, stitchFloorShiftDb(receiver, 'waterfall'));
-        if (normalized !== row) stitchBuf = normalized;
-        row = normalized;
-      }
       if (dom === 'pop') {
         if (!enhBuf || !terrainScratch || enhBuf.length !== row.length) {
           enhBuf = new Float32Array(row.length);
@@ -193,14 +201,19 @@ export function WaterfallHeightfield({
     const draw = () => {
       if (!renderer || lost) return;
       // Read settings LIVE every draw so the sliders take effect immediately.
-      const { wfDbMin, wfDbMax, wfTxDbMin, wfTxDbMax, waterfallScrollSpeed } =
+      const { wfTxDbMin, wfTxDbMax, waterfallScrollSpeed } =
         useDisplaySettingsStore.getState();
       const enhance = useSignalEnhanceStore.getState();
       const dom = domainNow();
       // Pop rows are normalised 0..1; RX/TX keep their dB windows. Mirrors the
-      // WebGL waterfall's redraw() window selection.
-      const dbMin = dom === 'pop' ? 0 : dom === 'tx-db' ? wfTxDbMin : wfDbMin;
-      const dbMax = dom === 'pop' ? 1 : dom === 'tx-db' ? wfTxDbMax : wfDbMax;
+      // WebGL waterfall's redraw() window selection. For the RX domain the window
+      // is the per-receiver one: RX1 uses the global window; every other RX uses
+      // its own measured floor offset (median-anchored across all panes) or an
+      // operator override, so each band's noise floor lands at the same colour and
+      // the single dB slider evens them all out. Keyed/Pop are absolute.
+      const rxWin = dom === 'rx-db' ? effectiveRxWfWindow(rxIndex) : null;
+      const dbMin = dom === 'pop' ? 0 : dom === 'tx-db' ? wfTxDbMin : rxWin!.wfDbMin;
+      const dbMax = dom === 'pop' ? 1 : dom === 'tx-db' ? wfTxDbMax : rxWin!.wfDbMax;
       renderer.setScrollSpeed(waterfallScrollSpeed);
       renderer.setReliefDepth(Math.max(0, Math.min(1, enhance.waterfallReliefDepth / 100)));
       // Temporal de-speckle only in Pop (where floor subtraction creates speckle);
@@ -212,10 +225,20 @@ export function WaterfallHeightfield({
       // View span: zoom is a single global setting (DspPipelineService applies the
       // same SetZoom to RX1 and RX2, and both frames carry the same hzPerPixel),
       // so BOTH halves follow the one shared zoom glide — RX2 scales as smoothly
-      // as RX1 instead of stepping off its own slice.
-      const viewHzPerPixel = viewZoom.isInitialized()
-        ? viewZoom.getDisplayedHzPerPixel()
-        : null;
+      // as RX1 instead of stepping off its own slice. The Kiwi slice receiver is
+      // the exception: it has an independent native span the shared tween knows
+      // nothing about, so it self-scales to its OWN current frame Hz/pixel
+      // (viewHzPerPixel == the renderer's anchor → scale 1, full width). See
+      // displayedHzPerPixelFor.
+      const ownFrameHzPerPixel = selectDisplaySlice(useDisplayStore.getState(), receiver).hzPerPixel;
+      const viewHzPerPixel =
+        rxIndex === KIWI_RECEIVER_INDEX
+          ? ownFrameHzPerPixel > 0
+            ? viewZoom.displayedHzPerPixelFor(rxIndex, ownFrameHzPerPixel)
+            : null
+          : viewZoom.isInitialized()
+            ? viewZoom.getDisplayedHzPerPixel()
+            : null;
       const t0 = performance.now();
       renderer.draw(dbMin, dbMax, visualCenterHz(), viewHzPerPixel);
       const dt = performance.now() - t0;
@@ -246,6 +269,7 @@ export function WaterfallHeightfield({
     let unsubViewZoom: (() => void) | null = null;
     let unsubTx: (() => void) | null = null;
     let unsubEnhance: (() => void) | null = null;
+    let unsubRxWin: (() => void) | null = null;
 
     const fail = (reason: string) => {
       setStatus('unsupported');
@@ -353,6 +377,13 @@ export function WaterfallHeightfield({
           requestRedraw();
         }
       });
+
+      // Repaint when this receiver's per-RX dB window override changes (operator
+      // dragged the WfDbScale while this RX was focused). The median-anchored
+      // floor offset itself is picked up live each frame via effectiveRxWfWindow.
+      unsubRxWin = useRxDbWindowStore.subscribe((state, prev) => {
+        if (state.overrides[rxIndex] !== prev.overrides[rxIndex]) requestRedraw();
+      });
     });
 
     return () => {
@@ -363,12 +394,16 @@ export function WaterfallHeightfield({
       unsubViewZoom?.();
       unsubTx?.();
       unsubEnhance?.();
+      unsubRxWin?.();
       cancelDrawBusFrame(draw);
       ro.disconnect();
       io.disconnect();
       document.removeEventListener('visibilitychange', onVisibilityChange);
       releaseFrameConsumer();
       releaseEstimatorConsumer();
+      // Drop this pane's floor from the median anchor — a removed band shouldn't
+      // keep skewing the cross-RX normalization with its last reading.
+      forgetReceiverFloor(rxIndex);
       renderer?.dispose();
     };
   }, [receiver, showStats, stitched]);
@@ -388,7 +423,7 @@ export function WaterfallHeightfield({
       }
       const spanHz = s.width * s.hzPerPixel;
       const c = useConnectionStore.getState();
-      const vfoHz = receiver === 'B' ? c.vfoBHz : c.vfoHz;
+      const vfoHz = getReceiverVfoHz(c, receiver);
       // Dial offset from THIS receiver's animated target center, so the cursor
       // tracks the glide identically on both stitched halves.
       const dialOffsetHz = vc.isInitialized() ? vfoHz - vc.getTargetCenterHz() : 0;
@@ -397,7 +432,9 @@ export function WaterfallHeightfield({
     const schedule = () => requestDrawBusFrame(update);
     const unsubVc = vc.subscribe(schedule);
     const unsubConn = useConnectionStore.subscribe((s, prev) => {
-      if (s.vfoHz !== prev.vfoHz || s.vfoBHz !== prev.vfoBHz) schedule();
+      // RX1 is the flat primary VFO; every secondary (RX2 = index 1, RX3+) lives
+      // in the receivers[] array.
+      if (s.vfoHz !== prev.vfoHz || s.receivers !== prev.receivers) schedule();
     });
     const unsubFrame = useDisplayStore.subscribe((s, prev) => {
       if (selectDisplaySlice(s, receiver).lastSeq !== selectDisplaySlice(prev, receiver).lastSeq) schedule();
@@ -426,7 +463,8 @@ export function WaterfallHeightfield({
       } as CSSProperties}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
-      {status === 'ready' && (!stitched || receiver === 'A') && <WfDbScale />}
+      {/* One global waterfall dB scale — only RX1 (leftmost) renders it. */}
+      {status === 'ready' && dbScale && rxIndex === 0 && <WfDbScale />}
       {/* Dial-position cursor on BOTH halves (RX2) — each tracks its own VFO so
           the stitched pair behaves like one waterfall with two live dials. */}
       {status === 'ready' && (
@@ -443,7 +481,7 @@ export function WaterfallHeightfield({
       {status === 'ready' && (
         <FilterCursorOverlay containerRef={containerRef} receiver={receiver} />
       )}
-      {status === 'ready' && receiver === 'A' && (!stitched || foreground) && (
+      {status === 'ready' && rxIndex === 0 && (!stitched || foreground) && (
         <NotchOverlay resizable containerRef={containerRef} />
       )}
       {status === 'unsupported' && (

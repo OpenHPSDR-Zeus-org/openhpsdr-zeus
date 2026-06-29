@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -278,7 +279,9 @@ internal static class PacketParser
                 int off = g * BytesPerSampleGroup;
                 int i = ReadInt24BigEndian(payload.Slice(off, 3));
                 int q = ReadInt24BigEndian(payload.Slice(off + 3, 3));
-                // off+6, off+7 carry the 16-bit mic sample (mic/line in). Unused for RX MVP.
+                // off+6, off+7 carry the 16-bit mic / line-in sample. Extracted on
+                // demand by ExtractMicSamples when a radio-mic relay handler is
+                // attached — used to forward the codec input back to TX (issue #992).
                 interleavedOut[written++] = ScaleInt24(i);
                 interleavedOut[written++] = ScaleInt24(q);
             }
@@ -286,6 +289,48 @@ internal static class PacketParser
 
         complexSamples = ComplexSamplesPerPacket;
         return true;
+    }
+
+    /// <summary>
+    /// Extract the 126 codec mic / line-in samples (int16 big-endian) from a
+    /// standard 1-DDC EP6 packet. The 2 mic bytes live at offsets 6..7 of every
+    /// 8-byte sample group (3I + 3Q + 2 mic). Per the original HPSDR USB protocol
+    /// (V1.58 §"The balance of the frame…", NOTE 2), the mic stream is always
+    /// 48 kHz regardless of the IQ rate — at 96/192/384 kHz IQ rates the same
+    /// mic sample is duplicated N = rate/48 kHz times across consecutive sample
+    /// groups, and consumers are expected to decimate. The decimation is the
+    /// receiver's job; this method just emits the raw 126-sample group, in
+    /// USB-frame order.
+    /// </summary>
+    /// <param name="packet">1032-byte Metis EP6 data frame (same format
+    /// <see cref="TryParsePacket(System.ReadOnlySpan{byte},System.Span{double},out uint,out int)"/>
+    /// accepts).</param>
+    /// <param name="micOut">Destination buffer; must be ≥ 126 entries long.</param>
+    /// <returns>Number of mic samples written (126 on success, 0 on bad header /
+    /// sync / short packet).</returns>
+    public static int ExtractMicSamples(ReadOnlySpan<byte> packet, Span<short> micOut)
+    {
+        if (packet.Length != PacketLength) return 0;
+        if (packet[0] != MetisMagic0 || packet[1] != MetisMagic1) return 0;
+        if (packet[2] != MetisTypeDataFrame) return 0;
+        if (packet[3] != MetisEp6) return 0;
+        if (micOut.Length < ComplexSamplesPerPacket) return 0;
+
+        int written = 0;
+        for (int frame = 0; frame < 2; frame++)
+        {
+            int frameStart = MetisHeaderLength + frame * UsbFrameLength;
+            ReadOnlySpan<byte> usb = packet.Slice(frameStart, UsbFrameLength);
+            if (usb[0] != Sync || usb[1] != Sync || usb[2] != Sync) return 0;
+
+            ReadOnlySpan<byte> payload = usb[UsbHeaderLength..];
+            for (int g = 0; g < ComplexSamplesPerUsbFrame; g++)
+            {
+                int off = g * BytesPerSampleGroup;
+                micOut[written++] = BinaryPrimitives.ReadInt16BigEndian(payload.Slice(off + 6, 2));
+            }
+        }
+        return written;
     }
 
     /// <summary>

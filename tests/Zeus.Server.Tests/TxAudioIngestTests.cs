@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -99,6 +100,7 @@ public class TxAudioIngestTests
     public void SetRxDisplayFastAttack(int channelId, bool fast) { }
         public void SetRxAfGainDb(int channelId, double db) { }
         public void SetNoiseReduction(int channelId, NrConfig cfg) { }
+        public Zeus.Dsp.Nr3ModelLoadResult LoadNr3Model(string? modelFilePath) => Zeus.Dsp.Nr3ModelLoadResult.Unavailable;
         public void SetNotches(IReadOnlyList<NotchDto> notches) { }
         public void SetNotchTuneFrequencyHz(double loHz) { }
         public void SetZoom(int channelId, int level) { }
@@ -113,6 +115,8 @@ public class TxAudioIngestTests
         public RxStageMeters GetRxStageMeters(int channelId) => RxStageMeters.Silent;
         public void SetTxMode(RxMode mode) { }
         public void SetTxFilter(int lowHz, int highHz) { }
+        public void SetRxBandpassWindow(int channelId, BandpassWindow window) { }
+        public void SetTxBandpassWindow(BandpassWindow window) { }
         public void SetTxPanelGain(double linearGain) { }
         public void SetTxLevelerMaxGain(double maxGainDb) { }
         public void SetTxTune(bool on) { }
@@ -203,6 +207,115 @@ public class TxAudioIngestTests
         ingest.OnMicPcmBytes(new byte[100]);
         Assert.Equal(1, ingest.DroppedFrames);
         Assert.Equal(0, engine.ProcessedBlocks);
+    }
+
+    // ---- HOST↔RADIO single-select gate (external-audio-jacks re-port) ----
+
+    [Fact]
+    public void HostArmed_RadioMicBlock_IsDropped()
+    {
+        // Default armed source is Host. A RadioMic-tagged block must be dropped
+        // by the in-lock single-select gate — it can NEVER leak onto the air
+        // while Host is selected.
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>());
+
+        Assert.Equal(MicBlockSource.Host, ingest.ActiveSource);
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytes(payload, MicBlockSource.RadioMic);
+        ingest.OnMicPcmBytes(payload, MicBlockSource.RadioMic);
+        Assert.Equal(0, engine.ProcessedBlocks);   // never reached WDSP
+        Assert.Equal(0, ring.Count);
+        Assert.True(ingest.DroppedFrames >= 2);
+    }
+
+    [Fact]
+    public void RadioArmed_HostBlock_IsDropped_RadioMicBlock_Flows()
+    {
+        // After arming RadioMic, the host mic is dropped and the radio jack
+        // feeds WDSP — exactly one contributor at a time, no double-feed.
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>());
+
+        ingest.SetActiveSource(TxAudioSource.RadioMic);
+        Assert.Equal(MicBlockSource.RadioMic, ingest.ActiveSource);
+
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        // Host blocks are dropped while the radio jack is armed.
+        ingest.OnMicPcmBytes(payload, MicBlockSource.Host);
+        ingest.OnMicPcmBytes(payload, MicBlockSource.Host);
+        Assert.Equal(0, engine.ProcessedBlocks);
+
+        // Radio-mic blocks flow through to WDSP.
+        ingest.OnMicPcmBytes(payload, MicBlockSource.RadioMic);
+        ingest.OnMicPcmBytes(payload, MicBlockSource.RadioMic);
+        Assert.Equal(1, engine.ProcessedBlocks);   // 1920 ≥ 1024 → one block
+        Assert.True(ring.Count > 0);
+    }
+
+    // ---- source-aware mic meter (radio-jack peak) ----
+
+    [Fact]
+    public void RadioArmed_RadioBlock_PopulatesRadioMeterPeak_ThenConsumeResets()
+    {
+        // The source-aware mic meter reads the radio-jack peak from accepted
+        // radio blocks, so the meter reflects the ACTUAL radio input instead of
+        // the host mic. ConsumeRadioPeakLinear returns the peak then resets, so
+        // the next heartbeat with no radio audio reads silence.
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>());
+
+        ingest.SetActiveSource(TxAudioSource.RadioMic);
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytes(payload, MicBlockSource.RadioMic);
+
+        float peak = ingest.ConsumeRadioPeakLinear();
+        Assert.True(MathF.Abs(peak - 0.5f) < 1e-4f, $"expected ~0.5, got {peak}");
+        Assert.Equal(0f, ingest.ConsumeRadioPeakLinear());   // reset on consume
+    }
+
+    [Fact]
+    public void HostArmed_HostBlocks_DoNotPopulateRadioMeterPeak()
+    {
+        // While Host is armed the radio meter peak stays silent — it only tracks
+        // accepted radio blocks (the host meter comes from NativeMicCapture's own
+        // window peak). Guards against host audio bleeding into the radio meter.
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>());
+
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytes(payload, MicBlockSource.Host);
+        ingest.OnMicPcmBytes(payload, MicBlockSource.Host);
+        Assert.Equal(0f, ingest.ConsumeRadioPeakLinear());
+    }
+
+    [Fact]
+    public void SourceSwitch_ClearsStaleRadioMeterPeak()
+    {
+        // Switching source drops any buffered radio meter peak so it can't bleed
+        // across a switch (radio→host must stop surfacing a frozen radio level).
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>());
+
+        ingest.SetActiveSource(TxAudioSource.RadioMic);
+        ingest.OnMicPcmBytes(BuildMicPcmPayload(_ => 0.5f), MicBlockSource.RadioMic);
+        ingest.SetActiveSource(TxAudioSource.Host);   // switch before heartbeat read
+        Assert.Equal(0f, ingest.ConsumeRadioPeakLinear());
     }
 
     [Fact]

@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -86,7 +87,6 @@ import {
   normalizeNbMode,
   normalizeNr,
   normalizeNrMode,
-  normalizeRx2AudioMode,
   normalizeSquelch,
   normalizeState,
   normalizeStatus,
@@ -143,24 +143,20 @@ describe('normalizeMode', () => {
     expect(normalizeMode(1)).toBe('USB');
     expect(normalizeMode(4)).toBe('AM');
     expect(normalizeMode(9)).toBe('DIGU');
+    expect(normalizeMode(10)).toBe('FREEDV');
+  });
+  it('matches the server enum name case-insensitively (FreeDv → FREEDV)', () => {
+    // The server serialises RxMode by its C# enum name: all-caps for every mode
+    // except FreeDv (PascalCase). Without case-insensitive matching, "FreeDv"
+    // missed MODE_ORDER and normalizeMode fell back to USB, making FreeDV mode
+    // silently revert to USB on the next state round-trip.
+    expect(normalizeMode('FreeDv')).toBe('FREEDV');
+    expect(normalizeMode('FREEDV')).toBe('FREEDV');
+    expect(normalizeMode('usb')).toBe('USB');
   });
   it('falls back to USB on garbage', () => {
     expect(normalizeMode('nope')).toBe('USB');
     expect(normalizeMode(42)).toBe('USB');
-  });
-});
-
-describe('normalizeRx2AudioMode', () => {
-  it('accepts numeric and string enum values', () => {
-    expect(normalizeRx2AudioMode(0)).toBe('both');
-    expect(normalizeRx2AudioMode(1)).toBe('rx1');
-    expect(normalizeRx2AudioMode(2)).toBe('rx2');
-    expect(normalizeRx2AudioMode('Both')).toBe('both');
-    expect(normalizeRx2AudioMode('Rx2')).toBe('rx2');
-  });
-  it('falls back to both on garbage', () => {
-    expect(normalizeRx2AudioMode(42)).toBe('both');
-    expect(normalizeRx2AudioMode('nope')).toBe('both');
   });
 });
 
@@ -185,7 +181,6 @@ describe('normalizeState', () => {
       vfoHz: 14_200_000,
       vfoBHz: 14_250_000,
       rx2Enabled: true,
-      rx2AudioMode: 2,
       rx2AfGainDb: -3,
       txVfo: 1,
       mode: 1,
@@ -199,17 +194,12 @@ describe('normalizeState', () => {
     });
     expect(s.status).toBe('Connected');
     expect(s.mode).toBe('USB');
-    expect(s.modeB).toBe('CWU');
     expect(s.endpoint).toBe('192.168.100.21:1024');
     expect(s.vfoHz).toBe(14_200_000);
-    expect(s.vfoBHz).toBe(14_250_000);
+    // RX2 (*B) fields no longer surface on RadioStateDto — they live in
+    // receivers[1]. The server may still send them; normalizeState ignores them.
     expect(s.rx2Enabled).toBe(true);
-    expect(s.rx2AudioMode).toBe('rx2');
-    expect(s.rx2AfGainDb).toBe(-3);
     expect(s.txVfo).toBe('B');
-    expect(s.filterLowHzB).toBe(475);
-    expect(s.filterHighHzB).toBe(725);
-    expect(s.filterPresetNameB).toBe('F6');
     expect(s.sampleRate).toBe(192_000);
     expect(s.preampOn).toBe(false);
   });
@@ -232,17 +222,37 @@ describe('normalizeState', () => {
     expect(s.status).toBe('Error');
     expect(s.endpoint).toBe(null);
     expect(s.vfoHz).toBe(0);
-    expect(s.vfoBHz).toBe(0);
     expect(s.rx2Enabled).toBe(false);
-    expect(s.rx2AudioMode).toBe('both');
-    expect(s.rx2AfGainDb).toBe(0);
     expect(s.txVfo).toBe('A');
     expect(s.mode).toBe('USB');
-    expect(s.modeB).toBe('USB');
-    expect(s.filterLowHzB).toBe(0);
-    expect(s.filterHighHzB).toBe(0);
     expect(s.nr).toEqual(NR_CONFIG_DEFAULT);
     expect(s.zoomLevel).toBe(1);
+  });
+  it('carries the multi-DDC receivers[] array and ceiling (wire v2)', () => {
+    // Regression: normalizeState used to drop receivers/maxReceivers/wireVersion,
+    // so applyState's `s.receivers ?? prev.receivers` kept the empty default and
+    // the "exposed receivers" control was frozen at RX1 (>2 did nothing).
+    const s = normalizeState({
+      wireVersion: 2,
+      maxReceivers: 8,
+      receivers: [
+        { index: 0, enabled: true, adcSource: 0, vfoHz: 7_100_000, mode: 'LSB' },
+        { index: 1, enabled: true, adcSource: 0, vfoHz: 7_150_000, mode: 'USB' },
+        { index: 2, enabled: true, adcSource: 1, vfoHz: 14_200_000, mode: 'USB' },
+      ],
+    });
+    expect(s.wireVersion).toBe(2);
+    expect(s.maxReceivers).toBe(8);
+    expect(s.receivers).toHaveLength(3);
+    expect(s.receivers?.[2]).toMatchObject({ index: 2, enabled: true, adcSource: 1, mode: 'USB' });
+  });
+  it('leaves receivers/maxReceivers undefined when a v1 server omits them', () => {
+    // Undefined (not []/0) lets applyState keep the store's prior values rather
+    // than collapsing the exposed-receiver control.
+    const s = normalizeState({});
+    expect(s.receivers).toBeUndefined();
+    expect(s.maxReceivers).toBeUndefined();
+    expect(s.wireVersion).toBeUndefined();
   });
   it('reads zoomLevel from the server', () => {
     expect(normalizeState({ zoomLevel: 3 }).zoomLevel).toBe(3);
@@ -312,7 +322,10 @@ describe('normalizeNrMode / normalizeNbMode', () => {
     expect(normalizeNrMode(0)).toBe('Off');
     expect(normalizeNrMode(1)).toBe('Anr');
     expect(normalizeNrMode(2)).toBe('Emnr');
-    expect(normalizeNrMode(4)).toBe('Off');
+    expect(normalizeNrMode(3)).toBe('Sbnr');
+    expect(normalizeNrMode(4)).toBe('Rnnr');
+    // 5 is past the last defined ordinal (Rnnr = 4) → Off.
+    expect(normalizeNrMode(5)).toBe('Off');
     expect(normalizeNbMode(2)).toBe('Nb2');
   });
   it('falls back to Off on garbage', () => {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // Workspace tile schema for the react-grid-layout (RGL) substrate that
 // replaces flexlayout-react at the desktop workspace level. One tile = one
@@ -68,11 +68,12 @@ export interface WorkspaceTile {
   instanceConfig?: unknown;
   /** When true, the tile is pinned to its current grid space. */
   locked?: boolean;
-  /** On-screen pixel height captured at the moment the tile was locked. While
-   *  locked, the tile is held at exactly this height regardless of how the
-   *  workspace rows shrink (see deriveWorkspaceLayout). A raw pixel value — NOT
-   *  a grid coordinate, so it is not scaled by the v7→v8 GRID_SCALE migration.
-   *  Only meaningful when `locked` is true; cleared on unlock. */
+  /** Legacy: on-screen pixel height captured when a tile was locked under the
+   *  old shrink-to-fit workspace, where a uniform rowHeight rescaled every tile.
+   *  The workspace is now a fixed-cell grid (a constant rowHeight), so a locked
+   *  tile holds its size automatically and this is no longer read or written.
+   *  Preserved verbatim on parse so older saved layouts round-trip unchanged.
+   *  A raw pixel value — never scaled by the v7→v8 GRID_SCALE migration. */
   lockedHeightPx?: number;
 }
 
@@ -121,6 +122,8 @@ export const DEFAULT_TILE_SPAN: Record<string, { w: number; h: number }> = {
   metergroup: { w: 2, h: 12 },
   // HamClock fills the whole workspace (24×48) — it's an embedded dashboard.
   hamclock: { w: 24, h: 48 },
+  // LAN Browser frames a full device web UI — give it real estate.
+  lanbrowser: { w: 12, h: 20 },
 };
 
 const FALLBACK_SPAN = { w: 8, h: 8 };
@@ -166,6 +169,41 @@ export function placeTileInGrid(
   }
   // Nothing fits inside the current extent — append below everything (free).
   return { x: 0, y: bottom, w, h };
+}
+
+/** Find a home for a new tile WITHIN a fixed page (pageCols × pageRows), the
+ *  visible workspace area. Same first-fit scan as placeTileInGrid but bounded:
+ *  returns null when the tile's footprint does not fit in any free slot inside
+ *  the page. The caller (layout-store) uses null as the signal to paginate —
+ *  spill the panel onto a fresh workspace — instead of appending it below the
+ *  fold where it would be clipped (the workspace never scrolls). A tile taller
+ *  or wider than a whole page can never fit one, so it is placed at the origin
+ *  rather than triggering an endless paginate. */
+export function placeTileInPage(
+  panelId: string,
+  others: WorkspaceTile[],
+  pageCols: number,
+  pageRows: number,
+): { x: number; y: number; w: number; h: number } | null {
+  const span = defaultSpanFor(panelId);
+  const cols = Math.max(1, Math.floor(pageCols));
+  const rows = Math.max(1, Math.floor(pageRows));
+  const w = Math.min(span.w, cols);
+  const h = span.h;
+  // Larger than a whole page in either axis — no page can hold it, so don't
+  // paginate forever; place it at the origin of the current page.
+  if (h > rows || span.w > cols) return { x: 0, y: 0, w, h };
+  const maxX = cols - w;
+  const maxY = rows - h;
+  for (let y = 0; y <= maxY; y += 1) {
+    for (let x = 0; x <= maxX; x += 1) {
+      const candidate = { x, y, w, h };
+      if (!others.some((t) => tilesOverlap(candidate, t))) {
+        return candidate;
+      }
+    }
+  }
+  return null;
 }
 
 function tilesOverlap(

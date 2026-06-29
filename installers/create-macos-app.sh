@@ -434,6 +434,15 @@ if [ -n "${CODESIGN_IDENTITY:-}" ]; then
                     \( -name "*.dylib" -o -name "createdump" \) \
                     -type f -print0 2>/dev/null)
 
+        # 1b. Zeus.SupportAgent is a standalone .NET executable (not a dylib)
+        #     that ships next to the main app binary. Apple notarization
+        #     requires every Mach-O inside the bundle to be signed with a
+        #     valid Developer ID cert, hardened runtime, and secure timestamp.
+        if [ -f "${bundle}/Contents/Resources/app/Zeus.SupportAgent" ]; then
+            echo "      sign Zeus.SupportAgent"
+            sign_one "${bundle}/Contents/Resources/app/Zeus.SupportAgent"
+        fi
+
         # 2. The apphost carries the entitlements (hardened runtime + mic).
         #    The wrapper Server.app has no apphost of its own — it exec's the
         #    main app's binary — so only sign it when present.
@@ -534,7 +543,7 @@ FIRST RUN — WDSP WISDOM
   minutes. The window will load, but do NOT click Discover/Connect
   until the wisdom build settles. Subsequent launches are instant.
 
-More info: https://github.com/Kb2uka/openhpsdr-zeus
+More info: https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus
 EOF
 else
     cat > "${DMG_TEMP}/README.txt" << 'EOF'
@@ -598,7 +607,7 @@ FIRST RUN — WDSP WISDOM
   minutes. The window will load, but do NOT click Discover/Connect
   until the wisdom build settles. Subsequent launches are instant.
 
-More info: https://github.com/Kb2uka/openhpsdr-zeus
+More info: https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus
 EOF
 fi
 

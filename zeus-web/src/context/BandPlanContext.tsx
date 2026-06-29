@@ -2,10 +2,12 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 
 import { createContext, useEffect, type ReactNode } from 'react';
 import { useBandPlanStore } from '../state/bandPlan';
+import { useBandEdgeAlert } from '../components/BandOverlay';
 import type { BandRegion, BandSegment, RxMode } from '../api/bands';
 
 export type BandPlanContextValue = {
@@ -31,6 +33,11 @@ export function BandPlanProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Issue #846: tone-at-edge alert (Icom-style). Mounted here because every
+  // active workspace wraps in BandPlanProvider — guarantees the alert runs
+  // regardless of which panadapter is on screen.
+  useBandEdgeAlert();
 
   return (
     <BandPlanContext.Provider

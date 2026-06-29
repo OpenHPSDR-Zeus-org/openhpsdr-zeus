@@ -22,7 +22,10 @@
 .app {
   display: grid;
   grid-template-columns: 56px minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr) 38px;
+  /* Transport row is `auto` (was fixed 38px) so it tracks the zoomed content
+     height when --zeus-chrome-zoom shrinks .transport below 38px (issue
+     #1107 — top bar + transport scale together with the workspace zoom). */
+  grid-template-rows: auto minmax(0, 1fr) auto;
   height: 100dvh;
   width: 100vw;
   background: var(--bg-0);
@@ -167,6 +170,15 @@
   border-color: var(--accent);
   color: var(--accent);
   opacity: 0.72;
+}
+/* A panel is being dragged over this layout tab — releasing here transfers
+   the panel to that layout. Mirror the active-tab accent so the drop target
+   reads as "this is where it lands." */
+.left-layout-bar .lb-tab[data-panel-drop-active='true'] {
+  background: var(--bg-2);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 10px var(--accent);
 }
 .left-layout-bar .lb-item.active .lb-tab {
   background: var(--bg-2);
@@ -480,6 +492,11 @@
     inset 0 -1px 0 rgba(0,0,0,0.5);
   height: 60px;
   overflow: hidden;
+  /* Issue #1107 — operator zoom (the ZOOM cluster in the transport bar) also
+     scales the top bar so the whole UI grows/shrinks as a unit and Zeus can
+     share a wide monitor with other apps. The CSS var is set by App.tsx from
+     the same connection-store value that drives FlexWorkspace's cell pitch. */
+  zoom: var(--zeus-chrome-zoom, 1);
 }
 .topbar .topbar-controls {
   display: flex;
@@ -505,10 +522,39 @@
   outline-offset: -2px;
 }
 .topbar .topbar-scroll-btn {
+  display: inline-flex;
+  flex: 0 0 24px;
+  width: 24px;
+  /* Match the strip buttons (.btn.sm = 27px min-height) so the arrows are
+     the same height as the MODE / BAND / STEP buttons they scroll. */
+  height: 27px;
+  min-height: 27px;
+  padding: 0;
+  align-self: center;
+  /* The strip buttons live inside a .ctrl-group whose 9px label + 3px gap
+     sit ABOVE the button row, pushing the buttons ~6px below the bar's
+     vertical centre. The arrows have no label, so an asymmetric top margin
+     equal to (label + gap) shifts their centred margin-box down by half that
+     — landing the arrow centre exactly on the strip button row. */
+  margin-top: calc(9px + 3px);
+}
+.topbar .topbar-scroll-btn[hidden] {
   display: none;
 }
+.topbar .topbar-scroll-btn svg {
+  pointer-events: none;
+  /* Brighter than the strip buttons' --fg-1 glyphs so the white chevron
+     reads clearly against the near-black panel. This selector (.topbar +
+     .topbar-scroll-btn + svg) outranks `.topbar .btn { color: --fg-1 }`,
+     so it wins regardless of source order. */
+  color: var(--fg-0);
+}
 .topbar .topbar-scroll-btn:disabled {
-  opacity: 0.32;
+  /* When a direction has nothing left to scroll, hide the arrow glyph but
+     KEEP its 24px column reserved (visibility, not opacity/display) so the
+     strip's edge button never slides into the arrow's space. The arrow can
+     therefore never appear to cover a button at any window width. */
+  visibility: hidden;
   cursor: default;
 }
 .topbar .btn {
@@ -808,20 +854,6 @@
     scrollbar-gutter: auto;
   }
 
-  .topbar .topbar-scroll-btn {
-    display: inline-flex;
-    flex: 0 0 24px;
-    width: 24px;
-    height: 28px;
-    min-height: 28px;
-    padding: 0;
-    align-self: center;
-  }
-
-  .topbar .topbar-scroll-btn svg {
-    pointer-events: none;
-  }
-
   .topbar .topbar-controls::-webkit-scrollbar {
     height: 0;
   }
@@ -1116,6 +1148,35 @@
 }
 .btn.orange:hover {
   filter: brightness(1.1);
+}
+
+/* Chat composer ghost-icon buttons (mic, paperclip). Borderless square hit
+   targets that live INSIDE the unified composer field, so they carry no chrome
+   at rest and only wash in on hover — keeps the field reading as one surface. */
+.chat-composer-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.chat-composer-icon:hover:not(:disabled) {
+  background: rgba(255,255,255,0.07);
+  color: var(--fg-0);
+}
+.chat-composer-icon:active:not(:disabled) {
+  background: rgba(255,255,255,0.04);
+}
+.chat-composer-icon:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* 4K-and-above bump. 34" ultrawide (3440 CSS px) stays under this threshold
@@ -1448,6 +1509,115 @@
   color: var(--fg-0);
   background: linear-gradient(180deg, var(--accent-bright), var(--accent));
   box-shadow: 0 0 12px rgba(78,166,255,0.26);
+}
+/* Multi-selected but not focused: a receiver that ganged controls also act on.
+ * Subtler than .is-active (the focused/primary) — accent tint + inset outline. */
+.hero-rx-audio-switch__key.is-selected {
+  color: var(--fg-0);
+  background: rgba(78,166,255,0.12);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* RX audio mixer — small header trigger + movable popout (replaces the inline
+ * switch so any number of DDC receivers fit without crowding the header). */
+.hero-rx-mixer-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 6px;
+  color: var(--fg-2);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.09);
+  font: 800 9px/1 var(--font-sans);
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+.hero-rx-mixer-trigger:hover {
+  color: var(--fg-0);
+  border-color: rgba(255,255,255,0.16);
+}
+.hero-rx-mixer-trigger.is-open {
+  color: var(--fg-0);
+  border-color: var(--accent);
+  box-shadow: 0 0 9px rgba(78,166,255,0.22);
+}
+.hero-rx-mixer-popout {
+  position: fixed;
+  z-index: 60;
+  min-width: 172px;
+  max-width: 280px;
+  background:
+    linear-gradient(180deg, var(--panel-top, #14181d), var(--panel-bot, #0c0f12));
+  border: 1px solid rgba(255,255,255,0.13);
+  border-radius: 9px;
+  box-shadow: 0 12px 34px rgba(0,0,0,0.52);
+  padding-bottom: 9px;
+  user-select: none;
+}
+.hero-rx-mixer-popout__bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 7px 6px 9px;
+  cursor: grab;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.hero-rx-mixer-popout__bar:active {
+  cursor: grabbing;
+}
+.hero-rx-mixer-popout__grip {
+  color: var(--fg-3);
+  display: inline-flex;
+}
+.hero-rx-mixer-popout__title {
+  flex: 1;
+  font: 800 9px/1 var(--font-sans);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--fg-1);
+}
+.hero-rx-mixer-popout__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+.hero-rx-mixer-popout__close:hover {
+  color: var(--fg-0);
+  background: rgba(255,255,255,0.08);
+}
+.hero-rx-mixer-popout__section {
+  padding: 8px 9px 0;
+}
+.hero-rx-mixer-popout__label {
+  font: 700 8px/1 var(--font-sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  margin-bottom: 5px;
+}
+.hero-rx-mixer-popout__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.hero-rx-mixer-popout .hero-rx-audio-switch__key {
+  min-width: 34px;
+  height: 22px;
+  border: 1px solid rgba(255,255,255,0.09);
+  background: rgba(255,255,255,0.03);
+}
+.hero-rx-mixer-popout .hero-rx-audio-switch__key.is-muted {
+  color: var(--fg-3);
+  opacity: 0.6;
 }
 .spectrum-wrap,
 .spectrum-canvas,
@@ -1854,6 +2024,7 @@
 .vfo-rx2-pill,
 .vfo-tool-key,
 .vfo-focus-key,
+.vfo-listen-key,
 .vfo-tx-key {
   display: inline-flex;
   align-items: center;
@@ -1877,6 +2048,7 @@
 .vfo-rx2-pill:hover,
 .vfo-tool-key:hover,
 .vfo-focus-key:hover,
+.vfo-listen-key:hover,
 .vfo-tx-key:hover {
   color: var(--fg-0);
   background:
@@ -1887,6 +2059,7 @@
 .vfo-rx2-pill:disabled,
 .vfo-tool-key:disabled,
 .vfo-focus-key:disabled,
+.vfo-listen-key:disabled,
 .vfo-tx-key:disabled {
   opacity: 0.42;
   cursor: default;
@@ -1927,7 +2100,8 @@
 }
 .vfo-stack {
   display: grid;
-  grid-template-rows: repeat(2, 70px);
+  /* One row per exposed receiver (RX1..RXN); grows with the multi-DDC count. */
+  grid-auto-rows: 70px;
   min-height: 140px;
   overflow: hidden;
   background:
@@ -1940,7 +2114,7 @@
 .vfo-lane {
   position: relative;
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) 38px;
+  grid-template-columns: 34px minmax(0, 1fr) 30px 38px;
   align-items: center;
   gap: 7px;
   min-height: 70px;
@@ -2032,6 +2206,22 @@
   border-color: color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 62%, transparent);
   box-shadow: 0 0 13px color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 28%, transparent);
 }
+.vfo-listen-key {
+  width: 28px;
+  min-width: 28px;
+  height: 32px;
+  padding: 0;
+  color: var(--fg-3);
+}
+.vfo-listen-key.is-on {
+  color: var(--fg-0);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 60%, white),
+    var(--vfo-filter-color, var(--accent))
+  );
+  border-color: color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 55%, transparent);
+}
 .vfo-tx-key {
   width: 36px;
   min-width: 36px;
@@ -2047,6 +2237,148 @@
   background: var(--tx-soft);
   border-color: var(--tx);
   box-shadow: 0 0 10px rgba(230,58,43,0.18);
+}
+
+/* ===== Multi-DDC VFO panel — chip rail + active detail (master-detail) ===== */
+.vfo-md {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  /* Render native (no ScaleToFitTile) — fill the tile and scroll the detail
+     stack when the tile is shorter than it, instead of uniformly shrinking the
+     digits to a thumbnail. The chip rail stays pinned at the top. */
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.vfo-md__rail {
+  display: flex;
+  gap: 5px;
+  flex: 0 0 auto;
+  overflow-x: auto;
+  padding: 2px;
+  scrollbar-width: thin;
+}
+.vfo-md__rail::-webkit-scrollbar { height: 5px; }
+.vfo-md__rail::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.16); border-radius: 3px; }
+.vfo-chip {
+  position: relative;
+  flex: 0 0 auto;
+  display: grid;
+  gap: 1px;
+  min-width: 72px;
+  padding: 5px 9px 5px 10px;
+  text-align: left;
+  color: var(--fg-2);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.012)),
+    rgba(0,0,0,0.18);
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color var(--dur-fast), background var(--dur-fast), opacity var(--dur-fast);
+}
+.vfo-chip::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 6px; bottom: 6px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: transparent;
+}
+.vfo-chip:hover { border-color: rgba(255,255,255,0.16); color: var(--fg-1); }
+.vfo-chip.is-active {
+  color: var(--fg-0);
+  border-color: color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 62%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 13%, transparent), transparent),
+    rgba(0,0,0,0.2);
+}
+.vfo-chip.is-active::before {
+  background: var(--vfo-filter-color, var(--accent));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 70%, transparent);
+}
+/* Multi-selected but not focused: a ganged-control target. Subtler than
+ * .is-active (the focused primary) — a dim receiver-colour outline. */
+.vfo-chip.is-selected {
+  border-color: color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 38%, transparent);
+  background: color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 7%, transparent);
+}
+.vfo-chip.is-muted { opacity: 0.55; }
+.vfo-chip.is-tx { border-color: color-mix(in srgb, var(--tx) 55%, transparent); }
+.vfo-chip__id {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font: 800 10px/1 var(--font-sans);
+  color: var(--vfo-filter-color, var(--accent));
+}
+.vfo-chip__tx {
+  font: 800 8px/1 var(--font-sans);
+  color: var(--tx);
+  letter-spacing: 0.04em;
+}
+.vfo-chip__freq { font: 700 12px/1.1 var(--font-mono, monospace); color: var(--fg-0); }
+.vfo-chip__band { font: 700 8px/1 var(--font-mono, monospace); color: var(--fg-3); letter-spacing: 0.04em; }
+.vfo-chip--add {
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  color: var(--fg-3);
+}
+.vfo-chip--add:hover { color: var(--fg-0); }
+
+.vfo-md__detail {
+  position: relative;
+  display: grid;
+  gap: 7px;
+  padding: 9px 10px 10px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.008)),
+    rgba(0,0,0,0.16);
+  border: 1px solid rgba(255,255,255,0.09);
+  border-left: 2px solid var(--vfo-filter-color, var(--accent));
+  border-radius: 8px;
+  min-width: 0;
+}
+.vfo-md__detail.is-tx { border-left-color: var(--tx); }
+.vfo-md__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.vfo-md__title {
+  font: 800 11px/1 var(--font-sans);
+  letter-spacing: 0.03em;
+  color: var(--fg-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vfo-md__band { font: 700 10px/1 var(--font-mono, monospace); color: var(--fg-2); }
+.vfo-md__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.vfo-md__af {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  color: var(--fg-2);
+  font: 700 9px/1 var(--font-sans);
+}
+.vfo-md__af input[type="range"] { flex: 1; min-width: 0; }
+.vfo-md__af-val { min-width: 24px; text-align: right; color: var(--fg-1); }
+.vfo-md__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
 }
 .vfo-audio-strip {
   display: grid;
@@ -2833,6 +3165,37 @@
 .swx--poor  { color: var(--tx); border-color: var(--tx); }
 .swx--muted { color: var(--fg-2); }
 
+/* ── Active Sessions panel ─────────────────────────────────────────────── */
+.sess-panel { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+.sess-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; border-bottom: 1px solid var(--panel-border, var(--line-strong));
+  flex: 0 0 auto;
+}
+.sess-title { font-size: 11px; font-weight: 700; color: var(--accent); letter-spacing: 0.04em; }
+.sess-count {
+  font-size: 10px; font-weight: 700; color: var(--fg-1);
+  background: var(--bg-2); border: 1px solid var(--line-strong);
+  border-radius: var(--r-xs); padding: 0 6px; min-width: 18px; text-align: center;
+}
+.sess-empty { padding: 16px; color: var(--fg-2); }
+.sess-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 0; }
+.sess-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1.2fr) minmax(0, 1.4fr) 56px 64px;
+  align-items: center; gap: 8px;
+  padding: 5px 8px;
+  border-bottom: 1px dotted rgba(255,255,255,0.06);
+  font-size: 11px;
+}
+.sess-kind { display: flex; align-items: center; gap: 5px; font-weight: 700; white-space: nowrap; }
+.sess-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+.sess-addr { color: var(--fg-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess-agent { color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess-dur { color: var(--fg-1); text-align: right; }
+.sess-stream { color: var(--fg-2); text-align: right; white-space: nowrap; }
+.sess-stream.is-on { color: var(--ok); font-weight: 700; }
+
 .cs-input {
   width: 90px;
   background: transparent;
@@ -2865,6 +3228,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 4px 8px;
   border-bottom: 1px solid var(--panel-border);
@@ -3059,7 +3423,10 @@
 
 /* ===== DSP ===== */
 .dsp-grid { padding: 10px; display: flex; flex-direction: column; gap: 10px; background: var(--bg-1); }
-.dsp-row { display: flex; align-items: center; gap: 10px; }
+/* Rows keep their natural height (no flex-shrink) so a short tile scrolls via
+ * DspFlexPanel's overflow:auto instead of squeezing rows until their buttons
+ * overlap the neighbouring row. */
+.dsp-row { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .dsp-row > .btn { flex-shrink: 0; min-width: 56px; }
 .dsp-row > .slider { flex: 1; }
 .dsp-smart-status {
@@ -3582,6 +3949,13 @@
   border-radius: 0;
   box-shadow: none;
   height: 38px;
+  /* Issue #1107 — scaled together with .topbar by the operator's workspace
+     zoom (set on .app via --zeus-chrome-zoom). The .app grid row this lives
+     in is `auto` so the row tracks the zoomed height instead of pinning at
+     38 px. The ZOOM cluster lives inside this bar; zooming below 100% shrinks
+     the cluster itself, but the readout stays click-to-reset-to-100 % so the
+     operator can always return to the default. */
+  zoom: var(--zeus-chrome-zoom, 1);
 }
 /* Transport buttons read as flat clickable regions of the toolbar, not raised
    chiclets. TX (MOX-on) is excluded — it keeps its red bevel/pulse for safety. */

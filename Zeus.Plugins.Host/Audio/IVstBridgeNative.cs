@@ -50,7 +50,39 @@ public interface IVstBridgeNative
 
     /// <summary>True if the plugin's editor window is currently open.</summary>
     bool EditorIsOpen(nint handle);
+
+    /// <summary>
+    /// Enumerate the audio-effect classes in a VST3 file/bundle WITHOUT
+    /// activating them — the in-process plugin scanner. On <see cref="VstBridgeStatus.Ok"/>,
+    /// <paramref name="json"/> is a UTF-8 JSON array of
+    /// <c>{uid,name,category,vendor}</c> objects (empty array when the file
+    /// has no audio-effect class). Other status codes match <c>zvst_status_t</c>.
+    /// Defaulted so existing test fakes need no change; the production bridge
+    /// overrides it via <c>zvst_describe</c>.
+    /// </summary>
+    int Describe(string path, out string json)
+    {
+        json = "[]";
+        return VstBridgeStatus.NotImplemented;
+    }
+
+    /// <summary>
+    /// The plugin's reported processing latency in samples at its loaded
+    /// geometry (captured once at load). 0 for a zero-latency effect, an
+    /// invalid handle, or a plugin that reports none. Defaulted so existing
+    /// test fakes need no change; the production bridge overrides it via
+    /// <c>zvst_get_latency_samples</c> (ABI v3).
+    /// </summary>
+    int GetLatencySamples(nint handle) => 0;
 }
+
+/// <summary>
+/// One audio-effect class enumerated from a VST3 file by
+/// <see cref="IVstBridgeNative.Describe"/>. <see cref="Uid"/> is the class
+/// TUID string — the identifier that selects this exact sub-plugin when a
+/// single file (a "shell") hosts several.
+/// </summary>
+public sealed record VstPluginDescriptor(string Uid, string Name, string Category, string Vendor);
 
 /// <summary>
 /// Status codes returned by <see cref="IVstBridgeNative"/>. Mirror
@@ -67,6 +99,7 @@ public static class VstBridgeStatus
     public const int InvalidHandle       = 6;
     public const int InvalidArguments    = 7;
     public const int NotImplemented      = 8;
+    public const int UnsupportedPrecision = 9;  // plugin refuses 32-bit float
     public const int Other               = 255;
 }
 
@@ -78,5 +111,8 @@ public static class VstBridgeStatus
 public static class VstBridgeAbi
 {
     // v2: added the editor entry points (zvst_editor_open/close/is_open).
-    public const int Current = 2;
+    // v3: added zvst_get_latency_samples + the ZVST_UNSUPPORTED_PRECISION
+    //     status, and host/plugin channel-count bridging inside zvst_process
+    //     (no existing signature changed).
+    public const int Current = 3;
 }

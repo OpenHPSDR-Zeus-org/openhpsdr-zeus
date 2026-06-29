@@ -53,6 +53,12 @@ function extremelyWeakSignal(): Float32Array {
   return spec;
 }
 
+function speechLikeSsbCopy(): Float32Array {
+  const spec = new Float32Array(WIDTH).fill(NOISE_DB);
+  for (let i = 64; i < 164; i += 4) spec[i] = NOISE_DB + 32;
+  return spec;
+}
+
 function quietNoise(): Float32Array {
   return new Float32Array(WIDTH).fill(NOISE_DB);
 }
@@ -75,22 +81,17 @@ function mockState(nr: NrConfigDto): RadioStateDto {
     status: 'Connected',
     endpoint: conn.endpoint,
     vfoHz: conn.vfoHz,
-    vfoBHz: conn.vfoBHz,
     rx2Enabled: false,
-    rx2AudioMode: 'both',
-    rx2AfGainDb: 0,
     txVfo: 'A',
     mode: conn.mode,
-    modeB: conn.modeB,
     filterLowHz: conn.filterLowHz,
     filterHighHz: conn.filterHighHz,
-    filterLowHzB: conn.filterLowHzB,
-    filterHighHzB: conn.filterHighHzB,
     filterPresetName: conn.filterPresetName,
-    filterPresetNameB: conn.filterPresetNameB,
     filterAdvancedPaneOpen: conn.filterAdvancedPaneOpen,
     txFilterLowHz: conn.txFilterLowHz,
     txFilterHighHz: conn.txFilterHighHz,
+    rxFilterWindow: conn.rxFilterWindow,
+    txFilterWindow: conn.txFilterWindow,
     sampleRate: conn.sampleRate,
     agcTopDb: conn.agcTopDb,
     agc: { ...AGC_CONFIG_DEFAULT },
@@ -107,7 +108,11 @@ function mockState(nr: NrConfigDto): RadioStateDto {
     adcOverloadWarning: false,
     preampOn: false,
     nr,
+    wdspNr3RnnrAvailable: false,
+    nr3ModelName: null,
+    nr3UsingBundledDefault: false,
     zoomLevel: 1,
+    workspaceZoomPct: conn.workspaceZoomPct,
     psEnabled: false,
     psAuto: true,
     psPtol: false,
@@ -341,6 +346,22 @@ describe('SmartNrController', () => {
     expect(setNrMock).toHaveBeenCalledTimes(1);
     expect(setNrMock.mock.calls[0]?.[0].nrMode).toBe('Sbnr');
     expect(useSmartNrStore.getState().status?.reason).toContain('Weak-signal assist');
+  });
+
+  it('applies NR3 for speech-like SSB when an RNNoise model is installed', () => {
+    useConnectionStore.setState({
+      mode: 'USB',
+      wdspNr3RnnrAvailable: true,
+      nr3ModelName: 'hf-voice.rnn',
+    });
+
+    for (let i = 0; i < 6; i++) feed(speechLikeSsbCopy());
+
+    expect(setNrMock).toHaveBeenCalledTimes(1);
+    expect(setNrMock.mock.calls[0]?.[0].nrMode).toBe('Rnnr');
+    expect(setNrMock.mock.calls[0]?.[0].snbEnabled).toBe(false);
+    expect(useSmartNrStore.getState().status?.profile).toBe('NR3');
+    expect(useSmartNrStore.getState().status?.reason).toContain('neural speech');
   });
 
   it('times out a stuck hardware diagnostics request and retries on a later sample', async () => {

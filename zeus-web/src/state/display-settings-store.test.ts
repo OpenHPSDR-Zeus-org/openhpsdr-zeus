@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -44,6 +45,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  DEFAULT_TX_AUTO_RANGE,
   DEFAULT_TX_DISPLAY_AVG_TAU_MS,
   DEFAULT_TX_DISPLAY_CAL_OFFSET_DB,
   DEFAULT_TX_DISPLAY_FFT_SIZE,
@@ -57,6 +59,7 @@ import {
   WATERFALL_SCROLL_SPEED_MIN,
   TX_FIXED_DB_MAX,
   TX_FIXED_DB_MIN,
+  shouldTxAutoRange,
   useDisplaySettingsStore,
 } from './display-settings-store';
 
@@ -259,12 +262,16 @@ describe('TX display analyzer params', () => {
   it('resets all params to defaults', () => {
     const s = useDisplaySettingsStore.getState();
     s.setTxDisplayParams({ calOffsetDb: -15, fftSize: 8192, window: 5, avgTauMs: 400 });
+    s.setTxAutoRange(true);
     s.resetTxDisplayParams();
     expect(useDisplaySettingsStore.getState()).toMatchObject({
       txDisplayCalOffsetDb: DEFAULT_TX_DISPLAY_CAL_OFFSET_DB,
       txDisplayFftSize: DEFAULT_TX_DISPLAY_FFT_SIZE,
       txDisplayWindow: DEFAULT_TX_DISPLAY_WINDOW,
       txDisplayAvgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS,
+      // Reset also restores the auto-range master enable to its default (off, so
+      // the TX windows follow the manual slider).
+      txAutoRange: DEFAULT_TX_AUTO_RANGE,
     });
   });
 });
@@ -272,6 +279,16 @@ describe('TX display analyzer params', () => {
 describe('TX auto-range', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })));
+    // In-memory localStorage so saved-range round-trips are deterministic and
+    // isolated per test, regardless of the runtime env (local node has no
+    // localStorage; CI jsdom does — direct global access isn't portable).
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+    });
     useDisplaySettingsStore.setState({
       txAutoRange: true,
       txDbMin: -80,
@@ -308,6 +325,10 @@ describe('TX auto-range', () => {
     expect(r.wfTxDbMin).toBeCloseTo(r.txDbMin, 0);
   });
 
+  it('defaults to off so the TX display follows the manual slider, not an auto fit', () => {
+    expect(DEFAULT_TX_AUTO_RANGE).toBe(false);
+  });
+
   it('is a no-op while turned off', () => {
     useDisplaySettingsStore.setState({ txAutoRange: false });
     useDisplaySettingsStore.getState().updateTxAutoRange(txFrame(-50, -10));
@@ -319,5 +340,87 @@ describe('TX auto-range', () => {
   it('a manual TX window edit switches auto-range off', () => {
     useDisplaySettingsStore.getState().setTxDbRange(-76, 14);
     expect(useDisplaySettingsStore.getState().txAutoRange).toBe(false);
+  });
+
+  it('dragging the TX panadapter scale switches auto-range off so the drag sticks', () => {
+    useDisplaySettingsStore.setState({ txAutoRange: true });
+    useDisplaySettingsStore.getState().shiftTxDbRange(5);
+    expect(useDisplaySettingsStore.getState().txAutoRange).toBe(false);
+  });
+
+  it('dragging the TX waterfall scale switches auto-range off so the drag sticks', () => {
+    useDisplaySettingsStore.setState({ txAutoRange: true });
+    useDisplaySettingsStore.getState().shiftWfTxDbRange(5);
+    expect(useDisplaySettingsStore.getState().txAutoRange).toBe(false);
+  });
+
+  describe('shouldTxAutoRange — engages only for voice MOX/PTT', () => {
+    const tx = (over: Partial<{ moxOn: boolean; tunOn: boolean; twoToneOn: boolean }> = {}) => ({
+      moxOn: false,
+      tunOn: false,
+      twoToneOn: false,
+      ...over,
+    });
+
+    it('engages for voice MOX when master enable is on', () => {
+      expect(shouldTxAutoRange(tx({ moxOn: true }), true)).toBe(true);
+    });
+
+    it('does NOT engage for TUNE', () => {
+      expect(shouldTxAutoRange(tx({ tunOn: true }), true)).toBe(false);
+    });
+
+    it('does NOT engage for two-tone, even if MOX is also keyed', () => {
+      expect(shouldTxAutoRange(tx({ twoToneOn: true }), true)).toBe(false);
+      expect(shouldTxAutoRange(tx({ moxOn: true, twoToneOn: true }), true)).toBe(false);
+    });
+
+    it('does NOT engage when the master enable is off', () => {
+      expect(shouldTxAutoRange(tx({ moxOn: true }), false)).toBe(false);
+    });
+
+    it('does NOT engage when not transmitting', () => {
+      expect(shouldTxAutoRange(tx(), true)).toBe(false);
+    });
+  });
+
+  it('restoreSavedTxWindows falls back to the fixed range when nothing is saved', () => {
+    // Deterministic regardless of test order — clear any persisted range first.
+    localStorage.removeItem('zeus.display.txDbRange');
+    localStorage.removeItem('zeus.display.wfTxDbRange');
+    // Simulate a window left narrow by a prior voice-MOX auto-fit.
+    useDisplaySettingsStore.setState({
+      txDbMin: -64,
+      txDbMax: -52,
+      wfTxDbMin: -64,
+      wfTxDbMax: -52,
+    });
+    useDisplaySettingsStore.getState().restoreSavedTxWindows();
+    const r = useDisplaySettingsStore.getState();
+    expect(r.txDbMin).toBe(TX_FIXED_DB_MIN);
+    expect(r.txDbMax).toBe(TX_FIXED_DB_MAX);
+    expect(r.wfTxDbMin).toBe(TX_FIXED_DB_MIN);
+    expect(r.wfTxDbMax).toBe(TX_FIXED_DB_MAX);
+    // The auto-range master flag is independent — restore must not touch it.
+    expect(r.txAutoRange).toBe(true);
+  });
+
+  it('restoreSavedTxWindows snaps a narrowed window back to the operator-saved range', () => {
+    localStorage.setItem('zeus.display.txDbRange', JSON.stringify({ txDbMin: -70, txDbMax: 10 }));
+    localStorage.setItem('zeus.display.wfTxDbRange', JSON.stringify({ wfTxDbMin: -70, wfTxDbMax: 10 }));
+    useDisplaySettingsStore.setState({
+      txDbMin: -64,
+      txDbMax: -52,
+      wfTxDbMin: -64,
+      wfTxDbMax: -52,
+    });
+    useDisplaySettingsStore.getState().restoreSavedTxWindows();
+    const r = useDisplaySettingsStore.getState();
+    expect(r.txDbMin).toBe(-70);
+    expect(r.txDbMax).toBe(10);
+    expect(r.wfTxDbMin).toBe(-70);
+    expect(r.wfTxDbMax).toBe(10);
+    localStorage.removeItem('zeus.display.txDbRange');
+    localStorage.removeItem('zeus.display.wfTxDbRange');
   });
 });

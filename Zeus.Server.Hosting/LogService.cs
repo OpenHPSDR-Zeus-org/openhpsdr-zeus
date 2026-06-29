@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -51,25 +52,32 @@ namespace Zeus.Server;
 
 public sealed class LogService : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<LogEntryDocument> _logs;
     private readonly ILogger<LogService> _log;
 
-    public LogService(ILogger<LogService> log, CredentialStore credStore)
+    public LogService(ILogger<LogService> log, string? dbPathOverride = null)
     {
         _log = log;
-        // Use the same database as CredentialStore for consistency
-        var dbPath = GetDatabasePath();
-        var dbPassword = GetDatabasePassword();
+        // The QSO logbook lives in its own plaintext DB (zeus-logbook.db),
+        // separate from both the prefs profiles and the retired encrypted
+        // zeus.db. Legacy rows are folded in once at startup by
+        // LegacyZeusDbMigration.
+        var dbPath = dbPathOverride ?? PrefsDbPath.LogbookPath();
 
-        var connectionString = $"Filename={dbPath};Password={dbPassword};Connection=shared";
-        _db = new LiteDatabase(connectionString);
+        var dir = Path.GetDirectoryName(dbPath);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            Directory.CreateDirectory(dir);
+
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _logs = _db.GetCollection<LogEntryDocument>("logs");
         _logs.EnsureIndex(x => x.Id, unique: true);
         _logs.EnsureIndex(x => x.QsoDateTimeUtc);
         _logs.EnsureIndex(x => x.Callsign);
 
-        _log.LogInformation("LogService initialized");
+        _log.LogInformation("LogService initialized at {Path}", dbPath);
     }
 
     public async Task<LogEntry> CreateLogEntryAsync(CreateLogEntryRequest request, CancellationToken ct = default)
@@ -82,7 +90,10 @@ public sealed class LogService : IDisposable
                 QsoDateTimeUtc = request.QsoDateTimeUtc ?? DateTime.UtcNow,
                 Callsign = request.Callsign.ToUpperInvariant(),
                 Name = request.Name,
-                FrequencyMhz = request.FrequencyMhz,
+                // 0/negative MHz means "dial unknown" (e.g. a manual log while
+                // disconnected) — store null so ADIF omits FREQ and falls back to
+                // BAND, rather than exporting a junk FREQ:0.000000.
+                FrequencyMhz = request.FrequencyMhz > 0 ? request.FrequencyMhz : null,
                 Band = request.Band,
                 Mode = request.Mode,
                 RstSent = request.RstSent,
@@ -202,6 +213,73 @@ public sealed class LogService : IDisposable
         }, ct);
     }
 
+    /// <summary>
+    /// Render the logbook (or the given subset) to ADIF and write it as a
+    /// timestamped .adi file in <paramref name="directory"/>. A null/blank
+    /// directory targets the operator's Downloads folder. Returns the absolute
+    /// path written, the QSO count, and the byte size so the UI can confirm
+    /// exactly where the file landed.
+    /// </summary>
+    public async Task<AdifExportToFileResponse> ExportToAdifFileAsync(
+        string? directory = null,
+        IEnumerable<string>? logEntryIds = null,
+        CancellationToken ct = default)
+    {
+        var ids = logEntryIds?.ToList();
+        var count = ids != null
+            ? _logs.Query().Where(x => ids.Contains(x.Id)).Count()
+            : _logs.Count();
+        var adif = await ExportToAdifAsync(ids, ct).ConfigureAwait(false);
+        var bytes = Encoding.UTF8.GetBytes(adif);
+
+        var targetDir = ResolveExportDirectory(directory);
+        Directory.CreateDirectory(targetDir);
+        var fileName = $"zeus-log-{DateTime.UtcNow:yyyyMMdd-HHmmss}.adi";
+        var fullPath = Path.Combine(targetDir, fileName);
+
+        await File.WriteAllBytesAsync(fullPath, bytes, ct).ConfigureAwait(false);
+        _log.LogInformation("Exported {Count} QSOs to ADIF file {Path} ({Bytes} bytes)",
+            count, fullPath, bytes.Length);
+
+        return new AdifExportToFileResponse(fullPath, count, bytes.Length);
+    }
+
+    /// <summary>
+    /// Resolve a writable export directory. A caller-supplied path wins (after
+    /// expanding a leading ~). Otherwise default to the operator's Downloads
+    /// folder — there is no <see cref="Environment.SpecialFolder"/> for it, so
+    /// derive it from the user-profile home and fall back to the profile root
+    /// itself if Downloads can't be created. Cross-platform: %USERPROFILE% on
+    /// Windows, $HOME on macOS/Linux.
+    /// </summary>
+    private static string ResolveExportDirectory(string? directory)
+    {
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            var trimmed = directory.Trim();
+            if (trimmed == "~" || trimmed.StartsWith("~/", StringComparison.Ordinal) ||
+                trimmed.StartsWith("~\\", StringComparison.Ordinal))
+            {
+                var rest = trimmed.Length > 1 ? trimmed[2..] : string.Empty;
+                trimmed = Path.Combine(HomeDirectory(), rest);
+            }
+            return trimmed;
+        }
+
+        var home = HomeDirectory();
+        var downloads = Path.Combine(home, "Downloads");
+        return downloads;
+    }
+
+    private static string HomeDirectory()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrEmpty(home)) return home;
+        home = Environment.GetEnvironmentVariable("HOME")
+               ?? Environment.GetEnvironmentVariable("USERPROFILE");
+        return string.IsNullOrEmpty(home) ? Directory.GetCurrentDirectory() : home;
+    }
+
     public async Task<AdifImportResponse> ImportAdifAsync(string adif, CancellationToken ct = default)
     {
         return await Task.Run(() =>
@@ -258,7 +336,7 @@ public sealed class LogService : IDisposable
 
     public void Dispose()
     {
-        _db?.Dispose();
+        _dbLease.Dispose();
     }
 
     private static LogEntry DocumentToEntry(LogEntryDocument doc) => new(
@@ -522,7 +600,22 @@ public sealed class LogService : IDisposable
         if (doc.FrequencyMhz.HasValue)
             AppendAdifField(sb, "FREQ", doc.FrequencyMhz.Value.ToString("F6", CultureInfo.InvariantCulture));
         AppendAdifField(sb, "BAND", doc.Band);
-        AppendAdifField(sb, "MODE", doc.Mode);
+        // FT4 is an MFSK SUBMODE in ADIF (3.1.x), not a top-level MODE enum value;
+        // strict parsers (LoTW / Club Log / QRZ) reject MODE=FT4. Emit it the
+        // canonical way. FT8 is a valid MODE and passes through unchanged.
+        if (string.Equals(doc.Mode, "FT4", StringComparison.OrdinalIgnoreCase))
+        {
+            AppendAdifField(sb, "MODE", "MFSK");
+            // Don't duplicate a SUBMODE already carried in the imported fields
+            // (those are re-emitted verbatim by AppendAdditionalAdifFields).
+            var hasSubmode = doc.AdifFields is not null && doc.AdifFields.ContainsKey("SUBMODE");
+            if (!hasSubmode)
+                AppendAdifField(sb, "SUBMODE", "FT4");
+        }
+        else
+        {
+            AppendAdifField(sb, "MODE", doc.Mode);
+        }
         AppendAdifField(sb, "RST_SENT", doc.RstSent);
         AppendAdifField(sb, "RST_RCVD", doc.RstRcvd);
 
@@ -584,7 +677,12 @@ public sealed class LogService : IDisposable
     private static void AppendAdifField(StringBuilder sb, string fieldName, string value)
     {
         if (string.IsNullOrEmpty(value)) return;
-        sb.Append($"<{fieldName}:{value.Length}>{value} ");
+        // ADIF declares each field length as an OCTET count, not a UTF-16
+        // code-unit count. Using value.Length corrupts any record with a
+        // non-ASCII byte (e.g. "José" emits <NAME:4> but writes 5 bytes),
+        // desyncing byte-based importers (LoTW, ClubLog, QRZ, N1MM). Emit
+        // the UTF-8 byte length so the field is spec-correct.
+        sb.Append($"<{fieldName}:{Encoding.UTF8.GetByteCount(value)}>{value} ");
     }
 
     private static DateTime ToUtc(DateTime dt) => dt.Kind == DateTimeKind.Utc ? dt : dt.ToUniversalTime();
@@ -608,33 +706,6 @@ public sealed class LogService : IDisposable
             .ToList();
     }
 
-    private static string GetDatabasePath()
-    {
-        var appDataDir = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData,
-            Environment.SpecialFolderOption.Create);
-
-        var zeusDir = Path.Combine(appDataDir, "Zeus");
-        return Path.Combine(zeusDir, "zeus.db");
-    }
-
-    private static string GetDatabasePassword()
-    {
-        // Read the same password that CredentialStore uses
-        var appDataDir = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData,
-            Environment.SpecialFolderOption.Create);
-
-        var zeusDir = Path.Combine(appDataDir, "Zeus");
-        var keyPath = Path.Combine(zeusDir, ".dbkey");
-
-        if (File.Exists(keyPath))
-        {
-            return File.ReadAllText(keyPath);
-        }
-
-        throw new InvalidOperationException("Database key not found. CredentialStore must be initialized first.");
-    }
 }
 
 internal sealed class LogEntryDocument

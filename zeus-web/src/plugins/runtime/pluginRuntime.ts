@@ -45,7 +45,6 @@ type PluginModule = {
 
 const registered = new Map<string, RegisteredPluginPanel>();
 const listeners = new Set<() => void>();
-let loaded = false;
 let loading: Promise<void> | null = null;
 
 function emit() {
@@ -153,7 +152,6 @@ export async function loadInstalledPluginUis(): Promise<void> {
   loading = (async () => {
     const list = await fetchInstalledPlugins();
     await Promise.all(list.plugins.map(loadOne));
-    loaded = true;
     emit();
   })();
   return loading;
@@ -177,16 +175,11 @@ export async function reloadInstalledPluginUis(): Promise<void> {
     if (!liveIds.has(panel.pluginId)) registered.delete(key);
   }
   await Promise.all(list.plugins.map(loadOne));
-  loaded = true;
   emit();
 }
 
 export function listRegisteredPanels(): RegisteredPluginPanel[] {
   return Array.from(registered.values());
-}
-
-export function isLoaded(): boolean {
-  return loaded;
 }
 
 export function subscribe(fn: () => void): () => void {

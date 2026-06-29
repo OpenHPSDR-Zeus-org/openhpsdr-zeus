@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 // See LICENSE / ATTRIBUTIONS.md at the repository root.
 
 import { useEffect, useState } from 'react';
@@ -12,11 +13,19 @@ import {
   setServerBaseUrl,
 } from '../serverUrl';
 import { useCapabilitiesStore } from '../state/capabilities-store';
+import { useQrzStore } from '../state/qrz-store';
+import {
+  getSupportAvailability,
+  setSupportAvailability,
+} from '../api/support';
 
 // Settings tab: lets the operator point a Capacitor / standalone build at a
-// specific Zeus.Server on their LAN (e.g. http://192.168.1.23:6060). Browser
+// specific Zeus.Server on their LAN (e.g. https://192.168.1.23:6443). Browser
 // users on the bundled deploy normally leave this blank — relative paths
 // already reach the same-origin server.
+
+// Origin that hosts the operator's /go/<callsign> remote vanity address.
+const REMOTE_GO_ORIGIN = 'https://openhpsdrzeus.com';
 
 export function ServerUrlPanel() {
   const [value, setValue] = useState(() => getServerBaseUrl());
@@ -86,7 +95,7 @@ export function ServerUrlPanel() {
         deploy). On native mobile / desktop wrappers, point this at the LAN
         host running Zeus.Server, e.g.{' '}
         <code style={{ fontFamily: 'monospace', color: 'var(--fg-1)' }}>
-          http://192.168.1.23:6060
+          https://192.168.1.23:6443
         </code>
         .
       </p>
@@ -159,7 +168,7 @@ export function ServerUrlPanel() {
           autoCorrect="off"
           spellCheck={false}
           inputMode="url"
-          placeholder="http://192.168.1.23:6060"
+          placeholder="https://192.168.1.23:6443"
           value={value}
           onChange={(e) => {
             setValue(e.target.value);
@@ -244,6 +253,408 @@ export function ServerUrlPanel() {
           Cleartext HTTP to RFC1918 / link-local addresses is permitted; iOS
           may show a "Find devices on local network" prompt the first time
           the app reaches a 192.168.* / 10.* host.
+        </div>
+      )}
+
+      <RemotePasswordSection />
+
+      <RemoteDiagnosticsSection />
+
+      <RemoteQrSection />
+    </div>
+  );
+}
+
+// Remote Diagnostics master switch (remote-diag P5). OFF by default. When on, a
+// maintainer can REQUEST a read-only diagnostics session; each request still
+// needs the operator's explicit Allow (the in-app prompt). They see logs +
+// diagnostics only — never radio control, never transmit. The crash auto-share
+// sub-toggle pre-authorises attaching a crash report when the backend dies.
+function RemoteDiagnosticsSection() {
+  const [available, setAvailable] = useState<boolean | null>(null);
+  const [autoShare, setAutoShare] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    (async () => {
+      try {
+        const s = await getSupportAvailability(ctrl.signal);
+        setAvailable(s.available);
+        setAutoShare(s.autoShareCrashes);
+      } catch {
+        if (!ctrl.signal.aborted) setAvailable(false);
+      }
+    })();
+    return () => ctrl.abort();
+  }, []);
+
+  const persist = async (next: { available: boolean; autoShareCrashes: boolean }) => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const s = await setSupportAvailability(next);
+      setAvailable(s.available);
+      setAutoShare(s.autoShareCrashes);
+    } catch (e) {
+      setNotice((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleAvailable = () =>
+    void persist({ available: !(available ?? false), autoShareCrashes: autoShare });
+  const toggleAutoShare = () =>
+    void persist({ available: available ?? false, autoShareCrashes: !autoShare });
+
+  const isOn = available === true;
+
+  return (
+    <div style={{ marginTop: 28 }}>
+      <h3
+        style={{
+          margin: '0 0 14px',
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+          color: 'var(--fg-2)',
+        }}
+      >
+        REMOTE DIAGNOSTICS
+      </h3>
+
+      <p style={{ fontSize: 12, color: 'var(--fg-2)', lineHeight: 1.5, marginTop: 0 }}>
+        Lets a Zeus maintainer <strong>request</strong> a read-only diagnostics
+        session to help troubleshoot a problem. This is off by default and is
+        separate from remote access — turning it on does not let anyone in by
+        itself. Each request still pops up an in-app prompt that <em>you</em>{' '}
+        must Allow. A maintainer can only see your logs and diagnostics; they can
+        never control your radio, change settings, or transmit.
+      </p>
+
+      <label
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          marginTop: 14,
+          cursor: busy || available === null ? 'default' : 'pointer',
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={isOn}
+          disabled={busy || available === null}
+          onChange={toggleAvailable}
+        />
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>
+          Remote Diagnostics available
+        </span>
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            color: isOn ? 'var(--accent)' : 'var(--fg-2)',
+          }}
+        >
+          {available === null ? '…' : isOn ? 'ON' : 'OFF'}
+        </span>
+      </label>
+
+      <label
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 10,
+          marginTop: 12,
+          opacity: isOn ? 1 : 0.6,
+          cursor: busy || !isOn ? 'default' : 'pointer',
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={autoShare}
+          disabled={busy || !isOn}
+          onChange={toggleAutoShare}
+          style={{ marginTop: 2 }}
+        />
+        <span style={{ fontSize: 12, color: 'var(--fg-2)', lineHeight: 1.5 }}>
+          <span style={{ fontWeight: 600, color: 'var(--fg-1)' }}>
+            Auto-share crash reports
+          </span>
+          <br />
+          If Zeus crashes, allow a crash report (logs + diagnostics snapshot) to
+          be attached automatically so the problem can be diagnosed without you
+          re-creating it.
+        </span>
+      </label>
+
+      {notice && (
+        <div style={{ marginTop: 12, fontSize: 11, color: 'var(--tx)' }}>{notice}</div>
+      )}
+    </div>
+  );
+}
+
+// Remote-access session password (ADR-0008). Mandatory: remote access does
+// nothing until the right password is entered. Set/change/clear hit the
+// SPAKE2+ verifier endpoints — the password is never stored, only its verifier.
+function RemotePasswordSection() {
+  const [hasPassword, setHasPassword] = useState<boolean | null>(null);
+  const [pw, setPw] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const refresh = async () => {
+    try {
+      const r = await fetch('/api/remote/password/status');
+      const j = await r.json();
+      setHasPassword(!!j.hasPassword);
+    } catch {
+      setHasPassword(null);
+    }
+  };
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  const save = async () => {
+    if (pw.length < 8) {
+      setNotice('Password must be at least 8 characters.');
+      return;
+    }
+    setBusy(true);
+    setNotice(null);
+    try {
+      const r = await fetch('/api/remote/password', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password: pw }),
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.error ?? 'Failed to save');
+      setPw('');
+      setNotice('Password saved.');
+      await refresh();
+    } catch (e) {
+      setNotice((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clear = async () => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      await fetch('/api/remote/password', { method: 'DELETE' });
+      setNotice('Password cleared — remote access is disabled.');
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 28 }}>
+      <h3
+        style={{
+          margin: '0 0 14px',
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+          color: 'var(--fg-2)',
+        }}
+      >
+        REMOTE ACCESS PASSWORD
+      </h3>
+
+      <p style={{ fontSize: 12, color: 'var(--fg-2)', lineHeight: 1.5, marginTop: 0 }}>
+        Required for remote access. Nothing — no audio, no control, not even a
+        connection — happens until this password is entered correctly. It is
+        verified end-to-end at your radio (SPAKE2+); the server stores only a
+        verifier, never the password itself.
+      </p>
+
+      <div
+        style={{
+          marginTop: 12,
+          fontSize: 12,
+          fontWeight: 700,
+          color: hasPassword ? 'var(--accent)' : 'var(--tx)',
+        }}
+      >
+        {hasPassword === null
+          ? '…'
+          : hasPassword
+            ? '● Password set — remote access can be enabled.'
+            : '○ No password — remote access is disabled.'}
+      </div>
+
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 14 }}>
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
+            color: 'var(--fg-2)',
+          }}
+        >
+          {hasPassword ? 'Change password' : 'Set password'}
+        </span>
+        <input
+          type="password"
+          autoComplete="new-password"
+          placeholder="at least 8 characters"
+          value={pw}
+          onChange={(e) => setPw(e.target.value)}
+          style={{
+            padding: '8px 10px',
+            fontFamily: 'monospace',
+            fontSize: 13,
+            color: 'var(--fg-0)',
+            background: 'var(--bg-2)',
+            border: '1px solid var(--panel-border)',
+            borderRadius: 'var(--r-sm)',
+            outline: 'none',
+          }}
+        />
+      </label>
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center' }}>
+        <button
+          type="button"
+          onClick={save}
+          disabled={busy || pw.length < 8}
+          style={{
+            padding: '8px 16px',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
+            color: !busy && pw.length >= 8 ? 'var(--fg-0)' : 'var(--fg-2)',
+            background: !busy && pw.length >= 8 ? 'var(--accent)' : 'var(--bg-2)',
+            border: '1px solid var(--panel-border)',
+            borderRadius: 'var(--r-sm)',
+            cursor: !busy && pw.length >= 8 ? 'pointer' : 'not-allowed',
+            opacity: !busy && pw.length >= 8 ? 1 : 0.6,
+          }}
+        >
+          {hasPassword ? 'Change' : 'Set password'}
+        </button>
+        <button
+          type="button"
+          onClick={clear}
+          disabled={busy || !hasPassword}
+          style={{
+            padding: '8px 16px',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
+            color: 'var(--fg-2)',
+            background: 'var(--bg-2)',
+            border: '1px solid var(--panel-border)',
+            borderRadius: 'var(--r-sm)',
+            cursor: !busy && hasPassword ? 'pointer' : 'not-allowed',
+            opacity: !busy && hasPassword ? 1 : 0.5,
+          }}
+        >
+          Clear
+        </button>
+        {notice && <span style={{ fontSize: 11, color: 'var(--fg-2)' }}>{notice}</span>}
+      </div>
+    </div>
+  );
+}
+
+// Remote-access QR: encodes the operator's openhpsdrzeus.com/go/<callsign>
+// address so a phone camera opens the remote client directly. The callsign comes
+// from the QRZ sign-in (Settings → QRZ); access still requires the session
+// password — the link alone is useless (ADR-0007/0008).
+function RemoteQrSection() {
+  const home = useQrzStore((s) => s.home);
+  const callsign = home?.callsign?.trim().toUpperCase() ?? '';
+  const remoteUrl = callsign
+    ? `${REMOTE_GO_ORIGIN}/go/${encodeURIComponent(callsign)}`
+    : null;
+  const qrSrc = remoteUrl
+    ? `${getServerBaseUrl()}/api/remote/qr.svg?data=${encodeURIComponent(remoteUrl)}`
+    : null;
+
+  return (
+    <div style={{ marginTop: 28 }}>
+      <h3
+        style={{
+          margin: '0 0 14px',
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+          color: 'var(--fg-2)',
+        }}
+      >
+        REMOTE ACCESS QR
+      </h3>
+
+      <p style={{ fontSize: 12, color: 'var(--fg-2)', lineHeight: 1.5, marginTop: 0 }}>
+        Scan with your phone to open your radio from anywhere at your personal
+        address. The link is safe to share — access still requires the session
+        password, so the address alone reaches nothing.
+      </p>
+
+      {remoteUrl ? (
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginTop: 14 }}>
+          <img
+            src={qrSrc!}
+            alt={`Remote access QR for ${remoteUrl}`}
+            width={148}
+            height={148}
+            style={{ background: '#fff', padding: 8, borderRadius: 'var(--r-sm)', flex: '0 0 auto' }}
+          />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+            <a
+              href={remoteUrl}
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                fontFamily: 'monospace',
+                fontSize: 13,
+                color: 'var(--accent)',
+                wordBreak: 'break-all',
+              }}
+            >
+              {remoteUrl}
+            </a>
+            <span style={{ fontSize: 11, color: 'var(--fg-2)' }}>
+              Point your phone camera at the code.
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div
+          style={{
+            marginTop: 14,
+            padding: 10,
+            fontSize: 11,
+            lineHeight: 1.5,
+            color: 'var(--fg-2)',
+            background: 'var(--bg-2)',
+            border: '1px solid var(--panel-border)',
+            borderRadius: 'var(--r-sm)',
+          }}
+        >
+          Sign in to QRZ (Settings → QRZ) so Zeus knows your callsign. Your remote
+          address will be{' '}
+          <code style={{ fontFamily: 'monospace', color: 'var(--fg-1)' }}>
+            openhpsdrzeus.com/go/&lt;your-callsign&gt;
+          </code>
+          .
         </div>
       )}
     </div>

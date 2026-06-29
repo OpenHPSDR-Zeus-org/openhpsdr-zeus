@@ -1,0 +1,8 @@
+Info: Saving your IP search path in C:\Documents and Settings\Kirk\.altera.quartus\ip\8.1\ip_search_path\user_components.ipx
+Info: Using factories: CuspFactory, ImportFactory, DSPBuilderFactory, DDRLegacyFactory, BeanElementFactory, LegacyFactory, HDLComponentElementFactory, TclModuleFactory, VariationFactory, JarFactory
+Progress: min 0: 
+Progress: max 1: 
+Progress: current 1: 
+Progress: (0) searching C:/Documents and Settings/Kirk/Desktop/Mercury/8.1 (command line switch)
+Info: C:/Documents and Settings/Kirk/Desktop/Mercury/8.1 matched 1 files in 0.00 seconds
+Info: Found 0 components

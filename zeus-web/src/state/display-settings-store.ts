@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -87,6 +88,14 @@ export const DEFAULT_TX_DISPLAY_CAL_OFFSET_DB = 0;
 export const DEFAULT_TX_DISPLAY_FFT_SIZE = 16384;
 export const DEFAULT_TX_DISPLAY_WINDOW = 2;
 export const DEFAULT_TX_DISPLAY_AVG_TAU_MS = 175;
+// TX display auto-range default. OFF — the TX panadapter/waterfall follow the
+// operator's manual dB-scale slider (the fixed/saved TX window), matching
+// Thetis's fixed manual TXWFAmpMin/Max thresholds. The per-frame auto-fit was
+// too sensitive: it tracked the live speech so tightly that peaks railed at
+// full-scale (the "flat-topping on TX" report) and the operator had no stable
+// level to configure. Auto-range stays available via the Spectrum Scale
+// settings checkbox for anyone who prefers the auto fit.
+export const DEFAULT_TX_AUTO_RANGE = false;
 export const TX_DISPLAY_CAL_OFFSET_ABS_DB = 60;
 export const TX_DISPLAY_AVG_TAU_MIN_MS = 0;
 export const TX_DISPLAY_AVG_TAU_MAX_MS = 2000;
@@ -96,6 +105,9 @@ const TX_STORAGE_KEY = 'zeus.display.txDbRange';
 const WF_STORAGE_KEY = 'zeus.display.wfDbRange';
 const WF_TX_STORAGE_KEY = 'zeus.display.wfTxDbRange';
 const WF_SCROLL_SPEED_STORAGE_KEY = 'zeus.display.wfScrollSpeed';
+const BAND_OVERLAY_STORAGE_KEY = 'zeus.display.bandOverlay';
+const BAND_EDGE_ALERT_STORAGE_KEY = 'zeus.display.bandEdgeAlert';
+const CHAT_ROSTER_OVERLAY_STORAGE_KEY = 'zeus.display.chatRosterOverlay';
 
 // Legacy localStorage keys — pre-server-side storage. Read once on first
 // load to migrate the operator's existing image / colour up to the backend,
@@ -151,6 +163,26 @@ function writeSavedWaterfallScrollSpeed(value: number): void {
   try {
     if (typeof localStorage === 'undefined') return;
     localStorage.setItem(WF_SCROLL_SPEED_STORAGE_KEY, String(value));
+  } catch {
+    // quota exceeded / private mode — accept silently.
+  }
+}
+
+function readBoolFlag(key: string, defaultValue: boolean): boolean {
+  try {
+    if (typeof localStorage === 'undefined') return defaultValue;
+    const raw = localStorage.getItem(key);
+    if (raw === null) return defaultValue;
+    return raw === '1' || raw === 'true';
+  } catch {
+    return defaultValue;
+  }
+}
+
+function writeBoolFlag(key: string, value: boolean): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(key, value ? '1' : '0');
   } catch {
     // quota exceeded / private mode — accept silently.
   }
@@ -358,6 +390,23 @@ const TX_AUTO_PEAK_PCT = 0.995;
 // Guard against degenerate ranges (e.g. silent input producing p5==p95).
 const MIN_SPAN_DB = 20;
 
+/**
+ * Whether the TX display auto-fit should engage for the current TX state.
+ *
+ * Auto-range is only meaningful for a wide modulated signal (voice MOX/PTT),
+ * where the high-percentile "peak" lands on real signal. A TUNE carrier (a
+ * few-bin spike) or a two-tone test (twin spikes) defeats the percentile fit —
+ * the "peak" falls in the noise floor and the window collapses onto it,
+ * rendering the clean carrier as "grass". Those transmit types keep the fixed
+ * window. Two-tone arms independently of MOX, so it is excluded explicitly.
+ */
+export function shouldTxAutoRange(
+  tx: { moxOn: boolean; tunOn: boolean; twoToneOn: boolean },
+  txAutoRange: boolean,
+): boolean {
+  return txAutoRange && tx.moxOn && !tx.tunOn && !tx.twoToneOn;
+}
+
 export type DisplaySettingsState = {
   autoRange: boolean;
   // Panadapter dB window. Driven by the DbScale gesture (manual) and/or
@@ -410,6 +459,20 @@ export type DisplaySettingsState = {
   // Photino-desktop port shuffle (per-launch random loopback port = fresh
   // localStorage origin = orphaned setting).
   rxTraceColor: string;
+  // Issue #846: licence-class band overlay on the panadapter — shading per
+  // band-plan segment, with sub-band labels. Local-only (no server round-trip);
+  // the active plan itself is fetched separately via the bandPlan store.
+  showBandOverlay: boolean;
+  // Issue #846: short audible tone when the VFO crosses from in-licence into
+  // out-of-licence (or into a band gap). Mirrors the alarm Icoms ship with.
+  bandEdgeAlertEnabled: boolean;
+  // Paint connected ZeusChat operators (callsign + transmit dot) onto the
+  // panadapter at the frequency they're tuned to. Local-only display
+  // preference; the overlay itself lives in components/ChatRosterOverlay.tsx.
+  showChatRosterOverlay: boolean;
+  setShowBandOverlay: (v: boolean) => void;
+  setBandEdgeAlertEnabled: (v: boolean) => void;
+  setShowChatRosterOverlay: (v: boolean) => void;
   setPanBackground: (v: PanBackgroundMode) => Promise<void>;
   setBackgroundImage: (dataUrl: string | null) => Promise<boolean>;
   setBackgroundImageFit: (v: BackgroundImageFit) => Promise<void>;
@@ -436,6 +499,10 @@ export type DisplaySettingsState = {
   // Fit the TX windows to a frame of live TX pixels (no-op when off / empty).
   // Driven from the waterfall ingest while keyed.
   updateTxAutoRange: (pixels: Float32Array) => void;
+  // Snap the TX windows back to the operator's saved (or fixed -80..+20) range.
+  // Used when auto-range disengages — turned off, or a non-voice TX type (TUNE /
+  // two-tone) where the auto-fit would collapse onto the noise floor.
+  restoreSavedTxWindows: () => void;
   resetDbRanges: () => void;
   updateAutoRange: (wfDb: Float32Array) => void;
   // Shift dbMin and dbMax together by `deltaDb`. Used by the draggable dB
@@ -489,6 +556,9 @@ const initialTxRange = readSavedTxRange();
 const initialWfRange = readSavedWfRange();
 const initialWfTxRange = readSavedWfTxRange();
 const initialWaterfallScrollSpeed = readSavedWaterfallScrollSpeed();
+const initialShowBandOverlay = readBoolFlag(BAND_OVERLAY_STORAGE_KEY, true);
+const initialBandEdgeAlertEnabled = readBoolFlag(BAND_EDGE_ALERT_STORAGE_KEY, true);
+const initialShowChatRosterOverlay = readBoolFlag(CHAT_ROSTER_OVERLAY_STORAGE_KEY, true);
 
 export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) => ({
   autoRange: false,
@@ -504,7 +574,17 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   txDisplayFftSize: DEFAULT_TX_DISPLAY_FFT_SIZE,
   txDisplayWindow: DEFAULT_TX_DISPLAY_WINDOW,
   txDisplayAvgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS,
-  txAutoRange: true,
+  // Master enable for the TX display auto-fit. OFF by default
+  // (DEFAULT_TX_AUTO_RANGE) so the TX panadapter/waterfall follow the
+  // operator's manual dB-scale slider — a stable, configurable level instead of
+  // the per-frame auto-fit that tracked speech so tightly it flat-topped at
+  // full-scale. When enabled it only engages for voice MOX/PTT — see
+  // shouldTxAutoRange(). TUNE and two-tone are deliberately excluded: their
+  // narrow carrier / twin-tone fools the percentile fit into collapsing the dB
+  // window onto the noise floor, rendering the clean carrier as "grass". Those
+  // fall back to the Thetis-parity fixed TX_FIXED_DB_MIN/MAX (-80..+20) window
+  // via restoreSavedTxWindows().
+  txAutoRange: DEFAULT_TX_AUTO_RANGE,
   colormap: 'blue',
   waterfallScrollSpeed: initialWaterfallScrollSpeed,
   // Defaults until the server-side fetch lands (see hydrateFromServer at the
@@ -518,6 +598,21 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   // that resolves the operator briefly sees the default amber trace — same
   // first-paint trade-off as panBackground / backgroundImage.
   rxTraceColor: DEFAULT_RX_TRACE_COLOR,
+  showBandOverlay: initialShowBandOverlay,
+  bandEdgeAlertEnabled: initialBandEdgeAlertEnabled,
+  showChatRosterOverlay: initialShowChatRosterOverlay,
+  setShowBandOverlay: (v) => {
+    set({ showBandOverlay: v });
+    writeBoolFlag(BAND_OVERLAY_STORAGE_KEY, v);
+  },
+  setBandEdgeAlertEnabled: (v) => {
+    set({ bandEdgeAlertEnabled: v });
+    writeBoolFlag(BAND_EDGE_ALERT_STORAGE_KEY, v);
+  },
+  setShowChatRosterOverlay: (v) => {
+    set({ showChatRosterOverlay: v });
+    writeBoolFlag(CHAT_ROSTER_OVERLAY_STORAGE_KEY, v);
+  },
   setPanBackground: async (panBackground) => {
     const prev = get().panBackground;
     set({ panBackground });
@@ -665,7 +760,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
       txDisplayFftSize: DEFAULT_TX_DISPLAY_FFT_SIZE,
       txDisplayWindow: DEFAULT_TX_DISPLAY_WINDOW,
       txDisplayAvgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS,
-      txAutoRange: true,
+      txAutoRange: DEFAULT_TX_AUTO_RANGE,
     });
     scheduleTxDisplaySave();
   },
@@ -674,16 +769,29 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
       set({ txAutoRange: true });
     } else {
       // Off restores the operator's saved TX windows (mirrors setAutoRange).
-      const tx = readSavedTxRange();
-      const wf = readSavedWfTxRange();
-      set({
-        txAutoRange: false,
-        txDbMin: tx.txDbMin,
-        txDbMax: tx.txDbMax,
-        wfTxDbMin: wf.wfTxDbMin,
-        wfTxDbMax: wf.wfTxDbMax,
-      });
+      set({ txAutoRange: false });
+      get().restoreSavedTxWindows();
     }
+  },
+  restoreSavedTxWindows: () => {
+    const tx = readSavedTxRange();
+    const wf = readSavedWfTxRange();
+    const { txDbMin, txDbMax, wfTxDbMin, wfTxDbMax } = get();
+    // Avoid a redundant set() (and render) when the windows are already there.
+    if (
+      txDbMin === tx.txDbMin &&
+      txDbMax === tx.txDbMax &&
+      wfTxDbMin === wf.wfTxDbMin &&
+      wfTxDbMax === wf.wfTxDbMax
+    ) {
+      return;
+    }
+    set({
+      txDbMin: tx.txDbMin,
+      txDbMax: tx.txDbMax,
+      wfTxDbMin: wf.wfTxDbMin,
+      wfTxDbMax: wf.wfTxDbMax,
+    });
   },
   updateTxAutoRange: (pixels) => {
     if (!get().txAutoRange || pixels.length === 0) return;
@@ -741,7 +849,12 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   shiftTxDbRange: (deltaDb) => {
     const { txDbMin, txDbMax } = get();
     const { min: nextMin, max: nextMax } = clampShift(txDbMin, txDbMax, deltaDb);
-    set({ txDbMin: nextMin, txDbMax: nextMax });
+    // Dragging the TX scale is a manual window edit — it must take over from
+    // auto-range, exactly like setTxDbRange. Without this the per-frame
+    // updateTxAutoRange EMA fights the drag and snaps it back every frame, so
+    // the scale appears frozen during voice MOX. (Thetis parity: TX uses a
+    // fixed manual threshold, not an auto fit.)
+    set({ txAutoRange: false, txDbMin: nextMin, txDbMax: nextMax });
     writeSavedTxRange(nextMin, nextMax);
     scheduleDbRangeSave();
   },
@@ -755,7 +868,13 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   shiftWfTxDbRange: (deltaDb) => {
     const { wfTxDbMin, wfTxDbMax } = get();
     const { min: nextMin, max: nextMax } = clampShift(wfTxDbMin, wfTxDbMax, deltaDb);
-    set({ wfTxDbMin: nextMin, wfTxDbMax: nextMax });
+    // Dragging the TX waterfall scale is a manual window edit — it must take
+    // over from auto-range, exactly like setWfTxDbRange. Without this the
+    // per-frame updateTxAutoRange EMA fights the drag and snaps it back every
+    // frame, so the waterfall slider appears to do nothing during voice MOX.
+    // (Thetis parity: the TX waterfall follows the operator's slider, not an
+    // auto fit.)
+    set({ txAutoRange: false, wfTxDbMin: nextMin, wfTxDbMax: nextMax });
     writeSavedWfTxRange(nextMin, nextMax);
     scheduleDbRangeSave();
   },

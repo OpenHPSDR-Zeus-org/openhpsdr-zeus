@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -45,3 +46,7 @@
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("Zeus.Protocol1.Tests")]
+// The external-port encoder seam (Zeus.Server.Hosting.IExternalPortEncoder)
+// delegates to ControlFrame's pure antenna-bit helpers so the firewall and the
+// wire path share one copy of the math — byte-identical by construction.
+[assembly: InternalsVisibleTo("Zeus.Server.Hosting")]

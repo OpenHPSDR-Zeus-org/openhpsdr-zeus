@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -43,183 +44,227 @@
 // License for details.
 
 import type { CSSProperties } from 'react';
-import { Copy, Headphones, Repeat2, Send } from 'lucide-react';
-import { setRx2, setTxVfo, setVfo, swapVfos, type TxVfo } from '../../api/client';
+import { Headphones, Send, Volume2, VolumeX } from 'lucide-react';
+import {
+  setReceiver,
+  setReceiverMuted,
+  setRx2,
+  setTxReceiver,
+} from '../../api/client';
 import { bandOf } from '../../components/design/data';
-import { spectrumReceiverFilterColor } from '../../components/spectrumReceiverColor';
+import { receiverColorByIndex } from '../../components/spectrumReceiverColor';
 import { VfoDisplay } from '../../components/VfoDisplay';
 import { useConnectionStore } from '../../state/connection-store';
+import {
+  getDesiredReceiverCount,
+  getReceiverAfGainDb,
+  getReceiverVfoHz,
+  optimisticSetReceiverAfGain,
+  optimisticSetReceiverVfo,
+  setExposedReceiverCount,
+} from '../../state/receiver-state';
 
 export function VfoPanel() {
   const applyState = useConnectionStore((s) => s.applyState);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
-  const vfoBHz = useConnectionStore((s) => s.vfoBHz);
+  const vfoBHz = useConnectionStore((s) => getReceiverVfoHz(s, 1));
   const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
-  const rx2AudioMode = useConnectionStore((s) => s.rx2AudioMode);
-  const rx2AfGainDb = useConnectionStore((s) => s.rx2AfGainDb);
-  const txVfo = useConnectionStore((s) => s.txVfo);
-  const rxFocus = useConnectionStore((s) => s.rxFocus);
-  const setRxFocus = useConnectionStore((s) => s.setRxFocus);
+  const rx2AfGainDb = useConnectionStore((s) => getReceiverAfGainDb(s, 1));
+  const receivers = useConnectionStore((s) => s.receivers);
+  const txReceiverIndex = useConnectionStore((s) => s.txReceiverIndex);
+  const focusedRxIndex = useConnectionStore((s) => s.focusedRxIndex);
+  const setFocusedRxIndex = useConnectionStore((s) => s.setFocusedRxIndex);
+  const selectedRxIndices = useConnectionStore((s) => s.selectedRxIndices);
+  const toggleRxSelection = useConnectionStore((s) => s.toggleRxSelection);
 
   const patchRx2 = (req: {
     enabled?: boolean;
     vfoBHz?: number;
     afGainDb?: number;
   }) => {
-    const optimistic: Partial<ReturnType<typeof useConnectionStore.getState>> = {};
-    if (req.enabled !== undefined) optimistic.rx2Enabled = req.enabled;
-    if (req.vfoBHz !== undefined) optimistic.vfoBHz = req.vfoBHz;
-    if (req.afGainDb !== undefined) optimistic.rx2AfGainDb = req.afGainDb;
-    useConnectionStore.setState(optimistic);
+    if (req.enabled !== undefined) useConnectionStore.setState({ rx2Enabled: req.enabled });
+    // RX2 VFO/AF are canonical on receivers[1]; the helpers dual-write the flat
+    // mirror so any not-yet-migrated reader stays in sync.
+    if (req.vfoBHz !== undefined) optimisticSetReceiverVfo(1, req.vfoBHz);
+    if (req.afGainDb !== undefined) optimisticSetReceiverAfGain(1, req.afGainDb);
     setRx2(req).then(applyState).catch(() => {});
   };
 
-  const chooseTxVfo = (next: TxVfo) => {
-    useConnectionStore.setState({ txVfo: next });
-    setTxVfo(next).then(applyState).catch(() => {});
+  // Transmit on any receiver's VFO (RX1=0, RX2=1, RX3+=index). The server moves
+  // the TX DUC/CTUN LO to the chosen receiver; clamps an unexposed index to RX1.
+  const chooseTxReceiver = (index: number) => {
+    useConnectionStore.setState({ txReceiverIndex: index, txVfo: index === 1 ? 'B' : 'A' });
+    setTxReceiver(index).then(applyState).catch(() => {});
   };
 
-  const copyBToA = () => {
-    useConnectionStore.setState({ vfoHz: vfoBHz });
-    setVfo(vfoBHz).then(applyState).catch(() => {});
+  // Per-RX listen/mute (Thetis chkMUT/chkRX2Mute). "audible" is the UI sense;
+  // the wire/state field is `muted`. Optimistic so the lane reacts immediately.
+  const toggleAudible = (index: number, audible: boolean) => {
+    const muted = !audible;
+    useConnectionStore.setState((s) => ({
+      receivers: s.receivers.map((r) => (r.index === index ? { ...r, muted } : r)),
+    }));
+    setReceiverMuted(index, muted).then(applyState).catch(() => {});
   };
 
-  const toggleRx2 = () => {
-    const enabled = !rx2Enabled;
-    if (enabled) setRxFocus('B');
-    else setRxFocus('A');
-    patchRx2({ enabled });
+  const audibleOf = (index: number) =>
+    !(receivers.find((r) => r.index === index)?.muted ?? false);
+
+  // MULTI RX master toggle: enable the whole multi-DDC set the operator
+  // configured in Settings → Receivers (remembered count, default 2), or
+  // collapse back to RX1 only. Replaces the old single "+ RX2" affordance.
+  const multiRxOn = rx2Enabled;
+  const toggleMultiRx = () => {
+    if (multiRxOn) {
+      setFocusedRxIndex(0);
+      setExposedReceiverCount(1);
+    } else {
+      setFocusedRxIndex(1);
+      setExposedReceiverCount(getDesiredReceiverCount());
+    }
   };
 
-  const receiverRow = (receiver: TxVfo, freqHz: number, enabled = true) => {
-    const focused = rxFocus === receiver;
-    const txSelected = txVfo === receiver;
-    const title = receiver === 'A' ? 'RX1 / VFO A' : 'RX2 / VFO B';
-    const label = receiver === 'A' ? 'VFO A' : 'VFO B';
-    const receiverFilterColor = spectrumReceiverFilterColor(receiver);
-    const mutedByListenMode = enabled && rx2Enabled && rx2AudioMode !== 'both'
-      && ((rx2AudioMode === 'rx1' && receiver === 'B') || (rx2AudioMode === 'rx2' && receiver === 'A'));
-    return (
-      <div
-        className={`vfo-lane ${focused ? 'is-focused' : ''} ${txSelected ? 'is-tx' : ''} ${
-          mutedByListenMode ? 'is-listen-muted' : ''
-        } ${enabled ? '' : 'is-disabled'}`}
-        style={{ '--vfo-filter-color': receiverFilterColor } as CSSProperties}
-        onClick={() => {
-          if (enabled) setRxFocus(receiver);
-        }}
-      >
-        <button
-          type="button"
-          className="vfo-focus-key"
-          disabled={!enabled}
-          onClick={(e) => {
-            e.stopPropagation();
-            setRxFocus(receiver);
-          }}
-          title={`Focus ${title}`}
-          aria-label={`Focus ${title}`}
-          aria-pressed={focused}
-        >
-          {receiver}
-        </button>
-        <div className="vfo-lane-body">
-          <div className="vfo-lane-meta">
-            <span className="vfo-lane-title">
-              {title}
-            </span>
-            <span className="vfo-lane-band mono">{bandOf(freqHz)}</span>
-          </div>
-          <VfoDisplay receiver={receiver} label={label} compact />
-        </div>
-        <button
-          type="button"
-          className={`vfo-tx-key ${txSelected ? 'is-selected' : ''}`}
-          disabled={!enabled}
-          onClick={(e) => {
-            e.stopPropagation();
-            chooseTxVfo(receiver);
-          }}
-          title={`Transmit on VFO ${receiver}`}
-          aria-label={`Transmit on VFO ${receiver}`}
-          aria-pressed={txSelected}
-        >
-          <Send size={13} />
-          <span>TX</span>
-        </button>
-      </div>
-    );
+  // AF gain for the active receiver. RX1's level is the main RX volume (lives in
+  // the toolbar), so the lane AF targets RX2 (flat field) and RX3+ (per-receiver).
+  const afGainOf = (index: number) =>
+    index === 1
+      ? rx2AfGainDb
+      : index >= 2
+      ? receivers.find((r) => r.index === index)?.afGainDb ?? 0
+      : 0;
+
+  const setAfGain = (index: number, db: number) => {
+    if (index === 1) {
+      patchRx2({ afGainDb: db });
+      return;
+    }
+    useConnectionStore.setState((s) => ({
+      receivers: s.receivers.map((r) => (r.index === index ? { ...r, afGainDb: db } : r)),
+    }));
+    setReceiver(index, { afGainDb: db }).then(applyState).catch(() => {});
   };
+
+  // Exposed receivers, in DDC order: RX1 always, RX2 when enabled, then every
+  // active extra DDC. The chip rail lists these; one is the active detail.
+  const lanes: { index: number; vfoHz: number; abId?: 'A' | 'B' }[] = [
+    { index: 0, vfoHz, abId: 'A' },
+  ];
+  if (rx2Enabled) lanes.push({ index: 1, vfoHz: vfoBHz, abId: 'B' });
+  for (const r of receivers.filter((r) => r.index >= 2 && r.enabled))
+    lanes.push({ index: r.index, vfoHz: r.vfoHz });
+
+  // lanes always contains RX1, so this fallback is just to satisfy the compiler.
+  const active =
+    lanes.find((l) => l.index === focusedRxIndex) ??
+    lanes[0] ?? { index: 0, vfoHz, abId: 'A' as const };
+  const activeTitle = `RX${active.index + 1}`;
+  const activeLabel = `RX${active.index + 1}`;
+  const activeAudible = audibleOf(active.index);
+  const activeTx = txReceiverIndex === active.index;
 
   return (
-    <div className="freq-panel vfo-dual-panel">
-      <div className="vfo-command-strip">
+    <div className="freq-panel vfo-md">
+      {/* Compact chip rail — one chip per exposed receiver, scrolls past 4. */}
+      <div className="vfo-md__rail" role="tablist" aria-label="Receivers">
+        {lanes.map((l) => {
+          const muted = !audibleOf(l.index);
+          const isTx = txReceiverIndex === l.index;
+          const isActive = l.index === active.index;
+          const isSelected = selectedRxIndices.includes(l.index);
+          return (
+            <button
+              key={l.index}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              className={`vfo-chip ${isActive ? 'is-active' : ''} ${
+                isSelected && !isActive ? 'is-selected' : ''
+              } ${isTx ? 'is-tx' : ''} ${muted ? 'is-muted' : ''}`}
+              style={{ '--vfo-filter-color': receiverColorByIndex(l.index) } as CSSProperties}
+              onClick={(e) =>
+                e.ctrlKey || e.metaKey ? toggleRxSelection(l.index) : setFocusedRxIndex(l.index)
+              }
+              title={`RX${l.index + 1}: click to focus, Ctrl/⌘-click to multi-select${
+                isTx ? ' · transmitting here' : ''
+              }${muted ? ' · muted' : ''}`}
+            >
+              <span className="vfo-chip__id">
+                {l.index + 1}
+                {isTx && <span className="vfo-chip__tx">TX</span>}
+                {muted && <VolumeX size={9} />}
+              </span>
+              <span className="vfo-chip__freq mono">{(l.vfoHz / 1_000_000).toFixed(3)}</span>
+              <span className="vfo-chip__band mono">{bandOf(l.vfoHz)}</span>
+            </button>
+          );
+        })}
         <button
           type="button"
-          className={`vfo-rx2-pill ${rx2Enabled ? 'is-on' : ''}`}
-          onClick={toggleRx2}
-          aria-pressed={rx2Enabled}
-          title={rx2Enabled ? 'Disable RX2' : 'Enable RX2'}
+          className={`vfo-chip vfo-chip--add ${multiRxOn ? 'is-active' : ''}`}
+          onClick={toggleMultiRx}
+          title={
+            multiRxOn
+              ? 'Disable extra receivers (back to RX1 only)'
+              : 'Enable multiple receivers (set how many in Settings → Receivers)'
+          }
+          aria-label="Toggle multiple receivers"
+          aria-pressed={multiRxOn}
         >
           <Headphones size={13} />
-          <span>RX2</span>
-          <span className="vfo-status-dot" aria-hidden="true" />
+          <span className="vfo-chip__band">MULTI RX</span>
         </button>
-        <div className="vfo-copy-bank" role="group" aria-label="VFO copy and swap">
-          <button
-            type="button"
-            className="vfo-tool-key"
-            onClick={() => patchRx2({ vfoBHz: vfoHz })}
-            title="Copy VFO A to VFO B"
-            aria-label="Copy VFO A to VFO B"
-          >
-            <Copy size={13} />
-            <span>A&gt;B</span>
-          </button>
-          <button
-            type="button"
-            className="vfo-tool-key"
-            onClick={copyBToA}
-            disabled={!rx2Enabled}
-            title="Copy VFO B to VFO A"
-            aria-label="Copy VFO B to VFO A"
-          >
-            <Copy size={13} />
-            <span>B&gt;A</span>
-          </button>
-          <button
-            type="button"
-            className="vfo-tool-key"
-            onClick={() => swapVfos().then(applyState).catch(() => {})}
-            title="Swap VFO A and VFO B"
-            aria-label="Swap VFO A and VFO B"
-          >
-            <Repeat2 size={14} />
-            <span>Swap</span>
-          </button>
+      </div>
+
+      {/* Active receiver detail — the full-size tuning surface. */}
+      <div
+        className={`vfo-md__detail ${activeTx ? 'is-tx' : ''}`}
+        style={{ '--vfo-filter-color': receiverColorByIndex(active.index) } as CSSProperties}
+      >
+        <div className="vfo-md__head">
+          <span className="vfo-md__title">{activeTitle}</span>
+          <span className="vfo-md__band mono">{bandOf(active.vfoHz)}</span>
         </div>
-      </div>
-
-      <div className="vfo-stack">
-        {receiverRow('A', vfoHz)}
-        {receiverRow('B', vfoBHz, rx2Enabled)}
-      </div>
-
-      <div className="vfo-audio-strip">
-        <label className="vfo-af-control mono">
-          <span className="vfo-af-label">AF</span>
-          <input
-            type="range"
-            min={-30}
-            max={12}
-            step={1}
-            value={rx2AfGainDb}
-            disabled={!rx2Enabled}
-            onChange={(e) => patchRx2({ afGainDb: Number(e.currentTarget.value) })}
-            aria-label="RX2 audio gain"
-          />
-          <span className="vfo-af-value">{rx2AfGainDb.toFixed(0)} dB</span>
-        </label>
+        <VfoDisplay
+          key={active.index}
+          {...(active.abId ? { receiver: active.abId } : { rxIndex: active.index })}
+          label={activeLabel}
+        />
+        <div className="vfo-md__actions">
+          <button
+            type="button"
+            className={`vfo-listen-key ${activeAudible ? 'is-on' : ''}`}
+            onClick={() => toggleAudible(active.index, !activeAudible)}
+            title={activeAudible ? `Mute ${activeLabel} audio` : `Hear ${activeLabel} audio`}
+            aria-pressed={activeAudible}
+          >
+            {activeAudible ? <Volume2 size={13} /> : <VolumeX size={13} />}
+          </button>
+          <button
+            type="button"
+            className={`vfo-tx-key ${activeTx ? 'is-selected' : ''}`}
+            onClick={() => chooseTxReceiver(active.index)}
+            title={`Transmit on ${activeTitle}`}
+            aria-pressed={activeTx}
+          >
+            <Send size={13} />
+            <span>TX</span>
+          </button>
+          {active.index >= 1 && (
+            <label className="vfo-md__af mono" title={`${activeLabel} audio gain`}>
+              <span>AF</span>
+              <input
+                type="range"
+                min={-30}
+                max={12}
+                step={1}
+                value={afGainOf(active.index)}
+                onChange={(e) => setAfGain(active.index, Number(e.currentTarget.value))}
+                aria-label={`${activeLabel} audio gain`}
+              />
+              <span className="vfo-md__af-val">{afGainOf(active.index).toFixed(0)}</span>
+            </label>
+          )}
+        </div>
       </div>
     </div>
   );

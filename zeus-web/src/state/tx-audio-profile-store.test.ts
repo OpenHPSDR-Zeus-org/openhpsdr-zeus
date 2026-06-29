@@ -43,7 +43,15 @@ function makeProfile(id: string, name: string, mode: 'native' | 'vst' = 'native'
 
 describe('tx-audio-profile-store', () => {
   beforeEach(() => {
-    useTxAudioProfileStore.setState({ profiles: [], loaded: false, lastLoadedId: null, busy: false });
+    useTxAudioProfileStore.setState({
+      profiles: [],
+      loaded: false,
+      lastLoadedId: null,
+      busy: false,
+      dirty: false,
+      baseline: null,
+      applyRevision: 0,
+    });
     vi.restoreAllMocks();
   });
 
@@ -114,11 +122,49 @@ describe('tx-audio-profile-store', () => {
     expect(hydrateSpy).toHaveBeenCalledWith(fakeState);
     expect(loadChainSpy).toHaveBeenCalled();
     expect(useTxAudioProfileStore.getState().lastLoadedId).toBe('dx-punch');
+    expect(useTxAudioProfileStore.getState().applyRevision).toBe(1);
     // The Audio Suite store reconciled from the apply response.
     const audio = useAudioSuiteStore.getState();
     expect(audio.chainOrder).toEqual(['comp', 'eq']);
     expect(audio.processingMode).toBe('vst');
     expect(audio.masterBypassed).toBe(true);
+  });
+
+  it('importProfile() imports then immediately applies the imported profile', async () => {
+    const applyStateSpy = vi.spyOn(useConnectionStore.getState(), 'applyState');
+    const hydrateSpy = vi.spyOn(useTxStore.getState(), 'hydrateFromState');
+    const loadChainSpy = vi
+      .spyOn(useAudioSuiteStore.getState(), 'loadChainOrderFromServer')
+      .mockResolvedValue();
+
+    const imported = makeProfile('voodoo-4k', 'VooDoo 4K');
+    const fakeState = { status: 'Connected', mode: 'USB' } as unknown as RadioStateDto;
+    vi.spyOn(client, 'importTxAudioProfile').mockResolvedValue(imported);
+    vi.spyOn(client, 'fetchTxAudioProfiles').mockResolvedValue([imported]);
+    vi.spyOn(client, 'fetchLastLoadedTxAudioProfile').mockResolvedValue({ id: null });
+    vi.spyOn(client, 'applyTxAudioProfile').mockResolvedValue({
+      profile: imported,
+      state: fakeState,
+      pluginIds: ['com.openhpsdr.zeus.samples.eq'],
+      parked: [],
+      processingMode: 'native',
+      engineActive: false,
+      engineAvailable: false,
+      masterBypass: false,
+    });
+
+    const file = new File(['{}'], 'voodoo-4k.json', { type: 'application/json' });
+    const result = await useTxAudioProfileStore.getState().importProfile(file);
+
+    expect(result.ok).toBe(true);
+    expect(client.importTxAudioProfile).toHaveBeenCalledWith(file, undefined);
+    expect(client.applyTxAudioProfile).toHaveBeenCalledWith('voodoo-4k');
+    expect(applyStateSpy).toHaveBeenCalledWith(fakeState);
+    expect(hydrateSpy).toHaveBeenCalledWith(fakeState);
+    expect(loadChainSpy).toHaveBeenCalled();
+    expect(useTxAudioProfileStore.getState().lastLoadedId).toBe('voodoo-4k');
+    expect(useTxAudioProfileStore.getState().applyRevision).toBe(1);
+    expect(useTxAudioProfileStore.getState().dirty).toBe(false);
   });
 
   it('remove() drops the row and clears a matching selection', async () => {
@@ -140,7 +186,13 @@ describe('tx-audio-profile-store', () => {
 describe('tx-audio-profile-store — dirty tracking', () => {
   beforeEach(() => {
     useTxAudioProfileStore.setState({
-      profiles: [], loaded: false, lastLoadedId: null, busy: false, dirty: false, baseline: null,
+      profiles: [],
+      loaded: false,
+      lastLoadedId: null,
+      busy: false,
+      dirty: false,
+      baseline: null,
+      applyRevision: 0,
     });
     // Deterministic clean live state for the snapshot to read.
     useTxStore.setState({ micGainDb: 0, levelerMaxGainDb: 8 });

@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -26,7 +27,34 @@ export type ChatOperator = {
   status: ChatOperatorStatus | null;
   /** Epoch ms — when this operator joined / was last seen. */
   since: number;
+  /** True when this operator is a relay moderator (callsign painted gold). */
+  admin: boolean;
 };
+
+/**
+ * An inline media attachment carried with a message. Photos and voice snippets
+ * are sent "like a text message": the bytes ride inside the message as a base64
+ * data URL. The client downscales/compresses photos (see util/chat-image.ts) and
+ * records voice at a low Opus bitrate (see util/chat-audio.ts) so the encoded
+ * size stays within the relay's per-message storage cap.
+ */
+export type ChatAttachment = {
+  /** "image" or "audio"; unknown kinds are ignored when rendering. */
+  kind: string;
+  /** MIME type, e.g. "image/jpeg" or "audio/webm". */
+  mime: string;
+  /** Base64 data URL — usable directly as an <img> src. */
+  dataUrl: string;
+  /** Original filename, if known. */
+  name: string | null;
+  width: number | null;
+  height: number | null;
+  /** Decoded byte size, if known. */
+  size: number | null;
+};
+
+/** Max length of an attachment data URL (chars). Mirrors the C#/relay caps. */
+export const MAX_ATTACHMENT_DATAURL_LEN = 120_000;
 
 export type ChatMessage = {
   id: string;
@@ -35,6 +63,8 @@ export type ChatMessage = {
   /** Epoch ms. */
   ts: number;
   room: string;
+  /** Optional inline photo; null for plain text messages. */
+  attachment: ChatAttachment | null;
 };
 
 export type ChatStatus = {
@@ -47,6 +77,8 @@ export type ChatStatus = {
   isAdmin: boolean;
   /** Whether this operator's frequency is shared at all (eye toggle). */
   freqPublic: boolean;
+  /** Admin only: whether the "see all frequencies" override is armed. */
+  seeAllFreq: boolean;
 };
 
 export type ChatRoomKind = 'public' | 'group' | 'dm';
@@ -89,6 +121,7 @@ export function normalizeStatus(raw: unknown): ChatStatus {
     error: toStr(r.error),
     isAdmin: Boolean(r.isAdmin),
     freqPublic: r.freqPublic !== false, // default visible
+    seeAllFreq: Boolean(r.seeAllFreq),
   };
 }
 
@@ -112,6 +145,7 @@ export function normalizeOperator(raw: unknown): ChatOperator {
     mode: toStr(r.mode),
     status: toStatus(r.status),
     since: toNum(r.since) ?? 0,
+    admin: Boolean(r.admin),
   };
 }
 
@@ -130,6 +164,38 @@ export function normalizeFriends(raw: unknown): ChatFriends {
   };
 }
 
+/**
+ * Parse an optional attachment. Returns null unless it is a well-formed image or
+ * audio data URL within the size cap — a malformed/oversized/unsupported
+ * attachment degrades the message to text-only rather than rendering a broken
+ * one. The `kind` is derived from the MIME family so a hostile/buggy sender
+ * can't mislabel an image as audio (or vice-versa).
+ */
+export function normalizeAttachment(raw: unknown): ChatAttachment | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const mime = typeof r.mime === 'string' ? r.mime : '';
+  const dataUrl = typeof r.dataUrl === 'string' ? r.dataUrl : '';
+  const isImage = mime.startsWith('image/') && dataUrl.startsWith('data:image/');
+  const isAudio = mime.startsWith('audio/') && dataUrl.startsWith('data:audio/');
+  if (!isImage && !isAudio) return null;
+  if (dataUrl.length > MAX_ATTACHMENT_DATAURL_LEN) return null;
+  return {
+    kind: isAudio ? 'audio' : 'image',
+    mime,
+    dataUrl,
+    name: toStr(r.name),
+    width: toNum(r.width),
+    height: toNum(r.height),
+    size: toNum(r.size),
+  };
+}
+
+/** Whether an attachment is a voice/audio clip (vs. an inline photo). */
+export function isAudioAttachment(att: ChatAttachment | null | undefined): boolean {
+  return !!att && (att.kind === 'audio' || att.mime.startsWith('audio/'));
+}
+
 export function normalizeMessage(raw: unknown): ChatMessage {
   const r = (raw ?? {}) as Record<string, unknown>;
   return {
@@ -138,6 +204,7 @@ export function normalizeMessage(raw: unknown): ChatMessage {
     text: typeof r.text === 'string' ? r.text : '',
     ts: toNum(r.ts) ?? 0,
     room: typeof r.room === 'string' ? r.room : '',
+    attachment: normalizeAttachment(r.attachment),
   };
 }
 
@@ -184,13 +251,39 @@ export function chatSetEnabled(enabled: boolean, signal?: AbortSignal): Promise<
   );
 }
 
-export function chatSend(text: string, room?: string, signal?: AbortSignal): Promise<{ ok: boolean }> {
+/**
+ * Heartbeat telling the backend whether this client currently has the Chat
+ * panel displayed. Presence (the relay connection) is gated on this, so an
+ * enabled operator who isn't showing the panel stays off everyone's roster.
+ */
+export function chatSetVisible(visible: boolean, signal?: AbortSignal): Promise<ChatStatus> {
+  return jsonFetch(
+    '/api/chat/visible',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ visible }),
+      signal,
+    },
+    normalizeStatus,
+  );
+}
+
+export function chatSend(
+  text: string,
+  room?: string,
+  attachment?: ChatAttachment | null,
+  signal?: AbortSignal,
+): Promise<{ ok: boolean }> {
+  const body: Record<string, unknown> = { text };
+  if (room) body.room = room;
+  if (attachment) body.attachment = attachment;
   return jsonFetch(
     '/api/chat/send',
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(room ? { text, room } : { text }),
+      body: JSON.stringify(body),
       signal,
     },
     (raw) => ({ ok: Boolean((raw as { ok?: unknown } | null)?.ok) }),
@@ -263,8 +356,12 @@ export function chatRooms(signal?: AbortSignal): Promise<ChatRoom[]> {
   });
 }
 
-export const chatDm = (to: string, text: string, signal?: AbortSignal) =>
-  postOk('/api/chat/dm', { to, text }, signal);
+export const chatDm = (
+  to: string,
+  text: string,
+  attachment?: ChatAttachment | null,
+  signal?: AbortSignal,
+) => postOk('/api/chat/dm', attachment ? { to, text, attachment } : { to, text }, signal);
 
 export const chatRequestHistory = (room: string, signal?: AbortSignal) =>
   postOk('/api/chat/history', { room }, signal);
@@ -284,3 +381,16 @@ export const chatBan = (callsign: string, signal?: AbortSignal) =>
   postOk('/api/chat/admin/ban', { callsign }, signal);
 export const chatUnban = (callsign: string, signal?: AbortSignal) =>
   postOk('/api/chat/admin/unban', { callsign }, signal);
+/** Admin: wipe a room's history (defaults to the public lobby). */
+export const chatClearRoom = (room?: string, signal?: AbortSignal) =>
+  postOk('/api/chat/admin/clear', room ? { room } : {}, signal);
+/** Admin: broadcast a one-off global announcement to every connected operator. */
+export const chatBroadcast = (text: string, signal?: AbortSignal) =>
+  postOk('/api/chat/admin/broadcast', { text }, signal);
+/** Admin: request the current ban list (relay replies with a `bans` push frame). */
+export const chatListBans = (signal?: AbortSignal) =>
+  postOk('/api/chat/admin/bans', {}, signal);
+/** Admin: arm/disarm the "see all frequencies" override (reveals every
+ *  operator's freq to this admin regardless of friendship / eye toggle). */
+export const chatSetSeeAll = (on: boolean, signal?: AbortSignal) =>
+  postOk('/api/chat/admin/see-all', { on }, signal);

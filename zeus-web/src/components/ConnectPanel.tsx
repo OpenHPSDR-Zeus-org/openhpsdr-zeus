@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -48,13 +49,17 @@ import {
   connectP2 as apiConnectP2,
   disconnect as apiDisconnect,
   disconnectP2 as apiDisconnectP2,
+  reclaimRadio,
   fetchRadios,
   fetchState,
   listPrefsDatabases,
   setActivePrefsDatabase,
   createPrefsDatabase,
   uploadPrefsDatabase,
+  exportPrefsDatabase,
   restartApp,
+  quitApp,
+  ApiError,
   type PrefsDatabaseInfo,
   type RadioInfoDto,
 } from '../api/client';
@@ -69,6 +74,7 @@ import { useRadioStore } from '../state/radio-store';
 import { useTxAudioProfileStore } from '../state/tx-audio-profile-store';
 import { useTxStore } from '../state/tx-store';
 import { TxAudioProfileSavePrompt } from './TxAudioProfileSavePrompt';
+import { ConfirmDialog } from '../layout/ConfirmDialog';
 import {
   useConnectStore,
   type ProtocolChoice,
@@ -117,16 +123,87 @@ function prefsDbOptionLabel(db: PrefsDatabaseInfo): string {
   return `${db.name} (${parts.join(' · ')})`;
 }
 
+// A single-line text prompt rendered as a proper in-app Zeus dialog (wraps
+// ConfirmDialog with an input) — replaces window.prompt so it matches Zeus
+// chrome. Enter submits; empty/whitespace input is a no-op. The input grabs
+// focus after ConfirmDialog's focus trap settles on Cancel.
+function PromptDialog({
+  title,
+  label,
+  placeholder,
+  confirmLabel,
+  onSubmit,
+  onCancel,
+}: {
+  title: string;
+  label: string;
+  placeholder?: string;
+  confirmLabel: string;
+  onSubmit: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState('');
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, []);
+  const submit = () => {
+    const v = value.trim();
+    if (v) onSubmit(v);
+  };
+  return (
+    <ConfirmDialog
+      title={title}
+      confirmLabel={confirmLabel}
+      intent="primary"
+      onConfirm={submit}
+      onCancel={onCancel}
+    >
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12.5, color: 'var(--fg-1)' }}>
+        <span>{label}</span>
+        <input
+          ref={inputRef}
+          className="mono"
+          value={value}
+          placeholder={placeholder}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              submit();
+            }
+          }}
+          style={{
+            padding: '6px 8px',
+            borderRadius: 'var(--r-sm)',
+            border: '1px solid var(--line-strong)',
+            background: '#0c0c10',
+            color: '#d8d8dc',
+            fontSize: 13,
+            outline: 'none',
+          }}
+        />
+      </label>
+    </ConfirmDialog>
+  );
+}
+
 // Compact prefs-database (profile) selector for the connect screen. Switching
 // applies on restart, so the change confirms, flips the server pointer, then
-// relaunches. New uses window.prompt for the name; Import opens a native file
-// dialog and uploads the chosen .db.
+// relaunches. New prompts for the name via an in-app Zeus dialog; Import opens
+// a native file dialog and uploads the chosen .db.
 function PrefsDatabaseRow() {
   const [databases, setDatabases] = useState<PrefsDatabaseInfo[] | null>(null);
   const [activeRel, setActiveRel] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [newDialogOpen, setNewDialogOpen] = useState(false);
+  const [pendingSwitch, setPendingSwitch] = useState<string | null>(null);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -147,8 +224,8 @@ function PrefsDatabaseRow() {
 
   const onSwitch = useCallback(
     async (relativePath: string) => {
+      setPendingSwitch(null);
       if (relativePath === activeRel) return;
-      if (!window.confirm('Switch database and restart Zeus?')) return;
       setError(null);
       setBusy(true);
       try {
@@ -165,9 +242,8 @@ function PrefsDatabaseRow() {
     [activeRel],
   );
 
-  const onNew = useCallback(async () => {
-    const name = window.prompt('New database name:');
-    if (name === null) return;
+  const onCreate = useCallback(async (name: string) => {
+    setNewDialogOpen(false);
     setError(null);
     setBusy(true);
     try {
@@ -180,6 +256,22 @@ function PrefsDatabaseRow() {
       setBusy(false);
     }
   }, []);
+
+  // Export the active database so the operator can back it up or move it to
+  // another machine. The dropdown's value tracks the active profile, so this
+  // downloads whichever DB is currently selected.
+  const onExport = useCallback(async () => {
+    if (!activeRel) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await exportPrefsDatabase(activeRel);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to export database');
+    } finally {
+      setBusy(false);
+    }
+  }, [activeRel]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -231,7 +323,10 @@ function PrefsDatabaseRow() {
           aria-label="Active prefs database"
           value={activeRel}
           disabled={disabled}
-          onChange={(e) => void onSwitch(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value;
+            if (next && next !== activeRel) setPendingSwitch(next);
+          }}
           style={{ ...prefsDbSelectStyle, flex: 1 }}
         >
           {databases === null && <option value="">Loading…</option>}
@@ -245,7 +340,7 @@ function PrefsDatabaseRow() {
           type="button"
           className="label-xs"
           disabled={disabled}
-          onClick={() => void onNew()}
+          onClick={() => setNewDialogOpen(true)}
           style={prefsDbButtonStyle}
           title="Create a new database"
         >
@@ -260,6 +355,16 @@ function PrefsDatabaseRow() {
           title="Import an existing .db file"
         >
           Import
+        </button>
+        <button
+          type="button"
+          className="label-xs"
+          disabled={disabled || !activeRel}
+          onClick={() => void onExport()}
+          style={prefsDbButtonStyle}
+          title="Export the active database to a .db file"
+        >
+          Export
         </button>
         <input
           ref={fileInputRef}
@@ -280,6 +385,33 @@ function PrefsDatabaseRow() {
         <span className="label-xs" style={{ color: 'var(--tx)' }}>
           {error}
         </span>
+      )}
+      {newDialogOpen && (
+        <PromptDialog
+          title="New Database"
+          label="New database name:"
+          placeholder="e.g. Field Day"
+          confirmLabel="Create"
+          onSubmit={(name) => void onCreate(name)}
+          onCancel={() => setNewDialogOpen(false)}
+        />
+      )}
+      {pendingSwitch !== null && (
+        <ConfirmDialog
+          title="Switch Database"
+          confirmLabel="Switch & Restart"
+          intent="primary"
+          onConfirm={() => void onSwitch(pendingSwitch)}
+          onCancel={() => setPendingSwitch(null)}
+        >
+          <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg-1)' }}>
+            Switch to{' '}
+            <strong className="mono">
+              {(databases ?? []).find((db) => db.relativePath === pendingSwitch)?.name ?? pendingSwitch}
+            </strong>{' '}
+            and restart Zeus?
+          </p>
+        </ConfirmDialog>
       )}
     </div>
   );
@@ -408,6 +540,17 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
   // Disconnect when the loaded profile has unsaved live edits.
   const [savePrompt, setSavePrompt] = useState<{ name: string } | null>(null);
   const [savePromptBusy, setSavePromptBusy] = useState(false);
+  // Pending "take over a Busy radio" confirmation. Holds the discovered radio
+  // the operator asked to force-connect to; the dialog kicks the current owner.
+  const [pendingTakeover, setPendingTakeover] = useState<RadioInfoDto | null>(null);
+  // Same takeover, Manual-connect path: a manual connect to a Busy radio comes
+  // back as a 409 (reclaimable) rather than a discovered row, so we stash the
+  // resolved form params here and offer the same Reclaim-then-connect flow.
+  const [pendingManualTakeover, setPendingManualTakeover] =
+    useState<Required<Pick<SavedEndpoint, 'ip' | 'port' | 'protocol' | 'sampleRate' | 'board'>> & { label?: string } | null>(null);
+
+  // Pending "Exit Zeus?" confirmation for the login-dialog Exit button.
+  const [pendingQuit, setPendingQuit] = useState(false);
 
   const [manualIp, setManualIp] = useState(manualFormDefaults.ip);
   const [manualPort, setManualPort] = useState(manualFormDefaults.port);
@@ -479,7 +622,72 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
     };
   }, [status, retryNonce]);
 
+  // Core connect sequence shared by the normal Connect button and the
+  // Busy-radio takeover flow. Caller owns the inflight/error state so both
+  // entry points can wrap it (the takeover sends a reclaim first).
+  const performConnect = useCallback(
+    async (r: RadioInfoDto, force = false) => {
+      const ep = endpointFor(r);
+      const isP2 = (r.details?.protocol ?? 'P1') === 'P2';
+      if (isP2) {
+        // Pass the discovered board byte (e.g. 0x01 = Hermes for Brick2).
+        // Without this the server falls back to OrionMkII for every P2
+        // connection — issue #171.
+        const rawBoardId = parseRawBoardId(r.details?.rawBoardId);
+        await apiConnectP2({
+          endpoint: ep,
+          sampleRate: DEFAULT_SAMPLE_RATE,
+          boardId: rawBoardId ?? undefined,
+          // Takeover path only: the server refuses a second-master connect to a
+          // Busy radio (relay-chatter guard). After reclaim has stopped the
+          // other owner, force past the guard so the still-settling radio's
+          // lingering Busy status doesn't re-block the re-connect.
+          force,
+        });
+        const fresh = await fetchState();
+        applyState(fresh);
+        hydrateTxFromState(fresh);
+      } else {
+        // Pass the discovered board byte so the server sets the correct
+        // board kind on the Protocol1Client (default is HermesLite2 —
+        // without this an ANAN-10E appears as HL2 post-connect, issue #294).
+        const rawBoardId = parseRawBoardId(r.details?.rawBoardId);
+        const next = await apiConnect({
+          endpoint: ep,
+          sampleRate: DEFAULT_SAMPLE_RATE,
+          boardId: rawBoardId ?? undefined,
+        });
+        applyState(next);
+        hydrateTxFromState(next);
+      }
+      setBoardId(r.boardId || null);
+      setConnectedProtocol(isP2 ? 'P2' : 'P1');
+      setLastConnectedEndpoint(ep || null);
+      applyPostConnectEffects();
+    },
+    [applyState, hydrateTxFromState, setBoardId, setConnectedProtocol, setLastConnectedEndpoint],
+  );
+
   const handleConnect = useCallback(
+    async (r: RadioInfoDto) => {
+      if (inflightRef.current) return;
+      setInflight(true);
+      setError(null);
+      try {
+        await performConnect(r);
+      } catch (err) {
+        setError(errorMessage(err));
+      } finally {
+        setInflight(false);
+      }
+    },
+    [performConnect, setInflight],
+  );
+
+  // Take over a Busy radio: ask the server to send a protocol stop (kicking
+  // the current owner) and then connect. Invoked from the takeover confirm
+  // dialog, never directly from the row button.
+  const handleForceConnect = useCallback(
     async (r: RadioInfoDto) => {
       if (inflightRef.current) return;
       const ep = endpointFor(r);
@@ -487,47 +695,19 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
       setInflight(true);
       setError(null);
       try {
-        if (isP2) {
-          // Pass the discovered board byte (e.g. 0x01 = Hermes for Brick2).
-          // Without this the server falls back to OrionMkII for every P2
-          // connection — issue #171.
-          const rawBoardId = parseRawBoardId(r.details?.rawBoardId);
-          await apiConnectP2({
-            endpoint: ep,
-            sampleRate: DEFAULT_SAMPLE_RATE,
-            boardId: rawBoardId ?? undefined,
-          });
-          const fresh = await fetchState();
-          applyState(fresh);
-          hydrateTxFromState(fresh);
-        } else {
-          // Pass the discovered board byte so the server sets the correct
-          // board kind on the Protocol1Client (default is HermesLite2 —
-          // without this an ANAN-10E appears as HL2 post-connect, issue #294).
-          const rawBoardId = parseRawBoardId(r.details?.rawBoardId);
-          const next = await apiConnect({
-            endpoint: ep,
-            sampleRate: DEFAULT_SAMPLE_RATE,
-            boardId: rawBoardId ?? undefined,
-          });
-          applyState(next);
-          hydrateTxFromState(next);
-        }
-        setBoardId(r.boardId || null);
-        setConnectedProtocol(isP2 ? 'P2' : 'P1');
-        setLastConnectedEndpoint(ep || null);
-        applyPostConnectEffects();
+        await reclaimRadio(ep, isP2 ? 'P2' : 'P1');
+        await performConnect(r, /* force */ true);
       } catch (err) {
         setError(errorMessage(err));
       } finally {
         setInflight(false);
       }
     },
-    [applyState, hydrateTxFromState, setBoardId, setConnectedProtocol, setInflight, setLastConnectedEndpoint],
+    [performConnect, setInflight],
   );
 
   const handleManualConnect = useCallback(
-    async (override?: Partial<SavedEndpoint>) => {
+    async (override?: Partial<SavedEndpoint>, force = false) => {
       if (inflightRef.current) return;
       const ip = (override?.ip ?? manualIp).trim();
       const port = override?.port ?? manualPort;
@@ -566,12 +746,12 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
         }
 
         if (protocol === 'P2') {
-          await apiConnectP2({ endpoint: ep, sampleRate });
+          await apiConnectP2({ endpoint: ep, sampleRate, force });
           const fresh = await fetchState();
           applyState(fresh);
           hydrateTxFromState(fresh);
         } else {
-          const next = await apiConnect({ endpoint: ep, sampleRate });
+          const next = await apiConnect({ endpoint: ep, sampleRate, force });
           applyState(next);
           hydrateTxFromState(next);
         }
@@ -584,7 +764,17 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
         }
         setManualFormDefaults({ ip, port, protocol, sampleRate, board, label: '' });
       } catch (err) {
-        setManualError(errorMessage(err));
+        // Busy radio (relay-chatter guard, P2 only): the server refuses a
+        // second-master connect with a 409 { reclaimable: true }. Offer the
+        // same Reclaim-then-connect takeover the Discover path exposes instead
+        // of dead-ending on the error text. `force` is already set on a retry
+        // after reclaim, so a still-Busy radio can't loop the prompt.
+        if (!force && err instanceof ApiError && err.reclaimable) {
+          setManualError(null);
+          setPendingManualTakeover({ ip, port, protocol, sampleRate, board, label });
+        } else {
+          setManualError(errorMessage(err));
+        }
       } finally {
         setInflight(false);
       }
@@ -594,6 +784,36 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
       manualSave, applyState, hydrateTxFromState, setBoardId, setConnectedProtocol, setInflight,
       setLastConnectedEndpoint, saveEndpoint, setManualFormDefaults,
     ],
+  );
+
+  // Take over a Busy radio from the Manual path: send the protocol stop to kick
+  // the current owner, then re-run the manual connect with force=true so the
+  // still-settling Busy status doesn't re-block it. Mirrors handleForceConnect
+  // for the Discover path.
+  const handleManualForceConnect = useCallback(
+    async (snap: NonNullable<typeof pendingManualTakeover>) => {
+      if (inflightRef.current) return;
+      const ep = `${snap.ip}:${snap.port}`;
+      // Latch the ref directly (the effect that mirrors `inflight` only runs on
+      // the next render) so the reclaim shows as inflight and a stray click
+      // can't double-submit during the radio's settle window.
+      inflightRef.current = true;
+      setInflight(true);
+      setManualError(null);
+      try {
+        await reclaimRadio(ep, snap.protocol === 'P2' ? 'P2' : 'P1');
+      } catch (err) {
+        setManualError(errorMessage(err));
+        inflightRef.current = false;
+        setInflight(false);
+        return;
+      }
+      // Release the latch so handleManualConnect's own guard passes; it owns the
+      // inflight state for the forced connect from here.
+      inflightRef.current = false;
+      await handleManualConnect(snap, /* force */ true);
+    },
+    [handleManualConnect, setInflight],
   );
 
   const doDisconnect = useCallback(async () => {
@@ -652,6 +872,13 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
   }, [doDisconnect]);
 
   const onSavePromptCancel = useCallback(() => setSavePrompt(null), []);
+
+  const handleQuit = useCallback(() => {
+    setPendingQuit(false);
+    // The process exits ~300 ms after acking, so the response may never land —
+    // fire and forget, swallowing the inevitable network error on teardown.
+    void quitApp().catch(() => {});
+  }, []);
 
   const handleRetry = useCallback(() => {
     setError(null);
@@ -797,6 +1024,15 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
             OpenHPSDR · Protocol 1 / 2
           </span>
         </div>
+        <button
+          type="button"
+          onClick={() => setPendingQuit(true)}
+          className="btn sm"
+          style={{ marginLeft: 'auto' }}
+          title="Close Zeus"
+        >
+          Exit
+        </button>
       </div>
       <div style={{ height: 180 }} />
 
@@ -934,25 +1170,36 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                           {ep || '—'} · {r.macAddress || '—'}
                         </span>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleConnect(r)}
-                        disabled={r.busy || inflight}
-                        title={
-                          r.busy
-                            ? 'Radio is busy (in use by another client)'
-                            : isP2
-                              ? 'Protocol 2 path — experimental, RX only'
-                              : undefined
-                        }
-                        className={`btn sm ${r.busy ? '' : 'active'}`}
-                      >
-                        {r.busy
-                          ? 'Busy'
-                          : inflight
-                            ? 'Connecting…'
-                            : 'Connect'}
-                      </button>
+                      {r.busy ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span
+                            className="label-xs"
+                            style={{ color: 'var(--tx)' }}
+                            title="In use by another client"
+                          >
+                            Busy
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setPendingTakeover(r)}
+                            disabled={inflight}
+                            title="Take over this radio — disconnects the client currently using it"
+                            className="btn sm"
+                          >
+                            Take over
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleConnect(r)}
+                          disabled={inflight}
+                          title={isP2 ? 'Protocol 2 path — experimental, RX only' : undefined}
+                          className="btn sm active"
+                        >
+                          {inflight ? 'Connecting…' : 'Connect'}
+                        </button>
+                      )}
                     </li>
                   );
                 })}
@@ -995,6 +1242,64 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
         )}
       </div>
       </div>
+      {pendingTakeover && (
+        <ConfirmDialog
+          title="Take over this radio?"
+          confirmLabel="Take over"
+          cancelLabel="Cancel"
+          intent="danger"
+          onConfirm={() => {
+            const target = pendingTakeover;
+            setPendingTakeover(null);
+            void handleForceConnect(target);
+          }}
+          onCancel={() => setPendingTakeover(null)}
+        >
+          <p style={{ margin: 0 }}>
+            <strong>{pendingTakeover.boardId || 'This radio'}</strong>
+            {' '}({endpointFor(pendingTakeover) || pendingTakeover.ipAddress}) is
+            in use by another client. Taking it over sends a stop command that
+            disconnects whoever is currently using it — including an active
+            transmission — and then connects Zeus.
+          </p>
+        </ConfirmDialog>
+      )}
+      {pendingManualTakeover && (
+        <ConfirmDialog
+          title="Take over this radio?"
+          confirmLabel="Take over"
+          cancelLabel="Cancel"
+          intent="danger"
+          onConfirm={() => {
+            const target = pendingManualTakeover;
+            setPendingManualTakeover(null);
+            void handleManualForceConnect(target);
+          }}
+          onCancel={() => setPendingManualTakeover(null)}
+        >
+          <p style={{ margin: 0 }}>
+            <strong>{pendingManualTakeover.ip}:{pendingManualTakeover.port}</strong>{' '}
+            is in use by another controller. Taking it over sends a stop command
+            that disconnects whoever is currently using it — including an active
+            transmission — and then connects Zeus.
+          </p>
+        </ConfirmDialog>
+      )}
+      {pendingQuit && (
+        <ConfirmDialog
+          title="Exit Zeus?"
+          confirmLabel="Exit"
+          cancelLabel="Cancel"
+          intent="danger"
+          onConfirm={handleQuit}
+          onCancel={() => setPendingQuit(false)}
+        >
+          <p style={{ margin: 0 }}>
+            This closes Zeus and stops the backend. Any active radio connection
+            will be dropped.
+          </p>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }

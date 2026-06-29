@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -82,6 +83,71 @@ describe('chat-store ingest (0x35 live frames)', () => {
     ing({ kind: 'message', message: msg('a', 100) });
     ing({ kind: 'message', message: msg('b', 200) }); // duplicate id — ignored
     expect(lobby().map((x) => x.id)).toEqual(['a', 'b']);
+  });
+
+  it('preserves a valid image attachment and drops a malformed one', () => {
+    const ing = useChatStore.getState().ingest;
+    const dataUrl = 'data:image/jpeg;base64,/9j/AA==';
+    ing({
+      kind: 'message',
+      message: {
+        id: 'img1',
+        ts: 100,
+        from: 'N9WAR',
+        text: 'look',
+        room: PUBLIC_ROOM,
+        attachment: { kind: 'image', mime: 'image/jpeg', dataUrl, width: 800, height: 600 },
+      },
+    });
+    // A non-image data URL must not survive normalization.
+    ing({
+      kind: 'message',
+      message: {
+        id: 'img2',
+        ts: 200,
+        from: 'N9WAR',
+        text: 'nope',
+        room: PUBLIC_ROOM,
+        attachment: { kind: 'image', mime: 'application/pdf', dataUrl: 'data:application/pdf;base64,AAAA' },
+      },
+    });
+    const msgs = lobby();
+    expect(msgs.find((m) => m.id === 'img1')?.attachment?.dataUrl).toBe(dataUrl);
+    expect(msgs.find((m) => m.id === 'img1')?.attachment?.width).toBe(800);
+    expect(msgs.find((m) => m.id === 'img2')?.attachment).toBeNull();
+  });
+
+  it('preserves a valid voice attachment and drops a mismatched one', () => {
+    const ing = useChatStore.getState().ingest;
+    const dataUrl = 'data:audio/webm;base64,GkXfAA==';
+    ing({
+      kind: 'message',
+      message: {
+        id: 'aud1',
+        ts: 300,
+        from: 'N9WAR',
+        text: '',
+        room: PUBLIC_ROOM,
+        attachment: { kind: 'audio', mime: 'audio/webm', dataUrl, name: 'voice-message.webm', size: 2048 },
+      },
+    });
+    // An audio MIME paired with an image data scheme must not survive.
+    ing({
+      kind: 'message',
+      message: {
+        id: 'aud2',
+        ts: 400,
+        from: 'N9WAR',
+        text: 'nope',
+        room: PUBLIC_ROOM,
+        attachment: { kind: 'audio', mime: 'audio/webm', dataUrl: 'data:image/png;base64,AAAA' },
+      },
+    });
+    const msgs = lobby();
+    const aud1 = msgs.find((m) => m.id === 'aud1')?.attachment;
+    expect(aud1?.dataUrl).toBe(dataUrl);
+    expect(aud1?.kind).toBe('audio');
+    expect(msgs.find((m) => m.id === 'aud2')?.attachment).toBeNull();
   });
 
   it('routes messages to the correct room and counts unread for inactive rooms', () => {

@@ -16,6 +16,7 @@ namespace Zeus.Server;
 /// </summary>
 public sealed class ChatEnabledStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<ChatEnabledEntry> _state;
     private readonly ILogger<ChatEnabledStore> _log;
@@ -29,7 +30,8 @@ public sealed class ChatEnabledStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _state = _db.GetCollection<ChatEnabledEntry>("chat_enabled");
 
         _log.LogInformation("ChatEnabledStore initialized at {Path}", dbPath);
@@ -99,7 +101,7 @@ public sealed class ChatEnabledStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 }
 
 public sealed class ChatEnabledEntry

@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -49,6 +50,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
+using OpenhpsdrZeus;
 using Photino.NET;
 using Zeus.Plugins.Host.Audio;
 using Zeus.Server;
@@ -102,26 +104,42 @@ public partial class Program
         public string? Url { get; set; }
     }
 
-    // OpenhpsdrZeus.csproj defaults to OutputType=Exe (console subsystem) so that
-    // headless service mode keeps a usable banner / log on stdout. On Windows that
-    // also means a console window pops up alongside the Photino frame in --desktop
-    // and --server modes, which operators (correctly) read as "why is there a
-    // backend log spamming behind my UI?". FreeConsole detaches the inherited
-    // console from this process, hiding the window without affecting Kestrel,
-    // Photino, or any redirected output. It's a no-op on macOS / Linux (the
-    // P/Invoke target does not exist), so the call is guarded by an OS check.
+    // A live detached workspace frame plus the metadata needed to persist and
+    // re-open it (the native PhotinoWindow alone carries neither its layout id
+    // nor a clean title). Tracked in a managed list so the layout id survives
+    // even after the native window is torn down at shutdown.
+    private sealed class DetachedWorkspaceWindow
+    {
+        public required string LayoutId { get; init; }
+        public required string Title { get; init; }
+        public required PhotinoWindow Window { get; init; }
+    }
+
+    // The executable is built as OutputType=WinExe (GUI subsystem) — see
+    // OpenhpsdrZeus.csproj. Windows therefore never auto-allocates a console for
+    // it, so the desktop / server Photino shells start with no console window to
+    // flash. The trade-off is that headless service mode no longer inherits a
+    // console automatically; AttachParentConsoleOnWindows reattaches to the
+    // launching shell's console (ATTACH_PARENT_PROCESS) when there is one, so the
+    // banner / stdout still reaches a terminal launch. When launched by
+    // double-click (installer icon) there is no parent console and the attach
+    // simply fails — which is exactly the "no window" behaviour we want. Both
+    // P/Invokes are no-ops on macOS / Linux, so the calls are guarded by an OS
+    // check.
+    private const int AttachParentProcess = -1;
+
     [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
     [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
-    private static extern bool FreeConsole();
+    private static extern bool AttachConsole(int dwProcessId);
 
     [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
     private static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
 
-    private static void HideConsoleOnWindows()
+    private static void AttachParentConsoleOnWindows()
     {
         if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
         {
-            FreeConsole();
+            AttachConsole(AttachParentProcess);
         }
     }
 
@@ -157,12 +175,20 @@ public partial class Program
 
         if (args.Contains("--verify-vst-bridge"))
         {
+            // WinExe has no console by default — reattach so Console.WriteLine
+            // output reaches the caller (PowerShell verify script reads stdout).
+            AttachParentConsoleOnWindows();
             return VerifyVstBridge();
         }
 
+        // Verbose preflight + crash tracer. Writes a full environment/dependency
+        // report and per-phase markers to %LOCALAPPDATA%/Zeus/zeus-startup.log on
+        // every launch, and installs last-resort exception handlers. This is the
+        // durable record we ask a user to send when "the window just closes".
+        StartupDiagnostics.Begin(args);
+
         if (args.Contains("--desktop"))
         {
-            HideConsoleOnWindows();
             try
             {
                 return RunDesktop(args);
@@ -170,6 +196,15 @@ public partial class Program
             catch (Exception ex) when (IsAddressInUse(ex))
             {
                 ReportStartupAddressInUse(ex);
+                return 1;
+            }
+            catch (Exception ex)
+            {
+                // Any other startup failure would otherwise escape Main and the
+                // process would vanish silently — the GUI-subsystem binary has no
+                // console, so the operator sees the window flash and close with no
+                // diagnostics. Record it and surface a dialog.
+                ReportStartupFatal(ex);
                 return 1;
             }
         }
@@ -180,8 +215,10 @@ public partial class Program
             // Photino status window so the operator on macOS / Linux has a
             // place to read the LAN URL and a Stop Zeus button. Headless
             // deploys (Docker, Pi) keep using the no-flag path and never
-            // load Photino.
-            HideConsoleOnWindows();
+            // load Photino. Reattach to the launching terminal's console (if
+            // any) so the banner still prints there; the GUI-subsystem binary
+            // means double-clicking the installer icon shows no console.
+            AttachParentConsoleOnWindows();
             try
             {
                 return RunServerWithStatus(args);
@@ -189,6 +226,11 @@ public partial class Program
             catch (Exception ex) when (IsAddressInUse(ex))
             {
                 ReportStartupAddressInUse(ex);
+                return 1;
+            }
+            catch (Exception ex)
+            {
+                ReportStartupFatal(ex);
                 return 1;
             }
         }
@@ -220,13 +262,38 @@ public partial class Program
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"VST bridge verification failed: {ex.GetBaseException().Message}");
+            // Print the full exception chain + native-resolution context. The
+            // distinction between DllNotFound (resolver couldn't locate the
+            // file) and EntryPointNotFound (DLL loaded but export missing) is
+            // exactly what's needed to fix a win-x64 publish-payload failure,
+            // and the bare base message hid it.
+            Console.Error.WriteLine("VST bridge verification failed.");
+            for (var e = ex; e is not null; e = e.InnerException)
+                Console.Error.WriteLine($"  {e.GetType().FullName}: {e.Message}");
+            Console.Error.WriteLine($"  ProcessArchitecture: {System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}");
+            Console.Error.WriteLine($"  RuntimeIdentifier:   {System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier}");
+            Console.Error.WriteLine($"  AppContext.BaseDirectory: {AppContext.BaseDirectory}");
+            try
+            {
+                var nativeRoot = Path.Combine(AppContext.BaseDirectory, "runtimes");
+                if (Directory.Exists(nativeRoot))
+                    foreach (var dll in Directory.EnumerateFiles(nativeRoot, "*vst-bridge*", SearchOption.AllDirectories))
+                        Console.Error.WriteLine($"  found bridge: {dll}");
+                else
+                    Console.Error.WriteLine($"  (no runtimes/ dir under BaseDirectory)");
+            }
+            catch (Exception probe) { Console.Error.WriteLine($"  (native enumerate failed: {probe.Message})"); }
             return 1;
         }
     }
 
     private static Task<int> RunService(string[] args)
     {
+        // Headless service mode logs to stdout. The binary is GUI-subsystem
+        // (WinExe) so Windows never gives it a console of its own; reattach to
+        // the launching terminal's console so the banner / logs land there.
+        AttachParentConsoleOnWindows();
+
         // 5000 is claimed by macOS ControlCenter (AirPlay receiver) by default,
         // which replies 403 before Kestrel ever sees the request. 6060 is a
         // stable free port across macOS/Linux/Windows for local dev and avoids
@@ -297,9 +364,18 @@ public partial class Program
             PrintConsoleBanner = false,
         };
 
+        StartupDiagnostics.Phase("desktop: ZeusHost.Build");
         var app = ZeusHost.Build(args, hostOptions);
+        StartupDiagnostics.Phase("desktop: ZeusHost.InitializeAsync");
         ZeusHost.InitializeAsync(app).GetAwaiter().GetResult();
+        StartupDiagnostics.Phase("desktop: app.StartAsync (Kestrel + hosted services)");
         app.StartAsync().GetAwaiter().GetResult();
+        StartupDiagnostics.Phase("desktop: host started");
+
+        // Spawn the out-of-process support sidecar now the backend is up. It runs
+        // detached so it survives a backend crash and can capture the crash logs
+        // the in-memory ring would lose. Best-effort — never blocks launch.
+        SupportSidecarLauncher.TryLaunch(app.Services);
 
         // Resolve the bound URLs after Start — Kestrel writes the OS-assigned
         // loopback port (plus the LAN HTTPS port we configured) into
@@ -346,9 +422,19 @@ public partial class Program
         // size (and maximized state). Position is not restored — see
         // WindowGeometryStore for why (off-screen / monitor-layout safety).
         var geometryStore = app.Services.GetRequiredService<WindowGeometryStore>();
+        var openWindowsStore = app.Services.GetRequiredService<OpenWorkspaceWindowsStore>();
         var savedGeometry = geometryStore.Get();
         var initialWidth = savedGeometry.Width;
         var initialHeight = savedGeometry.Height;
+
+        // On the G2's internal Pi, Zeus runs as the radio's built-in front-panel
+        // display — an appliance, not a windowed app. Drop the title bar and frame
+        // (Photino chromeless) and fill the screen so the SPA owns the whole DSI
+        // panel with no window-manager furniture. Detection mirrors how the
+        // hardware front-panel bridge identifies "this is the G2 Pi" (the udev
+        // g2-front-* symlink); see ShouldRunChromelessKiosk. Linux-only, no-op on
+        // ordinary desktops.
+        var kioskChrome = ShouldRunChromelessKiosk();
 
         // Photino's window/dock icon is set per-OS. Windows expects .ico (Photino's
         // SetIconFile binds it to the NSWindow / HWND), Linux GTK expects PNG, and
@@ -359,10 +445,46 @@ public partial class Program
         // resolves correctly from `dotnet run` output and from a published bundle.
         var iconFileName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "zeus.ico" : "zeus.png";
         var iconPath = Path.Combine(AppContext.BaseDirectory, iconFileName);
-        var detachedWorkspaceWindows = new List<PhotinoWindow>();
+        var detachedWorkspaceWindows = new List<DetachedWorkspaceWindow>();
 
+        // The dark placeholder loaded as StartString carries a tiny script that,
+        // once the page is live (i.e. WebView2 has finished initialising), posts a
+        // `zeus.placeholderReady` message back to the host. The host then navigates
+        // to the SPA from the WebMessageReceived handler below — a point where the
+        // native WebView2 control is provably ready to accept a navigation.
+        //
+        // This replaces the old approach of calling window.Load(startUrl) directly
+        // from the WindowCreated handler. WindowCreated fires *during* native window
+        // construction, before WebView2's CoreWebView2 is initialised; calling
+        // Photino_NavigateToUrl there dereferences a not-yet-created control and
+        // hard-crashes the process with a native access violation (0xc0000005 —
+        // an uncatchable corrupted-state exception, so no try/catch and no managed
+        // diagnostics handler can intercept it). Driving the SPA navigation off the
+        // placeholder-ready message keeps it on the live WebView2 while still
+        // happening AFTER the WindowCreated resize, so the no-reflow guarantee from
+        // #930 holds. If the host bridge is somehow absent the placeholder navigates
+        // itself as a fallback.
+        const string placeholderHtml =
+            "<!doctype html><meta name=\"color-scheme\" content=\"dark\">" +
+            "<body style=\"margin:0;height:100vh;background:#0a0a0c\">" +
+            "<script>(function(){function spa(){location.replace('__START_URL__');}" +
+            "try{var e=window.external;" +
+            "if(e&&typeof e.sendMessage==='function')" +
+            "e.sendMessage(JSON.stringify({type:'zeus.placeholderReady'}));" +
+            "else spa();}catch(_){spa();}})();</script>";
+        // Navigate to the SPA exactly once, even if the ready message arrives more
+        // than once (e.g. a placeholder reload).
+        var spaLoaded = false;
+
+        // Window construction is where a missing WebView2 runtime throws — the
+        // last phase marker in the log will be this one if that's the cause.
+        StartupDiagnostics.Phase("desktop: creating Photino window (needs WebView2)");
         var window = new PhotinoWindow()
             .SetTitle("Zeus")
+            // Appliance mode on the G2 Pi: no titlebar, no border. Chromeless is a
+            // startup parameter, so it must be set here in the builder chain before
+            // the native window is created; toggling it later is a no-op.
+            .SetChromeless(kioskChrome)
             .SetUseOsDefaultLocation(false)
             .SetMinWidth(MinWidth)
             .SetMinHeight(MinHeight)
@@ -372,6 +494,18 @@ public partial class Program
             .RegisterWebMessageReceivedHandler((sender, msg) =>
             {
                 if (sender is not PhotinoWindow owner) return;
+                // The dark placeholder reports it is live once WebView2 is ready.
+                // Navigate to the SPA here, not from WindowCreated — see the long
+                // note above placeholderHtml for why the WindowCreated path AVs.
+                if (IsPlaceholderReady(msg))
+                {
+                    if (spaLoaded) return;
+                    spaLoaded = true;
+                    StartupDiagnostics.Phase("desktop: placeholder ready, loading SPA");
+                    try { owner.Load(new Uri(startUrl)); }
+                    catch (Exception ex) { Console.Error.WriteLine($"window.spa.load failed: {ex.Message}"); }
+                    return;
+                }
                 if (TryReadWorkspaceWindowRequest(msg, out var request))
                 {
                     OpenWorkspaceWindow(owner, detachedWorkspaceWindows, request, iconPath);
@@ -384,7 +518,14 @@ public partial class Program
                 if (TryReadOpenExternalRequest(msg, out var externalUrl))
                     OpenExternalUrl(externalUrl);
             })
-            .Load(new Uri(startUrl));
+            // Deliberately load a dark placeholder, NOT the SPA, as the startup
+            // content. The placeholder posts `zeus.placeholderReady` once WebView2
+            // is live; the WebMessageReceived handler above then navigates to the
+            // SPA — after the WindowCreated resize, so React's first layout measures
+            // the final viewport (no panel reflow). The placeholder matches --bg-app
+            // (#0a0a0c) so the brief pre-size frame is invisible against the dark
+            // chrome instead of flashing white.
+            .LoadRawString(placeholderHtml.Replace("__START_URL__", startUrl));
 
         // Remember the last NORMAL (non-maximized) frame size as resize events
         // arrive. This is only needed for the maximized-at-close case: when the
@@ -400,8 +541,9 @@ public partial class Program
         // Reopen maximized if that's how it was left. Setting the property before
         // WaitForClose stores it as a startup parameter (the native window doesn't
         // exist yet), so the frame opens maximized; we still seeded SetSize above
-        // so a later un-maximize restores to the saved normal size.
-        if (savedGeometry.Maximized)
+        // so a later un-maximize restores to the saved normal size. Kiosk mode
+        // always opens filled — a frameless appliance owns the whole DSI panel.
+        if (savedGeometry.Maximized || kioskChrome)
             window.Maximized = true;
 
         // Reliably apply the restored size AFTER the native window exists. The
@@ -417,20 +559,48 @@ public partial class Program
         {
             try
             {
-                if (savedGeometry.Maximized)
+                // Record the full display topology + the geometry we're about to
+                // restore. This is the smoking gun for "window flashes and never
+                // appears" reports where the startup log otherwise reaches
+                // "entering message loop" cleanly (the window IS created — it just
+                // lands off the visible desktop or comes up minimized).
+                try
                 {
+                    foreach (var mon in window.Monitors)
+                        StartupDiagnostics.Log(
+                            $"[geometry] monitor area=({mon.MonitorArea.X},{mon.MonitorArea.Y} {mon.MonitorArea.Width}x{mon.MonitorArea.Height}) " +
+                            $"work=({mon.WorkArea.X},{mon.WorkArea.Y} {mon.WorkArea.Width}x{mon.WorkArea.Height}) scale={mon.Scale}");
+                    StartupDiagnostics.Log(
+                        $"[geometry] saved width={savedGeometry.Width} height={savedGeometry.Height} maximized={savedGeometry.Maximized}");
+                }
+                catch (Exception ex) { StartupDiagnostics.Log($"[geometry] monitor enumerate failed: {ex.Message}"); }
+
+                // Always seat a sane on-screen normal size + position first — even
+                // when restoring maximized — so un-maximizing later lands on the
+                // visible desktop rather than wherever the saved bytes pointed.
+                PlaceWindowOnVisibleWorkArea(window, initialWidth, initialHeight);
+                if (savedGeometry.Maximized || kioskChrome)
                     window.Maximized = true;
-                }
-                else
-                {
-                    window.Size = new System.Drawing.Size(initialWidth, initialHeight);
-                    window.Center();
-                }
+
+                // A frame that comes up minimized is indistinguishable from "no
+                // window" to the operator; some Windows builds have been observed
+                // to open this way after a restore. Force it back to normal.
+                if (window.Minimized)
+                    window.Minimized = false;
             }
             catch (Exception ex)
             {
+                StartupDiagnostics.Log($"[geometry] restore failed: {ex.Message}");
                 Console.Error.WriteLine($"window.geometry.restore failed: {ex.Message}");
             }
+            // NOTE: the SPA is NOT loaded here. Calling window.Load(startUrl) from
+            // this WindowCreated callback runs Photino_NavigateToUrl re-entrantly
+            // during native window construction — before CoreWebView2 exists — which
+            // crashes the process with a native access violation (0xc0000005). The
+            // navigation is driven instead by the `zeus.placeholderReady` web
+            // message (see placeholderHtml and the WebMessageReceived handler),
+            // which fires once WebView2 is live and still after this resize, so the
+            // no-reflow guarantee is preserved without the crash.
         });
 
         // Maximized and minimized are tracked separately: both must suppress
@@ -477,9 +647,22 @@ public partial class Program
             }
             catch (Exception ex)
             {
-                // Never block shutdown on a prefs write. Console is detached in
-                // desktop mode (FreeConsole), so this is best-effort.
+                // Never block shutdown on a prefs write. Desktop mode has no
+                // console (GUI-subsystem binary), so this is best-effort.
                 Console.Error.WriteLine($"window.geometry.save failed: {ex.Message}");
+            }
+            // Snapshot the still-open detached pop-out windows while the native
+            // window is alive. On macOS the post-WaitForClose persistence below
+            // never runs (AppKit's terminate: → _exit preempts it), so capture it
+            // here. Idempotent with the post-close save on Windows/Linux.
+            try
+            {
+                openWindowsStore.Replace(detachedWorkspaceWindows
+                    .Select(d => new OpenWorkspaceWindowDto(d.LayoutId, d.Title)));
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"workspace.windows.save failed: {ex.Message}");
             }
             return false; // allow the window to close
         });
@@ -497,15 +680,36 @@ public partial class Program
         // Task Manager.
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; window.Close(); };
 
+        // Make every macOS quit path skip exit()'s C++ static-destructor sweep
+        // (see InstallMacSafeTerminate). Installed AFTER the PhotinoWindow forces
+        // AppKit to load, and BEFORE the runloop where AppKit's auto-terminate can
+        // fire on last-window-close. No-op on Windows/Linux.
+        InstallMacSafeTerminate();
+
         // WaitForClose blocks the main thread until the user closes the window. On
         // macOS this satisfies Cocoa's "UI on main thread" requirement; Kestrel
         // runs on its own thread-pool, untouched by the windowing loop.
+        StartupDiagnostics.Phase("desktop: window created, entering message loop");
         window.WaitForClose();
+        // Persist the detached windows that are STILL open (operator-closed ones
+        // already removed themselves via their closing handler) so the next
+        // launch reopens them. Must run BEFORE the close-loop below — closing a
+        // child fires its handler, which removes it from this same list.
+        // Best-effort: never let a prefs write block shutdown.
+        try
+        {
+            openWindowsStore.Replace(detachedWorkspaceWindows
+                .Select(d => new OpenWorkspaceWindowDto(d.LayoutId, d.Title)));
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"workspace.windows.save failed: {ex.Message}");
+        }
         foreach (var child in detachedWorkspaceWindows.ToArray())
         {
             try
             {
-                child.Close();
+                child.Window.Close();
             }
             catch (Exception ex)
             {
@@ -517,8 +721,282 @@ public partial class Program
         // native window was still alive. We deliberately do NOT save here — the
         // window is torn down and its size getters are unsafe to read.
         Console.WriteLine("Window closed; stopping backend.");
-        app.StopAsync().GetAwaiter().GetResult();
+        ShutdownDesktopHost(app);
         return 0;
+    }
+
+    // libc _exit(2): terminate the process immediately WITHOUT running atexit
+    // handlers or C-runtime static destructors. Present on macOS and Linux.
+    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "_exit")]
+    private static extern void LibcImmediateExit(int status);
+
+    // --- macOS: route every Cocoa quit through _exit(2) ----------------------
+    //
+    // ROOT CAUSE (proven from an OpenhpsdrZeus .ips, issue #1065): closing the
+    // last window makes AppKit auto-fire -[NSApplication terminate:] from inside
+    // the CFRunLoop ("terminate after last window closed"). terminate: calls libc
+    // exit(), which runs __cxa_finalize_ranges — the C++ static-destructor sweep
+    // across EVERY loaded module, including in-process JUCE audio plugins (Waves,
+    // Supertone "Clear", …). Those destructors tear down a plugin's
+    // juce::MessageManager while its OWN background juce::Timer thread is still
+    // live, so the Timer's MessageQueue::post() locks a freed mutex → SIGSEGV
+    // (exit 139). Crash-thread proof: juce::Timer::TimerThread::run ->
+    // MessageQueue::post -> pthread_mutex_lock at NULL; main-thread proof:
+    // -[NSApplication terminate:] -> exit -> __cxa_finalize_ranges ->
+    // ~WCBIClientWithWLSThread (the Waves variant). Because terminate: preempts
+    // the runloop, WaitForClose() never returns and the _exit(0) in
+    // ShutdownDesktopHost is never reached on the quit path. The vendor-agnostic
+    // cure is to stop exit() from ever running: replace -[NSApplication
+    // terminate:] so it calls _exit(2) directly. _exit skips __cxa_finalize, so
+    // no plugin static destructor can run under a live plugin thread — closing
+    // both the Timer and Waves-WLS faces of the crash for ANY plugin the operator
+    // loads. Window geometry + open detached windows are already committed
+    // synchronously by the window-closing handler before this fires.
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib")]
+    private static extern IntPtr objc_getClass(string name);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib")]
+    private static extern IntPtr sel_registerName(string name);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib")]
+    private static extern IntPtr class_getInstanceMethod(IntPtr cls, IntPtr sel);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib")]
+    private static extern IntPtr method_setImplementation(IntPtr method, IntPtr imp);
+
+    [System.Runtime.InteropServices.UnmanagedFunctionPointer(
+        System.Runtime.InteropServices.CallingConvention.Cdecl)]
+    private delegate void ObjcTerminateImp(IntPtr self, IntPtr sel, IntPtr sender);
+
+    // Held for the process lifetime: the GC must never collect the delegate that
+    // backs the swizzled IMP, or terminate: would jump into freed memory.
+    private static ObjcTerminateImp? _safeTerminateImp;
+
+    private static void InstallMacSafeTerminate()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        try
+        {
+            var cls = objc_getClass("NSApplication");
+            if (cls == IntPtr.Zero) return;
+            var sel = sel_registerName("terminate:");
+            var method = class_getInstanceMethod(cls, sel);
+            if (method == IntPtr.Zero) return;
+            _safeTerminateImp = static (_, _, _) => LibcImmediateExit(0);
+            var imp = System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(_safeTerminateImp);
+            method_setImplementation(method, imp);
+            StartupDiagnostics.Log("[shutdown] macOS: -[NSApplication terminate:] routed to _exit(2) (skips plugin static-dtor race)");
+        }
+        catch (Exception ex)
+        {
+            // Non-fatal: worst case we retain the pre-existing crash-on-close risk.
+            StartupDiagnostics.Log($"[shutdown] macOS safe-terminate install failed: {ex.Message}");
+        }
+    }
+
+    // Windows: terminate immediately, skipping CLR finalizers, CRT static
+    // destructors and DLL_PROCESS_DETACH. zeus-vst-bridge loads VST3 (.dll)
+    // in-process on Windows too, so the same JUCE MessageManager-vs-Timer
+    // destructor race exists at normal CLR/CRT shutdown; TerminateProcess(self)
+    // runs none of those. Unlike Environment.Exit/quick_exit it fires no managed
+    // ProcessExit handler, so it also avoids the WebView2/Photino teardown
+    // deadlock noted in RunDesktop.
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern bool TerminateProcess(IntPtr hProcess, uint uExitCode);
+
+    // Shutdown for the Photino desktop / status-window paths, which drive the host
+    // lifecycle by hand (Photino owns the main thread, so we can't use app.Run()).
+    //
+    // The hard constraint: a third-party in-process JUCE plugin (e.g. a Waves /
+    // Supertone Audio Unit loaded via the macOS AU bridge) keeps its OWN background
+    // juce::Timer thread that managed code cannot stop. ANY teardown of that
+    // plugin's JUCE MessageManager while the thread is live is a use-after-free
+    // (SIGSEGV in juce::MessageQueue::post). DISPOSING THE HOST TRIGGERS EXACTLY
+    // THAT: AudioPluginBridge.DisposeAsync unloads the AU
+    // (AudioComponentInstanceDispose), tearing the MessageManager down under the
+    // live Timer thread. (An earlier fix disposed the host then _exit'd — but the
+    // crash is DURING dispose, before _exit is ever reached.) So we must NEVER
+    // dispose the host on the way out.
+    //
+    // Instead: StopAsync() the host — this stops hosted services (kills the
+    // out-of-process RX VST engine, stops sidecars) but does NOT unload the
+    // in-process AU (the bridge's StopAsync only unsubscribes) — then explicitly
+    // kill the out-of-process TX VST engine (it runs no JUCE in our process, so
+    // disposing it is safe) so it isn't orphaned by the hard exit, then on
+    // macOS/Linux _exit(2): the kernel reaps the live plugin thread WITHOUT running
+    // any destructor it could fault in. LiteDB writes are committed transactionally,
+    // so skipping graceful disposal is durability-safe. Windows hosts no in-process
+    // AU bridge, so it returns normally (and avoids the WebView2 ProcessExit
+    // deadlock noted above).
+    private static void ShutdownDesktopHost(WebApplication app)
+    {
+        // Deliberate shutdown — tell any supervising sidecar this is a clean exit,
+        // not a crash, BEFORE we stop the host or _exit(2).
+        SupportSidecar.MarkCleanExit();
+
+        // Stop hosted services WITHOUT disposing the host (see why above).
+        try { app.StopAsync().GetAwaiter().GetResult(); }
+        catch { /* best effort — never block the exit */ }
+
+        // Kill the out-of-process TX VST engine explicitly (it would otherwise only
+        // be torn down by the host DisposeAsync we deliberately skip). No in-process
+        // JUCE, so this cannot trigger the plugin-thread race.
+        try
+        {
+            if (app.Services.GetService(typeof(Zeus.Plugins.Host.Audio.VstEngineController)) is IAsyncDisposable engine)
+                engine.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+        catch { /* best effort */ }
+
+        Console.Out.Flush();
+        Console.Error.Flush();
+        if (OperatingSystem.IsWindows())
+        {
+            // Skip CLR/CRT shutdown + DLL detach: the in-process VST3 bridge has
+            // the same plugin-thread teardown race as macOS (see
+            // InstallMacSafeTerminate). TerminateProcess runs no destructor.
+            try { TerminateProcess(GetCurrentProcess(), 0); } catch { /* fall through */ }
+            return;
+        }
+        try { LibcImmediateExit(0); } catch { /* fall through to a normal return */ }
+    }
+
+    // True when the desktop should run as a frameless, fullscreen appliance —
+    // the case on the G2's internal Raspberry Pi, where Zeus IS the radio's
+    // built-in front-panel display and window-manager chrome (title bar, border)
+    // is just visual noise on the fixed DSI screen.
+    //
+    // Detection reuses the same signal the hardware front-panel bridge uses to
+    // recognise "this is the G2 Pi": the udev-published g2-front-* by-id serial
+    // symlink (see G2PanelOptions.KnownSymlinks and G2FrontPanelService). That
+    // keeps the two definitions of "native G2" in lock-step and means an ordinary
+    // shack PC — which has no such symlink — keeps its normal decorated window.
+    //
+    // ZEUS_KIOSK=1/0 (or true/false) is an explicit override for benches and dev
+    // boxes that aren't a stock G2. Auto-detection is Linux-only; Windows/macOS
+    // desktops are never made chromeless on hardware presence alone.
+    private static bool ShouldRunChromelessKiosk()
+    {
+        var force = Environment.GetEnvironmentVariable("ZEUS_KIOSK");
+        if (!string.IsNullOrWhiteSpace(force))
+        {
+            if (force == "1" || string.Equals(force, "true", StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (force == "0" || string.Equals(force, "false", StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+
+        if (!OperatingSystem.IsLinux())
+            return false;
+
+        foreach (var (path, _) in Zeus.Server.FrontPanel.G2PanelOptions.KnownSymlinks)
+        {
+            // File.Exists follows the symlink to the tty target, matching how
+            // G2FrontPanelService.ResolveDevice probes for the panel.
+            try { if (File.Exists(path)) return true; }
+            catch { /* probing is best-effort; a denied path just means "no panel" */ }
+        }
+        return false;
+    }
+
+    // Photino occasionally opens the frame off the visible desktop on
+    // multi-monitor / fractional-DPI setups: the window IS created and the
+    // message loop runs (the startup log reaches "entering message loop"), but
+    // the operator sees only a brief flash because the frame landed beyond the
+    // work area, or larger than the monitor, or centred using a different
+    // monitor's metrics. Clamp the desired size to the monitor work area and
+    // force the position back inside it so a visible frame is guaranteed.
+    //
+    // Best-effort and self-contained: any failure falls back to Photino's own
+    // SetSize + Center so a quirky monitor query can never strand the window.
+    private static void PlaceWindowOnVisibleWorkArea(PhotinoWindow window, int desiredWidth, int desiredHeight)
+    {
+        try
+        {
+            var work = window.MainMonitor.WorkArea; // System.Drawing.Rectangle, OS pixels
+            // No usable monitor reported — let Photino place it and bail.
+            if (work.Width <= 0 || work.Height <= 0)
+            {
+                window.Size = new System.Drawing.Size(desiredWidth, desiredHeight);
+                window.Center();
+                return;
+            }
+
+            // Never open larger than the visible work area: a size saved on a
+            // bigger monitor would otherwise hang the frame off the edges.
+            var availW = work.Width;
+            var availH = work.Height;
+
+            // On Linux, keep the frame strictly INSIDE the work area. A GTK
+            // window whose size meets or exceeds the available work area gets
+            // auto-maximized by the Wayland compositor (KWin / Mutter / wlroots),
+            // and a maximized GTK frame is drawn borderless — no titlebar — which
+            // the operator reads as "opens fullscreen with no titlebar". The
+            // SetMinWidth/SetMinHeight pinned at 1280x800 make this unavoidable on
+            // small panels (e.g. the 8" 1280x800 CM5 DSI screen): the minimum
+            // itself is >= the work area once a desktop panel is subtracted, so
+            // GTK can't shrink the frame and the compositor maximizes it. Reserve
+            // a margin AND relax the runtime minimum to that margin-inset size so
+            // the frame is provably smaller than the work area and stays a normal
+            // decorated window. Windows/macOS keep decorations at work-area size,
+            // so this whole branch is Linux-only to leave them untouched.
+            if (OperatingSystem.IsLinux())
+            {
+                const int LinuxWorkAreaMargin = 48;
+                availW = Math.Max(640, work.Width - LinuxWorkAreaMargin);
+                availH = Math.Max(480, work.Height - LinuxWorkAreaMargin);
+                // Lower the floor so the size below actually takes effect instead
+                // of being clamped back up by the geometry hint (which would
+                // re-trigger the auto-maximize).
+                if (availW < window.MinWidth) window.MinWidth = availW;
+                if (availH < window.MinHeight) window.MinHeight = availH;
+            }
+
+            var w = Math.Min(desiredWidth, availW);
+            var h = Math.Min(desiredHeight, availH);
+            window.Size = new System.Drawing.Size(w, h);
+
+            // Centre within the work area, then clamp so the title bar is always
+            // reachable even when the monitor origin is negative (a display to
+            // the left of / above the primary).
+            var left = work.X + (work.Width - w) / 2;
+            var top = work.Y + (work.Height - h) / 2;
+            left = Math.Max(work.X, Math.Min(left, work.X + work.Width - w));
+            top = Math.Max(work.Y, Math.Min(top, work.Y + work.Height - h));
+            window.Location = new System.Drawing.Point(left, top);
+
+            StartupDiagnostics.Log(
+                $"[geometry] placed at ({left},{top}) size {w}x{h} within work " +
+                $"({work.X},{work.Y} {work.Width}x{work.Height})");
+        }
+        catch (Exception ex)
+        {
+            StartupDiagnostics.Log($"[geometry] place-on-work-area failed, using Center(): {ex.Message}");
+            try
+            {
+                window.Size = new System.Drawing.Size(desiredWidth, desiredHeight);
+                window.Center();
+            }
+            catch (Exception inner)
+            {
+                Console.Error.WriteLine($"window.geometry.center fallback failed: {inner.Message}");
+            }
+        }
+    }
+
+    // The dark startup placeholder posts this once WebView2 is live, signalling
+    // that it is safe to navigate the window to the SPA. Kept deliberately narrow
+    // so it can never be confused with the SPA's own messages.
+    private static bool IsPlaceholderReady(string message)
+    {
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<WorkspaceWindowRequest>(message, WebMessageJsonOptions);
+            return parsed?.Type == "zeus.placeholderReady";
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static bool TryReadWorkspaceWindowRequest(string message, out WorkspaceWindowRequest request)
@@ -542,14 +1020,23 @@ public partial class Program
 
     private static void OpenWorkspaceWindow(
         PhotinoWindow owner,
-        List<PhotinoWindow> detachedWorkspaceWindows,
+        List<DetachedWorkspaceWindow> detachedWorkspaceWindows,
         WorkspaceWindowRequest request,
         string iconPath)
     {
         if (!Uri.TryCreate(request.Url, UriKind.Absolute, out var uri)) return;
+        var layoutId = request.LayoutId?.Trim() ?? string.Empty;
         var layoutTitle = string.IsNullOrWhiteSpace(request.Title)
             ? "Workspace"
             : request.Title.Trim();
+        // Startup restore reopens one frame per persisted layout; if one is
+        // already on screen for this layout (e.g. restore raced an operator
+        // drag-off) don't stack a duplicate.
+        if (layoutId.Length > 0 &&
+            detachedWorkspaceWindows.Any(d => d.LayoutId == layoutId))
+        {
+            return;
+        }
         var child = new PhotinoWindow(owner)
             .SetTitle($"Zeus - {layoutTitle}")
             .SetUseOsDefaultLocation(true)
@@ -559,20 +1046,30 @@ public partial class Program
             .SetIconFile(iconPath)
             .RegisterWindowClosingHandler((sender, _) =>
             {
+                // An operator closing one detached window deliberately drops it
+                // from the live set, so it is NOT re-opened next launch. The
+                // shutdown close-loop persists the set BEFORE closing children,
+                // so those removals don't erase what we just saved.
                 if (sender is PhotinoWindow closed)
-                    detachedWorkspaceWindows.Remove(closed);
+                    detachedWorkspaceWindows.RemoveAll(d => ReferenceEquals(d.Window, closed));
                 return false;
             })
             .Load(uri);
 
-        detachedWorkspaceWindows.Add(child);
+        var entry = new DetachedWorkspaceWindow
+        {
+            LayoutId = layoutId,
+            Title = layoutTitle,
+            Window = child,
+        };
+        detachedWorkspaceWindows.Add(entry);
         try
         {
             child.WaitForClose();
         }
         catch (Exception ex)
         {
-            detachedWorkspaceWindows.Remove(child);
+            detachedWorkspaceWindows.Remove(entry);
             Console.Error.WriteLine($"detached workspace open failed: {ex.Message}");
         }
     }
@@ -721,6 +1218,71 @@ public partial class Program
             _ = MessageBoxW(IntPtr.Zero, message, title, 0x00000040);
     }
 
+    // A startup failure other than port-in-use. The desktop/server paths run as
+    // a GUI-subsystem binary with no console, so an uncaught exception would make
+    // the process vanish with the window never appearing and nothing logged.
+    // Persist the full exception to the shared startup log and show a dialog so
+    // the operator gets an actionable message instead of a silent flash-and-close.
+    private static void ReportStartupFatal(Exception ex)
+    {
+        var baseEx = ex.GetBaseException();
+        var missingWebView2 = LooksLikeMissingWebView2(ex);
+
+        // The full exception goes to the same zeus-startup.log the preflight
+        // wrote, so the dependency report and the crash sit in one file.
+        StartupDiagnostics.LogException("desktop startup failed", ex);
+
+        string title;
+        string message;
+        if (missingWebView2)
+        {
+            // The single most common fresh-Windows cause: Photino renders the UI
+            // through WebView2, which is absent on Windows 11 LTSC / IoT /
+            // Enterprise N, debloated images, and some VMs. Point the operator
+            // straight at the fix.
+            title = "Zeus needs the Microsoft Edge WebView2 Runtime";
+            message =
+                "Zeus could not open its window because the Microsoft Edge WebView2 " +
+                "Runtime is not installed on this PC.\n\n" +
+                "Install it (free, from Microsoft), then launch Zeus again:\n" +
+                "https://developer.microsoft.com/microsoft-edge/webview2/\n\n" +
+                $"Technical detail: {baseEx.GetType().Name}: {baseEx.Message}";
+        }
+        else
+        {
+            title = "Zeus failed to start";
+            message =
+                "Zeus hit an unexpected error while starting and had to close.\n\n" +
+                $"{baseEx.GetType().Name}: {baseEx.Message}\n\n" +
+                $"A full log was written to:\n{StartupDiagnostics.LogPath}";
+        }
+
+        // Console is detached on Windows desktop/server mode; on macOS/Linux this
+        // still reaches the launching terminal.
+        Console.Error.WriteLine($"{title}: {message}");
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            _ = MessageBoxW(IntPtr.Zero, message, title, 0x00000010); // MB_ICONERROR
+    }
+
+    // Heuristic: does this exception chain look like a missing WebView2 runtime?
+    // Photino surfaces the absence in different shapes across versions (a COM
+    // HRESULT, a DllNotFound, or a message naming WebView2 / msedgewebview2), so
+    // we match on the text across the whole inner-exception chain rather than a
+    // single exception type.
+    private static bool LooksLikeMissingWebView2(Exception ex)
+    {
+        for (var cur = ex; cur is not null; cur = cur.InnerException)
+        {
+            var m = cur.Message;
+            if (string.IsNullOrEmpty(m)) continue;
+            if (m.Contains("WebView2", StringComparison.OrdinalIgnoreCase) ||
+                m.Contains("msedgewebview2", StringComparison.OrdinalIgnoreCase) ||
+                m.Contains("Edge WebView", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
     private static int RunServerWithStatus(string[] args)
     {
         // Service-mode backend (LAN bind, HTTPS, banner) PLUS a small Photino
@@ -750,8 +1312,15 @@ public partial class Program
         {
             foreach (var ip in lanIps)
             {
+                // HTTPS first and tagged: browsers only grant microphone TX on a
+                // secure origin, so a LAN operator who wants to transmit voice must
+                // use this row. The plain-HTTP row still works for RX-only / non-mic
+                // use but is listed second so it isn't the obvious first pick (issue
+                // #844 — operators were landing on http:// and getting "mic
+                // unavailable"). Mirrors the console banner's "use this for
+                // microphone TX" marker.
+                lanRows.Append($"<li><span class='lbl'>LAN HTTPS</span><a class='url' href='#' data-url='https://{ip}:{lanHttpsPort}'>https://{ip}:{lanHttpsPort}</a><span class='tag'>microphone TX</span></li>");
                 lanRows.Append($"<li><span class='lbl'>LAN HTTP</span><a class='url' href='#' data-url='http://{ip}:{httpPort}'>http://{ip}:{httpPort}</a></li>");
-                lanRows.Append($"<li><span class='lbl'>LAN HTTPS</span><a class='url' href='#' data-url='https://{ip}:{lanHttpsPort}'>https://{ip}:{lanHttpsPort}</a></li>");
             }
         }
         else
@@ -792,6 +1361,7 @@ public partial class Program
   .url {{ color:var(--accent); text-decoration:none; font-variant-numeric:tabular-nums; }}
   .url:hover {{ text-decoration:underline; }}
   .muted {{ color:var(--fg-3); font-style:italic; }}
+  .tag {{ margin-left:8px; padding:1px 7px; border-radius:9px; font-family:-apple-system, 'Segoe UI', system-ui, sans-serif; font-size:9px; font-weight:600; letter-spacing:0.6px; text-transform:uppercase; color:var(--panel-bot); background:var(--power); }}
   .actions {{ display:flex; justify-content:flex-end; gap:8px; margin-top:6px; }}
   button {{
     padding:6px 14px; font-family:-apple-system, system-ui, sans-serif; font-size:11px;
@@ -811,7 +1381,7 @@ public partial class Program
     {lanRows}
   </ul>
   <div class='actions'><button id='stop'>Stop Zeus</button></div>
-  <div class='hint'>HTTPS uses a self-signed certificate — accept the browser warning on first connect. Closing this window also stops the server.</div>
+  <div class='hint'>Browsers only allow microphone TX over HTTPS on a LAN address — open the <b>LAN HTTPS</b> URL above to transmit voice. HTTPS uses a self-signed certificate; accept the browser warning once on first connect. Closing this window also stops the server.</div>
 </div>
 <script>
   document.getElementById('stop').addEventListener('click', () => {{
@@ -858,7 +1428,7 @@ public partial class Program
         window.WaitForClose();
 
         Console.WriteLine("Status window closed; stopping backend.");
-        app.StopAsync().GetAwaiter().GetResult();
+        ShutdownDesktopHost(app);
         return 0;
     }
 }

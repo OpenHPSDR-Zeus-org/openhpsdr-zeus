@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -42,7 +43,6 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zeus.Server;
 
@@ -51,18 +51,19 @@ namespace Zeus.Server.Tests;
 public sealed class CredentialStoreTests : IDisposable
 {
     private readonly string _testDbDir;
+    private readonly string _testDbPath;
     private readonly CredentialStore _store;
 
     public CredentialStoreTests()
     {
-        // Per-fixture isolated dir so parallel tests can't collide on the real
-        // %LOCALAPPDATA%\Zeus\zeus.db. Env-var override doesn't redirect
-        // Environment.GetFolderPath on Windows (it uses SHGetKnownFolderPath),
-        // so the store needs an explicit directory injection.
+        // Per-fixture isolated DB file so parallel tests can't collide on the
+        // real %LOCALAPPDATA%\Zeus\zeus-prefs.db. The store now takes an explicit
+        // DB-file override (credentials live in the plaintext config DB).
         _testDbDir = Path.Combine(Path.GetTempPath(), $"zeus-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_testDbDir);
+        _testDbPath = Path.Combine(_testDbDir, "zeus-prefs.db");
 
-        _store = new CredentialStore(NullLogger<CredentialStore>.Instance, _testDbDir);
+        _store = new CredentialStore(NullLogger<CredentialStore>.Instance, _testDbPath);
     }
 
     public void Dispose()
@@ -145,37 +146,21 @@ public sealed class CredentialStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task DatabaseFile_IsEncrypted()
+    public async Task Credentials_PersistAcrossReopen()
     {
-        const string service = "encryption-test";
+        // Credentials now live in the plaintext config DB (zeus-prefs.db); the
+        // encrypted zeus.db is retired. This guards the round-trip: a credential
+        // written by one store instance is readable by a fresh one against the
+        // same file.
+        const string service = "persist-test";
         const string password = "SENSITIVE_PASSWORD_12345";
 
         await _store.SetAsync(service, "user", password);
-
         _store.Dispose();
 
-        var dbFiles = Directory.GetFiles(_testDbDir, "zeus.db*");
-        Assert.NotEmpty(dbFiles);
+        Assert.True(File.Exists(_testDbPath));
 
-        var dbFile = dbFiles[0];
-        // Permissive share: LiteDB on Windows can leave the file briefly
-        // share-locked even after Dispose; FileShare.ReadWrite | Delete
-        // avoids spurious IOException without hiding any real bug.
-        using (var fs = new FileStream(dbFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-        {
-            var dbContent = new byte[fs.Length];
-            var read = 0;
-            while (read < dbContent.Length)
-            {
-                var n = fs.Read(dbContent, read, dbContent.Length - read);
-                if (n <= 0) break;
-                read += n;
-            }
-            var asText = Encoding.UTF8.GetString(dbContent, 0, read);
-            Assert.DoesNotContain(password, asText);
-        }
-
-        using var store2 = new CredentialStore(NullLogger<CredentialStore>.Instance, _testDbDir);
+        using var store2 = new CredentialStore(NullLogger<CredentialStore>.Instance, _testDbPath);
         var retrieved = await store2.GetAsync(service);
         Assert.NotNull(retrieved);
         Assert.Equal(password, retrieved.Password);

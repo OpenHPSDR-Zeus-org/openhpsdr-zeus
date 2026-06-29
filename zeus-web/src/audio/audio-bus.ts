@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // RX audio fan-out bus. The WebSocket dispatcher decodes each 0x02
 // AudioFrame exactly once and publishes it here; the bus fans that single
@@ -45,12 +46,6 @@ class AudioBus {
         console.error('[audio-bus] subscriber threw', err);
       }
     }
-  }
-
-  /** Number of attached consumers — used by callers that want to skip work
-   *  (e.g. requesting the desktop on-demand stream) when nobody is listening. */
-  get subscriberCount(): number {
-    return this.subscribers.size;
   }
 }
 

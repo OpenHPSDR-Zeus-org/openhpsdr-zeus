@@ -140,7 +140,14 @@ cd "${SCRIPT_DIR}"
 # Same DYLD/LD pin as the service-mode launcher — see openhpsdr-zeus.
 export LD_LIBRARY_PATH="${SCRIPT_DIR}/runtimes/linux-x64/native:${SCRIPT_DIR}/runtimes/linux-arm64/native:${LD_LIBRARY_PATH}"
 
-exec ./OpenhpsdrZeus --desktop "$@"
+# Verify the GUI runtime dependency (WebKitGTK) before opening the Photino
+# window; offer to install it / fall back to the browser UI if it's missing.
+# shellcheck source=/dev/null
+. "${SCRIPT_DIR}/zeus-preflight.sh"
+if zeus_ensure_webkit; then
+    exec ./OpenhpsdrZeus --desktop "$@"
+fi
+zeus_run_service_with_browser "$@"
 EOF
 chmod +x "${PACKAGE_DIR}/openhpsdr-zeus-desktop"
 
@@ -163,7 +170,14 @@ cd "${SCRIPT_DIR}"
 
 export LD_LIBRARY_PATH="${SCRIPT_DIR}/runtimes/linux-x64/native:${SCRIPT_DIR}/runtimes/linux-arm64/native:${LD_LIBRARY_PATH}"
 
-exec ./OpenhpsdrZeus --server "$@"
+# Server mode also opens a Photino (WebKitGTK) status window — same dependency
+# check as desktop mode; fall back to the headless browser UI if it's missing.
+# shellcheck source=/dev/null
+. "${SCRIPT_DIR}/zeus-preflight.sh"
+if zeus_ensure_webkit; then
+    exec ./OpenhpsdrZeus --server "$@"
+fi
+zeus_run_service_with_browser "$@"
 EOF
 chmod +x "${PACKAGE_DIR}/openhpsdr-zeus-server"
 
@@ -243,6 +257,11 @@ echo "To remove them later: rm ${APPS_DIR}/zeus-desktop.desktop ${APPS_DIR}/zeus
 EOF
 chmod +x "${PACKAGE_DIR}/install-icons.sh"
 
+# Runtime dependency-check helper, sourced by the desktop/server launchers to
+# verify WebKitGTK (Photino's webview backend) before opening the native window.
+cp "${SCRIPT_DIR}/linux-zeus-preflight.sh" "${PACKAGE_DIR}/zeus-preflight.sh"
+chmod +x "${PACKAGE_DIR}/zeus-preflight.sh"
+
 # Ship the icon next to the launchers so the .desktop entries can resolve
 # Icon= relative to the install dir.
 if [ -f "${REPO_ROOT}/docs/pics/zeus.png" ]; then
@@ -285,13 +304,16 @@ Desktop mode (--desktop) is the right choice for:
 Requirements:
 - Linux ${RID} system (glibc-based; no system packages required — FFTW3 is
   statically linked into libwdsp.so and the .NET runtime is bundled)
-- Desktop mode additionally requires libwebkit2gtk-4.1-0:
+- Desktop/server modes additionally require libwebkit2gtk-4.1-0:
     Debian/Ubuntu:  sudo apt install libwebkit2gtk-4.1-0
     Fedora:         sudo dnf install webkit2gtk4.1
     Arch:           sudo pacman -S webkit2gtk-4.1
+  The desktop/server launchers detect this automatically: if it's missing they
+  offer to install it (when run from a terminal) and otherwise fall back to the
+  browser UI so Zeus still starts.
 
 For more information:
-https://github.com/Kb2uka/openhpsdr-zeus
+https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus
 
 License: GNU GPL v2 or later
 Copyright (C) 2025-2026 Brian Keating (EI6LF), Douglas J. Cerrato (KB2UKA), Christian Suarez (N9WAR), and contributors

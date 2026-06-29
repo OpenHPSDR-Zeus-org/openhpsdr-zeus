@@ -72,6 +72,34 @@ The **SNAP** button makes clicks intelligent. With Snap on, clicking near a sign
 
 Snap reaches out about 80 pixels from your cursor; click farther than that — out in empty spectrum — and the click tunes normally to where you clicked. A bit of built-in hysteresis keeps the target from flickering between two closely spaced signals. On the main receiver, a snap onto a live signal also arms a gentle self-correcting lock so you stay centered as the signal drifts.
 
+### Licence-class band overlay
+
+If you have a band plan loaded (Settings → **Band Plan** → pick your country / licence
+class), the panadapter draws a translucent strip along the bottom showing every band
+segment you can see, each tinted by what it means for your current mode:
+
+- **Green** — you're licensed here and your current mode is permitted.
+- **Amber** — amateur allocation, but your current mode is *not* permitted in this
+  segment (for example, SSB tuned into the CW-only sub-band). Move dial *or* change
+  mode to put yourself back in the green.
+- **Red** — not an amateur allocation at all (the gap between bands, or a SWL /
+  broadcast segment your plan covers).
+
+Each segment shows a small label along the bottom — `80M Phone`, `40M CW/Digital`,
+`30M CW/Digital`, and so on — so you can read the band layout at a glance.
+
+The overlay is on by default. Toggle it from Settings → Band Plan → **Panadapter
+overlay** if you'd rather have an unobstructed view.
+
+### Audible band-edge alert
+
+The same band plan can play a short two-tone beep when you tune past the edge of
+your privileges — handy if you're sweeping a band quickly and the dial drifts past
+the General phone edge into the Extra-only sub-band. The beep is local to your
+browser (it doesn't go on the air) and won't fire faster than about twice a second
+even if you sweep across several gaps. Toggle from Settings → Band Plan → **Tone at
+band edge**.
+
 ### Notch — masking interference
 
 The **NOTCH** button arms manual notching. Once armed, drag across an interfering signal — a birdie, carrier, or burst of EMF — on the spectrum, and Zeus drops a notch over that frequency band. A quick click (or a very narrow drag) drops a default-width notch right on the carrier under the cursor. A small **✕** button appears showing how many notches are active; click it to clear them all at once.

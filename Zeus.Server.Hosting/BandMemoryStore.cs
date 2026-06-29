@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -53,14 +54,15 @@ namespace Zeus.Server;
 // juggling two LiteDB connections to the same file.
 public sealed class BandMemoryStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<BandMemoryEntry> _entries;
     private readonly ILogger<BandMemoryStore> _log;
 
-    public BandMemoryStore(ILogger<BandMemoryStore> log)
+    public BandMemoryStore(ILogger<BandMemoryStore> log, string? dbPathOverride = null)
     {
         _log = log;
-        var dbPath = PrefsDbPath.Get();
+        var dbPath = dbPathOverride ?? PrefsDbPath.Get();
 
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
@@ -68,7 +70,8 @@ public sealed class BandMemoryStore : IDisposable
             Directory.CreateDirectory(dir);
         }
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _entries = _db.GetCollection<BandMemoryEntry>("band_memory");
         // Pre-existing rows can violate the unique-Band invariant if they were
         // written by a build before EnsureIndex(unique:true) was added, or by a
@@ -151,7 +154,7 @@ public sealed class BandMemoryStore : IDisposable
         _entries.Update(existing);
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
 }
 

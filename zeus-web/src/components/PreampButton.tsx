@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -46,10 +47,15 @@ import { useCallback } from 'react';
 import { setPreamp } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 
-// HermesLite2 has no hardware preamp — the RX gain path is firmware-controlled
-// through the attenuator register (CC0=0x14), so a preamp toggle is a no-op
-// that only confuses the user. Hide the button on HL2 entirely.
-const HL2_BOARD_ID = 'HermesLite2';
+// The boolean RX preamp bit (Mercury LNA — C3[4] of the C0=0x14 frame) is only
+// honored by the original HPSDR/Mercury "G1" stack. Thetis sends it solely for
+// HPSDRModel.HPSDR (console.cs:19223): every other board — Hermes, ANAN,
+// Orion-MkII / G2, HermesLite 2 — drives the RX front end through the step
+// attenuator instead, which Zeus surfaces as the S-ATT slider. On those boards
+// the preamp bit is inert on the wire, so the PRE toggle does nothing and only
+// confuses the operator. Show the button solely for the one board where it has
+// an effect; the step attenuator covers front-end gain everywhere else.
+const MERCURY_BOARD_ID = 'Metis';
 
 export function PreampButton() {
   const boardId = useConnectionStore((s) => s.boardId);
@@ -68,7 +74,7 @@ export function PreampButton() {
       });
   }, [applyState, preampOn, setPreampOn]);
 
-  if (boardId === HL2_BOARD_ID) return null;
+  if (boardId !== MERCURY_BOARD_ID) return null;
 
   return (
     <button

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // Host-side CW keyer. WDSP's CWX module is not exported by the libwdsp
 // binaries we ship today (verified 2026-05-24: `nm -D libwdsp.so | grep -i
@@ -269,6 +269,9 @@ public sealed class CwEngine : BackgroundService
                 Reason: err ?? "MOX refused"));
             return;
         }
+        // Host CW now owns the air — disarm the P2 internal keyer so the
+        // gateware doesn't self-key against this host-keyed send (#1032).
+        _radio.SetHostCwKeying(true);
         Notify(new CwEngineStatus(CwEngineState.Sending, job.Text, job.Wpm, queueDepth));
         _log.LogInformation(
             "cw.send text={Text} wpm={Wpm} mode={Mode} txVfo={TxVfo} txHz={TxHz}Hz lo={Lo}Hz baseband={Bb}Hz loRealigned={LoRealigned}",
@@ -374,6 +377,9 @@ public sealed class CwEngine : BackgroundService
                 Reason: err ?? "MOX refused"));
             return;
         }
+        // Host CW (raw keyer/logger) owns the air — disarm the P2 internal
+        // keyer for the duration so the gateware doesn't self-key too (#1032).
+        _radio.SetHostCwKeying(true);
         Notify(new CwEngineStatus(CwEngineState.Sending, "<keyer>", 0, queueDepth));
         _log.LogInformation(
             "cw.keyer.down txVfo={TxVfo} txHz={TxHz}Hz baseband={Bb}Hz durationMs={Dur} loRealigned={LoR}",
@@ -459,6 +465,10 @@ public sealed class CwEngine : BackgroundService
 
     private void TryReleaseMox(string reason)
     {
+        // Host CW is done keying — re-arm the P2 internal keyer (cleared
+        // unconditionally, even if UI/trip took MOX from us, so a paddle works
+        // again the moment this host send ends). No-op on P1. (#1032)
+        _radio.SetHostCwKeying(false);
         // Only release MOX if we still own it — UI or trip may have already
         // dropped it under us. Idempotent at the TxService layer either way.
         if (_tx.MoxOwner == MoxSource.Cwx)

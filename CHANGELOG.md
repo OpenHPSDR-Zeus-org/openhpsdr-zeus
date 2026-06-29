@@ -10,6 +10,114 @@ see the corresponding GitHub Release page.
 
 ---
 
+## [0.10.5] — 2026-06-28
+
+> **🎙️ The digital-modes release.** More than 200 pull requests land here, and the headline is that Zeus now does the digital modes natively: **FreeDV digital voice** (including the new neural **RADE** codec) as a first-class transmit/receive mode, and a built-in **FT8 / FT4** suite — decode, click-to-tune, armed auto-sequencing, an integrated logbook, and spotting — with no external software. Alongside the digital work this cycle brings **up to eight independent hardware receivers**, **full remote operation over the internet**, a **KiwiSDR** slice receiver, a real-time **Lightning Map**, serial **CAT** control, and the **return of external accessory-port switching** that was temporarily out in 0.10.0. The WAV recorder is now an installable plugin rather than core.
+
+### 🎧 Digital voice — FreeDV & RADE
+
+**FreeDV as a native mode.** Select FreeDV like any other mode and Zeus decodes and transmits digital voice end to end — a dedicated FreeDV panel (and pop-out) appears when you select it, with the station list, your decoded/transmitted text, and the controls in one place. *(#881, #885, #896, #940, #1092)*
+
+**RADE V1 — the new neural codec.** Zeus speaks **RADE / RADAE**, the new high-quality machine-learning FreeDV waveform, for full receive *and* transmit, including the LDPC end-of-over callsign. An **AUTO** mode auto-detects RADE versus classic FreeDV so you don't have to guess what the other station is sending. *(#921, #925, #935)*
+
+**One-click modem install.** Install the codec2 modem from inside the app — no terminal, no separate download. *(#888)*
+
+**FreeDV Reporter & polish.** A Stations / Reporter channel shows who's active and spots you to FreeDV Reporter; the passband and crosshair draw on the correct band-convention sideband; decoded audio now follows your AF gain; and an end-of-over TX tail plus a wider speech-band resampler clean up the on-air audio. *(#921, #989, #975, #983, #1008, #990)*
+
+### 📡 FT8 & FT4 — the Zeus Digital suite
+
+**Native FT8 and FT4, built in.** A complete FT8/FT4 client now lives inside Zeus — decode the band, click a signal on the waterfall to tune it, and run a contact. No WSJT-X required. *(#997, #1108)*
+
+**Armed auto-sequencing.** Arm a QSO and Zeus walks the standard FT8 exchange automatically, including sending the terminal **RR73** and standing down at the end of the contact. Set your **callsign and grid** once in the digital settings and they persist across restarts. *(#1108)*
+
+**Built-in logbook + spotting.** Contacts log automatically to the Zeus logbook. Opt in (off by default) to spot your decodes to **PSK Reporter** and **WSPRnet**, and Zeus broadcasts the universal **WSJT-X UDP** stream so external tools — **GridTracker**, **QRZ**, **Wavelog**, **ClubLog**, **N1MM**, **HamClock** — see your QSOs live. *(#1108, #1084, #1088, #1113)*
+
+**Pop-out "Zeus Digital" window.** The digital workspace pops out into its own window, reusing the main panadapter, QRZ lookups, and logbook so there's nothing redundant to learn. *(#1080, #1081)*
+
+> WSPR is present in the engine but **disabled in the UI for this release** (greyed out) — it returns once its reporting map lands. FT8 and FT4 are the live modes today.
+
+### 🎚️ Multiple receivers (multi-DDC)
+
+**Up to eight real receivers.** On Protocol-2 radios Zeus can now run **RX1 through RX8** as genuine independent hardware receivers — each with its own band, tuning, filter, and audio — not just extra views of one signal. *(#837, #848, #850, #856, #913, #924)*
+
+**Built for many receivers at once.** Gang band selection across the receivers you choose, give each its own waterfall dB scale with noise-floor normalization so panes match, pick which receiver has focus, and transmit on any receiver. The MULTI RX controls collapse cleanly back to a single receiver when you're done. *(#894, #926, #941, #947, #949, #963, #971, #1117)*
+
+### 🌐 KiwiSDR & remote operation
+
+**KiwiSDR slice receiver.** Point Zeus at a public KiwiSDR from a map picker and listen to a remote slice of spectrum right inside your workspace — with squelch, zoom/pan, and waterfall normalization. *(#995, #1000, #1005, #1047, #1114)*
+
+**Full remote operation.** Run your Zeus station from anywhere over the internet: live panadapter, **MOX / transmit control**, low-latency **Opus** receive audio, a voice-mic uplink for remote TX, an in-app **LAN Browser**, and WAN connection through the hosted broker with TURN for tricky networks. *(#988, #1002, #1043, #1090, #845, #826, #833, #820, #855)*
+
+### 🎛️ CAT control
+
+**Kenwood TS-2000 CAT — now over serial, too.** Control Zeus (or let it drive logging/contesting software) with Kenwood TS-2000 CAT emulation over TCP **and serial COM ports**, with Thetis CAT1–4 parity. *(#973, #1004, #985)*
+
+### 📻 Receive & DSP
+
+**AGC and noise reduction tightened up.** Auto-AGC-T now servos to the band noise floor the way Thetis does and stops strong-signal loudness pumping; receive AGC behavior was corrected; auto-attenuation matches Thetis's sustained-overload gate; and AF-gain / AGC-T slider drags are rate-capped so they don't click. *(#892, #806, #873, #889, #1055, #939)*
+
+**Smart noise reduction (NR3 / RNNoise).** An opt-in RNNoise-based noise-reduction engine is vendored and built into WDSP, with refined decision logic — and it now ships with a **default model so it works out of the box**, reporting load success rather than silently doing nothing. *(#891, #901, #904, #1036, #1129)*
+
+**P1 receiver fixes.** ADC dither/randomize for LT2208 boards and a corrected preamp bit, plus a guard against a zero-width filter silencing the receiver. *(#1073, #1028)*
+
+### 📤 Transmit & audio plugins
+
+**Plugin hosting everywhere.** Native in-process **VST3** hosting on Linux (with editors), **macOS Audio Unit (AU)** hosting, a higher-fidelity in-process bridge (channel negotiation, latency reporting), self-healing engine provisioning, and recovery from the post-long-TX dead-audio wedge. TX plugin hosting is now **on by default**. *(#864, #827, #866, #1069, #955, #874, #998)*
+
+**TX audio profiles.** Import TX audio profiles and mirror your profile catalog to a folder; recovered/imported profiles are hardened against bad data. *(#1021, #1037, #1023, #1025)*
+
+### 🔌 External accessory ports — back, and expanded
+
+**Port switching is restored.** The external **antenna selection**, **open-collector / PTT-out**, and **hardware PTT-in (footswitch)** control that regressed in the 0.10.0 merge is back — and now spans both protocols. *(#799, #807)*
+
+**More jacks wired.** External **TX audio-source** selection across all radios, the **CW key jack** on Protocol-2, **RX audio to the radio's speaker jack** (Protocol-1 *and* Protocol-2), and the ANAN-10E line-in path. *(#810, #1032, #1045, #1122, #1053)*
+
+### 💬 Operator chat
+
+**Richer chat.** Share photos inline, send up to 60-second **voice messages**, organize into **groups**, and see a live **chat roster overlay** right on the panadapter. Admins get a premium console (global message, clear public chat, ban management, gold callsigns, and a see-all-frequencies override). Chat is in the default layout. *(#994, #1079, #1068, #1070, #900, #911, #933, #1078, #895, #1094)*
+
+### ⚡ Lightning Map & operating aids
+
+**Real-time Lightning Map.** A new panel plots live lightning strikes from the Blitzortung network, with a configurable **proximity strike alert** so you know when storms are closing in on your station. *(#954, #968, #978)*
+
+### 🎙️ Recording
+
+**Digital Recorder.** The in-app tape deck was reworked into a folder-organized recorder with full create/rename/delete, level meters, and one-click transmit of a recording. *(#1022)*
+
+**WAV recorder is now a plugin.** The over-air WAV record/playback feature has moved out of the core and into an **installable plugin** — add it from the plugin catalog if you want it. This keeps the core lean and lets the recorder update independently. *(#1141)*
+
+### 🩺 Diagnostics, support & stability
+
+**Maintainer support sessions.** A new opt-in, **read-only** remote-diagnostics path lets a maintainer help you troubleshoot live — you grant access explicitly each time, and crashes can be auto-shared with your consent. Backed by an on-disk rolling log, a broker relay, and a sidecar that reports presence. *(#1082, #1086, #1093, #1095, #1096, #1097, #1098, #1127)*
+
+**Better crash reporting.** Verbose crash diagnostics, firmware version captured in the Report-a-Problem snapshot, and a live Audio Suite diagnostics panel (latency, DSP load, fidelity). *(#1026, #1059, #1072)*
+
+**Desktop hardening.** The long-standing **close-on-exit crash** (third-party plugin static destructors faulting under AppKit/WebView teardown) is fixed by hard-exiting after an orderly shutdown; the desktop build runs as a GUI subsystem with **no stray console window**; native-audio device opens no longer block startup. *(#1065, #1115, #1076, #1089, #1020, #1091, #1030)*
+
+**Reset & Uninstall Zeus.** A full cross-platform "Reset & Uninstall" that wipes Zeus cleanly with an inline backup to your Downloads folder first. *(#1087)*
+
+**Storage consolidation.** All preference stores moved onto a single shared LiteDB (fixes Windows file-lock failures), with a one-time migration off the legacy encrypted database. *(#1040, #847)*
+
+### 🖥️ Workspace & UI
+
+**Workspace zoom.** A persistent zoom that scales the entire panel grid — set it from the footer or the scroll wheel — so you can fit more on screen or enlarge for across-the-room reading. The top bar and transport scale with it. *(#1003, #1035, #1085, #1109)*
+
+**Saved-layouts library.** Name, save, and manage full workspace layouts (full create/read/update/delete) separately from your workspace tabs, transfer panels between tabs, and keep detached panel windows across restarts. *(#1007, #964, #984, #1113)*
+
+### 📖 Documentation
+
+**The operator's manual grew with the app.** The Zeus Operator's Manual gains a full **Digital Modes** chapter (FreeDV, RADE, FT8/FT4) and new coverage of multi-receiver operation, KiwiSDR, remote operation, CAT, the Lightning Map, and the restored accessory ports. It's rebuilt fresh each release and ships **inside every installer**. *(#985)*
+
+---
+
+### 🙏 Thanks
+
+- **Doug (KB2UKA)** — the digital-modes release is yours: the native FT8/FT4 suite, the FreeDV / RADE transmit-and-receive integration, the multi-receiver build-out, the external-port restoration, and the on-air bench work that proved all of it on real RF.
+- **Christian Suarez (N9WAR)** — for the remote-operation stack, the KiwiSDR receiver, the maintainer support-session and diagnostics framework, the chat and cloud infrastructure, and the deep platform work this cycle runs on.
+- **Every operator in the OpenHPSDR Zeus community** — thank you for testing on real radios, reporting what broke, and pushing Zeus forward. This release is for you.
+
+---
+
 ## [0.10.0] — 2026-06-20
 
 > **🎉 The biggest Zeus release yet — and truly the N9WAR feature release.** Around 145 pull requests land here. This is the release where the original Zeus and Christian Suarez's (N9WAR) Zeus become one, bringing whole new subsystems to operators for the first time: built-in operator chat, DX/POTA/SOTA spotting, space-weather, a true second receiver, AI net-monitoring, one-click self-diagnostics, a GPU waterfall, and a full operator's manual — on top of a deep receive/transmit audio overhaul.
@@ -285,7 +393,7 @@ We're also keeping an eye on operator reports for any remaining Windows-only qui
 - **Plugin-settings persistence fix** (#387). LiteDB upsert-by-`_id` bug was silently inserting new rows on every `SetAsync` instead of updating — operator dial-in could revert to defaults across desktop restarts. Now: atomic delete-by-key + insert, with descending-ID read so any pre-fix duplicates resolve to the latest value.
 - **Restart-required modal on every plugin install.** The "Please shut down Zeus and restart" dialog that previously fired only after the Download Audio Suite bundle install now also fires after a single-plugin install from the Plugins panel (Settings → Plugins → Browse / Install). New endpoints + AssemblyLoadContexts only register at backend startup, so the operator always gets the same explicit reminder.
 
-### Added — plugins shipping with this release (Kb2uka/openhpsdr-zeus-plugins)
+### Added — plugins shipping with this release (OpenHPSDR-Zeus-org/openhpsdr-zeus-plugins)
 
 - **EQ v0.2.0** — Input + Output gain stages plus a live FFT spectrum behind the curve.
 - **NoiseGate v0.1.0** — new plugin. Peak-envelope detector with built-in 3 dB hysteresis, hold timer, asymmetric attack/release gain slew, range knob, output trim. Threshold rail UI with **OPEN / HOLD / CLOSED** state pill.

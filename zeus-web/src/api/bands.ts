@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 
 export type BandAllocation = 'Amateur' | 'SWL' | 'Broadcast' | 'Reserved' | 'Unknown';
 export type ModeRestriction = 'Any' | 'CwOnly' | 'PhoneOnly' | 'DigitalOnly' | 'CwAndDigital';
@@ -37,7 +38,7 @@ export type BandCurrentDto = {
   txGuardIgnore: boolean;
 };
 
-export type RxMode = 'LSB' | 'USB' | 'CWL' | 'CWU' | 'AM' | 'FM' | 'SAM' | 'DSB' | 'DIGL' | 'DIGU';
+export type RxMode = 'LSB' | 'USB' | 'CWL' | 'CWU' | 'AM' | 'FM' | 'SAM' | 'DSB' | 'DIGL' | 'DIGU' | 'FREEDV';
 
 export async function fetchRegions(signal?: AbortSignal): Promise<BandRegion[]> {
   const r = await fetch('/api/bands/regions', { signal });
@@ -110,7 +111,9 @@ export function modeMatchesRestriction(mode: RxMode, restriction: ModeRestrictio
   switch (restriction) {
     case 'Any': return true;
     case 'CwOnly': return mode === 'CWU' || mode === 'CWL';
-    case 'PhoneOnly': return ['USB', 'LSB', 'AM', 'SAM', 'DSB', 'FM'].includes(mode);
+    // FreeDV is a ~2.4 kHz digital-VOICE mode that occupies phone segments
+    // (it transmits as a USB signal), so it follows the phone allocation.
+    case 'PhoneOnly': return ['USB', 'LSB', 'AM', 'SAM', 'DSB', 'FM', 'FREEDV'].includes(mode);
     case 'DigitalOnly': return mode === 'DIGL' || mode === 'DIGU';
     case 'CwAndDigital': return ['CWU', 'CWL', 'DIGL', 'DIGU'].includes(mode);
     default: return false;

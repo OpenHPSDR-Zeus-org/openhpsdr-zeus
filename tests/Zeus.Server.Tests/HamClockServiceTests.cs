@@ -28,6 +28,86 @@ public sealed class HamClockServiceTests
     }
 
     [Fact]
+    public void CreateToolProcessStartInfo_RunsNpmViaNodeWithCliEntrypoint()
+    {
+        // npm must be launched as `node "<…>/npm-cli.js" ci`, never through the
+        // npm/npm.cmd shim — otherwise a stray node_modules\npm in the working
+        // dir can shadow the real npm (regression: "Cannot find module npm-cli.js").
+        var root = Path.Combine(Path.GetTempPath(), "zeus-hamclock-npm-" + Guid.NewGuid().ToString("N"));
+        var npmBin = Path.Combine(root, "node_modules", "npm", "bin");
+        Directory.CreateDirectory(npmBin);
+        try
+        {
+            var nodePath = Path.Combine(root, OperatingSystem.IsWindows() ? "node.exe" : "node");
+            File.WriteAllText(nodePath, string.Empty);
+            var cliPath = Path.Combine(npmBin, "npm-cli.js");
+            File.WriteAllText(cliPath, string.Empty);
+
+            var psi = HamClockService.CreateToolProcessStartInfo("npm", "ci", Path.GetTempPath(), root);
+
+            Assert.Equal(nodePath, psi.FileName);
+            Assert.DoesNotContain("cmd.exe", psi.FileName, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal($"\"{cliPath}\" ci", psi.Arguments);
+            var path = psi.Environment.First(kv => string.Equals(kv.Key, "PATH", StringComparison.OrdinalIgnoreCase)).Value;
+            Assert.StartsWith(root + Path.PathSeparator, path);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CreateToolProcessStartInfo_ResolvesNpxCliEntrypoint()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "zeus-hamclock-npx-" + Guid.NewGuid().ToString("N"));
+        var npmBin = Path.Combine(root, "node_modules", "npm", "bin");
+        Directory.CreateDirectory(npmBin);
+        try
+        {
+            var nodePath = Path.Combine(root, OperatingSystem.IsWindows() ? "node.exe" : "node");
+            File.WriteAllText(nodePath, string.Empty);
+            var cliPath = Path.Combine(npmBin, "npx-cli.js");
+            File.WriteAllText(cliPath, string.Empty);
+
+            var psi = HamClockService.CreateToolProcessStartInfo("npx", "--version", Path.GetTempPath(), root);
+
+            Assert.Equal(nodePath, psi.FileName);
+            Assert.Equal($"\"{cliPath}\" --version", psi.Arguments);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CreateToolProcessStartInfo_FallsBackToCmdShim_WhenNpmCliEntrypointMissing()
+    {
+        // No npm-cli.js next to node → fall back to the cmd.exe shim path on
+        // Windows so installs still work on unusual Node layouts.
+        if (!OperatingSystem.IsWindows()) return;
+
+        var root = Path.Combine(Path.GetTempPath(), "zeus-hamclock-npmfb-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "node.exe"), string.Empty);
+            File.WriteAllText(Path.Combine(root, "npm.cmd"), string.Empty); // shim present, npm-cli.js absent
+
+            var psi = HamClockService.CreateToolProcessStartInfo("npm", "ci", Path.GetTempPath(), root);
+
+            Assert.Equal("cmd.exe", psi.FileName);
+            Assert.Contains("npm.cmd", psi.Arguments, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("ci", psi.Arguments, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ReadEnvPortFromContent_UsesFirstUncommentedPort()
     {
         const string env = """
@@ -80,6 +160,22 @@ public sealed class HamClockServiceTests
             freePort: () => 61000);
 
         Assert.Equal(HamClockService.DefaultStablePort, port);
+    }
+
+    [Theory]
+    [InlineData("v22.12.0", true)]   // exact minimum — HamClock deps' require(esm) threshold
+    [InlineData("v22.23.0", true)]   // the bundled version
+    [InlineData("v24.0.0", true)]
+    [InlineData("22.12.0", true)]    // tolerant of a missing 'v' prefix
+    [InlineData("v22.12.0-nightly", true)] // suffix stripped before compare
+    [InlineData("v22.11.0", false)]  // the version that throws ERR_REQUIRE_ESM
+    [InlineData("v20.18.0", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    [InlineData("not-a-version", false)]
+    public void NodeMeetsMinimum_GatesOnRequireEsmThreshold(string? version, bool expected)
+    {
+        Assert.Equal(expected, HamClockService.NodeMeetsMinimum(version));
     }
 
     [Fact]

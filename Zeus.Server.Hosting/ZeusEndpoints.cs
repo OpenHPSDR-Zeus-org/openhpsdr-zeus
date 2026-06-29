@@ -15,6 +15,7 @@ using Zeus.Protocol1.Discovery;
 using Zeus.Protocol2;
 using Zeus.Server.Diagnostics;
 using Zeus.Server.Tci;
+using Zeus.Server.Wsjtx;
 
 namespace Zeus.Server;
 
@@ -28,6 +29,11 @@ public static class ZeusEndpoints
     {
         var log = app.Services.GetRequiredService<ILogger<object>>();
 
+        // Live Diagnostics API v2 — unified, registry-driven surface
+        // (/api/diagnostics/v2). Legacy diagnostics routes below delegate to
+        // the same providers for wire-compatible snapshots.
+        app.MapDiagnosticsV2();
+
         app.MapGet("/api/version", () =>
         {
             var assembly = System.Reflection.Assembly.GetExecutingAssembly();
@@ -35,6 +41,21 @@ public static class ZeusEndpoints
                 .FirstOrDefault() as System.Reflection.AssemblyInformationalVersionAttribute;
             var version = attr?.InformationalVersion ?? "unknown";
             return Results.Ok(new { version });
+        });
+
+        // Operator manual. The PDF is built fresh from docs/manual each release
+        // and bundled next to the host binary (release.yml `build-manual` job),
+        // so it resolves under AppContext.BaseDirectory on every platform —
+        // including inside the macOS .app bundle and the Linux AppImage, where
+        // it is otherwise unreachable. Served inline (no download disposition)
+        // so the About-panel link opens it in a new tab. Dev builds don't carry
+        // the PDF, so this 404s locally — the link simply does nothing then.
+        app.MapGet("/manual", () =>
+        {
+            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "Zeus-Operator-Manual.pdf");
+            return System.IO.File.Exists(path)
+                ? Results.File(path, "application/pdf", enableRangeProcessing: true)
+                : Results.NotFound("Operator manual is not bundled in this build.");
         });
 
         // Self-diagnostic "Report a problem" feature. The picker fetches the
@@ -51,6 +72,71 @@ public static class ZeusEndpoints
                 return Results.Ok(diag.Build(req));
             });
 
+        // Maintainer remote-support: the OPERATOR's local decision surface for an
+        // inbound read-only diagnostics request (remote-diag P3). The request
+        // arrives over the broker and is parked by SupportRequestCoordinator; these
+        // endpoints let the in-app Allow/Deny UI (P5) list and answer it. They are
+        // intentionally LOCAL only — the support tunnel's allowlist excludes
+        // /api/support and the operator tunnel denies it, so a remote peer can
+        // never approve a session for itself.
+        app.MapGet("/api/support/pending",
+            (Zeus.Server.Hosting.Support.SupportRequestCoordinator coord) => Results.Ok(coord.Pending()));
+
+        app.MapPost("/api/support/approve",
+            (SupportDecisionRequest req, Zeus.Server.Hosting.Support.SupportRequestCoordinator coord) =>
+            {
+                var id = req.RequestId ?? "";
+                var ok = coord.Approve(id);
+                log.LogInformation("api.support.approve id={RequestId} ok={Ok}", id, ok);
+                return ok ? Results.Ok(new { ok = true }) : Results.NotFound(new { ok = false });
+            });
+
+        app.MapPost("/api/support/deny",
+            (SupportDecisionRequest req, Zeus.Server.Hosting.Support.SupportRequestCoordinator coord) =>
+            {
+                var id = req.RequestId ?? "";
+                var ok = coord.Deny(id);
+                log.LogInformation("api.support.deny id={RequestId} ok={Ok}", id, ok);
+                return ok ? Results.Ok(new { ok = true }) : Results.NotFound(new { ok = false });
+            });
+
+        // L1 "Remote Diagnostics available" master switch + crash auto-share
+        // sub-toggle (remote-diag P5). OFF by default; while OFF the coordinator
+        // refuses inbound requests outright. The Settings → Server panel drives
+        // PUT; the in-app Allow/Deny prompt + active-session badge poll /status.
+        app.MapGet("/api/support/availability",
+            (Zeus.Server.Hosting.Support.SupportAvailabilityStore store) =>
+                Results.Ok(new { available = store.IsAvailable, autoShareCrashes = store.AutoShareOnCrash }));
+
+        app.MapPut("/api/support/availability",
+            (SupportAvailabilityRequest req, Zeus.Server.Hosting.Support.SupportAvailabilityStore store) =>
+            {
+                var available = req.Available ?? false;
+                var autoShare = req.AutoShareCrashes ?? false;
+                var (newAvailable, newAutoShare) = store.Set(available, autoShare);
+                // Push the change to the out-of-process sidecar so it can
+                // register/deregister broker presence (P3c consumes this).
+                Zeus.Server.SupportSidecar.NotifyAvailabilityChanged(newAvailable, newAutoShare, log: log);
+                log.LogInformation(
+                    "api.support.availability available={Available} autoShareCrashes={AutoShare}",
+                    newAvailable, newAutoShare);
+                return Results.Ok(new { available = newAvailable, autoShareCrashes = newAutoShare });
+            });
+
+        // Single poll surface for the operator UI: opt-in posture + live pending
+        // requests + how many maintainer sessions are currently viewing.
+        app.MapGet("/api/support/status",
+            (Zeus.Server.Hosting.Support.SupportAvailabilityStore store,
+             Zeus.Server.Hosting.Support.SupportRequestCoordinator coord,
+             Zeus.Server.Hosting.Support.SupportWebRtcService rtc) =>
+                Results.Ok(new
+                {
+                    available = store.IsAvailable,
+                    autoShareCrashes = store.AutoShareOnCrash,
+                    pending = coord.Pending(),
+                    activeSessions = rtc.ActiveSessions,
+                }));
+
         // Capabilities snapshot — host-mode + platform metadata. Frontend
         // fetches once on app mount; future feature gates will reattach as
         // the new plugin system fills the FeatureMatrix. The HttpContext-
@@ -59,6 +145,116 @@ public static class ZeusEndpoints
         // host="desktop" — see CapabilitiesService.Snapshot(HttpContext).
         app.MapGet("/api/capabilities",
             (HttpContext ctx, CapabilitiesService caps) => Results.Ok(caps.Snapshot(ctx)));
+
+        // FT8/FT4 native decode control. The FT8 workspace POSTs enable on
+        // entering the mode and disable on leaving; decodes arrive out-of-band as
+        // 0x38 Ft8Decode WS frames. nativeAvailable is false on a platform whose
+        // zeus_ft8 binary wasn't shipped (the workspace then shows "unavailable").
+        app.MapGet("/api/ft8",
+            (Ft8Service ft8) => Results.Ok(new
+            {
+                nativeAvailable = ft8.NativeAvailable,
+                enabled = ft8.IsEnabled,
+                receiver = ft8.ActiveReceiver,
+                protocol = ft8.ActiveProtocol == Zeus.Dsp.Ft8.Ft8Protocol.Ft4 ? "FT4" : "FT8",
+                passes = ft8.DecodePasses,
+            }));
+
+        app.MapPost("/api/ft8/enable",
+            (Zeus.Contracts.Ft8EnableRequest body, Ft8Service ft8) =>
+            {
+                var proto = string.Equals(body.Protocol, "FT4", StringComparison.OrdinalIgnoreCase)
+                    ? Zeus.Dsp.Ft8.Ft8Protocol.Ft4 : Zeus.Dsp.Ft8.Ft8Protocol.Ft8;
+                if (body.Passes is int p) ft8.DecodePasses = Math.Clamp(p, 1, 4);
+                bool ok = ft8.Enable(body.Receiver ?? 0, proto);
+                log.LogInformation("api.ft8.enable rx={Rx} proto={Proto} ok={Ok}",
+                    body.Receiver ?? 0, proto, ok);
+                return ok
+                    ? Results.Ok(new { enabled = true, nativeAvailable = true })
+                    : Results.Ok(new { enabled = false, nativeAvailable = ft8.NativeAvailable });
+            });
+
+        // FT8/FT4 + WSPR ARMED auto-sequence TX keyer control surface (arm /
+        // stage / halt / status). Kept in its own extension file so this one
+        // stays manageable.
+        app.MapFt8TxEndpoints();
+
+        app.MapPost("/api/ft8/disable", (Ft8Service ft8) =>
+        {
+            ft8.Disable();
+            log.LogInformation("api.ft8.disable");
+            return Results.Ok(new { enabled = false });
+        });
+
+        // Shared operator identity (callsign + Maidenhead grid). This is the SAME
+        // identity the spotting uploaders and FreeDV Reporter resolve from — set
+        // it once here and FT8/FT4 TX ungates everywhere. Server-persisted so the
+        // desktop webview no longer loses it on restart. GET returns both the saved
+        // override and the effective resolved value (override → QRZ home fallback),
+        // so the Settings page can grey QRZ-sourced values.
+        app.MapGet("/api/operator",
+            (OperatorIdentityStore store, QrzService qrz) =>
+                Results.Ok(OperatorIdentityResolver.Status(store, qrz)));
+
+        app.MapPost("/api/operator",
+            (Zeus.Contracts.OperatorIdentity body, OperatorIdentityStore store, QrzService qrz) =>
+            {
+                store.Set(body);
+                log.LogInformation("api.operator.set call={Call} grid={Grid}",
+                    body.Callsign, body.Grid);
+                return Results.Ok(OperatorIdentityResolver.Status(store, qrz));
+            });
+
+        // FT8/FT4/WSPR workspace behaviour + display preferences (auto-seq, decode
+        // depth, macros, logging, waterfall/display). Persisted server-side PER
+        // MODE so each digital mode remembers its own config across desktop
+        // restarts. The `mode` query param selects FT8/FT4/WSPR; omitted → FT8
+        // (back-compat with the pre-per-mode mode-less caller). Pure behaviour/UI —
+        // none of these transmit; TX still requires an explicit arm.
+        app.MapGet("/api/ft8/settings",
+            (string? mode, Ft8SettingsStore store) =>
+                Results.Ok(store.Get(Ft8SettingsStore.NormalizeMode(mode))));
+
+        app.MapPost("/api/ft8/settings",
+            (Zeus.Contracts.Ft8Settings body, string? mode, Ft8SettingsStore store) =>
+            {
+                var m = Ft8SettingsStore.NormalizeMode(mode);
+                var saved = store.Set(m, body);
+                log.LogInformation(
+                    "api.ft8.settings mode={Mode} autoseq={Auto} passes={Passes} autolog={Log}",
+                    m, saved.AutoSequence, saved.DecodePasses, saved.AutoLog);
+                return Results.Ok(saved);
+            });
+
+        // WSPR native spotting control. nativeAvailable is false where the
+        // zeus_wspr decoder isn't shipped (e.g. Windows encode-only build today).
+        app.MapGet("/api/wspr",
+            (WsprService wspr) => Results.Ok(new
+            {
+                nativeAvailable = wspr.NativeAvailable,
+                enabled = wspr.IsEnabled,
+                receiver = wspr.ActiveReceiver,
+                dialFreqMhz = wspr.DialFreqMhz,
+            }));
+
+        app.MapPost("/api/wspr/enable",
+            (Zeus.Contracts.WsprEnableRequest body, WsprService wspr) =>
+            {
+                double dial = body.DialFreqMhz ?? 14.0956; // 20 m default
+                bool ok = wspr.Enable(body.Receiver ?? 0, dial);
+                log.LogInformation("api.wspr.enable rx={Rx} dial={Dial:F4} ok={Ok}",
+                    body.Receiver ?? 0, dial, ok);
+                return ok
+                    ? Results.Ok(new { enabled = true, nativeAvailable = true })
+                    : Results.Ok(new { enabled = false, nativeAvailable = wspr.NativeAvailable });
+            });
+
+        app.MapPost("/api/wspr/disable", (WsprService wspr) =>
+        {
+            wspr.Disable();
+            log.LogInformation("api.wspr.disable");
+            return Results.Ok(new { enabled = false });
+        });
 
         // Activation spots — merged POTA + SOTA feed, polled server-side by
         // ActivationSpotsService. The Spots panel polls this and offers
@@ -200,26 +396,87 @@ public static class ZeusEndpoints
                 engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
             });
         });
-        app.MapGet("/api/tx-audio-suite/processing-mode", (AudioProcessingModeService svc) =>
+        // Processing-mode + engine health. The health fields let the frontend
+        // distinguish "engine still starting" (transient — wait) from "engine
+        // keeps crashing" (Faulted — offer Repair) instead of a vague hint.
+        static object TxModeDto(AudioProcessingModeService svc, AudioProcessingMode mode) => new
         {
-            return Results.Ok(new
-            {
-                mode = svc.Mode.ToString().ToLowerInvariant(),
-                engineActive = svc.EngineActive,
-                engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
-            });
-        });
+            mode = mode.ToString().ToLowerInvariant(),
+            engineActive = svc.EngineActive,
+            engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
+            engineState = svc.EngineState.ToString().ToLowerInvariant(),
+            engineCrashLooping = svc.EngineCrashLooping,
+            engineRestartCount = svc.EngineRestartCount,
+            engineLastFault = svc.EngineLastFault,
+        };
+        app.MapGet("/api/tx-audio-suite/processing-mode", (AudioProcessingModeService svc) =>
+            Results.Ok(TxModeDto(svc, svc.Mode)));
         app.MapPut("/api/tx-audio-suite/processing-mode", async (ProcessingModeSetRequest body, AudioProcessingModeService svc) =>
         {
             if (body?.Mode is null || !Enum.TryParse<AudioProcessingMode>(body.Mode, ignoreCase: true, out var mode))
                 return Results.BadRequest(new { error = "mode must be 'native' or 'vst'" });
             var applied = await svc.SetModeAsync(mode);
-            return Results.Ok(new
+            return Results.Ok(TxModeDto(svc, applied));
+        });
+
+        // VST engine provisioning — the in-app "Get VST Engine" flow. The engine
+        // is the upstream KlayaR/VSTHost headless binary, fetched from its latest
+        // release and staged at the Zeus-managed path; it is never bundled in the
+        // Zeus installer (GPLv3 isolation — see VstEngineInstaller). GET reports
+        // install progress + whether the engine is already present; POST starts a
+        // background download (idempotent — no-op if already installed/running).
+        // The frontend polls GET until phase is "done" / "failed", then re-reads
+        // the processing-mode endpoint so the new engine is picked up.
+        static object EngineInstallDto(VstEngineInstaller installer)
+        {
+            var s = installer.Current;
+            return new
             {
-                mode = applied.ToString().ToLowerInvariant(),
-                engineActive = svc.EngineActive,
-                engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
-            });
+                phase = s.Phase.ToString().ToLowerInvariant(),
+                percent = s.Percent,
+                message = s.Message,
+                version = s.Version,
+                engineAvailable = installer.EngineInstalled,
+                // Platform affordance flags for the Audio Tools GUI. The
+                // out-of-process JUCE/VSTHost engine is Windows-only by design
+                // (VstEngineInstaller throws "Windows-only" elsewhere), so the
+                // "Download VST Engine" path is only meaningful on Windows. The
+                // native in-process bridges (zeus-vst-bridge for VST3, plus the
+                // macOS-only zeus-au-bridge for Audio Units) are how macOS/Linux
+                // host plugins — no engine download required. These additive
+                // flags let the frontend pick the right affordance per OS.
+                engineSupported = OperatingSystem.IsWindows(),
+                inProcessHostSupported = true,
+                auSupported = OperatingSystem.IsMacOS(),
+            };
+        }
+        app.MapGet("/api/audio-suite/vst-engine/install", (VstEngineInstaller installer) =>
+            Results.Ok(EngineInstallDto(installer)));
+        app.MapGet("/api/tx-audio-suite/vst-engine/install", (VstEngineInstaller installer) =>
+            Results.Ok(EngineInstallDto(installer)));
+        app.MapPost("/api/audio-suite/vst-engine/install", (VstEngineInstaller installer) =>
+        {
+            installer.Start();
+            return Results.Ok(EngineInstallDto(installer));
+        });
+        app.MapPost("/api/tx-audio-suite/vst-engine/install", (VstEngineInstaller installer) =>
+        {
+            installer.Start();
+            return Results.Ok(EngineInstallDto(installer));
+        });
+        // Repair/reinstall — force a re-download of the manifest's verified engine
+        // even when one is already present, replacing a stale/corrupt/crash-looping
+        // binary. Backs the "Repair engine" affordance the UI shows when the engine
+        // is Faulted; also runs automatically on crash-loop (AudioProcessingModeService).
+        app.MapPost("/api/audio-suite/vst-engine/repair", (VstEngineInstaller installer) =>
+        {
+            installer.Start(force: true);
+            return Results.Ok(EngineInstallDto(installer));
+        });
+        app.MapPost("/api/tx-audio-suite/vst-engine/repair", (VstEngineInstaller installer) =>
+        {
+            installer.Start(force: true);
+            return Results.Ok(EngineInstallDto(installer));
         });
 
         // Audio plugin chain order — operator's preferred sequence for
@@ -398,6 +655,51 @@ public static class ZeusEndpoints
         {
             svc.SetLastLoadedId(req?.Id);
             return Results.Ok(new LastLoadedTxAudioProfileDto(svc.LastLoadedId));
+        });
+
+        // Import a TX audio profile from an uploaded .json file (multipart). The
+        // webview can't hand the server a filesystem path, so the chosen file's
+        // bytes are uploaded here, parsed, and ADDED to the collection (never
+        // applied). The import is non-destructive — a slug collision bumps the
+        // name rather than overwriting. Every profile is also mirrored to the
+        // on-disk tx-audio-profiles folder. Antiforgery disabled — this is a
+        // loopback / LAN-token API, not a cookie-auth form post.
+        app.MapPost("/api/tx-audio-profiles/import", async (HttpRequest req, TxAudioProfileService svc) =>
+        {
+            try
+            {
+                if (!req.HasFormContentType)
+                    return Results.BadRequest(new { error = "Expected a multipart file upload." });
+                var form = await req.ReadFormAsync();
+                var file = form.Files.GetFile("file") ?? form.Files.FirstOrDefault();
+                if (file is null || file.Length == 0)
+                    return Results.BadRequest(new { error = "No file uploaded." });
+
+                var nameField = form.TryGetValue("name", out var n) ? n.ToString() : null;
+                var fallback = string.IsNullOrWhiteSpace(nameField)
+                    ? Path.GetFileNameWithoutExtension(file.FileName)
+                    : nameField;
+
+                using var reader = new StreamReader(file.OpenReadStream());
+                var json = await reader.ReadToEndAsync();
+                var imported = svc.ImportProfile(json, fallback);
+                return Results.Ok(imported);
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        }).DisableAntiforgery();
+
+        // Download a saved TX audio profile as a .json file so the operator can
+        // back it up or share it (the same bytes are mirrored in the
+        // tx-audio-profiles folder on disk).
+        app.MapGet("/api/tx-audio-profiles/{id}/export", (string id, TxAudioProfileService svc) =>
+        {
+            var export = svc.ExportProfile(id);
+            return export is null
+                ? Results.NotFound(new { error = $"no TX audio profile '{id}'" })
+                : Results.File(export.Value.Bytes, "application/json", export.Value.FileName);
         });
 
         app.MapGet("/api/rx-audio-suite/profiles", (RxAudioProfileService profiles) =>
@@ -584,6 +886,65 @@ public static class ZeusEndpoints
             }
         });
 
+        // Scan installed Audio Units (macOS) and register each as an installed
+        // Zeus plugin so it flows into the Audio Suite chain in-process — the
+        // AU sibling of scan-vst-directory. Unlike VST3, AUs are resolved from
+        // the OS AudioComponent registry, so there is no directory argument.
+        // The whole flow is a no-op off macOS: AuComponentScanService.ScanAsync
+        // returns an empty result, so these endpoints stay 200/empty on
+        // Windows/Linux (nothing AU-shaped ever runs there). As with VST3
+        // scans, registered AUs are parked into Available — a scan must never
+        // change what is processing audio.
+        static async Task<IResult> ScanAuAsync(
+            string defaultRoute,
+            ScanAuRequest? body,
+            AuComponentScanService scanner,
+            ChainOrderService chainOrder,
+            RxChainOrderService rxChainOrder,
+            CancellationToken ct)
+        {
+            var requested = body?.Route;
+            var route = string.IsNullOrWhiteSpace(requested)
+                || string.Equals(requested, "auto", StringComparison.OrdinalIgnoreCase)
+                ? defaultRoute
+                : requested;
+            try
+            {
+                var result = await scanner.ScanAsync(route, ct);
+                chainOrder.ParkAll(result.Registered
+                    .Where(r => AuComponentScanService.IsTxPluginId(r.Id))
+                    .Select(r => r.Id)
+                    .ToList());
+                rxChainOrder.ParkAll(result.Registered
+                    .Where(r => AuComponentScanService.IsRxPluginId(r.Id))
+                    .Select(r => r.Id)
+                    .ToList());
+                return Results.Ok(new
+                {
+                    supported = OperatingSystem.IsMacOS(),
+                    registered = result.Registered.Select(r => new { id = r.Id, name = r.Name }),
+                    skipped = result.Skipped.Select(r => new { id = r.Id, name = r.Name }),
+                    errors = result.Errors.Select(e => new { source = e.ComponentId, message = e.Message }),
+                });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        }
+        app.MapPost("/api/audio-suite/scan-au",
+            (ScanAuRequest? body, AuComponentScanService scanner,
+             ChainOrderService chainOrder, RxChainOrderService rxChainOrder, CancellationToken ct) =>
+                ScanAuAsync("tx", body, scanner, chainOrder, rxChainOrder, ct));
+        app.MapPost("/api/tx-audio-suite/scan-au",
+            (ScanAuRequest? body, AuComponentScanService scanner,
+             ChainOrderService chainOrder, RxChainOrderService rxChainOrder, CancellationToken ct) =>
+                ScanAuAsync("tx", body, scanner, chainOrder, rxChainOrder, ct));
+        app.MapPost("/api/rx-audio-suite/scan-au",
+            (ScanAuRequest? body, AuComponentScanService scanner,
+             ChainOrderService chainOrder, RxChainOrderService rxChainOrder, CancellationToken ct) =>
+                ScanAuAsync("rx", body, scanner, chainOrder, rxChainOrder, ct));
+
         // Audio Suite chain-level IN/OUT signal meters. Linear peak of
         // the block entering / leaving the TX insert chain, plus dBFS.
         // Reads 0 until the chain processes audio — which only happens
@@ -636,6 +997,33 @@ public static class ZeusEndpoints
             _                            => Results.StatusCode(500),
         };
 
+        // When an editor open can't succeed in the current mode, a naive open
+        // would fall through to the in-process bridge and surface its "set
+        // ZEUS_ENABLE_VST_LOAD=1" hint — a developer-only escape hatch that sends
+        // a new operator down the wrong (and unsafe) path. Point them at the
+        // supported fix instead: the crash-isolated out-of-process engine
+        // ("Download VST Engine" + VST processing mode). This covers two cases:
+        // VST mode with no routing engine, and Native mode where the in-process
+        // bridge won't host the plugin (TX native load is opt-in). Returns null
+        // when the open should proceed — the engine is routing, or the bridge can
+        // host this plugin (RX VSTs load in-process; TX only with the dev opt-in).
+        static IResult? VstEngineEditorGuard(string id, AudioProcessingModeService mode)
+        {
+            // NB: the TX term is TxNativeEditorOptIn (legacy explicit opt-in),
+            // NOT the TX load default. The load default flipped on (2026-06-26)
+            // but the editor engine-redirect UX is deliberately decoupled so it
+            // doesn't change on platforms where in-process TX editor hosting is
+            // unverified. A genuinely-loaded TX plugin bypasses this guard via
+            // HostsPlugin upstream.
+            var nativeLoadEnabled = VstDirectoryScanService.IsRxPluginId(id)
+                || Zeus.Plugins.Host.Audio.VstHostAudioPlugin.TxNativeEditorOptIn;
+            var error = VstEditorHint.EngineUnavailableMessage(
+                mode.Mode, mode.EngineActive,
+                AudioProcessingModeService.FindEngineExe() is not null,
+                nativeLoadEnabled);
+            return error is null ? null : Results.Json(new { error }, statusCode: 409);
+        }
+
         // Editor routing is mode-aware (host consolidation): when the
         // out-of-process engine is active (VST processing mode) the editor is
         // hosted crash-isolated in the engine process — the same instance that
@@ -654,11 +1042,20 @@ public static class ZeusEndpoints
         app.MapPost("/api/audio-suite/plugins/{id}/editor",
             (string id, AudioPluginBridge bridge, AudioProcessingModeService mode, RxVstEngineService rxVst) =>
             {
-                var result = rxVst.HasEngineSlot(id)
-                    ? rxVst.OpenEditor(id)
-                    : mode.EngineActive && mode.HasEngineSlot(id)
-                        ? mode.OpenEditor(id)
-                        : bridge.OpenEditor(id);
+                // RX engine slots route to the RX engine regardless of the TX
+                // processing mode; only the TX path is gated on the VST engine.
+                if (rxVst.HasEngineSlot(id))
+                    return MapEditorResult(rxVst.OpenEditor(id), open: true);
+                // Skip the "install the VST engine" guard when the bridge hosts
+                // this plugin in-process (a natively-loaded AU/VST3) — the editor
+                // opens via bridge.OpenEditor below. Engine-routed plugins are not
+                // natively loaded, so HostsPlugin is false and the guard still
+                // fires for them (Windows path unchanged).
+                if (!bridge.HostsPlugin(id) && VstEngineEditorGuard(id, mode) is { } guard)
+                    return guard;
+                var result = mode.EngineActive && mode.HasEngineSlot(id)
+                    ? mode.OpenEditor(id)
+                    : bridge.OpenEditor(id);
                 return MapEditorResult(result, open: true);
             });
 
@@ -684,6 +1081,13 @@ public static class ZeusEndpoints
         app.MapPost("/api/tx-audio-suite/plugins/{id}/editor",
             (string id, AudioPluginBridge bridge, AudioProcessingModeService mode) =>
             {
+                // As with the generic route: a bridge-hosted in-process plugin
+                // (natively-loaded AU/VST3) opens via bridge.OpenEditor and must
+                // not be blocked by the engine guard. Engine-routed TX VSTs are
+                // not natively loaded, so HostsPlugin is false and the guard fires
+                // exactly as today (Windows path unchanged).
+                if (!bridge.HostsPlugin(id) && VstEngineEditorGuard(id, mode) is { } guard)
+                    return guard;
                 var result = mode.EngineActive && mode.HasEngineSlot(id)
                     ? mode.OpenEditor(id)
                     : bridge.OpenEditor(id);
@@ -704,158 +1108,49 @@ public static class ZeusEndpoints
         // auto-detects RX slots, but route-aware callers should use this
         // receive-side URL so separate TX/RX VST instances never depend on
         // ambiguous editor routing.
+        // RX VSTs are hosted out-of-process only when the dedicated RX engine is
+        // installed AND active; otherwise (Native mode — the default, and the
+        // only option until the operator installs the VST engine) the in-process
+        // AudioPluginBridge loads and renders the RX VST editor. So fall back to
+        // the bridge exactly like the generic /api/audio-suite route does. Without
+        // this fallback a fresh install 404s the editor for a perfectly-loaded
+        // in-process RX VST and surfaces the wrong "engine missing" hint.
         app.MapGet("/api/rx-audio-suite/plugins/{id}/editor",
-            (string id, RxVstEngineService rxVst) =>
+            (string id, RxVstEngineService rxVst, AudioPluginBridge bridge) =>
             {
-                if (!rxVst.HasEngineSlot(id))
-                    return Results.NotFound(new { error = "No such plugin in the RX Audio Suite chain." });
-                return Results.Ok(new { open = rxVst.IsEditorOpen(id) });
+                if (rxVst.HasEngineSlot(id))
+                    return Results.Ok(new { open = rxVst.IsEditorOpen(id) });
+                return Results.Ok(new { open = bridge.IsEditorOpen(id) });
             });
 
         app.MapPost("/api/rx-audio-suite/plugins/{id}/editor",
-            (string id, RxVstEngineService rxVst) =>
+            (string id, RxVstEngineService rxVst, AudioPluginBridge bridge) =>
             {
                 var result = rxVst.HasEngineSlot(id)
                     ? rxVst.OpenEditor(id)
-                    : EditorActionResult.NotFound;
+                    : bridge.OpenEditor(id);
                 return MapEditorResult(result, open: true);
             });
 
         app.MapDelete("/api/rx-audio-suite/plugins/{id}/editor",
-            (string id, RxVstEngineService rxVst) =>
+            (string id, RxVstEngineService rxVst, AudioPluginBridge bridge) =>
             {
                 var result = rxVst.HasEngineSlot(id)
                     ? rxVst.CloseEditor(id)
-                    : EditorActionResult.NotFound;
+                    : bridge.CloseEditor(id);
                 return MapEditorResult(result, open: false);
             });
 
-        // WAV recorder / player. Records RX or processed-TX audio to float32
-        // WAVs in the Downloads folder, and plays recordings back to the local
-        // monitor (no keying). Over-the-air playback is a later layer.
-        app.MapGet("/api/wav/status", (Zeus.Server.Wav.WavRecorderService wav) =>
-            Results.Ok(wav.GetStatus()));
-        app.MapGet("/api/wav/list", (Zeus.Server.Wav.WavRecorderService wav) =>
-            Results.Ok(new { dir = wav.RecordingsDir, recordings = wav.ListRecordings() }));
-        app.MapPost("/api/wav/record/start",
-            (WavRecordStartRequest body, Zeus.Server.Wav.WavRecorderService wav) =>
-        {
-            var source = string.Equals(body?.Source, "tx", StringComparison.OrdinalIgnoreCase)
-                ? Zeus.Server.Wav.WavRecordSource.Tx
-                : Zeus.Server.Wav.WavRecordSource.Rx;
-            try { return Results.Ok(new { file = wav.StartRecording(source) }); }
-            catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
-        });
-        app.MapPost("/api/wav/record/stop", (Zeus.Server.Wav.WavRecorderService wav) =>
-        {
-            var r = wav.StopRecording();
-            return r is { } x
-                ? Results.Ok(new { file = Path.GetFileName(x.Path), samples = x.Samples })
-                : Results.Ok(new { file = (string?)null, samples = 0L });
-        });
-        app.MapPost("/api/wav/play",
-            (WavPlayRequest body, Zeus.Server.Wav.WavRecorderService wav) =>
-        {
-            if (string.IsNullOrWhiteSpace(body?.File))
-                return Results.BadRequest(new { error = "file is required" });
-            try { wav.Play(body.File); return Results.Ok(wav.GetStatus()); }
-            catch (FileNotFoundException) { return Results.NotFound(new { error = "recording not found" }); }
-            catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
-        });
-        app.MapPost("/api/wav/stop", (Zeus.Server.Wav.WavRecorderService wav) =>
-        {
-            wav.StopPlayback();
-            return Results.Ok(wav.GetStatus());
-        });
-        app.MapDelete("/api/wav/{file}", (string file, Zeus.Server.Wav.WavRecorderService wav) =>
-        {
-            try { wav.DeleteRecording(file); return Results.Ok(new { deleted = file }); }
-            catch (FileNotFoundException) { return Results.NotFound(new { error = "recording not found" }); }
-        });
+        // WAV recorder / tape deck HTTP endpoints were extracted into the
+        // installable plugin com.kb2uka.recorder, which re-maps them under the
+        // host plugin route prefix via IBackendPlugin.MapEndpoints.
 
         app.MapGet("/api/state", (RadioService r) => r.Snapshot());
 
-        // TX diagnostic — exposes the producer/consumer counts for the mic-to-IQ ring
-        // so we can verify end-to-end wiring without relying on logging. Safe to leave
-        // in as it's free to call and reveals nothing that isn't already in DI.
-        // TX wiring diagnostic: verifies producer (TxAudioIngest) and consumer
-        // (Protocol1Client via ITxIqSource) stats. Useful for "is the mic reaching
-        // TXA, and is the EP2 packer actually reading the ring" questions without
-        // hunting through logs. Free to call, exposes no secrets.
-        app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSource src, TxAudioIngest ingest, DspPipelineService dsp, TxService tx, RadioService radio, StreamingHub hub, HardwareDiagnosticsService hardware, ExternalPttService externalPtt, AudioPluginBridge? pluginBridge, Zeus.Plugins.Host.Audio.VstEngineController? vstEngine, RxVstEngineService? rxVstEngine) =>
-        {
-            var generatedUtc = DateTimeOffset.UtcNow;
-            var p2Tx = dsp.ActiveP2Client?.TxIqDiagnosticsSnapshot();
-            var micUplink = hub.MicInboundDiagnosticsSnapshot(generatedUtc);
-            var radioState = radio.Snapshot();
-            var keying = hardware.KeyingSnapshot(externalPtt.Snapshot());
-            var power = hardware.PowerCalibrationSnapshot();
-            bool hostTxActive = tx.IsMoxOn || tx.IsTunOn || tx.IsTwoToneOn;
-            bool txStageActive = hostTxActive || radioState.TxMonitorEnabled;
-            bool requiresMicUplink = tx.IsMoxOn && !tx.IsTunOn && !tx.IsTwoToneOn;
-            var txStage = dsp.CurrentEngine?.GetTxStageMeters() ?? TxStageMeters.Silent;
-            var activePower = string.Equals(power.ActiveProtocol, "P2", StringComparison.OrdinalIgnoreCase)
-                ? power.P2
-                : power.P1;
-            bool? hardwarePtt = string.Equals(keying.ActiveProtocol, "P2", StringComparison.OrdinalIgnoreCase)
-                ? keying.P2PttIn
-                : keying.P1HardwarePtt;
-            return Results.Ok(new
-            {
-                generatedUtc,
-                iqSourceType = src.GetType().FullName,
-                iqSourceIsRing = ReferenceEquals(src, ring),
-                ring = new { ring.TotalWritten, ring.TotalRead, ring.Count, ring.Dropped, ring.Capacity, ring.RecentMag },
-                micUplink,
-                ingest = new { ingest.TotalMicSamples, ingest.TotalTxBlocks, ingest.DroppedFrames },
-                protocol2 = p2Tx,
-                audioPath = BuildTxAudioPathHealth(
-                    generatedUtc,
-                    ring.TotalWritten,
-                    ring.TotalRead,
-                    ring.Count,
-                    ring.Dropped,
-                    ring.Capacity,
-                    ring.RecentMag,
-                    ingest.TotalMicSamples,
-                    ingest.TotalTxBlocks,
-                    ingest.DroppedFrames,
-                    p2Tx,
-                    hostTxActive,
-                    micUplink,
-                    requiresMicUplink),
-                stage = BuildTxStageDiagnostics(txStage, txStageActive),
-                egress = BuildTxEgressHealth(
-                    generatedUtc,
-                    ring.TotalWritten,
-                    ring.Dropped,
-                    p2Tx,
-                    tx.IsMoxOn,
-                    tx.IsTunOn,
-                    tx.IsTwoToneOn,
-                    hardwarePtt,
-                    activePower.FwdWatts,
-                    radioState.Mode,
-                    IsG2DutyGuidance(power.EffectiveBoard, power.OrionMkIIVariant)),
-                txPlugins = pluginBridge is null ? null : new
-                {
-                    masterBypassed = pluginBridge.IsMasterBypassed,
-                    bypassedForRemoteTx = pluginBridge.IsBypassedForRemoteTxSource,
-                },
-                vstEngine = vstEngine is null ? null : new
-                {
-                    active = vstEngine.IsActive,
-                    degradedBlocks = vstEngine.DegradedBlocks,
-                },
-                rxVstEngine = rxVstEngine is null ? null : new
-                {
-                    active = rxVstEngine.EngineActive,
-                    available = rxVstEngine.EngineAvailable,
-                    activePlugins = rxVstEngine.ActivePluginCount,
-                    degradedBlocks = rxVstEngine.DegradedBlocks,
-                },
-            });
-        });
+        // Compatibility route for the TX diagnostics snapshot. The read path is
+        // owned by TxDiagnosticsProvider so legacy and v2 diagnostics cannot drift.
+        app.MapGet("/api/tx/diag", (DiagnosticsProviderRegistry diagnostics) =>
+            Results.Ok(DiagnosticsSnapshot(diagnostics, "tx")));
 
         app.MapGet("/api/radios", async (
             IRadioDiscovery p1Discovery,
@@ -927,7 +1222,25 @@ public static class ZeusEndpoints
             }
         });
 
-        app.MapPost("/api/connect", async (ConnectRequest req, RadioService r, WdspWisdomInitializer wisdom, HttpContext ctx) =>
+        // Take over a Busy radio. Discovery reports status 0x03 when another
+        // client owns the radio; the UI normally disables Connect for those.
+        // This sends a protocol stop to the radio so it drops the current owner,
+        // freeing it for an immediate connect. Outward-facing and deliberate —
+        // the Connect panel gates it behind an explicit operator confirmation,
+        // because it can kick another (possibly transmitting) operator off.
+        app.MapPost("/api/radios/reclaim", async (ReclaimRadioRequest req, RadioReclaimService reclaim, HttpContext ctx) =>
+        {
+            if (!TryParseIpEndpoint(req.Endpoint ?? string.Empty, out var ipEndpoint))
+                return Results.BadRequest(new { error = $"Invalid endpoint '{req.Endpoint}'." });
+
+            var isP2 = string.Equals(req.Protocol, "P2", StringComparison.OrdinalIgnoreCase);
+            log.LogInformation("api.radios.reclaim ip={Ip} protocol={Proto}", ipEndpoint.Address, isP2 ? "P2" : "P1");
+
+            await reclaim.ReclaimAsync(ipEndpoint.Address, isP2, ctx.RequestAborted);
+            return Results.Ok(new { freed = true });
+        });
+
+        app.MapPost("/api/connect", async (ConnectRequest req, RadioService r, WdspWisdomInitializer wisdom, IRadioDiscovery p1Discovery, HttpContext ctx) =>
         {
             log.LogInformation(
                 "api.connect endpoint={Ep} rate={Rate} preamp={Pre} atten={Atten}",
@@ -953,11 +1266,31 @@ public static class ZeusEndpoints
             // Plumb the discovered board byte through so RadioService can
             // set the real board kind on the Protocol1Client rather than
             // defaulting to HermesLite2 for every P1 connection — issue #294.
-            var p1BoardKind = req.BoardId is byte bid ? MapBoardByte(bid) : HpsdrBoardKind.Unknown;
+            var p1BoardKind = req.BoardId is byte bid ? MapBoardByteP1(bid) : HpsdrBoardKind.Unknown;
+
+            // Best-effort firmware capture for the "Report a problem" diagnostic
+            // snapshot. A short discovery broadcast (the radio isn't connected
+            // yet, so it answers) lets us match the code-version byte for this
+            // endpoint. Fail-open: any failure leaves firmware null and never
+            // blocks the connect — the diagnostic just shows "unknown".
+            string? firmware = null;
+            if (TryParseIpEndpoint(req.Endpoint, out var fwIp))
+            {
+                try
+                {
+                    var found = await p1Discovery.DiscoverAsync(TimeSpan.FromMilliseconds(400), ctx.RequestAborted);
+                    firmware = found.FirstOrDefault(d => d.Ip.Equals(fwIp.Address))?.FirmwareString;
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    log.LogWarning(ex, "api.connect firmware probe failed — diagnostic firmware will be 'unknown'");
+                }
+            }
 
             try
             {
-                var state = await r.ConnectAsync(req.Endpoint, req.SampleRate, ctx.RequestAborted, p1BoardKind);
+                var state = await r.ConnectAsync(req.Endpoint, req.SampleRate, ctx.RequestAborted, p1BoardKind, firmware);
                 return Results.Ok(state);
             }
             catch (ArgumentException ex)
@@ -970,9 +1303,14 @@ public static class ZeusEndpoints
             }
         });
 
-        app.MapPost("/api/connect/p2", async (ConnectRequest req, DspPipelineService dsp, WdspWisdomInitializer wisdom, HttpContext ctx) =>
+        app.MapPost("/api/connect/p2", async (
+            ConnectRequest req,
+            DspPipelineService dsp,
+            WdspWisdomInitializer wisdom,
+            Zeus.Protocol2.Discovery.IRadioDiscovery p2Discovery,
+            HttpContext ctx) =>
         {
-            log.LogInformation("api.connect.p2 endpoint={Ep} rate={Rate}", req.Endpoint, req.SampleRate);
+            log.LogInformation("api.connect.p2 endpoint={Ep} rate={Rate} force={Force}", req.Endpoint, req.SampleRate, req.Force);
 
             if (wisdom.Phase != WisdomPhase.Ready)
                 return Results.Json(
@@ -981,6 +1319,61 @@ public static class ZeusEndpoints
 
             if (!TryParseIpEndpoint(req.Endpoint, out var ipEndpoint))
                 return Results.BadRequest(new { error = $"Invalid endpoint '{req.Endpoint}'." });
+
+            // HARDWARE-SAFETY GUARD (relay chatter / PSU brown-out).
+            // Before opening the relay-bearing high-priority stream, unicast-probe
+            // the radio and refuse to connect if it reports Busy — i.e. another
+            // controller (a co-located saturn-go / p2app stack, or another
+            // Zeus/Thetis client) is already driving it. Two masters publishing
+            // DIFFERENT band/antenna/ALEX-relay selections make the FPGA flip the
+            // BPF/LPF/T-R relay matrix every packet; the relay inrush can brown
+            // out a shared PSU and reboot the host (observed 2026-06-23 on a
+            // co-located CM5 Saturn all-in-one). A single Zeus master is fine —
+            // the danger requires a second, disagreeing controller. The operator
+            // takes over deliberately via Reclaim, which stops the other owner
+            // and re-connects with force=true. The probe fails OPEN: a radio that
+            // doesn't answer the probe is NOT blocked, so this never strands a
+            // legitimate connect. The probe must NOT weaken the co-located
+            // ephemeral-port bind — it only reads discovery, it doesn't touch the
+            // connect socket.
+            // Probe result is reused after the busy-gate to capture the
+            // firmware version for the diagnostics snapshot — null on a forced
+            // connect, which deliberately skips the probe.
+            Zeus.Protocol2.Discovery.DiscoveredRadio? probe = null;
+            if (!req.Force)
+            {
+                try
+                {
+                    probe = await p2Discovery.ProbeAsync(
+                        ipEndpoint.Address, TimeSpan.FromMilliseconds(700), ctx.RequestAborted);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    // Probe failure (socket setup, etc.) must not block a connect —
+                    // log and fall through, same fail-open posture as no-reply.
+                    log.LogWarning(ex, "api.connect.p2 busy-probe failed — allowing connect");
+                }
+
+                if (probe?.Details.Busy == true)
+                {
+                    log.LogWarning(
+                        "api.connect.p2 REFUSED — radio {Ip} reports BUSY (another controller owns it); refusing second-master connect",
+                        ipEndpoint.Address);
+                    return Results.Json(
+                        new
+                        {
+                            error =
+                                "This radio is already in use by another controller. Connecting Zeus as a " +
+                                "second master would make the band/antenna/T-R relays chatter and can brown " +
+                                "out the radio. Stop the other controller (e.g. saturn-go / another client), " +
+                                "or use Reclaim to take exclusive control, then connect again.",
+                            busy = true,
+                            reclaimable = true,
+                        },
+                        statusCode: StatusCodes.Status409Conflict);
+                }
+            }
 
             var rateKhz = req.SampleRate switch
             {
@@ -996,11 +1389,14 @@ public static class ZeusEndpoints
             // Plumb the discovered board byte through so RadioService can
             // surface the real board kind instead of defaulting to OrionMkII
             // for every P2 connection (issue #171 — Brick2 is Hermes/0x01 on P2).
-            var boardKind = req.BoardId is byte b ? MapBoardByte(b) : HpsdrBoardKind.Unknown;
+            var boardKind = req.BoardId is byte b ? MapBoardByteP2(b) : HpsdrBoardKind.Unknown;
+
+            // Firmware version for the "Report a problem" diagnostic snapshot.
+            var firmware = probe?.FirmwareString;
 
             try
             {
-                rateKhz = await dsp.ConnectP2Async(ipEndpoint, rateKhz, numAdc: 2, ctx.RequestAborted, boardKind);
+                rateKhz = await dsp.ConnectP2Async(ipEndpoint, rateKhz, numAdc: 2, ctx.RequestAborted, boardKind, firmware);
                 return Results.Ok(new { protocol = "P2", endpoint = req.Endpoint, sampleRateKhz = rateKhz });
             }
             catch (InvalidOperationException ex)
@@ -1030,7 +1426,7 @@ public static class ZeusEndpoints
         app.MapPost("/api/vfo", (VfoSetRequest req, RadioService r) =>
         {
             log.LogInformation("api.vfo receiver={Receiver} hz={Hz}", req.Receiver, req.Hz);
-            return req.Receiver == 1 ? r.SetVfoB(req.Hz) : r.SetVfo(req.Hz);
+            return r.SetReceiverVfo(req.Receiver, req.Hz);
         });
 
         app.MapPost("/api/vfo/swap", (RadioService r) =>
@@ -1047,12 +1443,134 @@ public static class ZeusEndpoints
             return r.SetRx2(req);
         });
 
+        // Configure any receiver by index for full multi-DDC (RX1=0, RX2=1,
+        // RX3+=2..). Index 0/1 delegate to the RX1/RX2 setters; index >= 2 drives
+        // an extra hardware DDC. Only supplied fields change.
+        app.MapPost("/api/receivers/{index:int}", (int index, ReceiverSetRequest req, RadioService r, KiwiSdrService kiwi) =>
+        {
+            if (index < 0 || index >= Zeus.Contracts.WireContract.MaxReceivers)
+                return Results.BadRequest(new { error = $"receiver index out of range (0..{Zeus.Contracts.WireContract.MaxReceivers - 1})" });
+            // The reserved Kiwi slot is a remote receiver, not a hardware DDC:
+            // route tuning/mode/filter to the Kiwi service (enable/disable + URL
+            // live on /api/kiwi). Returns the same StateDto so the projected Kiwi
+            // entry round-trips back to the client.
+            if (index == Zeus.Contracts.WireContract.KiwiReceiverIndex)
+            {
+                log.LogInformation("api.receivers.kiwi vfoHz={VfoHz} mode={Mode} low={Low} high={High}",
+                    req.VfoHz, req.Mode, req.FilterLowHz, req.FilterHighHz);
+                // CTUN on → freeze the waterfall centre and roam the dial within
+                // the displayed span; off → re-centre on the dial.
+                kiwi.SetTuning(req.VfoHz, req.Mode, req.FilterLowHz, req.FilterHighHz, r.Snapshot().CtunEnabled);
+                return Results.Ok(r.Snapshot());
+            }
+            log.LogInformation(
+                "api.receivers index={Index} enabled={Enabled} vfoHz={VfoHz} adc={Adc} mode={Mode}",
+                index, req.Enabled, req.VfoHz, req.AdcSource, req.Mode);
+            return Results.Ok(r.SetReceiver(
+                index,
+                enabled: req.Enabled,
+                vfoHz: req.VfoHz,
+                adcSource: req.AdcSource,
+                mode: req.Mode,
+                filterLowHz: req.FilterLowHz,
+                filterHighHz: req.FilterHighHz,
+                afGainDb: req.AfGainDb,
+                filterPresetName: req.FilterPresetName));
+        });
+
+        // Per-RX audio mute (RX1=0, RX2=1, RX3+=2..). Mirrors Thetis chkMUT /
+        // chkRX2Mute — silences only this receiver's contribution to the mix.
+        app.MapPost("/api/receivers/{index:int}/mute", (int index, MuteSetRequest req, RadioService r, KiwiSdrService kiwi) =>
+        {
+            if (index < 0 || index >= Zeus.Contracts.WireContract.MaxReceivers)
+                return Results.BadRequest(new { error = $"receiver index out of range (0..{Zeus.Contracts.WireContract.MaxReceivers - 1})" });
+            log.LogInformation("api.receivers.mute index={Index} muted={Muted}", index, req.Muted);
+            if (index == Zeus.Contracts.WireContract.KiwiReceiverIndex)
+            {
+                kiwi.SetMuted(req.Muted);
+                return Results.Ok(r.Snapshot());
+            }
+            return Results.Ok(r.SetReceiverMuted(index, req.Muted));
+        });
+
+        // KiwiSDR slice receiver config. GET returns current status (never the
+        // stored password — only HasPassword); POST patches enable/url/password
+        // and (re)connects. The Kiwi appears as the "Kiwi" receiver beside the
+        // hardware RXs once enabled with a URL.
+        app.MapGet("/api/kiwi", (KiwiSdrService kiwi) => Results.Ok(kiwi.GetConfig()));
+        app.MapPost("/api/kiwi", async (KiwiSetRequest req, KiwiSdrService kiwi) =>
+        {
+            log.LogInformation("api.kiwi enabled={Enabled} url={Url} pwSet={PwSet}",
+                req.Enabled, req.Url, req.Password is not null);
+            return Results.Ok(await kiwi.SetConfigAsync(req.Enabled, req.Url, req.Password, default));
+        });
+
+        // Public KiwiSDR directory for the Settings → KIWI map picker. Proxied
+        // server-side (the source is plain HTTP — mixed-content/CORS blocked in
+        // the browser); cached a couple of minutes in KiwiDirectoryService.
+        app.MapGet("/api/kiwi/directory", async (KiwiDirectoryService dir, HttpContext ctx) =>
+            Results.Ok(await dir.GetAsync(ctx.RequestAborted)));
+
+        // VFO lock (Thetis chkVFOLock): blocks operator dial tuning; CAT/TCI
+        // still tune. Pure software guard, no hardware effect.
+        app.MapPost("/api/radio/vfo-lock", (VfoLockSetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.radio.vfo-lock locked={Locked}", req.Locked);
+            return Results.Ok(r.SetVfoLock(req.Locked));
+        });
+
+        // RIT (Receiver Incremental Tuning). Both fields optional; Hz clamped to
+        // ±99999. RX1 only.
+        app.MapPost("/api/rx/rit", (RitSetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.rx.rit enabled={Enabled} hz={Hz}", req.Enabled, req.Hz);
+            return Results.Ok(r.SetRit(req.Enabled, req.Hz));
+        });
+
+        // XIT (Transmit Incremental Tuning). Both fields optional; Hz clamped to
+        // ±99999. Moves only the transmitted carrier.
+        app.MapPost("/api/tx/xit", (XitSetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.tx.xit enabled={Enabled} hz={Hz}", req.Enabled, req.Hz);
+            return Results.Ok(r.SetXit(req.Enabled, req.Hz));
+        });
+
+        // Diversity combiner (Thetis DiversityForm). Every field optional.
+        // P2/ANAN-class only (needs two phase-synchronous ADCs).
+        app.MapPost("/api/rx/diversity", (DiversitySetRequest req, RadioService r) =>
+        {
+            log.LogInformation(
+                "api.rx.diversity enabled={Enabled} gain={Gain} phaseDeg={PhaseDeg} sourceRx={SourceRx}",
+                req.Enabled, req.Gain, req.PhaseDeg, req.SourceRx);
+            return Results.Ok(r.SetDiversity(req.Enabled, req.Gain, req.PhaseDeg, req.SourceRx));
+        });
+
+        // ATU tune request (Thetis ATUTune). Holds the Apollo/Alex auto-tune bit
+        // (Protocol-1 C0=0x12 C2[4]) for DurationMs then auto-clears.
+        // Bench-verification pending — see RadioService.RequestAtuTune.
+        app.MapPost("/api/radio/atu/tune", (AtuTuneRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.radio.atu.tune durationMs={DurationMs}", req.DurationMs);
+            return Results.Ok(r.RequestAtuTune(req.DurationMs));
+        });
+
         app.MapPost("/api/tx/vfo", (TxVfoSetRequest req, RadioService r) =>
         {
             if (!Enum.IsDefined(req.TxVfo))
                 return Results.BadRequest(new { error = $"unknown txVfo {req.TxVfo}" });
             log.LogInformation("api.tx.vfo txVfo={TxVfo}", req.TxVfo);
             return Results.Ok(r.SetTxVfo(req.TxVfo));
+        });
+
+        // Select the transmit target by receiver index (0=RX1, 1=RX2, >=2 extra
+        // DDC). Generalises /api/tx/vfo beyond the A/B pair; an out-of-range or
+        // not-exposed index clamps to RX1 server-side.
+        app.MapPost("/api/tx/receiver", (TxReceiverSetRequest req, RadioService r) =>
+        {
+            if (req.Index < 0 || req.Index >= Zeus.Contracts.WireContract.MaxReceivers)
+                return Results.BadRequest(new { error = $"tx receiver index out of range (0..{Zeus.Contracts.WireContract.MaxReceivers - 1})" });
+            log.LogInformation("api.tx.receiver index={Index}", req.Index);
+            return Results.Ok(r.SetTxReceiver(req.Index));
         });
 
         // Set the radio's hardware NCO (LO) frequency directly. Does not
@@ -1068,6 +1586,29 @@ public static class ZeusEndpoints
             }
             log.LogInformation("api.radio.lo hz={Hz}", req.Hz);
             return Results.Ok(r.SetRadioLo(req.Hz));
+        });
+
+        // Per-receiver DDC-centre pan. Index 0 is RX1's hardware NCO (delegates to
+        // /api/radio/lo's setter); index >= 1 recentres a secondary DDC (the
+        // client keep-in-view autopan's analogue of SetRadioLo). No-op for P1
+        // secondaries (shared NCO) / CTUN-off / disabled — see RequestSecondaryLo.
+        app.MapPost("/api/receivers/{index:int}/lo", (int index, RadioLoSetRequest req, RadioService r, DspPipelineService pipe, KiwiSdrService kiwi) =>
+        {
+            if (req.Hz < 0 || req.Hz > 60_000_000)
+            {
+                log.LogInformation("api.receivers.lo rejected index={Index} hz={Hz}", index, req.Hz);
+                return Results.BadRequest(new { error = "hz out of range [0, 60000000]" });
+            }
+            log.LogInformation("api.receivers.lo index={Index} hz={Hz}", index, req.Hz);
+            // Kiwi slice: pan its waterfall centre (no hardware DDC behind it).
+            if (index == Zeus.Contracts.WireContract.KiwiReceiverIndex)
+            {
+                kiwi.SetCenter(req.Hz);
+                return Results.Ok(r.Snapshot());
+            }
+            if (index <= 0) return Results.Ok(r.SetRadioLo(req.Hz));
+            pipe.RequestSecondaryLo(index, req.Hz);
+            return Results.Ok(r.Snapshot());
         });
 
         // Toggle CTUN (click-tune / centred tuning). When enabled, panadapter
@@ -1095,6 +1636,81 @@ public static class ZeusEndpoints
             return r.SetFilter(req.Low, req.High);
         });
 
+        // FreeDV digital-voice telemetry + config. The mode itself is selected
+        // via /api/mode (RxMode.FreeDv); these surface the live modem state
+        // (sync/SNR/submode) polled by the FreeDV panel and apply submode /
+        // squelch / TX-text changes. No-op-safe when the codec2 native library
+        // is missing (NativeAvailable=false).
+        app.MapGet("/api/freedv/status", (FreeDvService fd) => Results.Ok(fd.Status()));
+
+        // FreeDV Reporter stations — live roster mirrored from qso.freedv.org by
+        // FreeDvReporterService (persistent read-only Socket.IO link). Returns the
+        // current snapshot (connection state + stations sorted by frequency);
+        // empty until the first bulk_update arrives. The Stations panel polls this
+        // and offers click-to-tune.
+        app.MapGet("/api/freedv/stations",
+            (FreeDvReporterService svc) => Results.Ok(svc.GetSnapshot()));
+
+        // FreeDV Reporter "report mode" — strictly opt-in (default OFF). When
+        // enabled with a callsign + Maidenhead grid, Zeus connects to the reporter
+        // in "report" role and broadcasts the operator's callsign / grid / freq /
+        // TX activity to the public qso.freedv.org map. GET returns the current
+        // (normalized) settings; POST saves them and forces a reconnect so the new
+        // role / identity takes effect.
+        app.MapGet("/api/freedv/reporter/settings",
+            (FreeDvReporterService svc) => Results.Ok(svc.GetSettings()));
+        app.MapPost("/api/freedv/reporter/settings",
+            (FreeDvReporterSettings req, FreeDvReporterService svc) =>
+            {
+                var saved = svc.SaveSettings(req);
+                log.LogInformation(
+                    "api.freedv.reporter.settings report={Enabled} call={Call} grid={Grid}",
+                    saved.ReportEnabled, saved.Callsign, saved.GridSquare);
+                return Results.Ok(saved);
+            });
+
+        // QSY request — ask the station identified by {sid} to move to the
+        // operator's current VFO frequency. Requires report mode active and a
+        // known sid; 400 otherwise.
+        app.MapPost("/api/freedv/stations/{sid}/qsy",
+            (string sid, FreeDvReporterService svc) =>
+                svc.RequestQsy(sid)
+                    ? Results.Ok(new { ok = true })
+                    : Results.BadRequest(new { error = "Not reporting, or station unknown." }));
+        app.MapPut("/api/freedv/config", (FreeDvConfigRequest req, FreeDvService fd) =>
+        {
+            log.LogInformation(
+                "api.freedv.config submode={Submode} squelch={Sq} thresh={Th}",
+                req.Submode, req.SquelchEnabled, req.SnrSquelchThreshDb);
+            return Results.Ok(fd.ApplyConfig(req));
+        });
+
+        // FreeDV codec2 library install. codec2 can't be built on an operator's
+        // machine, so when the bundled binary is missing this fetches the prebuilt
+        // lib Zeus committed for the running platform from the repo and stages it,
+        // reloading the modem live (see FreeDvNativeInstaller). GET reports install
+        // progress + whether codec2 is already present; POST starts a background
+        // download (idempotent — no-op if already installed/running). The panel
+        // polls GET until phase is "done" / "failed".
+        static object FreeDvInstallDto(FreeDvNativeInstaller installer)
+        {
+            var s = installer.Current;
+            return new
+            {
+                phase = s.Phase.ToString().ToLowerInvariant(),
+                percent = s.Percent,
+                message = s.Message,
+                installed = installer.Installed,
+            };
+        }
+        app.MapGet("/api/freedv/install", (FreeDvNativeInstaller installer) =>
+            Results.Ok(FreeDvInstallDto(installer)));
+        app.MapPost("/api/freedv/install", (FreeDvNativeInstaller installer) =>
+        {
+            installer.Start();
+            return Results.Ok(FreeDvInstallDto(installer));
+        });
+
         // TX bandpass filter — signed Hz pair (LSB negative, DSB symmetric). Per-mode
         // family memory is managed in RadioService, identical shape to the RX filter.
         // Operator-editable via Settings → TX Filter panel.
@@ -1102,6 +1718,26 @@ public static class ZeusEndpoints
         {
             log.LogInformation("api.tx-filter low={L} high={H}", req.LowHz, req.HighHz);
             return r.SetTxFilter(req.LowHz, req.HighHz);
+        });
+
+        // SSB bandpass "rectangularity" — issue #871. RX and TX are independent
+        // selectors; each pushes the chosen WDSP fir.c window code (0 = soft /
+        // Blackman-Harris 4-term, 1 = sharp / BH 7-term) into the live engine and
+        // persists to DspSettingsStore.
+        app.MapPost("/api/rx/filter-window", (BandpassWindowSetRequest req, RadioService r) =>
+        {
+            if (!Enum.IsDefined(req.Window))
+                return Results.BadRequest(new { error = $"unknown BandpassWindow {req.Window}" });
+            log.LogInformation("api.rx.filterWindow window={Window}", req.Window);
+            return Results.Ok(r.SetRxBandpassWindow(req.Window));
+        });
+
+        app.MapPost("/api/tx/filter-window", (BandpassWindowSetRequest req, RadioService r) =>
+        {
+            if (!Enum.IsDefined(req.Window))
+                return Results.BadRequest(new { error = $"unknown BandpassWindow {req.Window}" });
+            log.LogInformation("api.tx.filterWindow window={Window}", req.Window);
+            return Results.Ok(r.SetTxBandpassWindow(req.Window));
         });
 
         // Filter preset endpoints (PRD §5.2). These are the preferred filter surface;
@@ -1339,11 +1975,12 @@ public static class ZeusEndpoints
             var snapshot = store.Save(req);
             sidetone.SetPitchHz(snapshot.SidetoneHz);
             sidetone.SetGainDb(snapshot.SidetoneGainDb);
-            // Forward keyer speed (WPM) + mode to the radio's on-board iambic
-            // keyer (C&C 0x0B) so a paddle keys at the panel speed. No-op when
-            // no radio is connected (the value is cached + re-pushed on the
-            // next connect). See zeus-bks.
-            radio.SetCwKeyerConfig(snapshot.Wpm, snapshot.KeyerMode);
+            // Forward keyer speed (WPM) + mode + sidetone to the radio's
+            // on-board iambic keyer so a paddle keys at the panel speed:
+            // P1 → C&C 0x0B; P2 → TxSpecific internal-keyer arm (#1032). No-op
+            // when no radio is connected (cached + re-pushed on the next
+            // connect). See zeus-bks.
+            radio.SetCwKeyerConfig(snapshot.Wpm, snapshot.KeyerMode, snapshot.SidetoneHz, snapshot.SidetoneGainDb);
             return Results.Ok(snapshot);
         });
 
@@ -1604,6 +2241,68 @@ public static class ZeusEndpoints
             return Results.Ok(r.SetNr4(req));
         });
 
+        // ---- NR3 (RNNoise) model management (issue #79 follow-up) ----
+        // Zeus ships no model; NR3 stays hidden in the UI until the operator
+        // installs an RNNoise weights file here — either a multipart upload or a
+        // server-side fetch from a URL. Native availability + the installed
+        // model name also ride StateDto, so the GET is a convenience for the
+        // install panel.
+        app.MapGet("/api/rx/nr3/model", (RadioService r) =>
+        {
+            var s = r.Snapshot();
+            return Results.Ok(new { available = s.WdspNr3RnnrAvailable, modelName = s.Nr3ModelName });
+        });
+
+        app.MapPost("/api/rx/nr3/model", async (HttpRequest http, RadioService r) =>
+        {
+            if (!http.HasFormContentType || http.Form.Files.Count == 0)
+                return Results.BadRequest(new { error = "expected multipart/form-data with a 'file' field" });
+            var file = http.Form.Files["file"] ?? http.Form.Files[0];
+            if (file.Length == 0)
+                return Results.BadRequest(new { error = "uploaded model file is empty" });
+            using var ms = new MemoryStream();
+            await file.CopyToAsync(ms);
+            try
+            {
+                var state = r.InstallNr3Model(ms.ToArray(), file.FileName);
+                log.LogInformation("api.rx.nr3.model.install name=\"{Name}\" bytes={Bytes}", file.FileName, ms.Length);
+                return Results.Ok(state);
+            }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (InvalidOperationException ex) { return Results.Problem(ex.Message); }
+        });
+
+        app.MapPost("/api/rx/nr3/model/download", async (Nr3ModelDownloadRequest req, RadioService r, IHttpClientFactory httpFactory) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.Url) ||
+                !Uri.TryCreate(req.Url, UriKind.Absolute, out var uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+                return Results.BadRequest(new { error = "url must be an absolute http(s) URL" });
+            try
+            {
+                var client = httpFactory.CreateClient();
+                client.Timeout = TimeSpan.FromSeconds(60);
+                // Cap the buffered response so a wrong (huge) URL can't OOM the
+                // host; the model store enforces its own 64 MiB ceiling too.
+                client.MaxResponseContentBufferSize = 80L * 1024 * 1024;
+                var bytes = await client.GetByteArrayAsync(uri);
+                var name = Path.GetFileName(uri.LocalPath);
+                if (string.IsNullOrWhiteSpace(name)) name = "model.rnnn";
+                var state = r.InstallNr3Model(bytes, name);
+                log.LogInformation("api.rx.nr3.model.download url=\"{Url}\" bytes={Bytes}", req.Url, bytes.Length);
+                return Results.Ok(state);
+            }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (HttpRequestException ex) { return Results.BadRequest(new { error = $"download failed: {ex.Message}" }); }
+            catch (TaskCanceledException) { return Results.BadRequest(new { error = "download timed out" }); }
+        });
+
+        app.MapDelete("/api/rx/nr3/model", (RadioService r) =>
+        {
+            log.LogInformation("api.rx.nr3.model.remove");
+            return Results.Ok(r.RemoveNr3Model());
+        });
+
         // Manual notch filters (MNF) — the client posts the full notch list on
         // every change (and on connect). GET returns the current set so a fresh
         // client (or a reconnect) can hydrate. Notches kill EMF/birdies in the
@@ -1650,12 +2349,27 @@ public static class ZeusEndpoints
             return Results.Ok(saved);
         });
 
-        app.MapPost("/api/rx/zoom", (ZoomSetRequest req, RadioService r) =>
+        app.MapPost("/api/rx/zoom", (ZoomSetRequest req, RadioService r, KiwiSdrService kiwi) =>
         {
             log.LogInformation("api.rx.zoom level={Level}", req.Level);
             if (req.Level < SyntheticDspEngine.MinZoomLevel || req.Level > SyntheticDspEngine.MaxZoomLevel)
                 return Results.BadRequest(new { error = $"zoom level must be in [{SyntheticDspEngine.MinZoomLevel},{SyntheticDspEngine.MaxZoomLevel}]; got {req.Level}" });
+            // Zoom is a global setting; mirror it onto the Kiwi slice so its
+            // waterfall span follows the slider too (it re-tunes the remote
+            // KiwiSDR's SET zoom and re-emits frames at the new Hz/pixel).
+            kiwi.SetZoom(req.Level);
             return Results.Ok(r.SetZoom(req.Level));
+        });
+
+        // Workspace UI zoom — scales the panel-grid cell pitch (see
+        // StateDto.WorkspaceZoomPct). Distinct from /api/rx/zoom (spectral). The
+        // server clamps Pct into range rather than 400-ing, so a slider step can
+        // never get stuck on an out-of-range value; the echoed state carries the
+        // accepted percent back for the optimistic-send reconcile.
+        app.MapPost("/api/ui/workspace-zoom", (WorkspaceZoomSetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.ui.workspaceZoom pct={Pct}", req.Pct);
+            return Results.Ok(r.SetWorkspaceZoom(req.Pct));
         });
 
         // Band memory: last-used (hz, mode) per HF band. GET returns the full map so
@@ -1963,43 +2677,43 @@ public static class ZeusEndpoints
         // discovery/state, Thetis-derived static capabilities, and decoded
         // P1/P2 wire telemetry so new hardware fields can be mapped before
         // they become operator-configurable controls.
-        app.MapGet("/api/radio/diagnostics", (HardwareDiagnosticsService diag) =>
+        app.MapGet("/api/radio/diagnostics", (DiagnosticsProviderRegistry diagnostics) =>
         {
-            return Results.Ok(diag.Snapshot());
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "hardware"));
         });
 
-        app.MapPost("/api/radio/diagnostics/map/reset", (HardwareDiagnosticsService diag) =>
+        app.MapPost("/api/radio/diagnostics/map/reset", (HardwareDiagnosticsService diag, DiagnosticsProviderRegistry diagnostics) =>
         {
             diag.ResetMapping();
-            return Results.Ok(diag.Snapshot());
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "hardware"));
         });
 
-        app.MapPost("/api/radio/diagnostics/map/marker", (HardwareDiagnosticsMarkerRequest req, HardwareDiagnosticsService diag) =>
+        app.MapPost("/api/radio/diagnostics/map/marker", (HardwareDiagnosticsMarkerRequest req, HardwareDiagnosticsService diag, DiagnosticsProviderRegistry diagnostics) =>
         {
             diag.AddMappingMarker(req.Label, req.Notes);
-            return Results.Ok(diag.Snapshot());
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "hardware"));
         });
 
-        app.MapPost("/api/radio/diagnostics/dsp-scene", (FrontendDspSceneDiagnosticsRequest req, FrontendDspSceneDiagnosticsService scene) =>
+        app.MapPost("/api/radio/diagnostics/dsp-scene", (FrontendDspSceneDiagnosticsRequest req, FrontendDspSceneDiagnosticsService scene, DiagnosticsProviderRegistry diagnostics) =>
         {
             scene.Update(req);
-            return Results.Ok(scene.Snapshot());
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "frontend-dsp-scene"));
         });
 
-        app.MapGet("/api/radio/diagnostics/dsp-scene", (FrontendDspSceneDiagnosticsService scene) =>
+        app.MapGet("/api/radio/diagnostics/dsp-scene", (DiagnosticsProviderRegistry diagnostics) =>
         {
-            return Results.Ok(scene.Snapshot());
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "frontend-dsp-scene"));
         });
 
-        app.MapPost("/api/radio/diagnostics/audio-playback", (FrontendAudioPlaybackDiagnosticsRequest req, FrontendAudioPlaybackDiagnosticsService playback) =>
+        app.MapPost("/api/radio/diagnostics/audio-playback", (FrontendAudioPlaybackDiagnosticsRequest req, FrontendAudioPlaybackDiagnosticsService playback, DiagnosticsProviderRegistry diagnostics) =>
         {
             playback.Update(req);
-            return Results.Ok(playback.Snapshot());
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "frontend-audio-playback"));
         });
 
-        app.MapGet("/api/radio/diagnostics/audio-playback", (FrontendAudioPlaybackDiagnosticsService playback) =>
+        app.MapGet("/api/radio/diagnostics/audio-playback", (DiagnosticsProviderRegistry diagnostics) =>
         {
-            return Results.Ok(playback.Snapshot());
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "frontend-audio-playback"));
         });
 
         app.MapGet("/api/dsp/nr-condition", (FrontendDspSceneDiagnosticsService scene, DspPipelineService dsp, RadioService radio) =>
@@ -2010,13 +2724,9 @@ public static class ZeusEndpoints
                 BuildSmartNrRxChainRuntime(state, radio.GetAdcProtectionStatus())));
         });
 
-        app.MapGet("/api/dsp/live-diagnostics", (FrontendDspSceneDiagnosticsService scene, DspPipelineService dsp, RadioService radio) =>
+        app.MapGet("/api/dsp/live-diagnostics", (DiagnosticsProviderRegistry diagnostics) =>
         {
-            var state = radio.Snapshot();
-            var condition = scene.SmartNrCondition(
-                dsp.SnapshotNrRuntime(),
-                BuildSmartNrRxChainRuntime(state, radio.GetAdcProtectionStatus()));
-            return Results.Ok(DspLiveDiagnosticsService.Build(condition, dsp.SnapshotLiveRuntimeEvidence(), state));
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "dsp-live"));
         });
 
         app.MapGet("/api/dsp/external-engine-candidates", () =>
@@ -2044,21 +2754,9 @@ public static class ZeusEndpoints
             return Results.Ok(DspBenchmarkCaptureManifestService.Build(live, DspBenchmarkPlanCatalog.Build()));
         });
 
-        app.MapGet("/api/dsp/modernization-snapshot", (FrontendDspSceneDiagnosticsService scene, DspPipelineService dsp, RadioService radio) =>
+        app.MapGet("/api/dsp/modernization-snapshot", (DiagnosticsProviderRegistry diagnostics) =>
         {
-            var state = radio.Snapshot();
-            var condition = scene.SmartNrCondition(
-                dsp.SnapshotNrRuntime(),
-                BuildSmartNrRxChainRuntime(state, radio.GetAdcProtectionStatus()));
-            var live = DspLiveDiagnosticsService.Build(condition, dsp.SnapshotLiveRuntimeEvidence(), state);
-            var plan = DspBenchmarkPlanCatalog.Build();
-            var manifest = DspBenchmarkCaptureManifestService.Build(live, plan);
-            return Results.Ok(DspModernizationEvidenceSnapshotService.Build(
-                condition,
-                live,
-                plan,
-                manifest,
-                DspExternalEngineCandidateCatalog.All()));
+            return Results.Ok(DiagnosticsSnapshot(diagnostics, "dsp-modernization"));
         });
 
         app.MapGet("/api/tx/external-ptt", (ExternalPttService externalPtt) =>
@@ -2069,6 +2767,139 @@ public static class ZeusEndpoints
         app.MapGet("/api/cw/hardware-keying", (HardwareDiagnosticsService diag, ExternalPttService externalPtt) =>
         {
             return Results.Ok(diag.KeyingSnapshot(externalPtt.Snapshot()));
+        });
+
+        // Hardware-PTT-IN → MOX enable gate (per-install, default OFF). GET
+        // returns the live lamp level + persisted enable flag + hang time; PUT
+        // flips the gate. A persisted ON flag only ARMS the gate — MOX still
+        // requires a physical footswitch edge (edge-triggered, never on
+        // connect/restart). The lamp tracks the footswitch regardless of the
+        // gate. Ungated per board — every board exposes a PTT-IN line.
+        app.MapGet("/api/radio/ptt-status", (ExternalPttService externalPtt) =>
+        {
+            return Results.Ok(externalPtt.Snapshot());
+        });
+
+        app.MapPut("/api/radio/ptt-status", (PttEnableSetRequest req, PttSettingsStore store, ExternalPttService externalPtt) =>
+        {
+            store.Set(req.Enabled);
+            return Results.Ok(externalPtt.Snapshot());
+        });
+
+        // ANAN G2 / G2-Ultra hardware front-panel bridge settings (per-install).
+        // GET returns the stored enable/device/baud plus live bridge status
+        // (connected + active device/baud + panel type). PUT updates the stored
+        // settings and reconnects the bridge — no server restart. DevicePath ""
+        // clears the override (auto-detect); Baud 0 = auto. On the G2 Pi the
+        // defaults auto-detect the panel; on a Windows/macOS host point it at the
+        // COM port here. Ungated — the panel is a host serial device.
+        app.MapGet("/api/radio/front-panel", (Zeus.Server.FrontPanel.G2FrontPanelService svc) =>
+        {
+            return Results.Ok(svc.Snapshot());
+        });
+
+        app.MapPut("/api/radio/front-panel",
+            (G2PanelSettingsSetRequest req,
+             Zeus.Server.FrontPanel.G2PanelSettingsStore store,
+             Zeus.Server.FrontPanel.G2FrontPanelService svc) =>
+        {
+            if (req.Baud is int b && b is not (0 or 9600 or 115200))
+                return Results.BadRequest(new { error = $"unsupported baud {b} (use 0=auto, 9600, or 115200)" });
+            var cur = store.Get();
+            store.Set(
+                enabled: req.Enabled ?? cur.Enabled,
+                devicePath: req.DevicePath ?? cur.DevicePath,
+                baud: req.Baud ?? cur.Baud);
+            return Results.Ok(svc.Snapshot());
+        });
+
+        // Global (per-radio) TX-audio source (external-audio-jacks re-port). GET
+        // surfaces the per-board capability gates + the RESOLVED (board-clamped)
+        // source so the single-select picker shows only the jacks the connected
+        // board offers and hydrates from what the server is actually pushing.
+        // Always 200 — a board with neither codec nor HL2 mic reports both gates
+        // false and the panel shows nothing.
+        app.MapGet("/api/radio/audio", (RadioService radio, AudioSettingsStore store) =>
+        {
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            var resolved = RadioService.ClampAudioSource(store.Get(), caps);
+            return Results.Ok(new AudioFrontEndDto(
+                HasOnboardCodec: caps.HasOnboardCodec,
+                HermesLite2MicFrontEnd: caps.HermesLite2MicFrontEnd,
+                HasRadioLineIn: caps.HasRadioLineIn,
+                HasBalancedXlr: caps.HasBalancedXlr,
+                HasMicBias: caps.HasMicBias,
+                Source: resolved.Source,
+                MicBoost: resolved.MicBoost,
+                MicBias: resolved.MicBias,
+                LineInGain: resolved.LineInGain));
+        });
+
+        // PUT the whole global TX-audio source. Capability-gated: 409 when the
+        // connected board has no audio front-end at all (neither codec nor HL2
+        // mic), so a non-audio board can never be handed audio bytes. The
+        // requested Source is CLAMPED against the board's capabilities (an
+        // unsupported jack → Host) before persisting, so the store never holds a
+        // source the wire can't emit on this board. LineInGain is clamped 0..31.
+        // The save fires AudioSettingsStore.Changed -> RadioService.PushAudioFrontEnd,
+        // which re-clamps + pushes server-authoritatively to the live client
+        // (P1 SetAudioFrontEnd / P2 TxSpecific 50/51) and mirrors the resolved
+        // source into StateDto — never via the frontend, so no clobber-on-connect.
+        app.MapPut("/api/radio/audio", (AudioFrontEndSetRequest req, RadioService radio, AudioSettingsStore store) =>
+        {
+            if (req is null)
+                return Results.BadRequest(new { error = "body required" });
+
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            bool audioCapable = caps.HasOnboardCodec || caps.HermesLite2MicFrontEnd;
+            if (!audioCapable)
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no audio front-end" });
+
+            var requested = new AudioSourceSelection(
+                Source: req.Source,
+                MicBoost: req.MicBoost,
+                MicBias: req.MicBias,
+                LineInGain: (byte)Math.Clamp(req.LineInGain, 0, 31));
+            // Clamp to the board before persisting — a board that lacks the
+            // requested jack stores Host, never the illegal source.
+            store.Set(RadioService.ClampAudioSource(requested, caps));
+
+            var resolved = RadioService.ClampAudioSource(store.Get(), caps);
+            return Results.Ok(new AudioFrontEndDto(
+                caps.HasOnboardCodec,
+                caps.HermesLite2MicFrontEnd,
+                caps.HasRadioLineIn,
+                caps.HasBalancedXlr,
+                caps.HasMicBias,
+                resolved.Source,
+                resolved.MicBoost,
+                resolved.MicBias,
+                resolved.LineInGain));
+        });
+
+        // Radio-side speaker output (codec-equipped radios, P1 + P2). GET reports
+        // the persisted opt-in plus whether it's currently effective for the
+        // connected board (any codec radio; HL2 has no stream codec and is
+        // excluded). The frontend refetches this on connect to hydrate the toggle
+        // without touching the StateDto wire format. Issue #1122.
+        app.MapGet("/api/radio/speaker-output", (RadioSpeakerSettingsStore store, RadioSpeakerAudioSink sink) =>
+            Results.Ok(new RadioSpeakerOutputDto(
+                Enabled: store.Enabled,
+                Available: sink.AvailableForConnectedBoard())));
+
+        // PUT the opt-in. Persisted globally; the store's Changed event clears the
+        // RX-audio ring when turned off so a later RX never replays a stale tail.
+        // The sink self-gates per frame (board + MOX + mono/48k), so the toggle is
+        // safe to flip at any time, including mid-session.
+        app.MapPut("/api/radio/speaker-output", (RadioSpeakerOutputSetRequest req, RadioSpeakerSettingsStore store, RadioSpeakerAudioSink sink) =>
+        {
+            if (req is null)
+                return Results.BadRequest(new { error = "body required" });
+
+            store.Set(req.Enabled);
+            return Results.Ok(new RadioSpeakerOutputDto(
+                Enabled: store.Enabled,
+                Available: sink.AvailableForConnectedBoard()));
         });
 
         app.MapGet("/api/radio/power-calibration", (HardwareDiagnosticsService diag) =>
@@ -2154,6 +2985,96 @@ public static class ZeusEndpoints
 
             var effective = radio.SetHl2BandVolts(req.BandVolts);
             return Results.Ok(new Hl2OptionsDto(BandVolts: effective));
+        });
+
+        // HL2 user GPIO (external-port parity audit — re-port of external-ports
+        // plan Phase 5). The 4-bit user_dig_out mask → 0x0a/wire-0x14 frame
+        // C3[3:0] → MCP23008 on the HL2 IO connector. GET always returns 200; the
+        // Supported flag is the board's HasHl2UserGpio capability (HL2 only) and
+        // the frontend gates the User-GPIO card on it. PUT 409s on a board without
+        // the capability so a non-HL2 board can never be handed a GPIO mask. The
+        // save is server-authoritative: SetHl2GpioMask persists + fires
+        // Changed → RadioService.PushHl2Gpio, which re-pushes to the live client —
+        // never via the frontend, so no clobber-on-connect.
+        app.MapGet("/api/radio/hl2-gpio", (RadioService radio) =>
+        {
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            return Results.Ok(new Hl2GpioDto(
+                Supported: caps.HasHl2UserGpio,
+                Bits: caps.HasHl2UserGpio ? radio.GetHl2GpioMask() : 0));
+        });
+
+        app.MapPut("/api/radio/hl2-gpio", (Hl2GpioSetRequest req, RadioService radio) =>
+        {
+            if (req is null)
+                return Results.BadRequest(new { error = "body required" });
+
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            if (!caps.HasHl2UserGpio)
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no user GPIO" });
+
+            radio.SetHl2GpioMask((byte)(req.Bits & 0x0F));
+            return Results.Ok(new Hl2GpioDto(Supported: true, Bits: radio.GetHl2GpioMask()));
+        });
+
+        // External antenna ports (external-ports plan — antenna slice, #804).
+        // GET returns the per-band TX/RX antenna + RX-aux selection plus the
+        // board-capability gates the frontend renders the right selectors from.
+        // Antenna state is server-authoritative and NEVER enters StateDto.
+        app.MapGet("/api/radio/antenna", (RadioService radio, AntennaSettingsStore store) =>
+        {
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            var bands = store.GetAll()
+                .Select(b => new AntennaBandDto(b.Band, b.TxAnt.ToString(), b.RxAnt.ToString(), b.RxAux.ToString()))
+                .ToArray();
+            return Results.Ok(new AntennaSettingsDto(
+                HasTxAntennaRelays: caps.HasTxAntennaRelays,
+                HasRxAntennaRelays: caps.HasRxAntennaRelays,
+                Bands: bands,
+                AvailableRxAux: AvailableRxAux(caps.RxAuxInputs)));
+        });
+
+        // PUT one band's antenna selection. Capability-gated: 400 on a malformed
+        // body / unknown band / unparseable antenna; 409 when the request asks
+        // for a relay the connected board does not have (a non-ANT1 TX on a board
+        // without TX relays, a non-ANT1 RX on a board without RX relays, or an
+        // aux the board does not expose). ANT1 / None are always accepted (the
+        // hardwired default on every board). The save fires Changed →
+        // RadioService.RecomputePaAndPush, which pushes server-authoritatively to
+        // the live client (P1 SetAntennaRx / P2 SetAntennas) — never via the
+        // frontend, so no clobber-on-connect. The wire layer defers a mid-key
+        // relay change to the unkey edge; PS owns the K36/BYPASS relay while armed
+        // regardless of an aux=BYPASS pick (PS-K36 firewall).
+        app.MapPut("/api/radio/antenna", (AntennaSetRequest req, RadioService radio, AntennaSettingsStore store) =>
+        {
+            if (req is null || string.IsNullOrWhiteSpace(req.Band))
+                return Results.BadRequest(new { error = "band required" });
+            if (!BandUtils.HfBands.Contains(req.Band))
+                return Results.BadRequest(new { error = $"unknown band '{req.Band}'" });
+            if (!Enum.TryParse<HpsdrAntenna>(req.TxAnt, ignoreCase: true, out var txAnt))
+                return Results.BadRequest(new { error = $"unknown txAnt '{req.TxAnt}'" });
+            if (!Enum.TryParse<HpsdrAntenna>(req.RxAnt, ignoreCase: true, out var rxAnt))
+                return Results.BadRequest(new { error = $"unknown rxAnt '{req.RxAnt}'" });
+            var rxAuxStr = string.IsNullOrWhiteSpace(req.RxAux) ? "None" : req.RxAux;
+            if (!Enum.TryParse<RxAuxInputSel>(rxAuxStr, ignoreCase: true, out var rxAux))
+                return Results.BadRequest(new { error = $"unknown rxAux '{req.RxAux}'" });
+
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            if (txAnt != HpsdrAntenna.Ant1 && !caps.HasTxAntennaRelays)
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no TX antenna relays; only Ant1 is valid" });
+            if (rxAnt != HpsdrAntenna.Ant1 && !caps.HasRxAntennaRelays)
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no RX antenna relays; only Ant1 is valid" });
+            if (rxAux != RxAuxInputSel.None && !RxAuxSupported(rxAux, caps.RxAuxInputs))
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} does not expose RX-aux input {rxAux}" });
+
+            store.SetBand(req.Band, txAnt, rxAnt, rxAux);
+
+            var bands = store.GetAll()
+                .Select(b => new AntennaBandDto(b.Band, b.TxAnt.ToString(), b.RxAnt.ToString(), b.RxAux.ToString()))
+                .ToArray();
+            return Results.Ok(new AntennaSettingsDto(
+                caps.HasTxAntennaRelays, caps.HasRxAntennaRelays, bands,
+                AvailableRxAux(caps.RxAuxInputs)));
         });
 
         // ANAN-G2 / Saturn-class ADC options. Dither/random write Protocol-2
@@ -2305,6 +3226,42 @@ public static class ZeusEndpoints
             return Results.Ok(store.DeleteNamed(radio ?? "default", id));
         });
 
+        // Saved-layouts library — reusable layout presets per radio, separate
+        // from the working tabs above. The operator snapshots a workspace into a
+        // preset (PUT), restores/seeds from it client-side, and manages the pool.
+        app.MapGet("/api/ui/saved-layouts", (string? radio, LayoutStore store) =>
+            Results.Ok(store.GetSavedLayouts(radio ?? "default")));
+
+        app.MapPut("/api/ui/saved-layouts", (SaveSavedLayoutRequest req, LayoutStore store) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.SavedId))
+                return Results.BadRequest(new { error = "savedId required" });
+            if (string.IsNullOrWhiteSpace(req.LayoutJson))
+                return Results.BadRequest(new { error = "layoutJson required" });
+            return Results.Ok(store.UpsertSavedLayout(
+                req.RadioKey ?? "default",
+                req.SavedId,
+                req.Name,
+                req.LayoutJson,
+                req.Icon,
+                req.Description));
+        });
+
+        app.MapDelete("/api/ui/saved-layouts", (string? radio, string? id, LayoutStore store) =>
+        {
+            if (string.IsNullOrWhiteSpace(id))
+                return Results.BadRequest(new { error = "id required" });
+            return Results.Ok(store.DeleteSavedLayout(radio ?? "default", id));
+        });
+
+        // Detached workspace windows (extra Photino frames popped off the dock)
+        // that were open at the last desktop shutdown. The desktop shell reads
+        // this once on startup and reopens each; web/headless clients never call
+        // it (the restore path is gated on the Photino bridge), so it returns an
+        // empty list there.
+        app.MapGet("/api/ui/workspace-windows", (OpenWorkspaceWindowsStore store) =>
+            Results.Ok(store.GetAll()));
+
         // Prefs-database (profile) selector. All Zeus prefs/settings/layouts live
         // in a single LiteDB resolved by PrefsDbPath.Get() at startup; the active
         // choice is a pointer file (NOT inside any DB). Switching applies on the
@@ -2384,11 +3341,70 @@ public static class ZeusEndpoints
             }
         }).DisableAntiforgery();
 
+        // Download an existing profile's .db so the operator can back it up or
+        // move it to another machine. Opens the file shared so the active
+        // database can be exported while it's in use.
+        app.MapGet("/api/prefs/databases/export", (string? relativePath) =>
+        {
+            if (string.IsNullOrWhiteSpace(relativePath))
+                return Results.BadRequest(new { error = "relativePath required" });
+            try
+            {
+                var bytes = PrefsDbPath.ReadProfileBytes(relativePath, out var fileName);
+                return Results.File(bytes, "application/octet-stream", fileName);
+            }
+            catch (FileNotFoundException)
+            {
+                return Results.NotFound(new { error = "Database not found." });
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
         app.MapPost("/api/app/restart", (AppRestartService restart) =>
         {
             restart.RequestRestart();
             return Results.Ok(new { restarting = true });
         });
+
+        app.MapPost("/api/app/quit", (AppRestartService restart) =>
+        {
+            restart.RequestQuit();
+            return Results.Ok(new { quitting = true });
+        });
+
+        // ---- Reset & Uninstall Zeus (About panel) ----------------------------
+        // Preview the exact paths the wipe will remove (+ warnings) and mint a
+        // one-shot confirm token. removeBinary asks for a full uninstall (app
+        // binary too); BinaryRemovalSupported reports whether that's achievable
+        // on this install (false → data-only fallback).
+        app.MapGet("/api/app/uninstall/preview",
+            (bool? removeBinary, Zeus.Server.Uninstall.UninstallService svc) =>
+                Results.Ok(svc.Preview(removeBinary ?? false)));
+
+        // One-click backup: prefs DB + all profiles + logbook + ADIF, streamed as
+        // a single zip the operator saves to ~/Downloads (which the wipe never
+        // touches) BEFORE uninstalling.
+        app.MapGet("/api/app/backup",
+            async (Zeus.Server.Uninstall.UninstallService svc, HttpContext ctx) =>
+            {
+                var (bytes, fileName) = await svc.BuildBackupAsync(ctx.RequestAborted);
+                return Results.File(bytes, "application/zip", fileName);
+            });
+
+        // Execute. Requires the one-shot token from the preview. Builds + validates
+        // the manifest fresh (fail-closed); on success launches the detached wipe
+        // and exits.
+        app.MapPost("/api/app/uninstall",
+            (UninstallRequest req, Zeus.Server.Uninstall.UninstallService svc) =>
+            {
+                var result = svc.Execute(req.Token, req.RemoveBinary);
+                if (!result.Started)
+                    return Results.BadRequest(new { error = result.Error, abortReasons = result.AbortReasons });
+                return Results.Ok(new { uninstalling = true });
+            }).DisableAntiforgery();
 
         app.MapGet("/api/qrz/status", (QrzService qrz) => qrz.GetStatus());
 
@@ -2445,6 +3461,11 @@ public static class ZeusEndpoints
         // ── ZeusChat — operator-to-operator chat over the Cloudflare relay ──
         app.MapGet("/api/chat/status", (ChatService chat) => chat.GetStatus());
 
+        // Web-client heartbeat: presence is published only while the operator is
+        // showing the Chat panel (so closing/hiding it drops them off the roster).
+        app.MapPost("/api/chat/visible", (ChatVisibleRequest req, ChatService chat) =>
+            Results.Ok(chat.ReportPanelVisible(req.Visible)));
+
         app.MapPost("/api/chat/enable", (ChatEnableRequest req, ChatService chat) =>
         {
             log.LogInformation("api.chat.enable enabled={Enabled}", req.Enabled);
@@ -2453,11 +3474,12 @@ public static class ZeusEndpoints
 
         app.MapPost("/api/chat/send", async (ChatSendRequest req, ChatService chat, HttpContext ctx) =>
         {
-            if (string.IsNullOrWhiteSpace(req.Text))
+            // Text is optional when an image is attached (image-only message).
+            if (string.IsNullOrWhiteSpace(req.Text) && req.Attachment is null)
                 return Results.BadRequest(new { error = "message text required" });
             try
             {
-                await chat.SendMessageAsync(req.Text, req.Room, ctx.RequestAborted);
+                await chat.SendMessageAsync(req.Text, req.Room, req.Attachment, ctx.RequestAborted);
                 return Results.Ok(new { ok = true });
             }
             catch (ArgumentException ex)
@@ -2524,7 +3546,7 @@ public static class ZeusEndpoints
         app.MapGet("/api/chat/rooms", (ChatService chat) => Results.Ok(new { rooms = chat.GetRooms() }));
 
         app.MapPost("/api/chat/dm", (ChatDmRequest req, ChatService chat, HttpContext ctx) =>
-            Run(() => chat.SendDmAsync(req.To, req.Text, ctx.RequestAborted)));
+            Run(() => chat.SendDmAsync(req.To, req.Text, req.Attachment, ctx.RequestAborted)));
 
         app.MapPost("/api/chat/history", (ChatRoomRequest req, ChatService chat, HttpContext ctx) =>
             Run(() => chat.RequestHistoryAsync(req.Room, ctx.RequestAborted)));
@@ -2545,6 +3567,14 @@ public static class ZeusEndpoints
             Run(() => chat.BanAsync(req.Callsign, ctx.RequestAborted)));
         app.MapPost("/api/chat/admin/unban", (ChatFriendRequest req, ChatService chat, HttpContext ctx) =>
             Run(() => chat.UnbanAsync(req.Callsign, ctx.RequestAborted)));
+        app.MapPost("/api/chat/admin/clear", (ChatClearRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.ClearRoomAsync(req.Room, ctx.RequestAborted)));
+        app.MapPost("/api/chat/admin/broadcast", (ChatBroadcastRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.BroadcastAsync(req.Text, ctx.RequestAborted)));
+        app.MapPost("/api/chat/admin/bans", (ChatService chat, HttpContext ctx) =>
+            Run(() => chat.ListBansAsync(ctx.RequestAborted)));
+        app.MapPost("/api/chat/admin/see-all", (ChatSeeAllRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.SetSeeAllFreqAsync(req.On, ctx.RequestAborted)));
 
         // Point-to-point propagation (DE → DX). Proxies the HamClock sidecar's
         // ITU-R P.533-14 engine; always returns 200 with an {available:false}
@@ -2579,11 +3609,42 @@ public static class ZeusEndpoints
             return Results.Ok(response);
         });
 
-        app.MapPost("/api/log/entry", async (CreateLogEntryRequest req, LogService logService, HttpContext ctx) =>
+        app.MapPost("/api/log/entry", async (
+            CreateLogEntryRequest req,
+            LogService logService,
+            QrzService qrz,
+            WsjtxUdpBroadcaster wsjtx,
+            Wsjtx.N1mmBroadcaster n1mm,
+            CloudLog.CloudLogService cloudLog,
+            HttpContext ctx) =>
         {
             if (string.IsNullOrWhiteSpace(req.Callsign))
                 return Results.BadRequest(new { error = "callsign required" });
+
+            // Operator name enrichment: when the caller didn't supply a name
+            // (FT8 auto-log, a spot logged without a QRZ card open, an import
+            // lacking NAME), fill it from QRZ. The QRZ feed splits the operator
+            // into <fname>+<name>, so compose the full name rather than the
+            // surname alone. Best-effort — a lookup miss or no subscription
+            // must never block logging the QSO.
+            if (string.IsNullOrWhiteSpace(req.Name))
+            {
+                var enriched = await TryQrzFullNameAsync(qrz, req.Callsign, ctx.RequestAborted);
+                if (!string.IsNullOrWhiteSpace(enriched))
+                    req = req with { Name = enriched };
+            }
+
             var entry = await logService.CreateLogEntryAsync(req, ctx.RequestAborted);
+            // Push the just-logged QSO to every opted-in external logger. Each
+            // target is OFF by default and no-ops when disabled; this is the only
+            // logging path that egresses (ADIF bulk import never does).
+            // Fire-and-forget so a slow/blocked target (e.g. a free-text Host whose
+            // DNS is dead) can never delay the operator's log confirmation. Each
+            // client swallows its own failures internally; use a detached token so
+            // the post-response request abort doesn't cancel them.
+            _ = wsjtx.BroadcastLoggedQsoAsync(entry, CancellationToken.None);   // Class A: WSJT-X type-12 UDP
+            _ = n1mm.BroadcastLoggedQsoAsync(entry, CancellationToken.None);    // Class B: N1MM contactinfo UDP
+            _ = cloudLog.PublishAsync(entry, CancellationToken.None);           // Class C: Wavelog/Cloudlog + Club Log HTTP
             return Results.Ok(entry);
         });
 
@@ -2595,6 +3656,23 @@ public static class ZeusEndpoints
                 System.Text.Encoding.UTF8.GetBytes(adif),
                 "text/plain",
                 fileName);
+        });
+
+        // Write the logbook (or a selected subset) to an ADIF file in a
+        // directory on the machine running the backend, returning the path so
+        // the Logbook panel can confirm where it landed (a silent browser
+        // download gave the operator no feedback). Null directory => Downloads.
+        app.MapPost("/api/log/export/adif/file", async (AdifExportToFileRequest req, LogService logService, HttpContext ctx) =>
+        {
+            try
+            {
+                var result = await logService.ExportToAdifFileAsync(req.Directory, req.LogEntryIds, ctx.RequestAborted);
+                return Results.Ok(result);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                return Results.BadRequest(new { error = $"Could not write ADIF file: {ex.Message}" });
+            }
         });
 
         app.MapPost("/api/log/import/adif", async (LogService logService, HttpContext ctx) =>
@@ -2648,6 +3726,60 @@ public static class ZeusEndpoints
                 Results: results));
         });
 
+        // -- Logging v2: HTTP cloud-log uploaders (Wavelog/Cloudlog + Club Log) --
+        // Per-QSO realtime ADIF push. Egress OFF by default; fired automatically
+        // from /api/log/entry. These endpoints manage config/secrets and a manual
+        // batch re-publish. Secrets are write-only — status reports presence only.
+        app.MapGet("/api/log/cloud/config", async (CloudLog.CloudLogService cloud, HttpContext ctx) =>
+            Results.Ok(await cloud.GetStatusAsync(ctx.RequestAborted)));
+
+        app.MapPost("/api/log/cloud/config", (CloudLog.CloudLogConfig req, CloudLog.CloudLogService cloud) =>
+        {
+            log.LogInformation(
+                "api.log.cloud.config wavelog={Wl} clublog={Cl}",
+                req.Wavelog.Enabled, req.ClubLog.Enabled);
+            return Results.Ok(cloud.SetConfig(req));
+        });
+
+        app.MapPost("/api/log/cloud/credentials", async (
+            CloudLog.CloudLogCredentialsRequest req, CloudLog.CloudLogService cloud, HttpContext ctx) =>
+        {
+            // Each non-null field is applied; an empty string clears that secret.
+            if (req.WavelogApiKey is not null)
+                await cloud.SetWavelogApiKeyAsync(req.WavelogApiKey, ctx.RequestAborted);
+            if (req.ClubLogPassword is not null || req.ClubLogApiKey is not null)
+                await cloud.SetClubLogCredentialsAsync(req.ClubLogPassword, req.ClubLogApiKey, ctx.RequestAborted);
+            return Results.Ok(await cloud.GetStatusAsync(ctx.RequestAborted));
+        });
+
+        app.MapPost("/api/log/publish/cloud", async (
+            QrzPublishRequest req, CloudLog.CloudLogService cloud, LogService logService, HttpContext ctx) =>
+        {
+            if (req.LogEntryIds == null || !req.LogEntryIds.Any())
+                return Results.BadRequest(new { error = "no log entry IDs provided" });
+            var entries = await logService.GetLogEntriesByIdsAsync(req.LogEntryIds, ctx.RequestAborted);
+            var results = new List<CloudLog.CloudLogResult>();
+            foreach (var entry in entries)
+                results.AddRange(await cloud.PublishOnceAsync(entry, ctx.RequestAborted));
+            return Results.Ok(new
+            {
+                total = results.Count,
+                successCount = results.Count(r => r.Success),
+                failedCount = results.Count(r => !r.Success),
+                results,
+            });
+        });
+
+        // -- Logging v2: N1MM-format UDP broadcaster (HRD / DXKeeper gateway) -----
+        app.MapGet("/api/n1mm/config", (Wsjtx.N1mmBroadcaster n1mm) => Results.Ok(n1mm.GetConfig()));
+
+        app.MapPost("/api/n1mm/config", (Wsjtx.N1mmConfig req, Wsjtx.N1mmBroadcaster n1mm) =>
+        {
+            log.LogInformation(
+                "api.n1mm.config enabled={En} host={Host} port={Port}", req.Enabled, req.Host, req.Port);
+            return Results.Ok(n1mm.SetConfig(req));
+        });
+
         app.MapGet("/api/rotator/status", (RotctldService rot) => rot.GetStatus());
 
         app.MapGet("/api/rotator/config", (RotctldService rot) => rot.GetConfig());
@@ -2681,6 +3813,28 @@ public static class ZeusEndpoints
             return Results.Ok(result);
         });
 
+        // Multi-rotator config (issue #917). Returns / updates the full slot
+        // list + the active slot id + the AutoRoute toggle. Slot-aware UI hits
+        // these; legacy /api/rotator/config above keeps reflecting only the
+        // active slot for the Compass / Dial panels.
+        app.MapGet("/api/rotator/multi-config", (RotctldService rot) => rot.GetMultiConfig());
+
+        app.MapPost("/api/rotator/multi-config", async (RotctldMultiConfig req, RotctldService rot, HttpContext ctx) =>
+        {
+            log.LogInformation(
+                "api.rotator.multi-config slots={Count} active={Active} autoRoute={Auto}",
+                req.Slots?.Count ?? 0, req.ActiveSlotId, req.AutoRoute);
+            var cfg = await rot.SetMultiConfigAsync(req, ctx.RequestAborted);
+            return Results.Ok(cfg);
+        });
+
+        app.MapPost("/api/rotator/active", async (RotctldSetActiveRequest req, RotctldService rot, HttpContext ctx) =>
+        {
+            if (req.SlotId <= 0) return Results.BadRequest(new { error = "slotId must be positive" });
+            var status = await rot.SetActiveSlotAsync(req.SlotId, ctx.RequestAborted);
+            return Results.Ok(status);
+        });
+
         app.MapGet("/api/tci/status", (TciManagementService tci) => tci.GetStatus());
 
         app.MapPost("/api/tci/config", (TciRuntimeConfig req, TciManagementService tci, HttpContext ctx) =>
@@ -2698,6 +3852,78 @@ public static class ZeusEndpoints
             return Results.Ok(result);
         });
 
+        app.MapGet("/api/cat/status", (CatManagementService cat) => cat.GetStatus());
+
+        app.MapPost("/api/cat/config", (CatRuntimeConfig req, CatManagementService cat, HttpContext ctx) =>
+        {
+            log.LogInformation("api.cat.config enabled={En} bind={Bind} port={Port}", req.Enabled, req.BindAddress, req.Port);
+            var status = cat.SetConfig(req);
+            return Results.Ok(status);
+        });
+
+        app.MapPost("/api/cat/test", (CatTestRequest req, CatManagementService cat, HttpContext ctx) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.BindAddress) || req.Port is <= 0 or >= 65536)
+                return Results.BadRequest(new { error = "bindAddress and port required" });
+            var result = cat.TestPort(req.BindAddress.Trim(), req.Port);
+            return Results.Ok(result);
+        });
+
+        // Serial CAT ports (Thetis CAT1–4). GET returns per-port config + live
+        // open/error status plus the host's enumerable serial devices (UI
+        // suggestions; pty/com0com pairs aren't enumerable so the field is
+        // free-form). PUT replaces all four port configs and hot-reconnects (no
+        // restart). POST /test probe-opens one port to verify it's usable.
+        app.MapGet("/api/cat/serial/status",
+            (Zeus.Server.Cat.CatSerialService svc) => Results.Ok(svc.Snapshot()));
+
+        app.MapPut("/api/cat/serial/config",
+            (CatSerialConfig req, CatSerialConfigStore store, Zeus.Server.Cat.CatSerialService svc) =>
+        {
+            var ports = req?.Ports ?? Array.Empty<CatSerialPortConfig>();
+            log.LogInformation("api.cat.serial.config ports=[{Ports}]",
+                string.Join(", ", ports.Select((p, i) => $"#{i + 1} {(p.Enabled ? $"{p.PortName}@{p.BaudRate}" : "off")}")));
+            store.Set(ports);
+            return Results.Ok(svc.Snapshot());
+        });
+
+        app.MapPost("/api/cat/serial/test",
+            (CatSerialTestRequest req, Zeus.Server.Cat.CatSerialService svc) =>
+        {
+            if (string.IsNullOrWhiteSpace(req?.PortName))
+                return Results.BadRequest(new { error = "portName required" });
+            return Results.Ok(svc.TestPort(req));
+        });
+
+        // WSJT-X logged-QSO UDP broadcaster (outbound QSO-record push to
+        // JTAlert / Log4OM / GridTracker / N1MM). Default OFF / loopback; config
+        // applies live (no restart — there is no listener, only a UDP sender).
+        app.MapGet("/api/wsjtx/status", (WsjtxManagementService wsjtx) => wsjtx.GetStatus());
+
+        app.MapPost("/api/wsjtx/config", (WsjtxRuntimeConfig req, WsjtxManagementService wsjtx, HttpContext ctx) =>
+        {
+            log.LogInformation(
+                "api.wsjtx.config enabled={En} transport={Tr} host={Host} port={Port} group={Grp} ttl={Ttl} type5={T5} live={Live}",
+                req.Enabled, req.Transport, req.Host, req.Port, req.MulticastGroup, req.MulticastTtl,
+                req.SendQsoLogged, req.SendLiveDecodes);
+            var status = wsjtx.SetConfig(req);
+            return Results.Ok(status);
+        });
+
+        // Digital-mode spotting uploaders (FT8/FT4 -> PSK Reporter, WSPR ->
+        // WSPRnet). NEW network egress, both DISABLED by default; config applies
+        // live (the uploaders only send UDP/HTTP — there is no listener).
+        app.MapGet("/api/spotting/status", (SpottingManagementService spotting) => spotting.GetStatus());
+
+        app.MapPost("/api/spotting/config", (SpottingRuntimeConfig req, SpottingManagementService spotting) =>
+        {
+            log.LogInformation(
+                "api.spotting.config psk={Psk} wsprnet={Wspr}",
+                req.PskReporterEnabled, req.WsprnetEnabled);
+            var status = spotting.SetConfig(req);
+            return Results.Ok(status);
+        });
+
         app.Map("/ws", async (HttpContext ctx, StreamingHub hub) =>
         {
             if (!ctx.WebSockets.IsWebSocketRequest)
@@ -2708,6 +3934,85 @@ public static class ZeusEndpoints
             using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
             await hub.AttachClientAsync(ws, ctx.RequestAborted);
         });
+
+        // -- Remote-access QR (Server menu: scan → open remote client) --------
+        // Renders any URL to an SVG QR. The Server menu requests it for the
+        // operator's /go/<callsign> address (RemoteQr.AddressFor). See
+        // docs/designs/remote-access-webrtc.md.
+        app.MapGet("/api/remote/qr.svg", (string? data) =>
+        {
+            if (string.IsNullOrWhiteSpace(data) || data.Length > 1024)
+                return Results.BadRequest(new { error = "data required (max 1024 chars)" });
+            return Results.Content(
+                Zeus.Server.Hosting.Remote.RemoteQr.Svg(data), "image/svg+xml");
+        });
+
+        // -- Remote-access session password (ADR-0008) ------------------------
+        // The operator sets a password here; remote access cannot be enabled
+        // without one. Verified end-to-end via SPAKE2+ — the server stores only
+        // the verifier, never the password.
+        app.MapGet("/api/remote/password/status",
+            (Zeus.Server.Hosting.Remote.RemotePasswordStore store) =>
+                Results.Ok(new { hasPassword = store.HasPassword() }));
+
+        app.MapPost("/api/remote/password",
+            (Zeus.Server.Hosting.Remote.RemotePasswordRequest req,
+             Zeus.Server.Hosting.Remote.RemotePasswordStore store) =>
+            {
+                if (string.IsNullOrWhiteSpace(req?.Password) || req.Password.Length < 8)
+                    return Results.BadRequest(new { error = "password must be at least 8 characters" });
+                store.Set(req.Password);
+                log.LogInformation("api.remote.password set");
+                return Results.Ok(new { hasPassword = true });
+            });
+
+        app.MapDelete("/api/remote/password",
+            (Zeus.Server.Hosting.Remote.RemotePasswordStore store) =>
+            {
+                store.Clear();
+                log.LogInformation("api.remote.password cleared");
+                return Results.Ok(new { hasPassword = false });
+            });
+
+        // WebRTC signaling: answer the browser's offer with a password-gated session
+        // (Phase 1). 403 when no password is set — there is no unauthenticated path.
+        app.MapPost("/api/remote/connect",
+            async (Zeus.Server.Hosting.Remote.RemoteConnectRequest req,
+                   Zeus.Server.Hosting.Remote.RemoteWebRtcService rtc,
+                   CancellationToken ct) =>
+            {
+                if (string.IsNullOrWhiteSpace(req?.Sdp))
+                    return Results.BadRequest(new { error = "sdp required" });
+                try
+                {
+                    var answer = await rtc.ConnectAsync(req.Sdp, ct);
+                    return Results.Ok(new { sdp = answer, type = "answer" });
+                }
+                catch (Zeus.Server.Hosting.Remote.RemoteAccessDisabledException)
+                {
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                }
+            });
+
+        // -- WebRTC data-plane spike (Phase 0) --------------------------------
+        // Dev-only: inert unless ZEUS_RTC_SPIKE=1. Answers a browser SDP offer
+        // and echoes binary DataChannel messages so we can measure real
+        // browser↔Zeus.Server round-trip latency. See zeus-web/public/rtc-spike.html
+        // and docs/designs/remote-access-webrtc.md. NOT the production transport.
+        if (Environment.GetEnvironmentVariable("ZEUS_RTC_SPIKE") == "1")
+        {
+            log.LogWarning("rtc.spike endpoint ENABLED (/api/rtc/spike/offer) — dev only");
+            app.MapPost("/api/rtc/spike/offer",
+                async (Zeus.Server.Hosting.Remote.RtcSpikeOffer req,
+                       Zeus.Server.Hosting.Remote.WebRtcSpikeService rtc,
+                       CancellationToken ct) =>
+                {
+                    if (string.IsNullOrWhiteSpace(req?.Sdp))
+                        return Results.BadRequest(new { error = "sdp required" });
+                    var answerSdp = await rtc.CreateEchoAnswerAsync(req.Sdp, ct);
+                    return Results.Ok(new { sdp = answerSdp, type = "answer" });
+                });
+        }
 
         // -- HamClock embed (optional Node sidecar; see HamClockService) -----
         // Inert until the operator installs it from Settings → HamClock. The
@@ -2743,10 +4048,85 @@ public static class ZeusEndpoints
             return Results.Ok(hc.Snapshot());
         });
 
+        // LAN Browser proxy. Fetches a private-LAN device web page on the radio
+        // host's behalf and returns it (HTML rewritten so sub-resources route
+        // back through this same endpoint). Scoped to RFC1918 / IPv6-ULA targets
+        // by LanProxyService; loopback + public + cloud-metadata are refused.
+        // Tunnels transparently for remote operators (it's a same-origin /api GET).
+        app.MapGet("/api/lan/proxy", async (string? url, string? inline, LanProxyService proxy, HttpContext ctx, CancellationToken ct) =>
+        {
+            // inline=1 → self-contained HTML for an iframe srcdoc (the remote path,
+            // where the operator's browser can't load sub-resources from the LAN).
+            bool wantInline = inline is "1" or "true";
+            var result = await proxy.FetchAsync(url, wantInline, ct);
+            ctx.Response.StatusCode = result.Status;
+            ctx.Response.ContentType = result.ContentType ?? "application/octet-stream";
+            await ctx.Response.Body.WriteAsync(result.Body, ct);
+        });
+
+        // HamClock DX-push config + push (Logging v2). Outbound "set the worked
+        // station on the map". Egress OFF by default; server-side forward avoids
+        // browser CORS / HTTPS-mixed-content blocking the classic-HamClock host.
+        app.MapGet("/api/hamclock/push-config", (HamClockPushManagementService push) =>
+            Results.Ok(push.GetConfig()));
+
+        app.MapPost("/api/hamclock/push-config", (HamClockPushConfig req, HamClockPushManagementService push) =>
+        {
+            log.LogInformation(
+                "api.hamclock.push-config enabled={En} trigger={Tr} target={Tg} host={Host} port={Port}",
+                req.Enabled, req.Trigger, req.Target, req.ExternalHost, req.ExternalPort);
+            return Results.Ok(push.SetConfig(req));
+        });
+
+        app.MapPost("/api/hamclock/dx", async (
+            HamClockDxRequest req, HamClockPushManagementService push, HamClockService hc) =>
+        {
+            var cfg = push.GetConfig();
+            if (!cfg.Enabled)
+                return Results.Ok(new { pushed = false, skipped = "disabled" });
+            // Fire the GET inline but tightly time-bounded inside PushDxAsync; it
+            // never throws and returns false on any skip/failure.
+            bool pushed = await hc.PushDxAsync(req.Grid, cfg.Target, cfg.ExternalHost, cfg.ExternalPort);
+            return Results.Ok(new { pushed });
+        });
+
         return app;
     }
 
     // ---------- helpers (formerly local functions in Program.cs) -------------
+
+    /// <summary>
+    /// Best-effort QRZ lookup that returns the operator's full display name
+    /// ("First Last") for a callsign, or null. The QRZ feed splits the operator
+    /// into &lt;fname&gt; (first) and &lt;name&gt; (last), so compose both —
+    /// the surname alone is what made the logbook Name column read blank for
+    /// records where QRZ only populates the first name. Never throws: a missing
+    /// subscription, a not-logged-in state, or a lookup miss simply yields null
+    /// so the QSO still logs.
+    /// </summary>
+    private static async Task<string?> TryQrzFullNameAsync(QrzService qrz, string callsign, CancellationToken ct)
+    {
+        try
+        {
+            // Bound the lookup so logging a QSO never stalls on a slow or
+            // gate-contended QRZ feed (FT8 bursts, no subscription, network
+            // blip). The QSO logs with no name rather than hanging.
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(4));
+            var station = await qrz.LookupAsync(callsign, timeout.Token).ConfigureAwait(false);
+            if (station == null) return null;
+            var full = string.Join(' ', new[] { station.FirstName, station.Name }
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s!.Trim()));
+            return string.IsNullOrWhiteSpace(full) ? null : full;
+        }
+        catch
+        {
+            // Not logged in / no subscription / network blip — logging a QSO
+            // must never depend on QRZ being reachable.
+            return null;
+        }
+    }
 
     private static IResult GetNativeAudioDevices(IServiceProvider sp)
     {
@@ -2854,6 +4234,29 @@ public static class ZeusEndpoints
         return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
     }
 
+    // The aux-input strings the connected board's Alex / filter board exposes
+    // (external-ports plan — antenna slice, #804). Empty on boards with no aux
+    // inputs (HL2). Names match the RxAuxInputSel single-choice enum the PUT
+    // request parses.
+    static string[] AvailableRxAux(RxAuxInputs caps)
+    {
+        var list = new List<string>(4);
+        if (caps.HasFlag(RxAuxInputs.Ext1))   list.Add(nameof(RxAuxInputSel.Ext1));
+        if (caps.HasFlag(RxAuxInputs.Ext2))   list.Add(nameof(RxAuxInputSel.Ext2));
+        if (caps.HasFlag(RxAuxInputs.Xvtr))   list.Add(nameof(RxAuxInputSel.Xvtr));
+        if (caps.HasFlag(RxAuxInputs.Bypass)) list.Add(nameof(RxAuxInputSel.Bypass));
+        return list.ToArray();
+    }
+
+    static bool RxAuxSupported(RxAuxInputSel sel, RxAuxInputs caps) => sel switch
+    {
+        RxAuxInputSel.Ext1   => caps.HasFlag(RxAuxInputs.Ext1),
+        RxAuxInputSel.Ext2   => caps.HasFlag(RxAuxInputs.Ext2),
+        RxAuxInputSel.Xvtr   => caps.HasFlag(RxAuxInputs.Xvtr),
+        RxAuxInputSel.Bypass => caps.HasFlag(RxAuxInputs.Bypass),
+        _                    => true, // None always allowed
+    };
+
     static bool TryParseIpEndpoint(string raw, out IPEndPoint ep)
     {
         ep = null!;
@@ -2866,20 +4269,37 @@ public static class ZeusEndpoints
         return true;
     }
 
-    // Mirrors the byte→enum maps in Zeus.Protocol1.Discovery.ReplyParser and
-    // Zeus.Protocol2.Discovery.ReplyParser. Kept inline (not factored to a
-    // shared helper) because those parsers are deliberately self-contained
-    // per protocol; this is the connect-time projection of the same table.
-    static HpsdrBoardKind MapBoardByte(byte raw) => raw switch
+    // Connect-time projection of the discovered board byte → kind. Protocol 1
+    // and Protocol 2 use DIFFERENT wire numbering for the dual-ADC family
+    // (Angelia/Orion/OrionMkII), so they MUST use separate maps that mirror
+    // Zeus.Protocol1/Protocol2 Discovery.ReplyParser respectively. Reusing one
+    // table for both was the connect-time half of issue #780 (a P2 ANAN-200D,
+    // byte 0x04, was projected through the P1 table as Angelia/100D).
+    // Do NOT merge these two.
+    static HpsdrBoardKind MapBoardByteP1(byte raw) => raw switch
     {
         0x00 => HpsdrBoardKind.Metis,
         0x01 => HpsdrBoardKind.Hermes,
         0x02 => HpsdrBoardKind.HermesII,
-        0x04 => HpsdrBoardKind.Angelia,
-        0x05 => HpsdrBoardKind.Orion,
+        0x04 => HpsdrBoardKind.Angelia,      // ANAN-100D (P1 wire)
+        0x05 => HpsdrBoardKind.Orion,        // ANAN-200D (P1 wire)
         0x06 => HpsdrBoardKind.HermesLite2,
         0x0A => HpsdrBoardKind.OrionMkII,
         0x14 => HpsdrBoardKind.HermesC10,
+        _    => HpsdrBoardKind.Unknown,
+    };
+
+    static HpsdrBoardKind MapBoardByteP2(byte raw) => raw switch
+    {
+        0x00 => HpsdrBoardKind.Metis,        // Atlas
+        0x01 => HpsdrBoardKind.Hermes,
+        0x02 => HpsdrBoardKind.HermesII,
+        0x03 => HpsdrBoardKind.Angelia,      // ANAN-100D (P2 wire)
+        0x04 => HpsdrBoardKind.Orion,        // ANAN-200D (P2 wire — issue #780)
+        0x05 => HpsdrBoardKind.OrionMkII,    // ANAN-7000DLE / 8000DLE (P2 wire)
+        0x06 => HpsdrBoardKind.HermesLite2,
+        0x0A => HpsdrBoardKind.OrionMkII,    // Saturn / ANAN-G2
+        0x14 => HpsdrBoardKind.HermesC10,    // ANAN-G2E
         _    => HpsdrBoardKind.Unknown,
     };
 
@@ -3234,6 +4654,15 @@ public static class ZeusEndpoints
             SquelchAdaptive: squelch.Adaptive,
             SquelchLevel: squelch.Level,
             PreampOn: state.PreampOn);
+    }
+
+    private static object DiagnosticsSnapshot(DiagnosticsProviderRegistry registry, string routeSegment)
+    {
+        if (registry.TryGetByRoute(routeSegment, out var provider))
+            return provider.Snapshot();
+
+        throw new InvalidOperationException(
+            $"Diagnostics provider route '{routeSegment}' is not registered.");
     }
 
     internal static object BuildTxStageDiagnostics(TxStageMeters stage, bool hostTxActive)
@@ -3851,6 +5280,10 @@ public static class ZeusEndpoints
 }
 
 internal sealed record NativeMuteRequest(bool Muted);
+/// <summary>Operator Allow/Deny body for a maintainer remote-support request (remote-diag P3).</summary>
+internal sealed record SupportDecisionRequest(string? RequestId);
+/// <summary>Operator opt-in body for the L1 Remote Diagnostics master switch (remote-diag P5).</summary>
+internal sealed record SupportAvailabilityRequest(bool? Available, bool? AutoShareCrashes);
 internal sealed record NativeAudioDevicesSetRequest(string? InputDeviceId, string? OutputDeviceId);
 internal sealed record NativeAudioDeviceDto(string Id, string Name, bool IsDefault);
 internal sealed record NativeAudioDevicesResponse(
@@ -3866,6 +5299,11 @@ internal sealed record PreviewSetRequest(bool Enabled, bool? MeterOnly = null);
 internal sealed record ChainOrderSetRequest(List<string> PluginIds);
 internal sealed record ChainMembershipSetRequest(bool Active);
 internal sealed record ScanVstDirectoryRequest(string Directory, string? Route = null);
+
+// Body for the AU scan endpoints. AUs come from the OS AudioComponent
+// registry, so there is no directory — only an optional route selector
+// ("auto" | "tx" | "rx" | "both"), mirroring the VST3 scan's Route field.
+internal sealed record ScanAuRequest(string? Route = null);
 internal sealed record MasterBypassSetRequest(bool Bypassed);
 internal sealed record ProcessingModeSetRequest(string Mode);
 internal sealed record TxStageDensityDiagnostics(
@@ -3957,6 +5395,8 @@ internal sealed record TxDutyGuidanceDto(
     double? RecommendedMaxWatts,
     bool LimitExceeded,
     string? ManualReference);
+// Body for POST /api/radios/reclaim. Endpoint is the discovered "ip:port"
+// string (port is ignored — protocol command ports are fixed); Protocol is
+// "P1" or "P2" so the server sends the correct stop frame.
+internal sealed record ReclaimRadioRequest(string? Endpoint, string? Protocol);
 internal sealed record HardwareDiagnosticsMarkerRequest(string? Label, string? Notes);
-internal sealed record WavRecordStartRequest(string? Source);
-internal sealed record WavPlayRequest(string? File);

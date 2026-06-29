@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -91,6 +92,13 @@ export function MicMeter() {
   const isNative = hostMode === 'desktop';
   const micGainDb = useTxStore((s) => s.micGainDb);
   const err = useTxStore((s) => s.micError);
+  // The server publishes its actual https:// LAN URLs (port-accurate, the same
+  // list ServerUrlPanel shows) via capabilities. Name the real one in the
+  // insecure-context hint below instead of a hardcoded port, so the operator
+  // can copy it verbatim even if Zeus is on a non-default HTTPS port.
+  const lanHttpsUrl = useCapabilitiesStore(
+    (s) => s.capabilities?.lanHttpsUrls?.[0] ?? null,
+  );
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   // Shared ballistic — averages + RC-smooths the (raw + gain) signal and
@@ -116,6 +124,31 @@ export function MicMeter() {
   const clipping = effectiveDbfs >= CLIP_WARN_DBFS;
 
   if (err) {
+    // Browsers refuse getUserMedia on a non-secure context (anything other
+    // than https:// or http://localhost). A plain http:// LAN IP like
+    // http://192.168.1.50:6060 is treated as insecure and the mic call is
+    // rejected silently no matter how many permission prompts the operator
+    // accepts. Surface that distinction so they know to switch to the
+    // https://… address Zeus prints at startup instead of staring at a
+    // generic "mic unavailable" chip.
+    const insecure =
+      typeof window !== 'undefined' && window.isSecureContext === false;
+    if (insecure) {
+      const tip = lanHttpsUrl
+        ? `Browsers require HTTPS for microphone access. Open Zeus at ${lanHttpsUrl} ` +
+          'and accept the self-signed certificate warning once.'
+        : 'Browsers require HTTPS for microphone access. Open Zeus at the ' +
+          'https://… URL printed in the Zeus.Server startup log (port 6443) ' +
+          'and accept the self-signed certificate warning once.';
+      return (
+        <div className="knob-group" title={tip} style={{ minWidth: 180 }}>
+          <span className="label-xs">MIC</span>
+          <span className="chip tx">
+            <span className="v">needs HTTPS</span>
+          </span>
+        </div>
+      );
+    }
     return (
       <div className="knob-group" title={err} style={{ minWidth: 140 }}>
         <span className="label-xs">MIC</span>

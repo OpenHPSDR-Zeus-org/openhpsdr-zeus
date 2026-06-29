@@ -87,6 +87,17 @@ export interface VstScanResult {
 export type VstScanRoute = 'auto' | 'tx' | 'rx' | 'both';
 export type AudioSuiteRoute = 'tx' | 'rx';
 
+/** Result of an AU registry scan (POST /api/{tx,rx}-audio-suite/scan-au). */
+export interface AuScanResult {
+  ok: boolean;
+  error?: string;
+  /** False off macOS — the scanner is a no-op there. */
+  supported: boolean;
+  registered: Array<{ id: string; name: string }>;
+  skipped: Array<{ id: string; name: string }>;
+  errors: Array<{ source: string; message: string }>;
+}
+
 export interface AudioProfileMutationResult {
   ok: boolean;
   error?: string;
@@ -145,6 +156,7 @@ interface AudioSuiteState {
   // survives a reload — purely a presentation preference, never sent
   // to the server.
   collapsed: Record<string, boolean>;
+  pluginSettingsRevision: number;
 
   // Chips+detail layout: which chain plugin is loaded in the detail
   // pane. Presentation-only, persisted to localStorage. A null or stale
@@ -191,6 +203,7 @@ interface AudioSuiteState {
   // Rack collapse plumbing.
   toggleCollapsed(pluginId: string): void;
   setAllCollapsed(collapsed: boolean, pluginIds: string[]): void;
+  bumpPluginSettingsRevision(): void;
   toggleSidebar(): void;
   toggleSidebarForRoute(route: AudioSuiteRoute): void;
 
@@ -220,6 +233,12 @@ interface AudioSuiteState {
   // Scan a directory for VST3 plugins, register each, and refresh the
   // rack. Returns a summary (or an error string on failure).
   scanVstDirectory(directory: string, route?: VstScanRoute): Promise<VstScanResult>;
+
+  // Scan the OS AudioComponent registry for AUv2 effects (macOS only),
+  // register each, and refresh the rack — the AU sibling of
+  // scanVstDirectory. No directory: AUs are resolved from the system
+  // registry. Returns supported=false (and an empty list) off macOS.
+  scanAuComponents(route?: VstScanRoute): Promise<AuScanResult>;
 
   // Permanently uninstall a plugin (DELETE /api/plugins/{id}) and refresh
   // the Audio Suite so its rack / sidebar panel disappears. Unlike parking
@@ -260,6 +279,10 @@ interface AudioSuiteState {
   processingMode: 'native' | 'vst';
   vstEngineAvailable: boolean;
   vstEngineActive: boolean;
+  // True when VST mode is selected and an engine is installed but it keeps
+  // crashing on startup (Faulted) rather than just still warming up. Drives the
+  // "Repair engine" affordance; the server also auto-repairs once on crash-loop.
+  vstEngineCrashLooping: boolean;
   rxVstEngineAvailable: boolean;
   rxVstEngineActive: boolean;
   rxVstActivePlugins: number;
@@ -267,6 +290,49 @@ interface AudioSuiteState {
   loadProcessingModeFromServer(): Promise<void>;
   loadRxProcessingModeFromServer(): Promise<void>;
   setProcessingMode(mode: 'native' | 'vst'): Promise<void>;
+
+  // "Get VST Engine" provisioning. The out-of-process VST engine is fetched
+  // from its upstream release and staged by the server (never bundled). The
+  // operator triggers it from the Audio Suite when VST mode is selected but no
+  // engine is installed; this store polls the server install status until it
+  // finishes, then refreshes the processing-mode so the new engine is picked up.
+  // phase lifecycle: idle → downloading → extracting → staging (server) →
+  // configuring (client switches to VST mode) → done (installed AND usable).
+  vstEngineInstall: {
+    phase:
+      | 'idle'
+      | 'downloading'
+      | 'extracting'
+      | 'staging'
+      | 'configuring'
+      | 'done'
+      | 'failed';
+    percent: number;
+    message: string | null;
+  };
+  // postUrl is an internal seam (install vs repair endpoint); callers use the
+  // no-arg form. Default is the install endpoint.
+  installVstEngine(postUrl?: string): Promise<void>;
+  // Force a re-download of the verified engine, replacing a stale/corrupt or
+  // crash-looping binary. Reuses the install status/polling lifecycle.
+  repairVstEngine(): Promise<void>;
+
+  // Platform affordance flags, mirrored from the engine-install GET DTO.
+  //   engineSupported        — the out-of-process VST engine can be
+  //                            downloaded/used (Windows only). When false,
+  //                            the "Download VST Engine" button is hidden
+  //                            because the installer throws on this OS.
+  //   inProcessHostSupported — the native in-process bridges (VST3, and AU
+  //                            on macOS) host plugins without any engine
+  //                            download. True on every platform.
+  //   auSupported            — Audio Units can be scanned/hosted (macOS only).
+  // engineSupportLoaded gates first-paint so the panel doesn't flash the
+  // wrong affordance before the DTO arrives.
+  engineSupported: boolean;
+  inProcessHostSupported: boolean;
+  auSupported: boolean;
+  engineSupportLoaded: boolean;
+  loadEngineSupportFromServer(): Promise<void>;
 }
 
 type AudioSuitePersistedState = Pick<
@@ -347,12 +413,23 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       processingMode: 'native',
       vstEngineAvailable: false,
       vstEngineActive: false,
+      vstEngineCrashLooping: false,
       rxVstEngineAvailable: false,
       rxVstEngineActive: false,
       rxVstActivePlugins: 0,
       rxVstDegradedBlocks: 0,
+      vstEngineInstall: { phase: 'idle', percent: 0, message: null },
+      // Default to the Windows shape (engine supported) until the server DTO
+      // arrives, so a never-loaded state never accidentally hides the Windows
+      // path. engineSupportLoaded keeps the panel from committing to an
+      // affordance before that first load resolves.
+      engineSupported: true,
+      inProcessHostSupported: true,
+      auSupported: false,
+      engineSupportLoaded: false,
       isDragging: false,
       collapsed: {},
+      pluginSettingsRevision: 0,
       selectedChainId: null,
       rxSelectedChainId: null,
       sidebarCollapsed: false,
@@ -487,6 +564,9 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           for (const id of pluginIds) next[id] = collapsed;
           return { collapsed: next };
         }),
+
+      bumpPluginSettingsRevision: () =>
+        set((s) => ({ pluginSettingsRevision: s.pluginSettingsRevision + 1 })),
 
       toggleSidebar: () =>
         set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
@@ -712,6 +792,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
               await get().loadMasterBypassFromServer();
             }
           }
+          get().bumpPluginSettingsRevision();
           return { ok: true };
         } catch (err) {
 
@@ -786,6 +867,50 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         } catch (err) {
 
           console.warn('audio-suite scan-vst-directory threw', err);
+          return { ...empty, error: String(err) };
+        }
+      },
+
+      scanAuComponents: async (route = 'auto') => {
+        const empty: AuScanResult = {
+          ok: false,
+          supported: false,
+          registered: [],
+          skipped: [],
+          errors: [],
+        };
+        try {
+          const scanUrl =
+            route === 'tx'
+              ? '/api/tx-audio-suite/scan-au'
+              : route === 'rx'
+                ? '/api/rx-audio-suite/scan-au'
+                : '/api/audio-suite/scan-au';
+          const res = await fetch(scanUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ route }),
+          });
+          const body = await res.json();
+          if (!res.ok) {
+            return { ...empty, error: body?.error ?? `AU scan failed (${res.status})` };
+          }
+          // Newly-registered AUs are parked server-side; re-register their UI
+          // panels and refresh both chain orders so TX/RX racks update.
+          await reloadInstalledPluginUis();
+          await get().loadChainOrderFromServer();
+          await get().loadRxChainOrderFromServer();
+          await get().loadRxProcessingModeFromServer();
+          return {
+            ok: true,
+            supported: body.supported === true,
+            registered: body.registered ?? [],
+            skipped: body.skipped ?? [],
+            errors: body.errors ?? [],
+          };
+        } catch (err) {
+
+          console.warn('audio-suite scan-au threw', err);
           return { ...empty, error: String(err) };
         }
       },
@@ -1078,11 +1203,13 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
             mode?: string;
             engineAvailable?: boolean;
             engineActive?: boolean;
+            engineCrashLooping?: boolean;
           };
           set({
             processingMode: body.mode === 'vst' ? 'vst' : 'native',
             vstEngineAvailable: body.engineAvailable === true,
             vstEngineActive: body.engineActive === true,
+            vstEngineCrashLooping: body.engineCrashLooping === true,
           });
         } catch (err) {
 
@@ -1149,10 +1276,164 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           console.warn('audio-suite processing-mode PUT threw', err);
         }
       },
+
+      installVstEngine: async (postUrl = '/api/tx-audio-suite/vst-engine/install') => {
+        const phase = get().vstEngineInstall.phase;
+        if (phase === 'downloading' || phase === 'extracting' || phase === 'staging') {
+          return; // already running
+        }
+        set({ vstEngineInstall: { phase: 'downloading', percent: 0, message: 'Starting…' } });
+        try {
+          const res = await fetch(postUrl, {
+            method: 'POST',
+          });
+          if (!res.ok) {
+            set({
+              vstEngineInstall: {
+                phase: 'failed',
+                percent: 0,
+                message: `Install request rejected (${res.status}).`,
+              },
+            });
+            return;
+          }
+
+          // Poll the server install status until it finishes. The engine
+          // download is multi-MB, so allow a generous ceiling before giving up
+          // on the poll loop (the server keeps working regardless).
+          for (let i = 0; i < 600; i += 1) {
+            await new Promise((r) => setTimeout(r, 1000));
+            let body: {
+              phase?: string;
+              percent?: number;
+              message?: string | null;
+            };
+            try {
+              const poll = await fetch('/api/tx-audio-suite/vst-engine/install');
+              if (!poll.ok) continue;
+              body = await poll.json();
+            } catch {
+              continue;
+            }
+            const p = (body.phase ?? 'idle') as
+              | 'idle'
+              | 'downloading'
+              | 'extracting'
+              | 'staging'
+              | 'done'
+              | 'failed';
+            if (p === 'done') {
+              // Configure: switch the TX route to VST so the freshly-staged
+              // engine activates and audio runs through it — the operator gets
+              // working VST without a second click. A direct PUT (not
+              // setProcessingMode, which short-circuits when the mode is
+              // unchanged) so the server re-activates even if VST was already
+              // the selected route when the engine was missing.
+              set({
+                vstEngineInstall: {
+                  phase: 'configuring',
+                  percent: 100,
+                  message: 'Configuring VST mode…',
+                },
+              });
+              try {
+                const put = await fetch('/api/tx-audio-suite/processing-mode', {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ mode: 'vst' }),
+                });
+                if (put.ok) {
+                  const pm = (await put.json()) as {
+                    mode?: string;
+                    engineAvailable?: boolean;
+                    engineActive?: boolean;
+                  };
+                  set({
+                    processingMode: pm.mode === 'vst' ? 'vst' : 'native',
+                    vstEngineAvailable: pm.engineAvailable === true,
+                    vstEngineActive: pm.engineActive === true,
+                  });
+                } else {
+                  await get().loadProcessingModeFromServer();
+                }
+              } catch {
+                await get().loadProcessingModeFromServer();
+              }
+              set({
+                vstEngineInstall: {
+                  phase: 'done',
+                  percent: 100,
+                  message: 'VST engine ready — TX audio now routes through VST.',
+                },
+              });
+              return;
+            }
+            set({
+              vstEngineInstall: {
+                phase: p,
+                percent: typeof body.percent === 'number' ? body.percent : 0,
+                message: body.message ?? null,
+              },
+            });
+            if (p === 'failed') return;
+          }
+        } catch (err) {
+          set({
+            vstEngineInstall: {
+              phase: 'failed',
+              percent: 0,
+              message: 'Install failed (network?).',
+            },
+          });
+          console.warn('vst-engine install threw', err);
+        }
+      },
+
+      repairVstEngine: async () => {
+        await get().installVstEngine('/api/tx-audio-suite/vst-engine/repair');
+      },
+
+      // Read the platform affordance flags from the engine-install GET DTO.
+      // Server is authoritative; fetched on Audio Tools mount. On failure the
+      // flags keep their last (Windows-shaped) defaults — fail safe toward
+      // showing the engine path rather than hiding a working affordance.
+      loadEngineSupportFromServer: async () => {
+        try {
+          const res = await fetch('/api/tx-audio-suite/vst-engine/install');
+          if (!res.ok) return;
+          const body = (await res.json()) as {
+            engineSupported?: boolean;
+            inProcessHostSupported?: boolean;
+            auSupported?: boolean;
+          };
+          set({
+            engineSupported: body.engineSupported !== false,
+            inProcessHostSupported: body.inProcessHostSupported !== false,
+            auSupported: body.auSupported === true,
+            engineSupportLoaded: true,
+          });
+        } catch (err) {
+
+          console.warn('audio-suite engine-support GET threw', err);
+        }
+      },
     }),
     {
       name: 'zeus-audio-suite',
       version: 1,
+      // The TX/RX Audio Suite windows must NEVER auto-open on startup — they
+      // open only when the operator explicitly clicks the button after boot.
+      // We still persist window placement/size and profile selections, but the
+      // open flags are forced closed on every rehydrate so a suite left open at
+      // shutdown does not reappear on the next launch. This override wins over
+      // both already-saved `txOpen:true` data and any legacy `migrate` output.
+      merge: (persisted, current) => ({
+        ...current,
+        ...(persisted as Partial<AudioSuiteState>),
+        isOpen: false,
+        txOpen: false,
+        rxOpen: false,
+      }),
       migrate: (persisted) => {
         const state = persisted as Partial<AudioSuitePersistedState>;
         const suiteRoute: AudioSuiteRoute = state.suiteRoute === 'rx' ? 'rx' : 'tx';

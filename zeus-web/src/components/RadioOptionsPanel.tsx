@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // RADIO settings tab — HL2-only optional toggles. Wraps a small set of
 // firmware feature flags the operator can flip without rebooting the
@@ -86,14 +87,14 @@ export function RadioOptionsPanel() {
         </div>
       ) : null}
 
-      {supportsG2AdcOptions ? (
+      {supportsG2AdcOptions || g2Options.supported ? (
         <div className="ps-card">
           <h4>
             <svg className="ps-ic-sm" viewBox="0 0 12 12">
               <path d="M2 8h8M2 4h8M4 2v8M8 2v8" />
               <rect x="2" y="2" width="8" height="8" rx="1" />
             </svg>
-            ANAN-G2 Options
+            {supportsG2AdcOptions ? 'ANAN-G2 Options' : 'ADC Options'}
             <span className="ps-card-hint">ADC linearity and decorrelation</span>
           </h4>
 
@@ -101,9 +102,10 @@ export function RadioOptionsPanel() {
             <div className="ps-name">
               Dither Enabled
               <em>
-                Enables the Protocol-2 CmdRx ADC dither mask used by Thetis to
-                address ADC nonlinearity errors. Applies live on verified
-                G2-class radios and persists for reconnect.
+                Adds a small dither signal to the ADC to address converter
+                nonlinearity errors. On Protocol-2 G2 radios this is the CmdRx
+                ADC dither mask; on Protocol-1 LT2208 boards it is Config-frame
+                C3 bit 3. Applies live and persists for reconnect.
               </em>
             </div>
             <label className="ps-check">
@@ -124,8 +126,9 @@ export function RadioOptionsPanel() {
             <div className="ps-name">
               Random Enabled
               <em>
-                Enables the Protocol-2 CmdRx ADC digital-output randomizer
-                mask used by Thetis to reduce digital feedback artifacts.
+                ADC digital-output randomizer that reduces digital feedback
+                artifacts on the data bus. Protocol-2 G2 CmdRx random mask;
+                Protocol-1 LT2208 Config-frame C3 bit 4.
               </em>
             </div>
             <label className="ps-check">
@@ -142,17 +145,19 @@ export function RadioOptionsPanel() {
             </label>
           </div>
 
-          <div className="ps-field">
-            <div className="ps-name">
-              MaxRXFreq
-              <em>
-                Zeus enforces the G2 0-60 MHz receive ceiling through the
-                VFO and radio-LO clamp, so this is shown as a live parity
-                value instead of a duplicate setting.
-              </em>
+          {supportsG2AdcOptions ? (
+            <div className="ps-field">
+              <div className="ps-name">
+                MaxRXFreq
+                <em>
+                  Zeus enforces the G2 0-60 MHz receive ceiling through the
+                  VFO and radio-LO clamp, so this is shown as a live parity
+                  value instead of a duplicate setting.
+                </em>
+              </div>
+              <span className="mono">{g2Options.maxRxFreqMHz.toFixed(2)} MHz</span>
             </div>
-            <span className="mono">{g2Options.maxRxFreqMHz.toFixed(2)} MHz</span>
-          </div>
+          ) : null}
 
           {g2Options.rx1AttenuatorSupported || hasSteppedAttenuationRx2 ? (
             <div className="ps-field">

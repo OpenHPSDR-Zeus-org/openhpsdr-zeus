@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -39,6 +40,8 @@
 //
 // Kill switch: VIEW_ZOOM_TWEEN_ENABLED = false (or TAU_MS = 0) snaps to the
 // target every tick, restoring the pre-animation stepping feel.
+
+import { KIWI_RECEIVER_INDEX } from './receiver-state';
 
 export const VIEW_ZOOM_TWEEN_ENABLED = true;
 
@@ -135,6 +138,25 @@ export function setTarget(hzPerPixel: number): void {
 
 /** The animated hzPerPixel the surfaces should render against. */
 export function getDisplayedHzPerPixel(): number {
+  return displayedHzPerPixel;
+}
+
+/** The displayed hzPerPixel a given receiver's spectrum surfaces should scale
+ *  their trace/history against.
+ *
+ *  Hardware DDCs (RX1..RX6) share the radio's one Hz/pixel scale and follow the
+ *  global zoom tween, so they get `getDisplayedHzPerPixel()`. The Kiwi slice
+ *  receiver (KIWI_RECEIVER_INDEX) is a remote KiwiSDR with its OWN independent
+ *  Hz/pixel (its native ~29 kHz span over its own bin count), which the shared
+ *  RX1-driven tween knows nothing about. Scaling the Kiwi trace by the RX1 ratio
+ *  squished it into the centre of the pane. Self-scale the Kiwi to its own
+ *  current frame Hz/pixel so the draw-time scaleX resolves to 1 (full width) and
+ *  the trace, waterfall, axis, and overlays all agree.
+ *
+ *  `ownFrameHzPerPixel` is the receiver's latest frame Hz/pixel (<= 0 when none
+ *  yet); a non-positive value falls back to the global displayed span. */
+export function displayedHzPerPixelFor(rxIndex: number, ownFrameHzPerPixel: number): number {
+  if (rxIndex === KIWI_RECEIVER_INDEX && ownFrameHzPerPixel > 0) return ownFrameHzPerPixel;
   return displayedHzPerPixel;
 }
 

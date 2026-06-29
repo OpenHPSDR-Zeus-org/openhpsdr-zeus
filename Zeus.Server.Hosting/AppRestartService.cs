@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
@@ -30,6 +30,33 @@ public sealed class AppRestartService
     // or stop a sidecar). Best-effort — failures are swallowed.
     public Action? OnRestartRequested { get; set; }
 
+    // Exit the running Zeus process without relaunching. Used by the login
+    // dialog's Exit button to close the app. Same clean teardown as the restart
+    // path (Environment.Exit unwinds the Photino window without re-entering a
+    // torn-down WebView2 apartment), minus the detached relauncher helper.
+    public void RequestQuit()
+    {
+        try
+        {
+            OnRestartRequested?.Invoke();
+        }
+        catch
+        {
+            // Never block the exit on a best-effort hook.
+        }
+
+        // Deliberate exit — let any supervising support sidecar see this as a
+        // clean shutdown, not a crash.
+        SupportSidecar.MarkCleanExit();
+
+        // Let the in-flight HTTP response flush before the process dies.
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(300).ConfigureAwait(false);
+            Environment.Exit(0);
+        });
+    }
+
     public void RequestRestart()
     {
         var exe = Environment.ProcessPath
@@ -52,6 +79,11 @@ public sealed class AppRestartService
         {
             // Never block the relaunch on a best-effort hook.
         }
+
+        // A relaunch is a deliberate exit — mark it clean so a supervising sidecar
+        // doesn't capture a crash record for the old PID. (The fresh process will
+        // spawn its own sidecar.)
+        SupportSidecar.MarkCleanExit();
 
         // Let the in-flight HTTP response flush before the process dies.
         _ = Task.Run(async () =>

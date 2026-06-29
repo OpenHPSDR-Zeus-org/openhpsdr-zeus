@@ -61,15 +61,68 @@ foreach ($nativeName in @("wdsp.dll", "miniaudio.dll", "zeus-vst-bridge.dll")) {
 # running the published app itself. Loading the net10.0 host assembly inside
 # PowerShell uses PowerShell's runtime context instead of the publish payload's
 # runtime context, which can fail before the VST resolver is exercised.
-try {
-    $probeOutput = & (Join-Path $publishPath "OpenhpsdrZeus.exe") --verify-vst-bridge 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw ($probeOutput -join [Environment]::NewLine)
+# OpenhpsdrZeus.exe is built GUI-subsystem (WinExe, so no console window pops up
+# on normal launch). That breaks the obvious `& exe 2>&1; $LASTEXITCODE` probe:
+# PowerShell's call operator does NOT wait for a GUI-subsystem process and
+# cannot capture its console, so BOTH the output and the exit code came back
+# EMPTY — every attempt looked like an exit-code-less failure even when the
+# bridge was fine. Start-Process -Wait reliably blocks until the GUI process
+# exits and -PassThru yields the real .ExitCode, while -RedirectStandard*
+# captures the exe's stdout/stderr (the managed verdict + any exception) to
+# files we can read and print.
+#
+# Retry a few times so a one-off native-load hiccup doesn't red the whole
+# nightly, but keep EVERY attempt's output visible and still fail loudly if all
+# attempts fail: a real regression fails all 3 with the real exception printed,
+# and a flake that needed a retry emits a ::warning:: in the run summary.
+$exe = Join-Path $publishPath "OpenhpsdrZeus.exe"
+$tmp = [System.IO.Path]::GetTempPath()
+$outFile = Join-Path $tmp "zeus-vst-verify-out-$Arch.txt"
+$errFile = Join-Path $tmp "zeus-vst-verify-err-$Arch.txt"
+$maxAttempts = 3
+$probeExit = 1
+for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    Remove-Item -LiteralPath $outFile, $errFile -ErrorAction SilentlyContinue
+
+    $spArgs = @{
+        FilePath               = $exe
+        ArgumentList           = '--verify-vst-bridge'
+        Wait                   = $true
+        PassThru               = $true
+        NoNewWindow            = $true
+        RedirectStandardOutput = $outFile
+        RedirectStandardError  = $errFile
+    }
+    $proc = Start-Process @spArgs
+    $probeExit = $proc.ExitCode
+
+    $probeOutput = @()
+    foreach ($f in @($outFile, $errFile)) {
+        if (Test-Path -LiteralPath $f) {
+            $probeOutput += (Get-Content -LiteralPath $f -ErrorAction SilentlyContinue)
+        }
+    }
+    if ($probeOutput) {
+        Write-Host "--- OpenhpsdrZeus --verify-vst-bridge output (attempt $attempt/$maxAttempts, exit $probeExit) ---"
+        $probeOutput | ForEach-Object { Write-Host $_ }
+        Write-Host "--- end probe output ---"
+    }
+
+    if ($probeExit -eq 0) {
+        if ($attempt -gt 1) {
+            Write-Host "::warning::VST bridge verify passed only on attempt $attempt/$maxAttempts — intermittent win-x64 bridge-load flake (see probe output above)."
+        }
+        break
+    }
+
+    if ($attempt -lt $maxAttempts) {
+        Write-Host "VST bridge verify attempt $attempt/$maxAttempts failed (exit $probeExit); retrying in 3s..."
+        Start-Sleep -Seconds 3
     }
 }
-catch {
-    $ex = $_.Exception
-    throw "Managed VST bridge failed to load from installer payload: $($ex.Message)"
+
+if ($probeExit -ne 0) {
+    throw "Managed VST bridge failed to load from installer payload after $maxAttempts attempts (probe exit $probeExit; see probe output above)."
 }
 
 Write-Host "Windows installer payload verified: $publishPath"

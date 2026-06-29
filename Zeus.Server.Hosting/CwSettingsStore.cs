@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 
 using LiteDB;
 using Zeus.Contracts;
@@ -43,6 +43,7 @@ public sealed class CwSettingsStore : IDisposable
     /// reject runaway paste / accidental long strings at the API edge.</summary>
     public const int MaxMacroChars = 200;
 
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<CwSettingsEntry> _docs;
     private readonly ILogger<CwSettingsStore> _log;
@@ -56,7 +57,8 @@ public sealed class CwSettingsStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _docs = _db.GetCollection<CwSettingsEntry>("cw_settings");
 
         _log.LogInformation("CwSettingsStore initialized at {Path}", dbPath);
@@ -139,7 +141,7 @@ public sealed class CwSettingsStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
     private static CwSettingsEntry SeedDefaultsEntry() => new()
     {

@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // This file is part of the configurable Meters Panel feature. The catalog
 // here is the SINGLE source of truth for "what meter readings exist": both
 // the Library drawer (operator-facing list of available meters) and the
-// runtime selector hook (`useMeterReading`) read from it. Adding a new
-// reading is one row in METER_CATALOG plus one branch in `useMeterReading`.
+// runtime sampler (`sampleByMeterId` / `useBallisticReadingById`) read from
+// it. Adding a new reading is one row in METER_CATALOG plus one branch in the
+// sampler switch.
 //
 // Color discipline (CLAUDE.md, plan §4.6): the only raw hex permitted is
 // amber #FFA028, and only for RX signal-strength bar fills + peak-hold
@@ -134,26 +135,6 @@ export interface MeterReadingDef {
   defaultKind: MeterDefaultKind;
 }
 
-/** Project a `MeterZone` (in the meter's native unit) onto the current axis,
- *  returned as 0..1 fractions clipped to the visible range. Returns null
- *  when the band is fully outside the visible window. */
-export function projectZone(
-  zone: MeterZone,
-  min: number,
-  max: number,
-): { from: number; to: number; level: MeterZoneLevel } | null {
-  if (max <= min) return null;
-  const lo = Math.max(min, Math.min(zone.from, zone.to));
-  const hi = Math.min(max, Math.max(zone.from, zone.to));
-  if (hi <= lo) return null;
-  const span = max - min;
-  return {
-    from: (lo - min) / span,
-    to: (hi - min) / span,
-    level: zone.level,
-  };
-}
-
 /** Resolve the zone list for a reading at the operator's current axis range,
  *  falling back to a 3-zone (ok/warn/danger) layout derived from
  *  warnAt/dangerAt when the def has no explicit zones. Returns an empty
@@ -182,22 +163,6 @@ export function resolveZones(
     out.push({ from: danger, to: max, level: 'danger' });
   }
   return out;
-}
-
-/** Resolve the CSS color tokens for a zone level. Soft variant is used for
- *  the band fill (rendered behind the live value at low alpha); the hard
- *  variant matches the live-fill recolor logic in `_fillColorForValue`. */
-export function zoneColorTokens(
-  level: MeterZoneLevel,
-): { soft: string; hard: string } {
-  switch (level) {
-    case 'ok':
-      return { soft: 'var(--ok-soft)', hard: 'var(--ok)' };
-    case 'warn':
-      return { soft: 'var(--power-soft)', hard: 'var(--power)' };
-    case 'danger':
-      return { soft: 'var(--tx-soft)', hard: 'var(--tx)' };
-  }
 }
 
 /** Immersive-palette CSS color for a zone tick rendered on a BigArc /

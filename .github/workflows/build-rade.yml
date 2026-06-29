@@ -1,0 +1,165 @@
+# Build the RADE V1 native decoder (libzeus_rade) for every Zeus RID.
+#
+# Manual-dispatch + artifact-upload, exactly like build-native-libs.yml: this
+# workflow builds the one shared library `zeus_rade` (radae_c + opus_dnn/FARGAN +
+# Zeus's shim — see native/radae/CMakeLists.txt and vendor/PROVENANCE.md) and
+# uploads it as a per-RID artifact. The maintainer downloads the artifact from
+# the run summary and commits it to Zeus.Dsp/runtimes/<rid>/native/. Nothing is
+# committed or pushed by this workflow, and it does NOT run on PRs — so a build
+# step that needs tweaking can never break the main CI.
+#
+# The three upstream C slices (~95 MB of compiled-in NN weights) are NOT in the
+# Zeus tree; this workflow vendors them from sv1eia/Thetis-RADE at the pinned SHA
+# recorded in native/radae/vendor/PROVENANCE.md.
+#
+# Validation status (2026-06-24):
+#   - linux-x64 / linux-arm64 : the exact composition was PROVEN end-to-end in
+#     WSL Ubuntu-24.04 (2620 synced ticks / 14 dB / 0.999969 max-amp). Scalar
+#     build (OPUS_DISABLE_INTRINSICS=ON), so arm64 is the same code path.
+#   - win-x64 : PROVEN locally with MinGW UCRT64 gcc — decoded the same off-air
+#     sample to the identical numbers, and the produced zeus_rade.dll is
+#     standalone (KERNEL32 + UCRT only). The static-link + PREFIX="" fixes are now
+#     baked into native/radae/CMakeLists.txt, so no win-specific flags are passed
+#     here. (CI runner toolchain — msys2 python3/shell — may still need a tweak.)
+#   - osx-arm64 : same CMake recipe + toolchain wired, NOT yet run — expect to
+#     iterate the first dispatch. The opus_dnn slice is scalar-only with stubbed
+#     SIMD subtrees, compiler-agnostic, so the risk is toolchain/link, not code.
+
+name: build-rade
+
+on:
+  workflow_dispatch:
+
+env:
+  # Pinned upstream for the vendored slices — keep in lockstep with
+  # native/radae/vendor/PROVENANCE.md.
+  THETIS_RADE_SHA: f7605a46bd21275ab8b9edd00d4a1b6fae6eabe8
+
+jobs:
+  build-rade:
+    name: zeus_rade (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, rid: linux-x64,  lib: libzeus_rade.so }
+          - { os: ubuntu-22.04, rid: linux-arm64, lib: libzeus_rade.so, cross: arm64 }
+          - { os: windows-2022, rid: win-x64,    lib: zeus_rade.dll }
+          - { os: macos-14,     rid: osx-arm64,  lib: libzeus_rade.dylib }
+    steps:
+      - name: Checkout Zeus
+        uses: actions/checkout@v4
+
+      - name: Set up CMake + Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Set up MinGW (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+
+      - name: Set up cross GCC (linux-arm64)
+        if: matrix.cross == 'arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      # ----------------------------------------------------------------------
+      # Vendor the three upstream slices from Thetis-RADE @ the pinned SHA into
+      # native/radae/vendor/{radae_c,opus_dnn,freedv_text}. Sparse checkout so we
+      # only fetch "Project Files/lib" (still ~95 MB of weight tables).
+      # ----------------------------------------------------------------------
+      - name: Vendor radae_c + opus_dnn + freedv_text
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          git -C "$tmp" init -q
+          git -C "$tmp" remote add origin https://github.com/sv1eia/Thetis-RADE.git
+          git -C "$tmp" config core.sparseCheckout true
+          git -C "$tmp" sparse-checkout set "Project Files/lib"
+          git -C "$tmp" fetch -q --depth 1 origin "$THETIS_RADE_SHA"
+          git -C "$tmp" checkout -q FETCH_HEAD
+          dst="native/radae/vendor"
+          mkdir -p "$dst"
+          for slice in radae_c opus_dnn freedv_text; do
+            rm -rf "$dst/$slice"
+            cp -R "$tmp/Project Files/lib/$slice" "$dst/$slice"
+          done
+          echo "Vendored slices:"; ls -la "$dst"
+
+      # ----------------------------------------------------------------------
+      # opus_dnn ships an MSVC-x64 scalar slice: its silk/{x86,arm}, celt/{x86,
+      # arm}, dnn/{x86,arm} SIMD subtrees are stripped, but its CMake source/
+      # header .mk lists still reference ~65 of those files. With
+      # OPUS_DISABLE_INTRINSICS=ON those SIMD sources aren't compiled, but CMake
+      # still validates that every referenced path EXISTS. Create empty
+      # placeholders for the missing referenced files so configure succeeds.
+      # (Documented in native/radae/vendor/PROVENANCE.md.)
+      # ----------------------------------------------------------------------
+      - name: Stub missing opus_dnn SIMD source references
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, re, glob
+          root = "native/radae/vendor/opus_dnn"
+          made = 0
+          # Collect file references from every *.mk list under opus_dnn.
+          for mk in glob.glob(os.path.join(root, "**", "*.mk"), recursive=True):
+              with open(mk, "r", errors="ignore") as f:
+                  text = f.read()
+              for tok in re.findall(r'[\w./\\-]+\.[ch]', text):
+                  rel = tok.strip().replace("\\", "/")
+                  # .mk paths are relative to the opus_dnn root.
+                  path = os.path.normpath(os.path.join(root, rel))
+                  if not os.path.exists(path):
+                      os.makedirs(os.path.dirname(path), exist_ok=True)
+                      open(path, "a").close()
+                      made += 1
+          print(f"Created {made} placeholder source stubs")
+          PY
+
+      - name: Configure + build zeus_rade
+        shell: bash
+        run: |
+          set -euo pipefail
+          GEN="Ninja"
+          EXTRA=""
+          if [ "${{ matrix.cross }}" = "arm64" ]; then
+            EXTRA="-DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64"
+          fi
+          cmake -S native/radae -B native/build-rade -G "$GEN" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DOPUS_DISABLE_INTRINSICS=ON \
+            -DZEUS_RADE_VENDOR="$PWD/native/radae/vendor" \
+            -DZEUS_RADE_BUILD_TEST=OFF \
+            $EXTRA
+          cmake --build native/build-rade --config Release --parallel
+
+      - name: Stage the artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          rid="${{ matrix.rid }}"
+          lib="${{ matrix.lib }}"
+          dest="Zeus.Dsp/runtimes/$rid/native"
+          mkdir -p "$dest"
+          found="$(find native/build-rade -name "$lib" | head -n1)"
+          if [ -z "$found" ]; then echo "::error::built $lib not found"; exit 1; fi
+          cp "$found" "$dest/$lib"
+          ls -la "$dest"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeus_rade-${{ matrix.rid }}
+          path: Zeus.Dsp/runtimes/${{ matrix.rid }}/native/${{ matrix.lib }}
+          if-no-files-found: error

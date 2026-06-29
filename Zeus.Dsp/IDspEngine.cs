@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -50,6 +51,23 @@ public enum DisplayPixout : byte
 {
     Panadapter = 0,
     Waterfall = 1,
+}
+
+/// <summary>Outcome of <see cref="IDspEngine.LoadNr3Model"/>.</summary>
+public enum Nr3ModelLoadResult
+{
+    /// <summary>NR3 isn't supported by the loaded engine (libwdsp built with
+    /// WDSP_WITH_NR3=OFF, or the Synthetic engine). No model was loaded.</summary>
+    Unavailable,
+    /// <summary>The model was intentionally cleared (null/empty path) — NR3 is
+    /// inert until a model is loaded. This is a success, not a failure.</summary>
+    Cleared,
+    /// <summary>A model file loaded successfully (verified via RNNRmodelLoaded
+    /// when the export is present; assumed on older libwdsp that lacks it).</summary>
+    Loaded,
+    /// <summary>A model file was requested but failed to parse/instantiate —
+    /// e.g. it isn't a compatible RNNoise DNNw weights file. NR3 stays inert.</summary>
+    LoadFailed,
 }
 
 public readonly record struct IqFrame(ReadOnlyMemory<double> InterleavedIq, int SampleRateHz);
@@ -150,6 +168,14 @@ public interface IDspEngine : IDisposable
 
     void SetNoiseReduction(int channelId, NrConfig cfg);
 
+    /// <summary>Load (or, with a null/empty path, clear) the process-global
+    /// RNNoise (NR3) model shared by every RNNR channel. The result distinguishes
+    /// a model that actually loaded from one that failed to parse/instantiate, so
+    /// the caller can reject a bad upload instead of silently leaving NR3 inert.
+    /// <see cref="Nr3ModelLoadResult.Unavailable"/> when the loaded libwdsp lacks
+    /// NR3 support (built with WDSP_WITH_NR3=OFF, or the Synthetic engine).</summary>
+    Nr3ModelLoadResult LoadNr3Model(string? modelFilePath);
+
     /// <summary>
     /// Replace the full manual-notch (MNF) set applied to the RX audio. Notch
     /// centre/width are absolute RF Hz; the engine rewrites the WDSP notch
@@ -236,6 +262,19 @@ public interface IDspEngine : IDisposable
     /// passbands are negative, DSB/AM/FM symmetric. No-op for Synthetic and
     /// when TXA is not open.</summary>
     void SetTxFilter(int lowHz, int highHz);
+
+    /// <summary>Set the RXA bandpass shoulder steepness / "rectangularity"
+    /// (issue #871) by mapping the <see cref="BandpassWindow"/> preset to a WDSP
+    /// FIR tap count (<c>SetRXABandpassNC</c>) — more taps = sharper skirt. The
+    /// preset name is retained for wire/persistence compatibility. No-op on
+    /// Synthetic.</summary>
+    void SetRxBandpassWindow(int channelId, BandpassWindow window);
+
+    /// <summary>Set the TXA bandpass shoulder steepness / "rectangularity"
+    /// (issue #871) via the FIR tap count (<c>SetTXABandpassNC</c>). Independent
+    /// of <see cref="SetRxBandpassWindow"/>. No-op on Synthetic and when TXA is
+    /// not open.</summary>
+    void SetTxBandpassWindow(BandpassWindow window);
 
     /// <summary>Process one WDSP-sized block of mic audio through TXA and return
     /// the modulated IQ. <paramref name="micMono"/> must contain exactly

@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -44,10 +45,37 @@
 
 using System.Buffers.Binary;
 using Microsoft.Extensions.Logging;
+using Zeus.Contracts;
 using Zeus.Dsp;
 using Zeus.Protocol1;
 
 namespace Zeus.Server;
+
+/// <summary>
+/// Internal tag identifying which producer fed a TX-audio block into
+/// <see cref="TxAudioIngest.OnMicPcmBytes"/>. Carried explicitly (NOT inferred
+/// from recency) so the in-lock single-select gate can arbitrate the host mic
+/// against a radio jack deterministically across a source switch
+/// (external-audio-jacks re-port). TCI/WAV remain operator-explicit overrides
+/// and bypass the host/radio arbitration — their precedence is the existing
+/// recency hysteresis.
+/// </summary>
+internal enum MicBlockSource
+{
+    /// <summary>Browser / native host microphone (the default TX-audio source).</summary>
+    Host = 0,
+    /// <summary>Radio-digitised jack audio (Saturn mic/line-in/XLR via UDP 1026).</summary>
+    RadioMic,
+    /// <summary>TCI client TX audio (MSHV / WSJT-X …). Operator-explicit override.</summary>
+    Tci,
+    /// <summary>WAV-recording playback to the air. Operator-explicit override.</summary>
+    Wav,
+    /// <summary>Built-in FT8/FT4/WSPR auto-sequence keyer audio (digital TX).
+    /// Operator-armed override — bypasses the host/radio single-select gate like
+    /// <see cref="Tci"/>/<see cref="Wav"/>, and suppresses the live mic for the
+    /// duration of a digital transmission so the two never double-feed TXA.</summary>
+    Ft8,
+}
 
 /// <summary>
 /// Bridges browser-side mic audio to WDSP TXA and onward to the EP2 IQ
@@ -96,6 +124,21 @@ public sealed class TxAudioIngest : IDisposable
     // mute by writing FROM this buffer, not by zeroing _scratchIq in place.
     private readonly float[] _muteIq = new float[4096];
 
+    // FreeDV end-of-over TX tail. Non-zero while the mic hot path must yield TX
+    // exclusively to DrainFreeDvTxTail (no double-feed into WDSP fexchange2),
+    // exactly as it defers to TxTuneDriver. Also the re-entrancy guard (CAS) so
+    // two rapid un-keys can't both drive ProcessTxBlock. Dedicated scratch so the
+    // drain (run on the un-key thread) never aliases _scratchMic/_scratchIq.
+    private int _tailDraining;
+    private readonly float[] _tailMic = new float[1024];
+    private readonly float[] _tailIq = new float[4096];
+    private const int TxRateHz = 48000;          // TX block / DAC rate
+    // Bench-tunable on the G2: hard ceiling on how long the un-key blocks while
+    // the final FreeDV frame clocks out, and the extra hold after the last block
+    // so the radio FIFO finishes transmitting before PTT drops.
+    private const int FreeDvTxTailMaxMs = 350;
+    private const int FreeDvTxTailGuardMs = 60;
+
     private long _totalMicSamples;
     private long _totalTxBlocks;
     private long _droppedFrames;
@@ -120,11 +163,93 @@ public sealed class TxAudioIngest : IDisposable
     // concurrent native-mic frame within TciHysteresisMs is suppressed -- the
     // recording replaces the live mic on the air, they never mix.
     private long _lastWavTickMs;
+    // Digital-keyer-source recency: set on every OnMicPcmBytesFromFt8 call so a
+    // concurrent native/browser mic frame within TciHysteresisMs is suppressed --
+    // while the FT8/FT4/WSPR keyer is streaming its synthesized audio the live
+    // mic must never mix into TXA. Same hysteresis shape as TCI/WAV.
+    private long _lastFt8TickMs;
     // Browser/mobile mic recency: desktop mode has NativeMicCapture running
     // continuously, so remote WebSocket mic frames must temporarily own the
     // "live mic" source. Otherwise mobile PTT mixes phone audio with desktop
     // capture silence and feeds TXA at roughly 2x realtime.
     private long _lastBrowserMicTickMs;
+
+    // The currently-armed TX-audio source for HOST↔RADIO arbitration
+    // (external-audio-jacks re-port, "atomic single-select gate"). Read and
+    // written ONLY under _sync. OnMicPcmBytes rejects any Host- or
+    // RadioMic-tagged block whose tag != _activeSource, so when a radio jack is
+    // armed the host mic is dropped immediately by the in-lock compare (no
+    // overlap window) and vice versa. TCI/WAV-tagged blocks bypass this compare.
+    // Default Host so a fresh / un-switched ingest is byte/behaviour-identical
+    // to today.
+    private MicBlockSource _activeSource = MicBlockSource.Host;
+    // Source whose samples currently occupy the WDSP accumulator. Read/written
+    // ONLY under _sync. Enforces that a partially-filled accumulator is NEVER
+    // topped up by a different source: between the cheap top-of-method gate and
+    // the accumulation lock, _activeSource can flip, so the AUTHORITATIVE
+    // arbitration is re-done inside the accumulation lock against this owner.
+    private MicBlockSource _accumulatorSource = MicBlockSource.Host;
+
+    // Peak radio-jack input level (linear 0..1) seen on ACCEPTED RadioMic blocks
+    // since the last meter read. Read/written ONLY under _sync. The desktop mic-
+    // meter heartbeat (NativeMicCapture) consumes this at ~10 Hz so the operator-
+    // facing meter shows the ACTUAL radio input when a radio source is armed —
+    // and reads silence (0) when no radio audio is arriving (no mic connected /
+    // no UDP-1026 stream). Without this, the meter would keep showing the host
+    // mic on a radio source (the reported "still listening to host" bug). Reset
+    // to 0 on any source switch so a stale value can't bleed across sources.
+    private float _radioPeakLinear;
+
+    /// <summary>
+    /// Arm the TX-audio source for the HOST↔RADIO single-select gate
+    /// (external-audio-jacks re-port). Called by the pipeline when the resolved
+    /// <see cref="TxAudioSource"/> changes. Under <see cref="_sync"/> this sets
+    /// the new active source AND clears the WDSP accumulator so no half-block of
+    /// the old source survives onto the new source — the new source fills from
+    /// empty. The 1026 re-blocker (owned upstream) is reset by the same caller.
+    /// Maps every radio jack (Mic/Line-In/XLR) onto
+    /// <see cref="MicBlockSource.RadioMic"/> because they all arrive on the one
+    /// UDP-1026 stream; only Host is distinct here. TCI/WAV are not selectable
+    /// sources — they override transiently.
+    /// </summary>
+    internal void SetActiveSource(TxAudioSource source)
+    {
+        var mapped = source == TxAudioSource.Host
+            ? MicBlockSource.Host
+            : MicBlockSource.RadioMic;
+        lock (_sync)
+        {
+            if (_activeSource == mapped) return;
+            _activeSource = mapped;
+            // Quiesce: drop any partially-accumulated old-source audio so it
+            // can't stitch onto the post-switch source mid-WDSP-block.
+            _accumulatorFill = 0;
+            // Drop any stale radio-meter peak so the meter doesn't carry a value
+            // across a source switch (e.g. host→radio shows fresh radio level,
+            // radio→host stops surfacing a frozen radio peak).
+            _radioPeakLinear = 0f;
+        }
+    }
+
+    /// <summary>Current armed source for the host/radio gate (test/diagnostic).</summary>
+    internal MicBlockSource ActiveSource { get { lock (_sync) return _activeSource; } }
+
+    /// <summary>
+    /// Read and reset the peak radio-jack input level (linear 0..1) seen on
+    /// accepted radio blocks since the last call. The desktop mic-meter heartbeat
+    /// consumes this so the meter reflects the ACTUAL radio input when a radio
+    /// source is armed, and reads silence (0) when no radio audio is arriving.
+    /// Thread-safe.
+    /// </summary>
+    internal float ConsumeRadioPeakLinear()
+    {
+        lock (_sync)
+        {
+            var peak = _radioPeakLinear;
+            _radioPeakLinear = 0f;
+            return peak;
+        }
+    }
 
     /// <summary>
     /// True when a TCI client is the authoritative source of TX audio right now
@@ -154,11 +279,13 @@ public sealed class TxAudioIngest : IDisposable
         DspPipelineService pipeline,
         TxService tx,
         StreamingHub hub,
-        ILogger<TxAudioIngest> log)
+        ILogger<TxAudioIngest> log,
+        FreeDvService? freeDv = null)
         : this(ring, () => pipeline.CurrentEngine, () => tx.IsMoxOn, hub, log,
                forwardP2: iq => pipeline.ForwardTxIqToP2(iq.Span),
                txOwnedByTuneDriver: () => tx.IsTunOn || tx.IsTwoToneOn,
-               preKeyOpenAtTicks: () => tx.PreKeyOpenAtTicks)
+               preKeyOpenAtTicks: () => tx.PreKeyOpenAtTicks,
+               freeDv: freeDv)
     {
     }
 
@@ -176,11 +303,13 @@ public sealed class TxAudioIngest : IDisposable
         Action<ReadOnlyMemory<float>>? forwardP2 = null,
         Action<int>? onWdspConsumed = null,
         Func<bool>? txOwnedByTuneDriver = null,
-        Func<long>? preKeyOpenAtTicks = null)
+        Func<long>? preKeyOpenAtTicks = null,
+        FreeDvService? freeDv = null)
     {
         _ring = ring;
         _engineProvider = engineProvider;
         _isMoxOn = isMoxOn;
+        _freeDv = freeDv;
         _forwardP2 = forwardP2;
         _onWdspConsumed = onWdspConsumed;
         _txOwnedByTuneDriver = txOwnedByTuneDriver ?? (static () => false);
@@ -190,6 +319,108 @@ public sealed class TxAudioIngest : IDisposable
         _handler = OnMicPcmBytesFromBrowserMic;
         _hub.MicPcmReceived += _handler;
     }
+
+    /// <summary>
+    /// FreeDV end-of-over TX tail. Called by <see cref="TxService"/> on a genuine
+    /// un-key, BEFORE the wire MOX bit drops and while the WDSP TXA is still up.
+    /// Completes the final modem frame (RADE also appends its EOO callsign), then
+    /// clocks the queued modem audio out to the radio at the DAC rate so the
+    /// receiver gets WHOLE OFDM frames instead of a mid-symbol cut — the root
+    /// cause of end-of-over garble. Blocks the caller for the bounded tail
+    /// duration, then returns so PTT can drop. No-op unless FreeDV is engaged and
+    /// the engine is a real (TXA-capable) backend. Sets <see cref="_tailDraining"/>
+    /// so the mic hot path yields TX exclusively (no double-feed into fexchange2),
+    /// mirroring the tune-driver handoff. Runs on the un-key (API) thread; the
+    /// mic ingest runs on the audio thread — the _sync barrier below quiesces any
+    /// in-flight mic block before the drain feeds the ring.
+    /// </summary>
+    public void DrainFreeDvTxTail()
+    {
+        var freeDv = _freeDv;
+        if (freeDv is null || !freeDv.Active) return;
+        if (_txOwnedByTuneDriver()) return;        // TUN/two-tone owns TX
+        var engine = _engineProvider();
+        int blockSize = engine?.TxBlockSamples ?? 0;
+        int iqOut = engine?.TxOutputSamples ?? 0;
+        if (engine is null || blockSize <= 0 || iqOut <= 0
+            || blockSize > _tailMic.Length || 2 * iqOut > _tailIq.Length)
+            return;
+
+        // Claim TX exclusively (CAS — bail if another tail drain is already
+        // running). Then take _sync as a barrier so any mic critical section
+        // already in flight finishes before we feed the ring.
+        if (Interlocked.CompareExchange(ref _tailDraining, 1, 0) != 0) return;
+        lock (_sync) { _accumulatorFill = 0; }
+        try
+        {
+            // Complete the final frame so a well-formed last OFDM symbol exists.
+            freeDv.FinishTx();
+
+            long freq = System.Diagnostics.Stopwatch.Frequency;
+            long periodTicks = (long)(freq * (double)blockSize / TxRateHz);
+            long deadline = System.Diagnostics.Stopwatch.GetTimestamp();
+            long hardStop = deadline + (long)(freq * (FreeDvTxTailMaxMs / 1000.0));
+            int idle = 0;
+            while (System.Diagnostics.Stopwatch.GetTimestamp() < hardStop)
+            {
+                int real = freeDv.DrainTx(new Span<float>(_tailMic, 0, blockSize));
+                // DrainTx silence-pads a short block; once the queue is empty
+                // (two fully-silent blocks) stop so we don't key dead carrier.
+                if (real == 0) { if (++idle >= 2) break; }
+                else idle = 0;
+
+                int produced = engine.ProcessTxBlock(
+                    new ReadOnlySpan<float>(_tailMic, 0, blockSize),
+                    new Span<float>(_tailIq, 0, 2 * iqOut));
+                if (produced > 0)
+                {
+                    var iqSpan = new ReadOnlySpan<float>(_tailIq, 0, 2 * produced);
+                    _ring.Write(iqSpan);                                   // P1 EP2 packer
+                    _forwardP2?.Invoke(new ReadOnlyMemory<float>(_tailIq, 0, 2 * produced)); // P2 DUC
+                }
+
+                // Pace at the DAC rate so the radio FIFO transmits as we feed it.
+                deadline += periodTicks;
+                long remaining = deadline - System.Diagnostics.Stopwatch.GetTimestamp();
+                if (remaining > 0)
+                {
+                    int ms = (int)(remaining * 1000 / freq);
+                    if (ms > 0) Thread.Sleep(ms);
+                }
+                else deadline = System.Diagnostics.Stopwatch.GetTimestamp(); // re-anchor if behind
+            }
+
+            // Hold long enough for the radio FIFO to finish the last blocks before
+            // PTT drops (bench-tunable on the G2).
+            Thread.Sleep(FreeDvTxTailGuardMs);
+            _log.LogInformation("freedv.tx.tail drained, dropping PTT");
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "freedv.tx.tail drain threw");
+        }
+        finally
+        {
+            // Mirror the old MOX-falling-edge cleanup so the next over starts
+            // clean. The ring is already drained (we paced + guarded), so Clear
+            // only removes any safety remainder. _lastSeenMox=false stops the
+            // audio thread re-running the falling-edge clear after _moxOn flips.
+            lock (_sync)
+            {
+                _ring.Clear();
+                _accumulatorFill = 0;
+                _lastSeenMox = false;
+            }
+            freeDv.FlushTx();
+            Volatile.Write(ref _tailDraining, 0);
+        }
+    }
+
+    // FreeDV digital-voice modem coordinator. When FreeDV is the active mode,
+    // mic speech is replaced (in place, pre-WDSP) with the transmitted modem
+    // signal so WDSP's USB TXA modulates the modem audio onto the carrier.
+    // Null in unit tests.
+    private readonly FreeDvService? _freeDv;
 
     private readonly Action<ReadOnlyMemory<float>>? _forwardP2;
     // True while TUN or the two-tone test is active. TxTuneDriver is the sole TX
@@ -237,7 +468,7 @@ public sealed class TxAudioIngest : IDisposable
     internal void OnMicPcmBytesFromTci(ReadOnlyMemory<byte> f32lePayload)
     {
         Volatile.Write(ref _lastTciTickMs, Environment.TickCount64);
-        OnMicPcmBytes(f32lePayload);
+        OnMicPcmBytes(f32lePayload, MicBlockSource.Tci);
     }
 
     /// <summary>
@@ -251,7 +482,7 @@ public sealed class TxAudioIngest : IDisposable
         long now = Environment.TickCount64;
         Volatile.Write(ref _lastBrowserMicTickMs, now);
         if (ShouldSuppressForAuthoritativeSource(now)) return;
-        OnMicPcmBytes(f32lePayload);
+        OnMicPcmBytes(f32lePayload, MicBlockSource.Host);
     }
 
     /// <summary>
@@ -266,7 +497,40 @@ public sealed class TxAudioIngest : IDisposable
         if (ShouldSuppressForAuthoritativeSource(now)) return;
         long lastBrowserMic = Volatile.Read(ref _lastBrowserMicTickMs);
         if (lastBrowserMic != 0 && now - lastBrowserMic < TciHysteresisMs) return;
-        OnMicPcmBytes(f32lePayload);
+        OnMicPcmBytes(f32lePayload, MicBlockSource.Host);
+    }
+
+    /// <summary>
+    /// Source-tagged entry point for radio-digitised jack audio (Saturn mic /
+    /// line-in / balanced-XLR, arriving on UDP 1026 and re-blocked to 960
+    /// samples upstream — external-audio-jacks re-port). Tagged
+    /// <see cref="MicBlockSource.RadioMic"/>; the in-lock
+    /// <see cref="_activeSource"/> compare in <see cref="OnMicPcmBytes"/> drops
+    /// it unless a radio jack is the armed source, so it can never leak onto the
+    /// air under Host. Like the host mic, it yields to a recent TCI/WAV override
+    /// so a remote/playback source is never mixed with radio-jack audio.
+    /// </summary>
+    internal void OnMicPcmBytesFromRadioMic(ReadOnlyMemory<byte> f32lePayload)
+    {
+        long now = Environment.TickCount64;
+        if (ShouldSuppressForAuthoritativeSource(now)) return;
+        OnMicPcmBytes(f32lePayload, MicBlockSource.RadioMic);
+    }
+
+    /// <summary>
+    /// Source-tagged entry point for the built-in FT8/FT4/WSPR auto-sequence
+    /// keyer (from <see cref="Ft8TxService"/> / <see cref="WsprTxService"/>).
+    /// Mirrors <see cref="OnMicPcmBytesFromWav"/>: stamps the digital-keyer
+    /// recency marker so the live native/browser mic is suppressed for the
+    /// duration of the transmission, then feeds the synthesized block through the
+    /// normal TX chain. The block is tagged <see cref="MicBlockSource.Ft8"/>, an
+    /// operator-armed override that bypasses the host/radio single-select gate.
+    /// The caller keys MOX; this method does not touch MOX.
+    /// </summary>
+    internal void OnMicPcmBytesFromFt8(ReadOnlyMemory<byte> f32lePayload)
+    {
+        Volatile.Write(ref _lastFt8TickMs, Environment.TickCount64);
+        OnMicPcmBytes(f32lePayload, MicBlockSource.Ft8);
     }
 
     private bool ShouldSuppressForAuthoritativeSource(long now)
@@ -274,11 +538,14 @@ public sealed class TxAudioIngest : IDisposable
         long lastTci = Volatile.Read(ref _lastTciTickMs);
         if (lastTci != 0 && now - lastTci < TciHysteresisMs) return true;
         long lastWav = Volatile.Read(ref _lastWavTickMs);
-        return lastWav != 0 && now - lastWav < TciHysteresisMs;
+        if (lastWav != 0 && now - lastWav < TciHysteresisMs) return true;
+        long lastFt8 = Volatile.Read(ref _lastFt8TickMs);
+        return lastFt8 != 0 && now - lastFt8 < TciHysteresisMs;
     }
 
     /// <summary>Source-tagged entry point for WAV-recording playback to the
-    /// air (from <see cref="Zeus.Server.Wav.WavRecorderService"/>). Stamps the
+    /// air (driven by the com.kb2uka.recorder plugin via
+    /// <see cref="PluginPlaybackSink"/>'s over-air path). Stamps the
     /// WAV recency timestamp so the live native mic is suppressed for the clip,
     /// then feeds the block through the same path as mic audio — so a recording
     /// is processed by the normal TX chain exactly like live speech. The caller
@@ -286,16 +553,40 @@ public sealed class TxAudioIngest : IDisposable
     internal void OnMicPcmBytesFromWav(ReadOnlyMemory<byte> f32lePayload)
     {
         Volatile.Write(ref _lastWavTickMs, Environment.TickCount64);
-        OnMicPcmBytes(f32lePayload);
+        OnMicPcmBytes(f32lePayload, MicBlockSource.Wav);
     }
 
     // Internal so tests can drive the ingest directly without standing up a WS.
+    // Untagged overload defaults to Host (host path byte/behaviour-identical to
+    // today).
     internal void OnMicPcmBytes(ReadOnlyMemory<byte> f32lePayload)
+        => OnMicPcmBytes(f32lePayload, MicBlockSource.Host);
+
+    // The source tag arbitrates the HOST↔RADIO single-select gate IN-LOCK (see
+    // _activeSource); TCI/WAV bypass that compare as operator-explicit overrides.
+    internal void OnMicPcmBytes(ReadOnlyMemory<byte> f32lePayload, MicBlockSource source)
     {
         if (f32lePayload.Length != MicBlockBytes)
         {
             lock (_sync) _droppedFrames++;
             return;
+        }
+
+        // Cheap early-out for the host/radio gate (external-audio-jacks
+        // re-port). This is NOT the hard gate — _activeSource can still flip
+        // between here and the accumulation lock below, so the AUTHORITATIVE
+        // single-select decision is re-checked atomically with the append (see
+        // "ATOMIC single-select gate" inside the accumulation lock). Doing the
+        // obvious reject here too avoids running the MOX-edge / tap / WDSP-sizing
+        // work for a block the authoritative check would drop anyway. TCI/WAV
+        // bypass this compare — they are operator-explicit overrides gated by the
+        // recency hysteresis above.
+        if (source is MicBlockSource.Host or MicBlockSource.RadioMic)
+        {
+            lock (_sync)
+            {
+                if (source != _activeSource) { _droppedFrames++; return; }
+            }
         }
 
         // Non-destructive mic tap, fired BEFORE the MOX/monitor gate so a
@@ -328,6 +619,7 @@ public sealed class TxAudioIngest : IDisposable
                     // MOX fell since our last frame — drain the IQ ring so the
                     // next keyed TX starts clean, without the tail of this one.
                     _ring.Clear();
+                    _freeDv?.FlushTx();
                     _lastSeenMox = false;
                 }
             }
@@ -341,6 +633,7 @@ public sealed class TxAudioIngest : IDisposable
             lock (_sync)
             {
                 _ring.Clear();
+                _freeDv?.FlushTx();
                 _lastSeenMox = false;
             }
         }
@@ -375,6 +668,59 @@ public sealed class TxAudioIngest : IDisposable
 
         lock (_sync)
         {
+            // FreeDV end-of-over tail is clocking the final frame out on the
+            // un-key thread; yield TX exclusively (no second feeder on the WDSP
+            // TXA / radio IQ ring). Authoritative check under _sync — the drain
+            // sets _tailDraining then takes _sync as a barrier, so any frame that
+            // reaches here after that point bails. Drop the accumulator so no
+            // pre-tail remainder stitches onto the next over.
+            if (Volatile.Read(ref _tailDraining) != 0) { _accumulatorFill = 0; return; }
+
+            // ATOMIC single-select gate (external-audio-jacks re-port, the
+            // crux). This is the AUTHORITATIVE host/radio arbitration: it runs
+            // in the SAME critical section as the accumulator append, so no flip
+            // of _activeSource (by SetActiveSource, also under _sync) can slip
+            // between "decide" and "append". A Host/RadioMic block whose tag no
+            // longer matches the armed source is dropped, so two producer threads
+            // straddling a switch resolve to exactly one contributor per WDSP
+            // block — no double-feed. TCI/WAV bypass this (operator-explicit
+            // overrides; recency-gated above). Under Host with a Host block this
+            // is a pure no-op → host path byte/behaviour-identical to today.
+            if (source is MicBlockSource.Host or MicBlockSource.RadioMic
+                && source != _activeSource)
+            {
+                _droppedFrames++;
+                return;
+            }
+            // Guard the accumulator owner: if a half-filled block belongs to a
+            // different source than the one now appending (possible when the
+            // active source flipped while data sat buffered), drop the stale
+            // remainder so the two sources never mix inside one WDSP block.
+            // SetActiveSource already clears on the host/radio switch; this
+            // covers the TCI/WAV interleave as well.
+            if (_accumulatorFill > 0 && _accumulatorSource != source)
+                _accumulatorFill = 0;
+            _accumulatorSource = source;
+
+            // Track the radio-jack input peak for the source-aware mic meter.
+            // Only on accepted RadioMic blocks (the gate above guarantees the
+            // radio jack is the armed source) — the host path is untouched. The
+            // desktop meter heartbeat consumes this via ConsumeRadioPeakLinear,
+            // so the meter shows the real radio level and falls to silence when
+            // no radio audio is arriving.
+            if (source == MicBlockSource.RadioMic)
+            {
+                var rspan = f32lePayload.Span;
+                float radioPeak = 0f;
+                for (int i = 0; i < MicBlockSamples; i++)
+                {
+                    float a = BinaryPrimitives.ReadSingleLittleEndian(rspan.Slice(i * 4, 4));
+                    if (a < 0) a = -a;
+                    if (a > radioPeak) radioPeak = a;
+                }
+                if (radioPeak > _radioPeakLinear) _radioPeakLinear = radioPeak;
+            }
+
             // Decode f32le into accumulator. WDSP wants -1..+1 range; browser
             // ships the same convention.
             var src = f32lePayload.Span;
@@ -399,6 +745,12 @@ public sealed class TxAudioIngest : IDisposable
             while (_accumulatorFill >= blockSize)
             {
                 Array.Copy(_accumulator, 0, _scratchMic, 0, blockSize);
+                // FreeDV TX insert: replace the mic-speech block with the
+                // FreeDV modem signal (in place, same count, internally
+                // buffered). WDSP's USB TXA then SSB-modulates the modem audio.
+                // No-op unless FreeDV is the active mode.
+                if (_freeDv is not null && _freeDv.Active)
+                    _freeDv.ProcessTx(new Span<float>(_scratchMic, 0, blockSize));
                 int produced = engine.ProcessTxBlock(
                     new ReadOnlySpan<float>(_scratchMic, 0, blockSize),
                     new Span<float>(_scratchIq, 0, 2 * iqOut));

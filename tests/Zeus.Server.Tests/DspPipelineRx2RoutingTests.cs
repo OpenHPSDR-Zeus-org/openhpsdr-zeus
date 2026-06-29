@@ -15,9 +15,17 @@ public class DspPipelineRx2RoutingTests
         FilterLowHz: 300,
         FilterHighHz: 2600,
         SampleRate: 384_000,
-        VfoBHz: 14_250_000,
-        ModeB: mode,
-        RadioLoHz: 14_200_000);
+        RadioLoHz: 14_200_000,
+        // RX2 tuning lives in the canonical Receivers[1] entry (VFO-B fields gone).
+        Receivers: new ReceiverDto[]
+        {
+            new(Index: 0, Enabled: true, AdcSource: 0, VfoHz: 14_200_000, Mode: mode,
+                FilterLowHz: 300, FilterHighHz: 2600, FilterPresetName: "VAR1", AfGainDb: 0,
+                SampleRateHz: 384_000, Muted: false),
+            new(Index: 1, Enabled: true, AdcSource: 0, VfoHz: 14_250_000, Mode: mode,
+                FilterLowHz: 300, FilterHighHz: 2600, FilterPresetName: "VAR1", AfGainDb: 0,
+                SampleRateHz: 384_000, Muted: false),
+        });
 
     [Fact]
     public void Rx2CtunShift_Protocol2TrueDdc_UsesRx2DdcCenter()
@@ -86,36 +94,149 @@ public class DspPipelineRx2RoutingTests
     }
 
     [Fact]
-    public void SelectRxAudio_Rx2ModeWithNoRx2Samples_FallsBackToRx1()
+    public void MixRxAudioN_Rx1Muted_PlaysSecondaryAtFullAmplitude()
     {
-        float[] rx1 = [0.10f, -0.20f, 0.30f, 9.0f];
+        // "RX2 only" in the per-RX mute model = mute RX1. RX1's samples are
+        // already zeroed by the caller; rx1Muted drops it from the divisor so the
+        // single unmuted secondary passes through at full amplitude (NOT halved).
+        float[] rx1 = new float[3];                  // RX1 muted → pre-zeroed
+        float[] rx2 = [0.40f, -0.50f, 0.30f];
 
-        int count = DspPipelineService.SelectRxAudio(
-            Rx2AudioMode.Rx2,
+        int count = DspPipelineService.MixRxAudioN(
             rx1,
             rx1Count: 3,
-            rx2: [],
-            rx2Count: 0);
+            new[] { new DspPipelineService.RxAudioSlice(rx2, rx2.Length) },
+            rx1Muted: true);
 
         Assert.Equal(3, count);
-        Assert.Equal([0.10f, -0.20f, 0.30f], rx1[..count]);
+        Assert.Equal(0.40f, rx1[0], 5);
+        Assert.Equal(-0.50f, rx1[1], 5);
+        Assert.Equal(0.30f, rx1[2], 5);
     }
 
     [Fact]
-    public void SelectRxAudio_Rx2ModeWithRx2Samples_UsesRx2()
+    public void MixRxAudioN_Rx1Muted_TwoSecondaries_AveragesOnlyThem()
     {
-        float[] rx1 = [0.10f, -0.20f, 0.30f];
-        float[] rx2 = [0.40f, -0.50f];
+        // RX1 muted, two unmuted secondaries → divide by 2 (RX1 excluded).
+        float[] rx1 = new float[2];
+        float[] rx2 = [0.40f, 0.20f];
+        float[] rx3 = [0.20f, 0.40f];
 
-        int count = DspPipelineService.SelectRxAudio(
-            Rx2AudioMode.Rx2,
+        int count = DspPipelineService.MixRxAudioN(
             rx1,
-            rx1Count: rx1.Length,
-            rx2,
-            rx2Count: rx2.Length);
+            rx1Count: 2,
+            new[]
+            {
+                new DspPipelineService.RxAudioSlice(rx2, rx2.Length),
+                new DspPipelineService.RxAudioSlice(rx3, rx3.Length),
+            },
+            rx1Muted: true);
 
         Assert.Equal(2, count);
-        Assert.Equal([0.40f, -0.50f], rx1[..count]);
+        Assert.Equal(0.30f, rx1[0], 5);   // (0.40+0.20)/2 — RX1 not in divisor
+        Assert.Equal(0.30f, rx1[1], 5);   // (0.20+0.40)/2
+    }
+
+    [Fact]
+    public void MixRxAudioN_Rx1Muted_NoUnmutedReceivers_ReturnsSilence()
+    {
+        // Everything muted (RX1 muted, no contributing slices) → silence.
+        float[] rx1 = new float[3];
+
+        int count = DspPipelineService.MixRxAudioN(
+            rx1,
+            rx1Count: 3,
+            System.ReadOnlySpan<DspPipelineService.RxAudioSlice>.Empty,
+            rx1Muted: true);
+
+        Assert.Equal(0, count);
+    }
+
+    [Fact]
+    public void MixRxAudioN_SingleSlice_MatchesLegacyHalfMix()
+    {
+        // One non-empty slice (RX2) must reproduce the old 0.5*(rx1+rx2) mix,
+        // including the diluted tail where only RX1 is present.
+        float[] rx1 = [0.10f, -0.20f, 0.30f, 0.40f];
+        float[] rx2 = [0.40f, -0.50f];
+
+        int count = DspPipelineService.MixRxAudioN(
+            rx1,
+            rx1Count: 4,
+            new[] { new DspPipelineService.RxAudioSlice(rx2, rx2.Length) });
+
+        Assert.Equal(4, count);
+        Assert.Equal(0.25f, rx1[0], 5);   // (0.10 + 0.40)/2
+        Assert.Equal(-0.35f, rx1[1], 5);  // (-0.20 - 0.50)/2
+        Assert.Equal(0.15f, rx1[2], 5);   // (0.30 + 0)/2  — tail still halved
+        Assert.Equal(0.20f, rx1[3], 5);   // (0.40 + 0)/2
+    }
+
+    [Fact]
+    public void MixRxAudioN_ThreeReceivers_AveragesAllPresent()
+    {
+        // RX1 + RX2 + RX3 all full-length → divide by 3.
+        float[] rx1 = [0.30f, 0.60f];
+        float[] rx2 = [0.30f, 0.00f];
+        float[] rx3 = [0.30f, 0.30f];
+
+        int count = DspPipelineService.MixRxAudioN(
+            rx1,
+            rx1Count: 2,
+            new[]
+            {
+                new DspPipelineService.RxAudioSlice(rx2, rx2.Length),
+                new DspPipelineService.RxAudioSlice(rx3, rx3.Length),
+            });
+
+        Assert.Equal(2, count);
+        Assert.Equal(0.30f, rx1[0], 5);   // (0.30+0.30+0.30)/3
+        Assert.Equal(0.30f, rx1[1], 5);   // (0.60+0.00+0.30)/3
+    }
+
+    [Fact]
+    public void MixRxAudioN_EmptySlicesExcludedFromDivisor()
+    {
+        // A secondary that produced no samples this tick must not dilute RX1:
+        // contributor count is 1, so RX1 passes through untouched.
+        float[] rx1 = [0.50f, -0.50f];
+
+        int count = DspPipelineService.MixRxAudioN(
+            rx1,
+            rx1Count: 2,
+            new[]
+            {
+                new DspPipelineService.RxAudioSlice(System.Array.Empty<float>(), 0),
+                new DspPipelineService.RxAudioSlice([0.10f, 0.10f], 0),
+            });
+
+        Assert.Equal(2, count);
+        Assert.Equal(0.50f, rx1[0], 5);
+        Assert.Equal(-0.50f, rx1[1], 5);
+    }
+
+    [Fact]
+    public void MixRxAudioN_Rx1Silent_PassesSecondariesThrough()
+    {
+        // RX1 produced nothing this tick (rx1Count==0); the two secondaries are
+        // averaged and passed through at the longer block length.
+        float[] rx1 = new float[3];
+        float[] rx2 = [0.40f, 0.40f, 0.40f];
+        float[] rx3 = [0.20f, 0.20f];
+
+        int count = DspPipelineService.MixRxAudioN(
+            rx1,
+            rx1Count: 0,
+            new[]
+            {
+                new DspPipelineService.RxAudioSlice(rx2, rx2.Length),
+                new DspPipelineService.RxAudioSlice(rx3, rx3.Length),
+            });
+
+        Assert.Equal(3, count);
+        Assert.Equal(0.30f, rx1[0], 5);   // (0.40+0.20)/2
+        Assert.Equal(0.30f, rx1[1], 5);   // (0.40+0.20)/2
+        Assert.Equal(0.20f, rx1[2], 5);   // (0.40 only)/2 — divisor is contributor count (2)
     }
 
     private sealed class RecordingEngine : IDspEngine
@@ -148,6 +269,7 @@ public class DspPipelineRx2RoutingTests
         public void SetRxDisplayFastAttack(int channelId, bool fast) { }
         public void SetRxAfGainDb(int channelId, double db) { }
         public void SetNoiseReduction(int channelId, NrConfig cfg) { }
+        public Zeus.Dsp.Nr3ModelLoadResult LoadNr3Model(string? modelFilePath) => Zeus.Dsp.Nr3ModelLoadResult.Unavailable;
         public void SetNotches(IReadOnlyList<NotchDto> notches) { }
         public void SetNotchTuneFrequencyHz(double loHz) { }
         public void SetZoom(int channelId, int level) { }
@@ -162,6 +284,8 @@ public class DspPipelineRx2RoutingTests
         public RxStageMeters GetRxStageMeters(int channelId) => RxStageMeters.Silent;
         public void SetTxMode(RxMode mode) { }
         public void SetTxFilter(int lowHz, int highHz) { }
+        public void SetRxBandpassWindow(int channelId, BandpassWindow window) { }
+        public void SetTxBandpassWindow(BandpassWindow window) { }
         public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved) => 0;
         public void SetTxPanelGain(double linearGain) { }
         public void SetTxLevelerMaxGain(double maxGainDb) { }

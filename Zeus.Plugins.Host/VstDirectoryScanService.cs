@@ -213,42 +213,43 @@ public sealed class VstDirectoryScanService
         var activeIds = new HashSet<string>(
             _manager.Active.Select(p => p.Loaded.Manifest.Id), StringComparer.Ordinal);
 
+        // The in-process bridge is the authoritative loadability check + metadata
+        // source on EVERY platform — it is exactly what hosts the plugin in Native
+        // mode. describe() loads the module and reads the factory, so it accepts a
+        // Linux ELF .vst3 / correct-arch bundle (which the Windows-PE heuristic
+        // below rejects) and yields the real plugin name. Falls back to the static
+        // PE heuristic only when the native bridge can't initialise (e.g. the
+        // library isn't staged in a CI/test layout).
+        var bridge = TryCreateScanBridge();
+
         foreach (var entry in entries)
         {
             ct.ThrowIfCancellationRequested();
-            var name = Path.GetFileNameWithoutExtension(entry.TrimEnd(
+            var fileName = Path.GetFileNameWithoutExtension(entry.TrimEnd(
                 Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
             try
             {
-                // Reject VSTs the engine can't host BEFORE registering them, so
-                // incompatible files never become dead "Bad Image" entries in the
-                // rack. Static check only — no plugin code is executed.
-                if (!IsLoadableVst3(entry, out var incompatReason))
+                var candidates = EnumerateVstCandidates(entry, bridge, errors, fileName);
+                if (candidates.Count == 0)
                 {
-                    errors.Add(new ScanError(entry, $"skipped (incompatible): {incompatReason}"));
-                    _log.LogInformation("Skipped incompatible VST '{Name}': {Reason}", name, incompatReason);
+                    _log.LogInformation("Skipped VST '{Name}' (not hostable on this platform)", fileName);
                     continue;
                 }
 
                 // Reference the VST in place — do NOT copy it. Many plugins ship
-                // as a thin .vst3 stub beside sibling payload DLLs / resources in
-                // their install dir (e.g. Clear.vst3 + Clear.dll + Clear.bin).
-                // Copying only the .vst3 strips those siblings, so LoadLibrary
-                // can't resolve the payload and the module fails to load
-                // (status=3 NotAVst3) even though the plugin is fine in a host
-                // that loads it from its install dir. We therefore store the
-                // ORIGINAL absolute path in the manifest; both the engine's
-                // load_chain and the in-process bridge honour a rooted vst3Path.
-                // Trade-off: if the operator moves/deletes the original file, the
-                // plugin stops loading — acceptable vs. silently breaking every
-                // stub-based plugin.
-                var vst3Abs = Path.GetFullPath(entry);
-
+                // as a thin .vst3 stub beside sibling payload libraries / resources
+                // in their install dir; copying only the .vst3 strips those siblings
+                // and the module then fails to load. The manifest carries the
+                // ORIGINAL absolute path; both the engine's load_chain and the
+                // in-process bridge honour a rooted vst3Path. Trade-off: moving or
+                // deleting the original breaks the plugin — acceptable vs. silently
+                // breaking every stub-based plugin.
+                foreach (var cand in candidates)
                 foreach (var routeInfo in routes)
                 {
-                    var routeName = routeInfo.DisplaySuffix is null ? name : $"{name} {routeInfo.DisplaySuffix}";
-                    var slot = ResolveSlot(routeInfo, name, vst3Abs);
-                    var id = UniqueId(name, usedIds, ResolveIdPrefix(routeInfo, slot));
+                    var routeName = routeInfo.DisplaySuffix is null ? cand.Name : $"{cand.Name} {routeInfo.DisplaySuffix}";
+                    var slot = ResolveSlot(routeInfo, cand.Name, cand.Vst3Abs);
+                    var id = UniqueId(cand.Name, usedIds, ResolveIdPrefix(routeInfo, slot));
                     usedIds.Add(id);
 
                     if (activeIds.Contains(id))
@@ -263,7 +264,7 @@ public sealed class VstDirectoryScanService
                     WriteStubAssembly(Path.Combine(pluginDir, StubAssemblyFile));
                     await File.WriteAllTextAsync(
                         Path.Combine(pluginDir, "plugin.json"),
-                        BuildManifestJson(id, routeName, vst3Abs, null, slot),
+                        BuildManifestJson(id, routeName, cand.Vst3Abs, cand.Uid, slot),
                         ct).ConfigureAwait(false);
 
                     await _manager.ActivateAsync(pluginDir, ct).ConfigureAwait(false);
@@ -279,6 +280,67 @@ public sealed class VstDirectoryScanService
         }
 
         return new ScanResult(directory, registered, skipped, errors);
+    }
+
+    private sealed record VstCandidate(string Vst3Abs, string Name, string? Uid);
+
+    private static IVstBridgeNative? TryCreateScanBridge()
+    {
+        try
+        {
+            var b = new VstBridgeNative();
+            return b.Init(VstBridgeAbi.Current) == VstBridgeStatus.Ok ? b : null;
+        }
+        catch
+        {
+            return null; // native lib absent (CI / unsupported layout) — use the heuristic
+        }
+    }
+
+    /// <summary>
+    /// Hostable plugin candidates for one <c>.vst3</c> entry. Two layered checks:
+    /// the cheap static Windows-PE heuristic accepts a 64-bit Windows VST3 without
+    /// loading anything (and gives the skip reason for incompatible Windows files);
+    /// when it rejects a binary — which it always does for a Linux ELF / macOS
+    /// dylib VST3 — the in-process bridge (the actual host) is asked to describe
+    /// the file, and a non-empty result both confirms it is hostable on THIS
+    /// platform/arch and yields the real plugin name. The bridge also enriches the
+    /// display name on the Windows path when it can introspect the file. The
+    /// in-process loader instantiates the first audio-effect class, so a file
+    /// yields one candidate (uid null = "load the first class"; shell sub-plugin
+    /// selection awaits a load-by-uid ABI).
+    /// </summary>
+    private IReadOnlyList<VstCandidate> EnumerateVstCandidates(
+        string entry, IVstBridgeNative? bridge, List<ScanError> errors, string fileName)
+    {
+        var vst3Abs = Path.GetFullPath(entry);
+
+        if (IsLoadableVst3(entry, out var reason))
+        {
+            var name = fileName;
+            if (bridge is not null)
+            {
+                var d = VstBridgeNative.Scan(bridge, vst3Abs);
+                if (d.Count > 0 && !string.IsNullOrWhiteSpace(d[0].Name)) name = d[0].Name;
+            }
+            return [new VstCandidate(vst3Abs, name, null)];
+        }
+
+        // PE heuristic rejected it — but it may be a Linux/macOS VST3 the bridge
+        // can host. The bridge IS what loads it in Native mode, so its verdict is
+        // authoritative for non-Windows binaries.
+        if (bridge is not null)
+        {
+            var descs = VstBridgeNative.Scan(bridge, vst3Abs);
+            if (descs.Count > 0)
+            {
+                var name = string.IsNullOrWhiteSpace(descs[0].Name) ? fileName : descs[0].Name;
+                return [new VstCandidate(vst3Abs, name, null)];
+            }
+        }
+
+        errors.Add(new ScanError(entry, $"skipped (incompatible): {reason}"));
+        return [];
     }
 
     /// <summary>
@@ -440,6 +502,21 @@ public sealed class VstDirectoryScanService
             .GetManifestResourceStream(StubResourceName)
             ?? throw new InvalidOperationException(
                 $"embedded stub resource '{StubResourceName}' not found");
+
+        // Idempotent by design. The stub is a constant embedded resource, so
+        // every package's copy is byte-identical. Once a plugin is loaded its
+        // collectible ALC holds an OS file lock on this DLL (LoadFromAssemblyPath
+        // keeps the file open for the context's lifetime, and a just-unloaded ALC
+        // keeps it locked until GC reclaims it). Clobbering it on a re-scan throws
+        // "the process cannot access the file … because it is being used by
+        // another process" — the failure that made a rescan over an already-
+        // populated plugin root report every plugin as Failed. A present,
+        // correctly-sized stub is already correct: leave it untouched. Only an
+        // absent or truncated copy (an interrupted prior write — which is never
+        // loaded, so never locked) is (re)written.
+        if (File.Exists(destPath) && new FileInfo(destPath).Length == res.Length)
+            return;
+
         using var file = File.Create(destPath);
         res.CopyTo(file);
     }

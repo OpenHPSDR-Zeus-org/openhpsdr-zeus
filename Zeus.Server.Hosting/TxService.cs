@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -221,6 +222,20 @@ public sealed class TxService
             ? (long)(preKeyMs / 1000.0 * System.Diagnostics.Stopwatch.Frequency)
             : 0;
 
+        // FreeDV end-of-over TX tail. On a genuine, accepted mic un-key, clock the
+        // final modem frame out to the radio while the wire MOX bit is STILL
+        // asserted and _moxOn is still true — done here, before the state lock, so
+        // the audio thread never runs its falling-edge ring-clear mid-tail and the
+        // receiver gets whole OFDM frames instead of a mid-symbol cut. No-op unless
+        // FreeDV is engaged; blocks briefly (bounded) for the tail to transmit.
+        // The acceptance test mirrors the lock below (only the owner / UI may
+        // drop), so we never transmit a tail for a drop that will be rejected.
+        if (!on && IsMoxOn
+            && (source == MoxSource.UI || MoxOwner is null || MoxOwner == source))
+        {
+            _pipeline.DrainFreeDvTxTail();
+        }
+
         bool wasTunOn;
         bool? txActiveCaptured;
         lock (_sync)
@@ -276,17 +291,50 @@ public sealed class TxService
             _radio.NotifyTunActive(false);
         }
 
-        // Order: mute RX before keying TX on MOX-on; reverse on MOX-off.
-        // Engine handles the RXA/TXA pair atomically under its own lock.
-        _pipeline.SetMox(on);
-        // PERF_PASS_3_DEBUG: t1 — server received MOX edge. Uncommitted.
-        _log.LogInformation("tx.mox.{Edge}.recv ts={Ts}",
-            on ? "on" : "off", System.Diagnostics.Stopwatch.GetTimestamp());
-        _radio.SetMox(on);
-        // MOX-off should leave the recompute pointing at _drivePct for the next
-        // half-key. MOX-on already did this before keying so the first frame
-        // cannot carry the stale TUN drive source.
-        if (!on) _radio.NotifyTunActive(false);
+        // T/R sequencing is deliberately asymmetric:
+        //
+        //   • MOX-ON  — bring the WDSP TX chain up (mute RXA, start TXA) BEFORE
+        //     asserting the wire MOX bit, so the radio never keys while the first
+        //     TX frame still carries stale RX-side IQ (unmodulated-carrier guard).
+        //
+        //   • MOX-OFF — drop the wire MOX bit FIRST, then tear the WDSP TX chain
+        //     down. WdspDspEngine.SetMox(false) damps TXA with dmp=1, and WDSP's
+        //     SetChannelState spins a Sleep(1) loop up to its 100 ms timeout
+        //     because Zeus stops feeding fexchange2 the instant MOX drops, so the
+        //     down-slew never completes (native/wdsp/channel.c:271-276). The radio
+        //     TX LED, the external PTT line and the amplifier T/R sequencing all
+        //     mirror the wire MOX bit, so running that ~100 ms+ teardown BEFORE
+        //     the wire drop stretched every TX→RX transition — the on-screen MOX
+        //     button and hardware PTT alike — on every WDSP board (issue #870).
+        //     deskHPSDR keeps feeding the channel so its down-slew finishes in a
+        //     few ms; Zeus can't, so we drop the wire bit immediately and absorb
+        //     the DSP teardown afterwards. No RF is generated once the wire MOX
+        //     bit is low (ControlFrame gates TX IQ on Mox), so dropping it first
+        //     is both safe and the correct amp-protection priority.
+        if (on)
+        {
+            // Engine handles the RXA/TXA pair atomically under its own lock.
+            _pipeline.SetMox(true);
+            _log.LogInformation("tx.mox.on.recv ts={Ts}",
+                System.Diagnostics.Stopwatch.GetTimestamp());
+            _radio.SetMox(true);
+        }
+        else
+        {
+            _radio.SetMox(false);
+            var wireDroppedTs = System.Diagnostics.Stopwatch.GetTimestamp();
+            _log.LogInformation("tx.mox.off.recv ts={Ts}", wireDroppedTs);
+            // Leave the recompute pointing back at _drivePct for the next
+            // half-key before the chain is torn down.
+            _radio.NotifyTunActive(false);
+            _pipeline.SetMox(false);
+            // How long the WDSP teardown took AFTER the wire already dropped —
+            // confirms the dmp=1 down-slew cost on a given box and proves the
+            // radio's T/R no longer waits on it (issue #870).
+            var teardownMs = (System.Diagnostics.Stopwatch.GetTimestamp() - wireDroppedTs)
+                * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            _log.LogInformation("tx.wdsp.teardown.afterWireDrop ms={Ms:F1}", teardownMs);
+        }
         _log.LogInformation("tx.mox on={On}", on);
         _hub.Broadcast(new MoxStateFrame(MoxOn: on, TunOn: false));
         error = null;

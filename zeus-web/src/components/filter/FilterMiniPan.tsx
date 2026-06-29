@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // Filter visualization PRD §3.2.1 — mini-panadapter inside the advanced
 // filter ribbon. Originally a fixed 12 kHz peak-hold trace with draggable
@@ -55,10 +56,21 @@ import {
   useSignalEnhanceStore,
   type DetectedPeak,
 } from '../../dsp/signal-estimator';
-import { setFilter } from '../../api/client';
+import {
+  displayFilterEdgesHz,
+  getReceiverFilterHighHz,
+  getReceiverFilterLowHz,
+  getReceiverFilterPresetName,
+  getReceiverMode,
+  getReceiverVfoHz,
+  optimisticSetReceiverFilter,
+  optimisticSetReceiverPreset,
+  postReceiverFilter,
+} from '../../state/receiver-state';
 import { formatCutOffset, formatFilterWidth, nudgeStepHz } from './filterPresets';
+import { receiverColorByIndex } from '../spectrumReceiverColor';
 import { MeterGlass } from '../meters/render/MeterGlass';
-import type { Rx2AudioMode, RxMode, TxVfo } from '../../api/client';
+import type { RxMode } from '../../api/client';
 import {
   DB_FLOOR,
   MINI_NOISE_GATE_DB,
@@ -211,20 +223,37 @@ function parseRgb(s: string): [number, number, number] {
   return [74, 158, 255]; // --accent fallback
 }
 
-type MiniPanConnectionSnapshot = {
-  rx2Enabled: boolean;
-  rxFocus: SpectrumReceiver;
-  vfoHz: number;
-  vfoBHz: number;
-  mode: RxMode;
-  modeB: RxMode;
-  filterLowHz: number;
-  filterHighHz: number;
-  filterLowHzB: number;
-  filterHighHzB: number;
-  filterPresetName: string | null;
-  filterPresetNameB: string | null;
-};
+// Resolve an `hsl(H S% L%)` token (the receiverColorByIndex output for RX3+) to
+// [r,g,b]. parseRgb can't — its numeric fallback would read H/S/L as r/g/b.
+function hslStringToRgb(s: string): [number, number, number] {
+  const m = s.match(/-?\d+(?:\.\d+)?/g);
+  if (!m || m.length < 3) return [74, 158, 255];
+  const h = ((((Number(m[0]) % 360) + 360) % 360)) / 360;
+  const sat = Math.max(0, Math.min(1, Number(m[1]) / 100));
+  const lig = Math.max(0, Math.min(1, Number(m[2]) / 100));
+  if (sat === 0) {
+    const v = Math.round(lig * 255);
+    return [v, v, v];
+  }
+  const q = lig < 0.5 ? lig * (1 + sat) : lig + sat - lig * sat;
+  const p = 2 * lig - q;
+  const hue2 = (t2: number) => {
+    let t = t2;
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  return [
+    Math.round(hue2(h + 1 / 3) * 255),
+    Math.round(hue2(h) * 255),
+    Math.round(hue2(h - 1 / 3) * 255),
+  ];
+}
+
+type ConnSnapshot = ReturnType<typeof useConnectionStore.getState>;
 
 type ActiveMiniPanFilter = {
   receiver: SpectrumReceiver;
@@ -235,46 +264,52 @@ type ActiveMiniPanFilter = {
   filterPresetName: string | null;
 };
 
+// One mini-pan per EXPOSED receiver: RX1 ('A') always; RX2 ('B') when enabled;
+// then every enabled extra DDC (RX3+) by its numeric index. The bandwidth-filter
+// panel splits into as many segments as there are receivers. RX2 audio routing
+// is governed solely by per-RX mute (legacy Rx2AudioMode retired in PR #932);
+// a muted receiver is still tunable/filterable.
 function filterMiniPanReceivers(
   rx2Enabled: boolean,
-  rx2AudioMode: Rx2AudioMode,
-  rxFocus: TxVfo,
+  receivers: readonly { index: number; enabled: boolean }[],
 ): SpectrumReceiver[] {
-  if (!rx2Enabled) return ['A'];
-  if (rx2AudioMode === 'both') return ['A', 'B'];
-  return [rxFocus];
+  const keys: SpectrumReceiver[] = ['A'];
+  if (rx2Enabled) keys.push('B');
+  for (const r of receivers) if (r.index >= 2 && r.enabled) keys.push(r.index);
+  return keys;
 }
 
-function miniPanVfoHzForReceiver(c: {
-  rx2Enabled: boolean;
-  rxFocus: SpectrumReceiver;
-  vfoHz: number;
-  vfoBHz: number;
-}, receiver: SpectrumReceiver): number {
-  return receiver === 'B' ? Number(c.vfoBHz) : Number(c.vfoHz);
+// All per-receiver reads/writes go through the canonical receivers[] selectors
+// (RX2 = index 1), so the mini-pan no longer touches the flat *B fields.
+function miniPanVfoHzForReceiver(c: ConnSnapshot, receiver: SpectrumReceiver): number {
+  return getReceiverVfoHz(c, receiver);
 }
 
 function miniPanFilterForReceiver(
-  c: MiniPanConnectionSnapshot,
+  c: ConnSnapshot,
   receiver: SpectrumReceiver,
 ): ActiveMiniPanFilter {
-  if (receiver === 'B') {
-    return {
-      receiver,
-      vfoHz: Number(c.vfoBHz),
-      mode: c.modeB,
-      filterLowHz: c.filterLowHzB,
-      filterHighHz: c.filterHighHzB,
-      filterPresetName: c.filterPresetNameB,
-    };
-  }
+  const mode = getReceiverMode(c, receiver);
+  const vfoHz = getReceiverVfoHz(c, receiver);
+  // FreeDV stores its passband USB-positive; re-sign to the band-convention
+  // sideband (LSB < 10 MHz) so the mini-pan window, walls, EQ bands and cut
+  // callouts all land on the side the demod actually is — matching the main
+  // panadapter passband/crosshair. Posting these signed edges on drag/wheel is
+  // safe: the backend takes abs() and re-signs from (mode, vfo) at the WDSP
+  // seam. No-op for every non-FreeDV mode. See displayFilterEdgesHz.
+  const { lowHz, highHz } = displayFilterEdgesHz(
+    mode,
+    vfoHz,
+    getReceiverFilterLowHz(c, receiver),
+    getReceiverFilterHighHz(c, receiver),
+  );
   return {
     receiver,
-    vfoHz: Number(c.vfoHz),
-    mode: c.mode,
-    filterLowHz: c.filterLowHz,
-    filterHighHz: c.filterHighHz,
-    filterPresetName: c.filterPresetName,
+    vfoHz,
+    mode,
+    filterLowHz: lowHz,
+    filterHighHz: highHz,
+    filterPresetName: getReceiverFilterPresetName(c, receiver),
   };
 }
 
@@ -284,9 +319,9 @@ function setSelectedFilterState(
   highHz: number,
   presetName: string,
 ): void {
-  useConnectionStore.setState(receiver === 'B'
-    ? { filterLowHzB: lowHz, filterHighHzB: highHz, filterPresetNameB: presetName }
-    : { filterLowHz: lowHz, filterHighHz: highHz, filterPresetName: presetName });
+  // Dual-writes the canonical receivers[] entry and (for RX2) the flat mirror.
+  optimisticSetReceiverFilter(receiver, lowHz, highHz);
+  optimisticSetReceiverPreset(receiver, presetName);
 }
 
 function sharedNoiseFloorForReceiver(receiver: SpectrumReceiver): Float32Array | null {
@@ -602,12 +637,17 @@ function FilterMiniPanSurface({
       const ink0 = (a: number) => `rgba(${fg0r}, ${fg0g}, ${fg0b}, ${a})`;
       const ink1 = (a: number) => `rgba(${fg1r}, ${fg1g}, ${fg1b}, ${a})`;
       const ink3 = (a: number) => `rgba(${fg3r}, ${fg3g}, ${fg3b}, ${a})`;
-      // A follows --accent, B follows --signal so the mini-pan matches the
-      // focused receiver colour used by the main spectrum surfaces.
-      const receiverAccent = receiver === 'B'
-        ? (cs.getPropertyValue('--signal').trim() || '#25d366')
-        : (cs.getPropertyValue('--accent').trim() || '#4a9eff');
-      const [ar, ag, ab] = parseRgb(receiverAccent);
+      // Each receiver gets its OWN colour, matching the main spectrum surfaces:
+      // A → --accent, B → --signal, RX3+ → its distinct identity hue
+      // (receiverColorByIndex returns an hsl() we resolve to rgb here).
+      const [ar, ag, ab] =
+        typeof receiver === 'number' && receiver >= 2
+          ? hslStringToRgb(receiverColorByIndex(receiver))
+          : parseRgb(
+              receiver === 'B'
+                ? cs.getPropertyValue('--signal').trim() || '#25d366'
+                : cs.getPropertyValue('--accent').trim() || '#4a9eff',
+            );
       const accent = (a: number) => `rgba(${ar}, ${ag}, ${ab}, ${a})`;
       const eqBlue = (a: number) => `rgba(34, 204, 255, ${Math.max(0, Math.min(1, a))})`;
 
@@ -668,6 +708,10 @@ function FilterMiniPanSurface({
       ctx.restore();
 
       const vfo = active.vfoHz;
+      // filterLowHz/filterHighHz are audio offsets from the hardware LO, not VFO.
+      // In CW modes LO ≠ VFO, so shift the spectrum window by cwOffset so the
+      // passband lines land on the correct spectral slice.
+      const cwOffset = active.mode === 'CWU' ? -c.cwPitchHz : active.mode === 'CWL' ? c.cwPitchHz : 0;
       if (display.panDb && display.hzPerPixel > 0) {
         heldPanDb = display.panDb;
         heldCenterHz = Number(display.centerHz);
@@ -704,7 +748,7 @@ function FilterMiniPanSurface({
       }
 
       // Window geometry shared by the trace, floor contour and markers.
-      const loHz = vfo + winLoOffHz;
+      const loHz = vfo + cwOffset + winLoOffHz;
       let binStart = 0;
       let binEnd = 0;
       let fullStartHz = 0;
@@ -1500,7 +1544,7 @@ function FilterMiniPanSurface({
         tickOffsets.push(Object.is(offHz, -0) ? 0 : offHz);
       }
       tickOffsets.forEach((offHz) => {
-        const absHz = vfo + offHz;
+        const absHz = vfo + cwOffset + offHz;
         const xPx = offsetToX(offHz);
         if (xPx < 0 || xPx > w) return;
         const text = formatTickMhz(absHz);
@@ -1528,16 +1572,15 @@ function FilterMiniPanSurface({
       if (
         s.filterLowHz !== p.filterLowHz ||
         s.filterHighHz !== p.filterHighHz ||
-        s.filterLowHzB !== p.filterLowHzB ||
-        s.filterHighHzB !== p.filterHighHzB ||
         s.filterPresetName !== p.filterPresetName ||
-        s.filterPresetNameB !== p.filterPresetNameB ||
         s.mode !== p.mode ||
-        s.modeB !== p.modeB ||
         s.vfoHz !== p.vfoHz ||
-        s.vfoBHz !== p.vfoBHz ||
+        s.cwPitchHz !== p.cwPitchHz ||
         s.rx2Enabled !== p.rx2Enabled ||
-        s.rxFocus !== p.rxFocus
+        s.rxFocus !== p.rxFocus ||
+        // RX1 is the flat primary; RX2 (index 1) filter/vfo/mode live in the
+        // receivers[] array, whose reference changes on any per-receiver edit.
+        s.receivers !== p.receivers
       ) {
         requestRedraw();
       }
@@ -1607,7 +1650,7 @@ function FilterMiniPanSurface({
       if (hi <= lo + 50) return;
       const slot = presetIsFixed(active.filterPresetName) || !active.filterPresetName ? 'VAR1' : active.filterPresetName;
       setSelectedFilterState(active.receiver, lo, hi, slot);
-      setFilter(lo, hi, slot, undefined, active.receiver).then(c.applyState).catch(() => {});
+      postReceiverFilter(active.receiver, lo, hi, slot).then(c.applyState).catch(() => {});
     };
     canvas.addEventListener('wheel', onWheel, { passive: false });
 
@@ -1635,7 +1678,7 @@ function FilterMiniPanSurface({
     if (!d) return;
     d.flushTimer = null;
     d.lastWriteAt = performance.now();
-    setFilter(d.pendingLo, d.pendingHi, d.activeSlot, undefined, d.receiver).catch(() => {});
+    postReceiverFilter(d.receiver, d.pendingLo, d.pendingHi, d.activeSlot).catch(() => {});
   };
 
   const schedule = () => {
@@ -1661,7 +1704,9 @@ function FilterMiniPanSurface({
     const d = selectDisplaySlice(useDisplayStore.getState(), active.receiver);
     if (!d.panDb || d.hzPerPixel <= 0 || floor === null) return false;
     const vfo = active.vfoHz;
-    const winLoHz = vfo + filterWindowLoOffsetHz(active.filterLowHz, active.filterHighHz, spanHz);
+    const fitCwOff = active.mode === 'CWU' ? -c.cwPitchHz : active.mode === 'CWL' ? c.cwPitchHz : 0;
+    const lo = vfo + fitCwOff;
+    const winLoHz = lo + filterWindowLoOffsetHz(active.filterLowHz, active.filterHighHz, spanHz);
     const dCenter = Number(d.centerHz);
     const peaks = detectPeaks(d.panDb, dCenter, d.hzPerPixel).filter((p) => p.snrDb >= BRACKET_MIN_SNR_DB);
     let best: DetectedPeak | null = null;
@@ -1677,12 +1722,12 @@ function FilterMiniPanSurface({
     // Keep the fit on the active mode's sideband — a signal on the wrong side of
     // the carrier is unreachable here without retuning, so bail rather than flip
     // the passband to the opposite sideband.
-    const fitted = fitPassbandForMode(active.mode, ext.loHz - vfo, ext.hiHz - vfo, FIT_MARGIN_HZ);
+    const fitted = fitPassbandForMode(active.mode, ext.loHz - lo, ext.hiHz - lo, FIT_MARGIN_HZ);
     if (!fitted) return false;
     const { low, high } = fitted;
     const slot = presetIsFixed(active.filterPresetName) || !active.filterPresetName ? 'VAR1' : active.filterPresetName;
     setSelectedFilterState(active.receiver, low, high, slot);
-    setFilter(low, high, slot, undefined, active.receiver).then(c.applyState).catch(() => {});
+    postReceiverFilter(active.receiver, low, high, slot).then(c.applyState).catch(() => {});
     return true;
   };
 
@@ -1759,7 +1804,11 @@ function FilterMiniPanSurface({
     if (!d || e.pointerId !== d.pointerId) return;
     e.stopPropagation();
 
-    const vfo = miniPanVfoHzForReceiver(useConnectionStore.getState(), d.receiver);
+    const snapC = useConnectionStore.getState();
+    const vfo = miniPanVfoHzForReceiver(snapC, d.receiver);
+    const snapMode = getReceiverMode(snapC, d.receiver);
+    const snapCwOff = snapMode === 'CWU' ? -snapC.cwPitchHz : snapMode === 'CWL' ? snapC.cwPitchHz : 0;
+    const lo = vfo + snapCwOff;
     const hzPerPx = d.spanHz / d.rect.width;
     // Magnetic snap is active for edge drags unless Alt is held (free placement)
     // and unless there are no detected carriers.
@@ -1769,12 +1818,12 @@ function FilterMiniPanSurface({
     if (d.mode === 'lo') {
       const relX = e.clientX - d.rect.left;
       loHz = Math.round(relX * hzPerPx + d.windowLoOffsetHz);
-      if (snap) loHz = Math.round(magnetEdge(vfo + loHz, d.peaks) - vfo);
+      if (snap) loHz = Math.round(magnetEdge(lo + loHz, d.peaks) - lo);
       if (loHz > d.startHiHz - 50) loHz = d.startHiHz - 50;
     } else if (d.mode === 'hi') {
       const relX = e.clientX - d.rect.left;
       hiHz = Math.round(relX * hzPerPx + d.windowLoOffsetHz);
-      if (snap) hiHz = Math.round(magnetEdge(vfo + hiHz, d.peaks) - vfo);
+      if (snap) hiHz = Math.round(magnetEdge(lo + hiHz, d.peaks) - lo);
       if (hiHz < d.startLoHz + 50) hiHz = d.startLoHz + 50;
     } else {
       const dxHz = Math.round((e.clientX - d.startX) * hzPerPx);
@@ -1806,7 +1855,7 @@ function FilterMiniPanSurface({
     const receiver = d.receiver;
     dragRef.current = null;
     const applyState = useConnectionStore.getState().applyState;
-    setFilter(lo, hi, slot, undefined, receiver).then(applyState).catch(() => {});
+    postReceiverFilter(receiver, lo, hi, slot).then(applyState).catch(() => {});
   };
 
   const onPointerMoveHover = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -1910,7 +1959,7 @@ function FilterMiniPanSurface({
     }
     const slot = presetIsFixed(active.filterPresetName) || !active.filterPresetName ? 'VAR1' : active.filterPresetName;
     setSelectedFilterState(active.receiver, lo, hi, slot);
-    setFilter(lo, hi, slot, undefined, active.receiver).then(c.applyState).catch(() => {});
+    postReceiverFilter(active.receiver, lo, hi, slot).then(c.applyState).catch(() => {});
   };
 
   const onWidthKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -1922,7 +1971,7 @@ function FilterMiniPanSurface({
     <div className={`filter-minipan-wrap ${split ? 'filter-minipan-wrap--split' : ''}`}>
       {showReceiverLabel && (
         <div className={`filter-minipan-vfo-tag mono ${receiver === 'B' ? 'is-rx2' : 'is-rx1'}`}>
-          {receiver === 'B' ? 'RX2 · VFO B' : 'RX1 · VFO A'}
+          {receiver === 'B' ? 'RX2' : 'RX1'}
         </div>
       )}
       <canvas
@@ -1971,19 +2020,18 @@ function FilterMiniPanSurface({
 
 export function FilterMiniPan() {
   const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
-  const rx2AudioMode = useConnectionStore((s) => s.rx2AudioMode);
-  const rxFocus = useConnectionStore((s) => s.rxFocus);
-  const receivers = filterMiniPanReceivers(rx2Enabled, rx2AudioMode, rxFocus);
-  const split = receivers.length > 1;
+  const receivers = useConnectionStore((s) => s.receivers);
+  const keys = filterMiniPanReceivers(rx2Enabled, receivers);
+  const split = keys.length > 1;
 
   return (
     <div className={`filter-minipan-stack ${split ? 'filter-minipan-stack--split' : ''}`}>
-      {receivers.map((receiver) => (
+      {keys.map((receiver) => (
         <FilterMiniPanSurface
-          key={receiver}
+          key={String(receiver)}
           receiver={receiver}
           split={split}
-          showReceiverLabel={rx2Enabled}
+          showReceiverLabel={split}
         />
       ))}
     </div>

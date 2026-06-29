@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -50,6 +51,12 @@ namespace Zeus.Contracts;
 public enum RxMode : byte
 {
     LSB, USB, CWL, CWU, AM, FM, SAM, DSB, DIGL, DIGU,
+    // FreeDV digital voice (Codec2 / freedv_api). Zeus-level mode only — it
+    // is NOT a WDSP demod mode. At the WDSP layer FreeDV runs as USB; the
+    // FreeDV modem is inserted as a streaming filter in the RX/TX audio path
+    // (see FreeDvService). Append-only: byte value 10 is fixed for prefs
+    // persistence — never reorder this enum.
+    FreeDv,
 }
 
 // PureSignal feedback antenna source. On G2/MkII the wire-format diff
@@ -59,15 +66,31 @@ public enum RxMode : byte
 // for this hardware, so Zeus exposes a two-way selector.
 public enum PsFeedbackSource : byte { Internal = 0, External = 1 }
 
+// SSB bandpass filter "rectangularity" selector (issue #871). Maps directly
+// to the WDSP fir.c window switch — Soft = Blackman-Harris 4-term (gentler
+// shoulder, Yaesu-like), Sharp = Blackman-Harris 7-term (steeper, Icom-like).
+// Sharp is the current hardcoded WDSP default; an operator who never touches
+// the selector hears no change. RX and TX carry independent values.
+// SSB bandpass shoulder-steepness presets (issue #871). Drives the WDSP FIR
+// tap count (nc): Soft = fewest taps (widest transition, Yaesu-like flat
+// shoulder), Normal = today's default nc (no first-connect drift), Sharp =
+// most taps (narrowest transition, Icom-like rectangular shoulder). The byte
+// values are load-bearing: persisted DspSettingsStore rows hold the byte, and
+// pre-#871 rows stored the old two-value "Sharp" as 1 — which now deserialises
+// to Normal (== today's behaviour), so legacy prefs are unchanged. Append-only.
+public enum BandpassWindow : byte { Soft = 0, Normal = 1, Sharp = 2 }
+
 public enum ConnectionStatus { Disconnected, Connecting, Connected, Error }
 
 // Thetis NR-button state: Off = no NR, Anr = NR1 (time-domain LMS),
-// Emnr = NR2 (Ephraim-Malah), Sbnr = NR4 (libspecbleach, issue #79).
-// NR3 (RNNR) is intentionally absent: training data for the bundled RNNoise
-// model is voice-corpus-only and underperforms on HF noise. All modes are
-// mutually exclusive in WDSP, so the button carries them in one enum. Byte
-// order is fixed — appending only — because persisted DspSettingsStore rows
-// would mis-deserialize on a reorder.
+// Emnr = NR2 (Ephraim-Malah), Sbnr = NR4 (libspecbleach, issue #79),
+// Rnnr = NR3 (RNNoise). Zeus ships a bundled default RNNoise model so NR3 is
+// selectable out of the box; the operator can override it by installing their
+// own weights file via the DSP menu. NR3 is selectable whenever the loaded
+// libwdsp exports the RNNR symbols and a model (default or operator) is active.
+// All modes are mutually exclusive in WDSP, so the button carries them in one
+// enum. Byte order is fixed — appending only — because persisted
+// DspSettingsStore rows would mis-deserialize on a reorder.
 [JsonConverter(typeof(NrModeJsonConverter))]
 public enum NrMode : byte
 {
@@ -75,6 +98,7 @@ public enum NrMode : byte
     Anr,
     Emnr,
     Sbnr = 3,
+    Rnnr = 4,
 }
 
 public sealed class NrModeJsonConverter : JsonConverter<NrMode>
@@ -82,7 +106,7 @@ public sealed class NrModeJsonConverter : JsonConverter<NrMode>
     public override NrMode Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         if (reader.TokenType == JsonTokenType.Number && reader.TryGetByte(out var numericValue))
-            return numericValue <= (byte)NrMode.Sbnr ? (NrMode)numericValue : NrMode.Off;
+            return numericValue <= (byte)NrMode.Rnnr ? (NrMode)numericValue : NrMode.Off;
 
         if (reader.TokenType == JsonTokenType.String)
         {
@@ -90,6 +114,7 @@ public sealed class NrModeJsonConverter : JsonConverter<NrMode>
             if (string.Equals(stringValue, nameof(NrMode.Anr), StringComparison.OrdinalIgnoreCase)) return NrMode.Anr;
             if (string.Equals(stringValue, nameof(NrMode.Emnr), StringComparison.OrdinalIgnoreCase)) return NrMode.Emnr;
             if (string.Equals(stringValue, nameof(NrMode.Sbnr), StringComparison.OrdinalIgnoreCase)) return NrMode.Sbnr;
+            if (string.Equals(stringValue, nameof(NrMode.Rnnr), StringComparison.OrdinalIgnoreCase)) return NrMode.Rnnr;
         }
 
         return NrMode.Off;
@@ -102,6 +127,7 @@ public sealed class NrModeJsonConverter : JsonConverter<NrMode>
             NrMode.Anr => nameof(NrMode.Anr),
             NrMode.Emnr => nameof(NrMode.Emnr),
             NrMode.Sbnr => nameof(NrMode.Sbnr),
+            NrMode.Rnnr => nameof(NrMode.Rnnr),
             _ => nameof(NrMode.Off),
         });
     }
@@ -598,7 +624,41 @@ public sealed record ExternalPttStatusDto(
     bool CwMode,
     bool SidetoneAvailable,
     string DiagnosticRecommendation,
-    DateTimeOffset GeneratedUtc);
+    DateTimeOffset GeneratedUtc,
+    // Hardware-PTT-IN → MOX enable gate (per-install, default OFF). Nullable so
+    // the read-only diagnostic snapshot (/api/tx/diag, /api/cw/hardware-keying)
+    // can omit it (null) while the dedicated /api/radio/ptt-status endpoint
+    // populates it from PttSettingsStore. When the gate is OFF the PTT-IN lamp
+    // still tracks the footswitch, but no MOX is promoted.
+    bool? Enabled = null);
+
+// Request body for PUT /api/radio/ptt-status — flips the per-install
+// hardware-PTT-IN → MOX enable gate. Persisted in PttSettingsStore; a
+// persisted ON flag only ARMS the gate, it never auto-keys MOX (MOX still
+// requires a physical footswitch edge).
+public sealed record PttEnableSetRequest(bool Enabled);
+
+// State of the ANAN G2 / G2-Ultra hardware front-panel bridge — body of
+// GET/PUT /api/radio/front-panel. The Enabled/DevicePath/Baud trio are the
+// operator's stored settings (DevicePath empty + Baud 0 = auto-detect); the
+// Connected/Active*/PanelType trio is the live bridge status (Connected =
+// serial line open; PanelType 5 = a recognised G2-Ultra handshake).
+public sealed record G2PanelSettingsDto(
+    bool Enabled,
+    string? DevicePath,
+    int Baud,
+    bool Connected,
+    string? ActiveDevicePath,
+    int ActiveBaud,
+    int PanelType);
+
+// Request body for PUT /api/radio/front-panel. Every field optional — only the
+// supplied ones change. DevicePath "" clears the override (back to auto-detect);
+// Baud 0 = auto.
+public sealed record G2PanelSettingsSetRequest(
+    bool? Enabled = null,
+    string? DevicePath = null,
+    int? Baud = null);
 
 public sealed record HardwareKeyingStatusDto(
     int SchemaVersion,
@@ -813,6 +873,71 @@ public sealed record NotchDto(double CenterHz, double WidthHz, bool Active = tru
 // connect), so the server/engine never has to reconcile deltas.
 public sealed record NotchListRequest(IReadOnlyList<NotchDto> Notches);
 
+/// <summary>Single source of truth for the SignalR / JSON wire contract
+/// version and the receiver-DDC ceiling shared between server and frontend.
+/// </summary>
+public static class WireContract
+{
+    /// <summary>Broadcast contract version. v1 was the implicit pre-multi-DDC
+    /// baseline (no <see cref="StateDto.Receivers"/>); v2 introduces the
+    /// per-receiver <see cref="StateDto.Receivers"/> array so the frontend can
+    /// feature-detect multi-DDC support. Surfaced on the wire via
+    /// <see cref="StateDto.WireVersion"/>.</summary>
+    public const int Version = 2;
+
+    /// <summary>Maximum concurrent DDC receivers. Protocol 2's DDC-enable
+    /// command is a single byte (8 bits ⇒ DDC0..DDC7), so the ceiling is 8.
+    /// <see cref="Zeus.Contracts"/> owns the canonical value;
+    /// <c>Zeus.Protocol2.Protocol2Client.MaxRxDdc</c> references it so the wire
+    /// foundation and the contract can never drift apart.</summary>
+    public const int MaxReceivers = 8;
+
+    /// <summary>Reserved receiver index for the non-hardware KiwiSDR slice. It
+    /// sits at the very top of the DDC range so it never collides with the
+    /// contiguous hardware run (RX1..RX6, practical max 6 on a G2/Saturn).
+    /// Frames for the Kiwi receiver are broadcast with this value as their
+    /// <c>RxId</c>; the frontend routes them through the same per-RX render path
+    /// as a hardware DDC and labels the entry from <see cref="ReceiverDto.Name"/>
+    /// ("Kiwi") instead of "RX{Index+1}".</summary>
+    public const int KiwiReceiverIndex = MaxReceivers - 1;
+}
+
+/// <summary>Per-receiver (per-DDC) state for the multi-DDC model. Index 0 is
+/// RX1, index 1 is RX2, and indices ≥ 2 are additional DDCs (up to
+/// <see cref="WireContract.MaxReceivers"/> − 1).
+/// <para>The first usable dual-receive path mirrors the <see cref="StateDto"/>
+/// flat RX1 fields (<see cref="StateDto.VfoHz"/> etc.) into index 0 and the
+/// RX2 / VFO-B fields (<see cref="StateDto.VfoBHz"/> etc.) into index 1;
+/// <see cref="Zeus.Server"/>'s RadioService projects them on every state
+/// change. Additional DDCs live only in this array. The frontend migrates from
+/// the flat fields to this array (multi-DDC UI), after which the flat dupes are
+/// retired.</para></summary>
+public sealed record ReceiverDto(
+    int Index,
+    bool Enabled,
+    // Which phase-synchronous 16-bit ADC feeds this DDC (0 or 1). Defaults to
+    // ADC0; per-DDC ADC assignment is exposed in Settings by the multi-DDC UI.
+    byte AdcSource,
+    long VfoHz,
+    RxMode Mode,
+    int FilterLowHz,
+    int FilterHighHz,
+    string? FilterPresetName,
+    double AfGainDb,
+    int SampleRateHz,
+    // Per-receiver audio mute (Thetis chkMUT / chkRX2Mute — RXOutputGain=0).
+    // Distinct from Rx2AudioMode routing: muting silences this receiver's audio
+    // contribution while leaving every other receiver audible. Defaults false so
+    // pre-mute wire frames deserialize unchanged. Mirrors the per-RX MUTE_RX1/
+    // RX2 keypad controls.
+    bool Muted = false,
+    // Optional human-facing label. Null for hardware DDC receivers — the UI
+    // derives their label from the index ("RX{Index+1}"). Set to a name (e.g.
+    // "Kiwi") for non-hardware software receivers such as the KiwiSDR slice that
+    // occupy a reserved high index (WireContract.KiwiReceiverIndex). Defaulted so
+    // pre-name wire frames deserialize unchanged.
+    string? Name = null);
+
 public sealed record StateDto(
     ConnectionStatus Status,
     string? Endpoint,
@@ -821,7 +946,7 @@ public sealed record StateDto(
     int FilterLowHz,
     int FilterHighHz,
     int SampleRate,
-    double AgcTopDb = 80.0,
+    double AgcTopDb = 90.0,
     // AGC mode + custom params (issue: DSP controls Thetis parity §4). Nullable
     // so legacy state frames (no Agc field) deserialize unchanged; null at the
     // engine seam means "use the Med canned profile". Persisted globally via
@@ -847,6 +972,14 @@ public sealed record StateDto(
     int AttenDb = 0,
     NrConfig? Nr = null,
     int ZoomLevel = 1,
+    // Workspace UI zoom as a whole-percent scale of the panel-grid cell pitch
+    // (column width + row height). 100 = authored size; below 100 shrinks the
+    // cells so more grid fits the monitor (more usable panel space), above 100
+    // enlarges them. Purely a frontend display scale — NOT the spectral
+    // ZoomLevel above and NOT wired to the DSP. Persisted server-side so the
+    // operator's choice follows any client connecting to this radio. Defaulted
+    // so legacy state frames (no field) deserialize unchanged.
+    int WorkspaceZoomPct = 100,
     // Auto-attenuator control loop. When on (default), the server raises
     // AttOffsetDb by 1 per ~100 ms window in which any ADC-overload bit was
     // seen, and decays it by 1 per clean window. Ported from Thetis
@@ -869,6 +1002,14 @@ public sealed record StateDto(
     // Default 150/2850 matches Thetis's stock SSB TX bandpass.
     int TxFilterLowHz = 150,
     int TxFilterHighHz = 2850,
+    // SSB bandpass "rectangularity" — operator-selectable WDSP fir.c window
+    // (issue #871). Sharp = BH 7-term (current WDSP default; steeper shoulder),
+    // Soft = BH 4-term (gentler shoulder). RX and TX are independent so the
+    // operator can mix sharp-receive with soft-transmit for ESSB containment,
+    // or vice versa. Default Sharp on both sides preserves byte-identical
+    // pre-#871 audio. Persisted in DspSettingsStore.
+    BandpassWindow RxFilterWindow = BandpassWindow.Sharp,
+    BandpassWindow TxFilterWindow = BandpassWindow.Sharp,
     // Master RX AF gain in dB. 0 dB ≡ WDSP SetRXAPanelGain1(1.0), the
     // engine's open-time default — a fresh session that never touches this
     // field is audibly identical to pre-#77 builds. Operator slider range
@@ -1034,14 +1175,14 @@ public sealed record StateDto(
     // RX1/RX2 inside the captured bandwidth immediately; future protocol
     // work can map this same state onto a second hardware DDC for wider
     // splits without changing the UI contract.
+    //
+    // RX2's *tuning* (VFO / mode / filter / AF gain) now lives in the canonical
+    // <see cref="Receivers"/> array at index 1 — the flat VFO-B fields
+    // (VfoBHz / ModeB / Filter*B / Rx2AfGainDb) were retired in the A/B wire
+    // collapse. Only the RX2 *control* fields below remain flat: the enable
+    // toggle, audio-routing mode, and per-RX mute.
     bool Rx2Enabled = false,
-    long VfoBHz = 14_200_000,
-    RxMode ModeB = RxMode.USB,
-    int FilterLowHzB = 100,
-    int FilterHighHzB = 2850,
-    string? FilterPresetNameB = "VAR1",
     Zeus.Contracts.Rx2AudioMode Rx2AudioMode = Zeus.Contracts.Rx2AudioMode.Both,
-    double Rx2AfGainDb = 0.0,
     Zeus.Contracts.TxVfo TxVfo = Zeus.Contracts.TxVfo.A,
 
     // CW sidetone pitch in Hz. Currently a baked-in constant
@@ -1065,7 +1206,95 @@ public sealed record StateDto(
     // RX preamp toggle. Persisted with the rest of the radio-state controls so
     // PRE comes back exactly as the operator left it after a backend restart.
     // Hidden on HL2 in the frontend because that board has no hardware preamp.
-    bool PreampOn = false);
+    bool PreampOn = false,
+
+    // ---- TX-audio source (external-audio-jacks re-port) ----
+    // The RESOLVED (board-clamped) TX-audio source the server is currently
+    // pushing. The frontend hydrates the audio picker from this and never
+    // clobbers the server on connect (PR #359/#360 anti-clobber pattern).
+    // Default Host is byte-identical to today on every board.
+    TxAudioSource TxAudioSource = TxAudioSource.Host,
+
+    // ---- Multi-DDC receivers array (wire v2) ----
+    // Canonical per-receiver list: index 0 = RX1, index 1 = RX2, index ≥ 2 =
+    // additional DDCs. RX1 (index 0) is still projected from the flat RX1 fields
+    // (VfoHz/Mode/Filter*/RxAfGainDb). RX2 (index 1) and every extra DDC are
+    // AUTHORITATIVE in this array — RX2's old flat VFO-B dupes were removed in
+    // the A/B wire collapse, so RadioService.ProjectReceivers carries index 1's
+    // tuning forward and only overlays the flat RX2 control fields (Rx2Enabled/
+    // Rx2Muted) + shared SampleRate. RadioService re-projects on every state
+    // change (Mutate + Snapshot), so the array is never stale. Null only on a
+    // pre-seed construction — every wire-bound path populates it.
+    IReadOnlyList<ReceiverDto>? Receivers = null,
+
+    // Wire contract version (WireContract.Version) so the frontend can
+    // feature-detect the Receivers[] array and per-DDC controls. v1 = implicit
+    // pre-multi-DDC baseline; v2 = Receivers[] present.
+    int WireVersion = WireContract.Version,
+
+    // DDC / receiver ceiling for this build (WireContract.MaxReceivers). The
+    // multi-DDC UI gates the "exposed receivers" control against this.
+    int MaxReceivers = WireContract.MaxReceivers,
+
+    // ---- VFO lock (Thetis chkVFOLock) ----
+    // Pure software guard: when true, operator dial tuning (panadapter click,
+    // wheel, typed entry) is rejected so an accidental knob bump can't move the
+    // VFO. CAT / TCI / calibration (fromExternal) still tune — they are
+    // intentional. No hardware effect. Ephemeral — defaults unlocked each
+    // session (Thetis resets the lock on restart).
+    bool VfoLocked = false,
+
+    // ---- RIT (Receiver Incremental Tuning, Thetis chkRIT/udRIT) ----
+    // Temporary RX-only frequency offset applied without moving the displayed
+    // VFO digits. In Zeus's CTUN model the offset is folded into the WDSP shift
+    // stage (DspPipelineService), so the tuned signal relocates while the dial
+    // reads unchanged. RitHz range ±99999 (Thetis udRIT). RX1 only.
+    bool RitEnabled = false,
+    long RitHz = 0,
+
+    // ---- XIT (Transmit Incremental Tuning, Thetis chkXIT/udXIT) ----
+    // Temporary TX-only carrier offset applied on key-down without moving the
+    // displayed VFO. Folded into the TX effective-LO computation
+    // (RadioService.TxEffectiveLoHz / AlignLoForTx). XitHz range ±99999.
+    bool XitEnabled = false,
+    long XitHz = 0,
+
+    // ---- Per-RX mute (Thetis chkMUT / chkRX2Mute) ----
+    // RX1 / RX2 audio mute (RXOutputGain=0 equivalent). Index ≥ 2 receivers
+    // carry their mute on ReceiverDto.Muted. Distinct from Rx2AudioMode routing.
+    bool Rx1Muted = false,
+    bool Rx2Muted = false,
+
+    // ---- Multi-DDC TX target ----
+    // Authoritative transmit target as a receiver index (0 = RX1/VFO A, 1 = RX2/
+    // VFO B, >= 2 = an extra DDC). TxVfo stays the legacy A/B projection;
+    // RadioService.TxFrequencyHz resolves the carrier from this index so TX can
+    // key on any receiver's VFO. Ephemeral — resets to RX1 each session (never
+    // auto-transmit on a receiver the operator can't see after a restart).
+    int TxReceiverIndex = 0,
+
+    // ---- Diversity combiner (Thetis DiversityForm / WDSP xdivEXT) ----
+    // Two phase-synchronous ADC streams combined with a per-source complex
+    // rotation (gain magnitude + phase) to null an interferer or peak a signal.
+    // Null = diversity off (default), byte-identical to today's single-ADC RX
+    // path. See DiversityConfig. Ephemeral — re-armed each session (like PS),
+    // never auto-armed on restart.
+    DiversityConfig? Diversity = null,
+
+    // ---- NR3 (RNNoise) availability + active model ----
+    // WdspNr3RnnrAvailable: the loaded libwdsp exports the RNNR symbols
+    // (SetRXARNNRRun / SetRXARNNRPosition / RNNRloadModel). False on builds
+    // compiled with WDSP_WITH_NR3=OFF — NR3 is then hidden in the UI.
+    // Nr3ModelName: name of the ACTIVE model — the operator-installed file name,
+    // or the bundled-default display name, or null when neither is available.
+    // NR3 becomes selectable when the native symbols are present AND a model
+    // (default or operator) is active.
+    // Nr3UsingBundledDefault: true when the active model is the shipped default
+    // (no operator model installed). The UI uses this to label the source and
+    // gate the "Remove" action (remove reverts to the default, not to inert).
+    bool WdspNr3RnnrAvailable = false,
+    string? Nr3ModelName = null,
+    bool Nr3UsingBundledDefault = false);
 
 /// <summary>Canonical CW constants shared between backend and wire DTOs.
 /// Single source of truth — CwOffset (server-side) and StateDto both
@@ -1093,9 +1322,58 @@ public sealed record ConnectRequest(
     // server uses it as the connected board kind instead of the historical
     // "P2 active ⇒ assume OrionMkII" fallback. Null/omitted = legacy
     // behaviour. Issue #171.
-    byte? BoardId = null);
+    byte? BoardId = null,
+    // Operator opt-in to take over a radio another controller is already
+    // driving. /api/connect/p2 normally refuses to become a SECOND master on a
+    // radio whose discovery reply reports Busy — connecting alongside another
+    // controller makes the band/antenna/T-R relay matrix chatter and can brown
+    // out the radio (observed on a co-located Saturn all-in-one running
+    // saturn-go + p2app). The takeover flow sends a reclaim stop first and sets
+    // this so the post-reclaim re-connect isn't re-blocked by the busy guard
+    // while the radio is still settling. Default false = guard enforced.
+    bool Force = false);
 
 public sealed record VfoSetRequest(long Hz, int Receiver = 0);
+
+/// <summary>Body of <c>POST /api/radio/vfo-lock</c>.</summary>
+public sealed record VfoLockSetRequest(bool Locked);
+
+/// <summary>Body of <c>POST /api/rx/rit</c>. Both fields optional; only the
+/// supplied ones change. <c>Hz</c> is clamped to ±99999 (Thetis udRIT range).</summary>
+public sealed record RitSetRequest(bool? Enabled = null, long? Hz = null);
+
+/// <summary>Body of <c>POST /api/tx/xit</c>. Both fields optional; only the
+/// supplied ones change. <c>Hz</c> is clamped to ±99999 (Thetis udXIT range).</summary>
+public sealed record XitSetRequest(bool? Enabled = null, long? Hz = null);
+
+/// <summary>Body of <c>POST /api/receivers/{index}/mute</c>.</summary>
+public sealed record MuteSetRequest(bool Muted);
+
+/// <summary>Body of <c>POST /api/radio/atu/tune</c>. <c>DurationMs</c> is how long
+/// the Apollo/Alex auto-tune request bit (C0=0x12 C2[4]) is held on the wire
+/// before auto-clearing; default 1000 ms matches Thetis's ATUTune sequence.</summary>
+public sealed record AtuTuneRequest(int DurationMs = 1000);
+
+/// <summary>Diversity-combiner configuration. Two phase-synchronous ADC streams
+/// are combined as <c>out = rx[Reference] + r·e^{jθ}·rx[Source]</c>, where
+/// <c>r = Gain</c> (magnitude, 0..2, 1.0 = unity) and <c>θ = PhaseDeg</c> in
+/// degrees (−180..180). The reference receiver (RX1/ADC0) is the phase anchor;
+/// <c>SourceRx</c> selects the second ADC's receiver (default RX2/index 1).
+/// Mirrors Thetis DiversityForm's I/Q rotate (Irotate=r·cosθ, Qrotate=r·sinθ)
+/// fed to WDSP <c>SetEXTDIVRotate</c>.</summary>
+public sealed record DiversityConfig(
+    bool Enabled = false,
+    double Gain = 1.0,
+    double PhaseDeg = 0.0,
+    int SourceRx = 1);
+
+/// <summary>Body of <c>POST /api/rx/diversity</c>. Every field optional; only
+/// the supplied ones change.</summary>
+public sealed record DiversitySetRequest(
+    bool? Enabled = null,
+    double? Gain = null,
+    double? PhaseDeg = null,
+    int? SourceRx = null);
 
 public enum Rx2AudioMode
 {
@@ -1115,6 +1393,49 @@ public sealed record Rx2SetRequest(
     long? VfoBHz = null,
     Rx2AudioMode? AudioMode = null,
     double? AfGainDb = null);
+
+/// <summary>Configure one receiver by index (RX1=0, RX2=1, RX3+=2..) for the
+/// full multi-DDC model — the body of <c>POST /api/receivers/{index}</c>. Every
+/// field is optional; only the supplied ones change. For index ≥ 2 these drive
+/// an extra hardware DDC (<c>AdcSource</c> selects the phase-synchronous ADC 0/1).
+/// </summary>
+public sealed record ReceiverSetRequest(
+    bool? Enabled = null,
+    long? VfoHz = null,
+    byte? AdcSource = null,
+    RxMode? Mode = null,
+    int? FilterLowHz = null,
+    int? FilterHighHz = null,
+    double? AfGainDb = null,
+    // Named filter preset (e.g. "VAR1", "F5") this receiver's low/high cuts came
+    // from. Optimistic-only round-trip so the RX3+ passband shows the preset
+    // label the operator picked, exactly as RX2 carries FilterPresetNameB. The
+    // cuts in FilterLowHz/FilterHighHz remain authoritative for the DSP.
+    string? FilterPresetName = null);
+
+/// <summary>Body of <c>POST /api/kiwi</c> — configure the KiwiSDR slice
+/// receiver. Every field is optional; only supplied fields change.
+/// <para><see cref="Url"/> is the KiwiSDR base URL or host:port (e.g.
+/// <c>sdr.example.org:8073</c> or <c>http://sdr.example.org:8073</c>). An empty
+/// <see cref="Password"/> string clears any stored password; null leaves it
+/// unchanged. Setting <see cref="Enabled"/> true with a URL present opens the
+/// connection; false tears it down.</para></summary>
+public sealed record KiwiSetRequest(
+    bool? Enabled = null,
+    string? Url = null,
+    string? Password = null);
+
+/// <summary>Status of the KiwiSDR slice receiver — the body of
+/// <c>GET /api/kiwi</c> and the value returned from <c>POST /api/kiwi</c>.
+/// <see cref="HasPassword"/> avoids ever returning the stored secret to the
+/// client; <see cref="Status"/> is a short connection-state word
+/// ("disabled", "connecting", "connected", "error").</summary>
+public sealed record KiwiConfigDto(
+    bool Enabled,
+    string? Url,
+    bool HasPassword,
+    string Status,
+    string? StatusDetail = null);
 
 /// <summary>Operator settings for the POTA/SOTA Spots feature. Persisted in
 /// zeus-prefs.db (<c>SpotsSettingsStore</c>) and shared with the frontend.
@@ -1309,6 +1630,11 @@ public sealed record MoxSetRequest(bool On);
 
 public sealed record TxVfoSetRequest(TxVfo TxVfo);
 
+/// <summary>Body of <c>POST /api/tx/receiver</c> — select the transmit target by
+/// receiver index (0 = RX1, 1 = RX2, >= 2 = an extra DDC). Generalises
+/// <see cref="TxVfoSetRequest"/> beyond the A/B pair.</summary>
+public sealed record TxReceiverSetRequest(int Index);
+
 public sealed record DriveSetRequest(int Percent);
 
 /// <summary>TX pre-key (MOX) delay in milliseconds, 0..500. See
@@ -1322,6 +1648,11 @@ public sealed record TxPreKeyDelaySetRequest(int DelayMs);
 public sealed record TuneDriveSetRequest(int Percent);
 
 public sealed record NrSetRequest(NrConfig Nr);
+
+// NR3 (RNNoise) model install-from-URL request. The operator pastes a URL to a
+// compatible RNNoise weights file; the server fetches and installs it. Uploads
+// use multipart/form-data instead (no DTO). Zeus hosts no model of its own.
+public sealed record Nr3ModelDownloadRequest(string Url);
 
 // AGC mode + custom-params set request. Replace-style (the whole AgcConfig is
 // posted on every change), matching NrSetRequest. The separate AGC max-gain
@@ -1338,6 +1669,11 @@ public sealed record SquelchSetRequest(SquelchConfig Squelch);
 // CompressorGainDb 0..20). The separate Leveler max-gain path
 // (/api/tx/leveler-max-gain) is untouched.
 public sealed record TxLevelingSetRequest(TxLevelingConfig TxLeveling);
+
+// SSB bandpass "rectangularity" set request — issue #871. Single-field shape:
+// the client posts the chosen window for the relevant side (RX or TX) and the
+// server pushes the corresponding WDSP fir.c window code into the live engine.
+public sealed record BandpassWindowSetRequest(BandpassWindow Window);
 
 // Per-popover save requests for the NR right-click panels. Nullable shape so
 // the popover can PATCH a single field without disturbing siblings (the server
@@ -1377,15 +1713,22 @@ public sealed record Nr2CoreConfigSetRequest(
 // the discrete factor on the wire.
 public sealed record ZoomSetRequest(int Level);
 
+// Workspace UI zoom — a whole-percent scale of the panel-grid cell pitch (see
+// StateDto.WorkspaceZoomPct). Distinct from ZoomSetRequest, which sets the
+// spectral analyzer zoom. The server clamps Pct into its allowed range.
+public sealed record WorkspaceZoomSetRequest(int Pct);
+
 public sealed record AutoAttSetRequest(bool Enabled);
 
 // RX ADC protection policy. This is the operator-facing superset of the
 // legacy Auto-ATT toggle: existing /api/auto-att still maps to Enabled, while
 // /api/rx/adc-protection exposes the ramp timing, step size, maximum automatic
-// offset, warning threshold, and optional Protocol-2 max-magnitude soft limit.
-// Defaults preserve the original Thetis-style loop: 100 ms windows, 1 dB
-// attack/release steps, 31 dB maximum offset, warning when overload level > 3,
-// and no magnitude-only attack unless the operator explicitly sets a limit.
+// offset, warning threshold, release hold-off, and optional Protocol-2
+// max-magnitude soft limit. Defaults mirror Thetis' handleOverload loop:
+// 100 ms windows, 1 dB attack/release steps, 31 dB maximum offset, attenuation
+// and the warning lamp both gated on a sustained overload (level > 3), a 2 s
+// hold before the offset unwinds (Thetis' nudAutoAttHold), and no
+// magnitude-only attack unless the operator explicitly sets a limit.
 public sealed record AdcProtectionConfig(
     bool Enabled = true,
     int AttackMs = 100,
@@ -1394,7 +1737,8 @@ public sealed record AdcProtectionConfig(
     int ReleaseStepDb = 1,
     int MaxOffsetDb = 31,
     int WarningThreshold = 3,
-    int MagnitudeSoftLimit = 0);
+    int MagnitudeSoftLimit = 0,
+    int ReleaseHoldMs = 2000);
 
 public sealed record AdcProtectionSetRequest(
     bool? Enabled = null,
@@ -1404,7 +1748,8 @@ public sealed record AdcProtectionSetRequest(
     int? ReleaseStepDb = null,
     int? MaxOffsetDb = null,
     int? WarningThreshold = null,
-    int? MagnitudeSoftLimit = null);
+    int? MagnitudeSoftLimit = null,
+    int? ReleaseHoldMs = null);
 
 public sealed record AdcProtectionStatusDto(
     AdcProtectionConfig Config,
@@ -1487,6 +1832,10 @@ public sealed record BandMemoryDto(string Band, long Hz, RxMode Mode);
 
 public sealed record BandMemorySetRequest(long Hz, RxMode Mode);
 
+// "Reset & Uninstall Zeus" confirm. Token is the one-shot nonce from the
+// uninstall preview; RemoveBinary requests a full uninstall (app binary too).
+public sealed record UninstallRequest(string? Token, bool RemoveBinary);
+
 // UI layout: opaque workspace JSON persisted server-side so the operator's
 // panel arrangement survives page reloads and reinstalls. The JSON is stored
 // as a string to avoid strongly-typing the workspace tree on the wire — the
@@ -1526,6 +1875,29 @@ public sealed record SaveNamedLayoutRequest(
     string? Description = null);
 
 public sealed record SetActiveLayoutRequest(string RadioKey, string LayoutId);
+
+// Saved-layouts library — a per-radio pool of reusable layout PRESETS, kept
+// separate from the working tabs (`RadioLayoutsDto`). The operator snapshots a
+// good workspace arrangement into a saved layout so they can restore it later
+// (if they mess the live tab up) or seed a brand-new workspace from it. Saved
+// layouts are never "active"; they are templates, applied on demand.
+public sealed record SavedLayoutDto(
+    string Id,
+    string Name,
+    string LayoutJson,
+    long UpdatedUtc,
+    string? Icon = null,
+    string? Description = null);
+
+public sealed record SavedLayoutsDto(string RadioKey, IReadOnlyList<SavedLayoutDto> SavedLayouts);
+
+public sealed record SaveSavedLayoutRequest(
+    string RadioKey,
+    string SavedId,
+    string Name,
+    string LayoutJson,
+    string? Icon = null,
+    string? Description = null);
 
 // Prefs-database (profile) selector. All Zeus settings/layouts/prefs persist in
 // a single LiteDB file resolved by PrefsDbPath.Get() at startup. The operator
@@ -1620,6 +1992,49 @@ public sealed record RadioSelectionSetRequest(
 // against the OrionMkIIVariant enum. Empty / unknown rejected with 400.
 public sealed record RadioVariantSetRequest(string Variant);
 
+// Global (per-radio, NOT per-band) TX-audio SOURCE selection
+// (external-audio-jacks re-port). GET carries the per-board source-availability
+// gates so the single-select picker renders only the sources the connected
+// board offers: HasOnboardCodec gates RadioMic; HasRadioLineIn gates
+// RadioLineIn; HasBalancedXlr gates RadioBalancedXlr; HasMicBias gates the bias
+// toggle; HermesLite2MicFrontEnd flags the (inert v1) HL2 mic front-end.
+// `Source` is the RESOLVED (board-clamped) source the server is pushing — the
+// frontend hydrates from it and never clobbers the server on connect. MicBoost /
+// MicBias / LineInGain are the parameters OF the selected source.
+public sealed record AudioFrontEndDto(
+    bool HasOnboardCodec,
+    bool HermesLite2MicFrontEnd,
+    bool HasRadioLineIn,
+    bool HasBalancedXlr,
+    bool HasMicBias,
+    TxAudioSource Source,
+    bool MicBoost,
+    bool MicBias,
+    int LineInGain);
+
+// Mutating version — sets the whole global TX-audio source. LineInGain is
+// clamped to 0..31 server-side. The server clamps Source against the board's
+// capabilities (an unsupported jack → Host) and returns the resolved state plus
+// the live capability gates.
+public sealed record AudioFrontEndSetRequest(
+    TxAudioSource Source,
+    bool MicBoost,
+    bool MicBias,
+    int LineInGain);
+
+// Radio-side speaker output (Protocol-1 codec radios). Whether to send
+// demodulated RX audio down the EP2 frame's L/R slots so the radio's onboard
+// codec drives its speaker/headphone/line-out jacks. <c>Available</c> is true
+// only while a P1 codec radio (not the codec-less HL2) is connected; the toggle
+// is otherwise inert. The Protocol-2 Saturn/G2 appliance speaker path is
+// separate and is NOT governed by this setting.
+public sealed record RadioSpeakerOutputDto(
+    bool Enabled,
+    bool Available);
+
+public sealed record RadioSpeakerOutputSetRequest(
+    bool Enabled);
+
 // HL2-specific optional toggles surfaced via /api/radio/hl2-options.
 // Shape is an object (not a bare bool) so future mi0bot HL2 toggles can
 // slot in without breaking the contract. Currently carries Band Volts
@@ -1633,6 +2048,17 @@ public sealed record Hl2OptionsDto(bool BandVolts);
 // distinct so the GET-vs-PUT request shapes can diverge in the future
 // (e.g. PUT becoming a partial update with nullable fields).
 public sealed record Hl2OptionsSetRequest(bool BandVolts);
+
+// HL2 user GPIO (external-port parity audit — re-port of external-ports plan
+// Phase 5). The 4-bit user_dig_out mask driven on the Protocol-1 0x0a/wire-0x14
+// frame C3[3:0] → MCP23008 on the HL2 IO connector. Supported is true only on a
+// connected Hermes-Lite 2 (HasHl2UserGpio); the frontend gates the User-GPIO
+// card on it. Bits is the low nibble (0..15).
+public sealed record Hl2GpioDto(bool Supported, int Bits);
+
+// PUT body for /api/radio/hl2-gpio — sets the 4-bit user_dig_out mask. Only the
+// low nibble is honoured; the server 409s on a board without HasHl2UserGpio.
+public sealed record Hl2GpioSetRequest(int Bits);
 
 // ANAN-G2 / Saturn-class ADC options surfaced via /api/radio/g2-options.
 // Dither and randomizer default on, matching the Thetis G2 option block.
@@ -2043,3 +2469,36 @@ public sealed record RepoUpdateStatus(
     public long? ReleaseAssetSizeBytes { get; init; }
     public string? ReleaseAssetDigest { get; init; }
 }
+
+// ---- External antenna ports (external-ports plan — antenna slice, #804) ----
+//
+// Per-band TX/RX antenna relay + RX-aux selection. Surfaced via
+// /api/radio/antenna, NEVER via StateDto — antenna state is server-authoritative
+// and pushed to the live client on the Changed → RecomputePaAndPush path, so a
+// frontend reconnect can never clobber it (PR #359/#360 no-clobber pattern).
+//
+// TxAnt / RxAnt are antenna strings ("Ant1" | "Ant2" | "Ant3"); RxAux is the
+// auxiliary RX input string ("None" | "Ext1" | "Ext2" | "Xvtr" | "Bypass").
+// "Ant1" / "None" reproduce today's wire bytes bit-for-bit (default-inert).
+public sealed record AntennaBandDto(string Band, string TxAnt, string RxAnt, string RxAux = "None");
+
+// GET /api/radio/antenna response. HasTxAntennaRelays / HasRxAntennaRelays are
+// the board-capability gates the frontend renders the right selectors from; the
+// per-band rows list every HF band. AvailableRxAux is the set of aux-input
+// strings the connected board exposes (empty on HL2 — no aux). AlexRevision is
+// always "Modern" in this slice: the wire path routes PureSignal external
+// feedback to the BYPASS/K36 bit (Rev 24+ behaviour), and the operator-set
+// legacy Rev15/16 EXT1 routing is not wire-discoverable so it is deferred.
+public sealed record AntennaSettingsDto(
+    bool HasTxAntennaRelays,
+    bool HasRxAntennaRelays,
+    IReadOnlyList<AntennaBandDto> Bands,
+    IReadOnlyList<string>? AvailableRxAux = null,
+    string AlexRevision = "Modern");
+
+// PUT /api/radio/antenna — sets ONE band's antenna + RX-aux selection. Band must
+// be a known HF band; TxAnt/RxAnt must parse to HpsdrAntenna; RxAux to the
+// server-side RxAuxInputSel. The server returns 409 for a relay/aux the
+// connected board lacks (non-ANT1 on a relay-less board, an aux the board does
+// not expose), 400 on a malformed body / unknown band / unparseable value.
+public sealed record AntennaSetRequest(string Band, string TxAnt, string RxAnt, string RxAux = "None");

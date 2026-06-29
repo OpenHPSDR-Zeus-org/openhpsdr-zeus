@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -15,6 +15,7 @@ import { LeafletMapErrorBoundary } from '../../components/design/LeafletMapError
 import { bearingDeg, distanceKm } from '../../components/design/geo';
 import { useQrzStore } from '../../state/qrz-store';
 import { useRotatorStore } from '../../state/rotator-store';
+import { RotatorSlotSelector } from '../../components/RotatorSlotSelector';
 
 function normalizeAz(deg: number | null | undefined): number | null {
   if (deg == null || !Number.isFinite(deg)) return null;
@@ -120,6 +121,7 @@ export function RotatorCompassPanel() {
           {rotMoving && targetVisibleAz != null && (
             <span className="rc-arrow">→ {fmtAz(targetVisibleAz)}</span>
           )}
+          <RotatorSlotSelector />
         </div>
 
         <div className="rc-controls">

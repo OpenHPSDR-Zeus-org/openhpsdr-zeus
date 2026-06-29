@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
@@ -37,6 +38,7 @@ namespace Zeus.Server;
 // Both share zeus-prefs.db with the other preference stores.
 public sealed class RadioStateStore : IDisposable
 {
+    private readonly Zeus.Data.SharedLiteDatabase.Lease _dbLease;
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<RadioStateEntry> _state;
     private readonly ILiteCollection<BoardSampleRateEntry> _boardRates;
@@ -51,7 +53,8 @@ public sealed class RadioStateStore : IDisposable
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _dbLease = Zeus.Data.SharedLiteDatabase.Acquire(dbPath);
+        _db = _dbLease.Database;
         _state = _db.GetCollection<RadioStateEntry>("radio_state");
         _boardRates = _db.GetCollection<BoardSampleRateEntry>("board_sample_rates");
         _boardRates.EnsureIndex(x => x.BoardKey, unique: true);
@@ -122,7 +125,7 @@ public sealed class RadioStateStore : IDisposable
         }
     }
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose() => _dbLease.Dispose();
 
     private static string BoardKey(HpsdrBoardKind board, OrionMkIIVariant variant) =>
         board == HpsdrBoardKind.OrionMkII
@@ -153,6 +156,7 @@ public sealed class RadioStateEntry
     public int AdcProtectionMaxOffsetDb { get; set; } = 31;
     public int AdcProtectionWarningThreshold { get; set; } = 3;
     public int AdcProtectionMagnitudeSoftLimit { get; set; }
+    public int AdcProtectionReleaseHoldMs { get; set; } = 2000;
     public int AttenDb { get; set; }
     public bool AutoAgcEnabled { get; set; }
     // RX preamp toggle (PRE). Not part of older rows; default false matches
@@ -171,6 +175,11 @@ public sealed class RadioStateEntry
     // restart.
     public double LevelerMaxGainDb { get; set; } = 8.0;
     public int ZoomLevel { get; set; } = 1;
+    // Workspace UI zoom (whole-percent cell-pitch scale; see
+    // StateDto.WorkspaceZoomPct). Default 100 = authored size; legacy rows
+    // missing the field hydrate to that. Persisted so the operator's panel
+    // scale survives a restart, same as the other UI-facing snapshot fields.
+    public int WorkspaceZoomPct { get; set; } = 100;
     // Drive slider % (0..100). Default 0 mirrors RadioService._drivePct seed.
     public int DrivePct { get; set; }
     // TUN drive slider % (0..100). Default 10 mirrors RadioService._tunePct seed —

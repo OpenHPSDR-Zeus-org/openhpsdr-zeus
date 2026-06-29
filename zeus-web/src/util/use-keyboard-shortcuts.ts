@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -56,7 +57,7 @@ import * as viewCenter from '../state/view-center';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 import { useTxStore } from '../state/tx-store';
 import { ACTIVE_MAP_REF } from '../state/active-map-ref';
-import { applyCtunZoomCenterAfterState, centerCtunForZoomIn } from './ctun-zoom-center';
+import { applyCtunZoomCenterAfterState, centerCtunForZoomIn, centerKiwiForZoomIn } from './ctun-zoom-center';
 
 // The arrow-key tune step follows the operator's TuningStepWidget choice
 // (toolbar-favorites-store.stepHz). Read at event time inside bumpTune so
@@ -146,6 +147,8 @@ export function useKeyboardShortcuts() {
       const ctrl = new AbortController();
       zoomAbort = ctrl;
       const centeredLoHz = centerCtunForZoomIn(store.zoomLevel, next, ctrl.signal);
+      // Zoom is global — re-centre the Kiwi slice on its dial too (self-guards).
+      centerKiwiForZoomIn(store.zoomLevel, next);
       setZoom(next, ctrl.signal)
         .then((s) => {
           if (!ctrl.signal.aborted) {

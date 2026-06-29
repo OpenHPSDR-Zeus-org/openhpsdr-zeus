@@ -3,6 +3,8 @@
 // Client for /api/dsp/display-intelligence, the server-side persistence surface
 // for Signal Intelligence weak-signal display policy.
 
+import { clampFinite } from '../util/number';
+
 export type DisplayIntelligenceSettings = {
   profileId: 'balanced' | 'dx' | 'cw' | 'digital' | 'voice' | 'contest' | 'custom';
   popEnabled: boolean;
@@ -55,12 +57,6 @@ export const DISPLAY_INTELLIGENCE_DEFAULTS: DisplayIntelligenceSettings = {
 
 const LEGACY_WATERFALL_RELIEF_DEPTH = 48;
 const LEGACY_WATERFALL_SMOOTHNESS = 42;
-
-function clampFinite(value: unknown, min: number, max: number, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? Math.max(min, Math.min(max, value))
-    : fallback;
-}
 
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {
   return Math.round(clampFinite(value, min, max, fallback));

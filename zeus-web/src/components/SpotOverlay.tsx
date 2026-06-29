@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -85,7 +86,7 @@ export function SpotOverlay() {
             />
             {/* callsign label at top */}
             <div
-              className="absolute top-5 -translate-x-1/2 select-none whitespace-nowrap font-mono text-[9px] leading-none px-0.5"
+              className="absolute top-5 -translate-x-1/2 select-none whitespace-nowrap font-mono text-[11px] leading-none px-0.5"
               style={{
                 color,
                 textShadow: '0 0 3px rgba(0,0,0,0.8)',

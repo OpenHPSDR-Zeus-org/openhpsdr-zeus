@@ -1,0 +1,372 @@
+# Copyright (C) 1991-2008 Altera Corporation
+# Your use of Altera Corporation's design tools, logic functions
+# and other software and tools, and its AMPP partner logic
+# functions, and any output files from any of the foregoing
+# (including device programming or simulation files), and any
+# associated documentation or information are expressly subject
+# to the terms and conditions of the Altera Program License
+# Subscription Agreement, Altera MegaCore Function License
+# Agreement, or other applicable license agreement, including,
+# without limitation, that your use is for the sole purpose of
+# programming logic devices manufactured by Altera and sold by
+# Altera or its authorized distributors.  Please refer to the
+# applicable agreement for further details.
+
+
+# The default values for assignments are stored in the file
+#		Angelia_assignment_defaults.qdf
+# If this file doesn't exist, and for assignments not listed, see file
+#		assignment_defaults.qdf
+
+# Altera recommends that you do not modify this file. This
+# file is updated automatically by the Quartus II software
+# and any changes you make may be lost or overwritten.
+
+
+set_global_assignment -name FAMILY "Cyclone IV GX"
+set_global_assignment -name DEVICE EP4CGX150DF31C7
+set_global_assignment -name TOP_LEVEL_ENTITY Orion
+set_global_assignment -name ORIGINAL_QUARTUS_VERSION "13.0 SP1"
+set_global_assignment -name PROJECT_CREATION_TIME_DATE "22:57:39  JANUARY 08, 2014"
+set_global_assignment -name LAST_QUARTUS_VERSION "18.1.0 Lite Edition"
+set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 85
+set_global_assignment -name DEVICE_FILTER_PACKAGE FBGA
+set_global_assignment -name DEVICE_FILTER_PIN_COUNT 896
+set_global_assignment -name USE_CONFIGURATION_DEVICE ON
+set_global_assignment -name FORCE_CONFIGURATION_VCCIO ON
+set_global_assignment -name RESERVE_ALL_UNUSED_PINS_WEAK_PULLUP "AS INPUT TRI-STATED"
+set_global_assignment -name ALLOW_POWER_UP_DONT_CARE OFF
+set_global_assignment -name POWER_PRESET_COOLING_SOLUTION "15 MM HEAT SINK WITH 200 LFPM AIRFLOW"
+set_global_assignment -name POWER_BOARD_THERMAL_MODEL "NONE (CONSERVATIVE)"
+set_global_assignment -name STRATIX_DEVICE_IO_STANDARD "3.3-V LVCMOS"
+set_global_assignment -name VERILOG_INPUT_VERSION SYSTEMVERILOG_2005
+set_global_assignment -name VERILOG_SHOW_LMF_MAPPING_MESSAGES OFF
+set_global_assignment -name CYCLONEII_RESERVE_NCEO_AFTER_CONFIGURATION "USE AS REGULAR IO"
+set_global_assignment -name GENERATE_RBF_FILE ON
+set_global_assignment -name CRC_ERROR_OPEN_DRAIN OFF
+set_global_assignment -name OUTPUT_IO_TIMING_NEAR_END_VMEAS "HALF VCCIO" -rise
+set_global_assignment -name OUTPUT_IO_TIMING_NEAR_END_VMEAS "HALF VCCIO" -fall
+set_global_assignment -name OUTPUT_IO_TIMING_FAR_END_VMEAS "HALF SIGNAL SWING" -rise
+set_global_assignment -name OUTPUT_IO_TIMING_FAR_END_VMEAS "HALF SIGNAL SWING" -fall
+set_location_assignment PIN_N24 -to ADCCLK
+set_location_assignment PIN_N27 -to ADCMISO
+set_location_assignment PIN_N29 -to ADCMOSI
+set_location_assignment PIN_AK14 -to ANT_TUNE
+set_location_assignment PIN_G27 -to ATTN_CLK
+set_location_assignment PIN_M29 -to ATTN_CLK_2
+set_location_assignment PIN_G28 -to ATTN_DATA
+set_location_assignment PIN_M30 -to ATTN_DATA_2
+set_location_assignment PIN_F30 -to ATTN_LE
+set_location_assignment PIN_M28 -to ATTN_LE_2
+set_location_assignment PIN_B6 -to CBCLK
+set_location_assignment PIN_B10 -to CDIN
+set_location_assignment PIN_B12 -to CDOUT
+set_location_assignment PIN_A15 -to CLK_25MHZ
+set_location_assignment PIN_B7 -to CLRCIN
+set_location_assignment PIN_B9 -to CLRCOUT
+set_location_assignment PIN_G6 -to CMCLK
+set_location_assignment PIN_A13 -to CMODE
+set_location_assignment PIN_AK6 -to CS
+set_location_assignment PIN_B25 -to DACD[0]
+set_location_assignment PIN_B24 -to DACD[1]
+set_location_assignment PIN_A24 -to DACD[2]
+set_location_assignment PIN_A23 -to DACD[3]
+set_location_assignment PIN_B22 -to DACD[4]
+set_location_assignment PIN_A22 -to DACD[5]
+set_location_assignment PIN_B21 -to DACD[6]
+set_location_assignment PIN_A21 -to DACD[7]
+set_location_assignment PIN_A20 -to DACD[8]
+set_location_assignment PIN_A19 -to DACD[9]
+set_location_assignment PIN_B19 -to DACD[10]
+set_location_assignment PIN_A18 -to DACD[11]
+set_location_assignment PIN_B18 -to DACD[12]
+set_location_assignment PIN_A17 -to DACD[13]
+set_location_assignment PIN_C17 -to DAC_ALC
+set_location_assignment PIN_AE20 -to DEBUG_LED1
+set_location_assignment PIN_AE19 -to DEBUG_LED2
+set_location_assignment PIN_AE18 -to DEBUG_LED3
+set_location_assignment PIN_AE17 -to DEBUG_LED4
+set_location_assignment PIN_AE16 -to DEBUG_LED5
+set_location_assignment PIN_AD23 -to DEBUG_LED6
+set_location_assignment PIN_AD16 -to DEBUG_LED7
+set_location_assignment PIN_AA21 -to DEBUG_LED8
+set_location_assignment PIN_AA20 -to DEBUG_LED9
+set_location_assignment PIN_AA18 -to DEBUG_LED10
+set_location_assignment PIN_A26 -to DITH
+set_location_assignment PIN_G30 -to DITH_2
+set_location_assignment PIN_V15 -to EXT_OSC_10MHZ
+set_location_assignment PIN_AK29 -to FPGA_PLL
+set_location_assignment PIN_N25 -to FPGA_PTT
+set_location_assignment PIN_A27 -to INA[0]
+set_location_assignment PIN_A28 -to INA[1]
+set_location_assignment PIN_A29 -to INA[2]
+set_location_assignment PIN_B27 -to INA[3]
+set_location_assignment PIN_B28 -to INA[4]
+set_location_assignment PIN_B30 -to INA[5]
+set_location_assignment PIN_C28 -to INA[6]
+set_location_assignment PIN_C29 -to INA[7]
+set_location_assignment PIN_C30 -to INA[8]
+set_location_assignment PIN_D28 -to INA[9]
+set_location_assignment PIN_D29 -to INA[10]
+set_location_assignment PIN_D30 -to INA[11]
+set_location_assignment PIN_E27 -to INA[12]
+set_location_assignment PIN_E28 -to INA[13]
+set_location_assignment PIN_E30 -to INA[14]
+set_location_assignment PIN_F26 -to INA[15]
+set_location_assignment PIN_H25 -to INA_2[0]
+set_location_assignment PIN_H27 -to INA_2[1]
+set_location_assignment PIN_H28 -to INA_2[2]
+set_location_assignment PIN_H30 -to INA_2[3]
+set_location_assignment PIN_J25 -to INA_2[4]
+set_location_assignment PIN_J27 -to INA_2[5]
+set_location_assignment PIN_J28 -to INA_2[6]
+set_location_assignment PIN_J29 -to INA_2[7]
+set_location_assignment PIN_J30 -to INA_2[8]
+set_location_assignment PIN_K25 -to INA_2[9]
+set_location_assignment PIN_K26 -to INA_2[10]
+set_location_assignment PIN_K27 -to INA_2[11]
+set_location_assignment PIN_K28 -to INA_2[12]
+set_location_assignment PIN_K29 -to INA_2[13]
+set_location_assignment PIN_K30 -to INA_2[14]
+set_location_assignment PIN_L30 -to INA_2[15]
+set_location_assignment PIN_N30 -to IO1
+set_location_assignment PIN_AK13 -to IO2
+set_location_assignment PIN_AJ22 -to IO4
+set_location_assignment PIN_AJ27 -to IO5
+set_location_assignment PIN_AK27 -to IO6
+set_location_assignment PIN_AK28 -to IO8
+set_location_assignment PIN_AK11 -to J15_5
+set_location_assignment PIN_AK12 -to J15_6
+set_location_assignment PIN_AJ25 -to KEY_DASH
+set_location_assignment PIN_AJ24 -to KEY_DOT
+set_location_assignment PIN_T29 -to LTC2208_122MHz
+set_location_assignment PIN_V29 -to LTC2208_122MHz_2
+set_location_assignment PIN_AK19 -to MICBIAS_ENABLE
+set_location_assignment PIN_C7 -to MICBIAS_SELECT
+set_location_assignment PIN_C5 -to MIC_SIG_SELECT
+set_location_assignment PIN_AK7 -to MODE2
+set_location_assignment PIN_A10 -to MOSI
+set_location_assignment PIN_AK17 -to NCONFIG
+set_location_assignment PIN_AJ16 -to OSC_10MHZ
+set_location_assignment PIN_AK20 -to OSC_ENABLE
+set_location_assignment PIN_F27 -to OVERFLOW
+set_location_assignment PIN_M25 -to OVERFLOW_2
+set_location_assignment PIN_F29 -to PGA
+set_location_assignment PIN_M27 -to PGA_2
+set_location_assignment PIN_L15 -to PHY_CLK125
+set_location_assignment PIN_A6 -to PHY_INT_N
+set_location_assignment PIN_A8 -to PHY_MDC
+set_location_assignment PIN_A7 -to PHY_MDIO
+set_location_assignment PIN_A5 -to PHY_RESET_N
+set_location_assignment PIN_AH2 -to PHY_RX[0]
+set_location_assignment PIN_AH3 -to PHY_RX[1]
+set_location_assignment PIN_AH4 -to PHY_RX[2]
+set_location_assignment PIN_AH5 -to PHY_RX[3]
+set_location_assignment PIN_B15 -to PHY_RX_CLOCK
+set_location_assignment PIN_AJ7 -to PHY_TX[0]
+set_location_assignment PIN_AJ6 -to PHY_TX[1]
+set_location_assignment PIN_AJ4 -to PHY_TX[2]
+set_location_assignment PIN_AJ3 -to PHY_TX[3]
+set_location_assignment PIN_AE6 -to PHY_TX_CLOCK
+set_location_assignment PIN_AH6 -to PHY_TX_EN
+set_location_assignment PIN_AJ28 -to PTT
+set_location_assignment PIN_C3 -to PTT_SELECT
+set_location_assignment PIN_F28 -to RAND
+set_location_assignment PIN_M26 -to RAND_2
+set_location_assignment PIN_A9 -to RX_DV
+set_location_assignment PIN_AK3 -to SCK
+set_location_assignment PIN_A25 -to SHDN
+set_location_assignment PIN_G29 -to SHDN_2
+set_location_assignment PIN_AK4 -to SI
+set_location_assignment PIN_AK5 -to SO
+set_location_assignment PIN_AK10 -to SPI_SCK
+set_location_assignment PIN_AJ9 -to SPI_SDO
+set_location_assignment PIN_A11 -to SSCK
+set_location_assignment PIN_AK9 -to Status_LED
+set_location_assignment PIN_AH22 -to USEROUT0
+set_location_assignment PIN_AH23 -to USEROUT1
+set_location_assignment PIN_AH24 -to USEROUT2
+set_location_assignment PIN_AH25 -to USEROUT3
+set_location_assignment PIN_AH26 -to USEROUT4
+set_location_assignment PIN_AH27 -to USEROUT5
+set_location_assignment PIN_AH28 -to USEROUT6
+set_location_assignment PIN_AK16 -to _122MHz
+set_location_assignment PIN_N28 -to nADCCS
+set_location_assignment PIN_A12 -to nCS
+set_location_assignment PIN_Y18 -to ATTN_CLK_3
+set_location_assignment PIN_Y20 -to ATTN_DATA_3
+set_location_assignment PIN_Y19 -to ATTN_LE_3
+set_location_assignment PIN_AG26 -to DITH_3
+set_location_assignment PIN_AE21 -to INA_3[0]
+set_location_assignment PIN_AE22 -to INA_3[1]
+set_location_assignment PIN_AE23 -to INA_3[2]
+set_location_assignment PIN_AF16 -to INA_3[3]
+set_location_assignment PIN_AF18 -to INA_3[4]
+set_location_assignment PIN_AF19 -to INA_3[5]
+set_location_assignment PIN_AF21 -to INA_3[6]
+set_location_assignment PIN_AF22 -to INA_3[7]
+set_location_assignment PIN_AG16 -to INA_3[8]
+set_location_assignment PIN_AG17 -to INA_3[9]
+set_location_assignment PIN_AG18 -to INA_3[10]
+set_location_assignment PIN_AG19 -to INA_3[11]
+set_location_assignment PIN_AG20 -to INA_3[12]
+set_location_assignment PIN_AG22 -to INA_3[13]
+set_location_assignment PIN_AG23 -to INA_3[14]
+set_location_assignment PIN_AG24 -to INA_3[15]
+set_location_assignment PIN_W15 -to LTC2208_122MHz_3
+set_location_assignment PIN_AG25 -to OVERFLOW_3
+set_location_assignment PIN_AG28 -to PGA_3
+set_location_assignment PIN_Y21 -to RAND_3
+set_location_assignment PIN_AG27 -to SHDN_3
+set_global_assignment -name CYCLONEIII_CONFIGURATION_DEVICE EPCS128
+set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -section_id Top
+set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
+set_global_assignment -name LL_ROOT_REGION ON -section_id "Root Region"
+set_global_assignment -name LL_MEMBER_STATE LOCKED -section_id "Root Region"
+set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -section_id Top
+set_instance_assignment -name CLOCK_SETTINGS IFCLK -to IFCLK
+set_instance_assignment -name CLOCK_SETTINGS CMCLK -to CMCLK
+set_instance_assignment -name CLOCK_SETTINGS CBCLK -to CBCLK
+set_instance_assignment -name CLOCK_SETTINGS CLRCIN -to CLRCIN
+set_instance_assignment -name CLOCK_SETTINGS CLRCOUT -to CLRCOUT
+set_instance_assignment -name CLOCK_SETTINGS TLV2208_125Mhz -to LTC2208_125Mhz
+set_instance_assignment -name CLOCK_SETTINGS OSC_10MHz -to OSC_10MHZ
+set_global_assignment -name EDA_SIMULATION_TOOL "<None>"
+set_global_assignment -name SYNTH_TIMING_DRIVEN_SYNTHESIS ON
+set_global_assignment -name CYCLONEII_OPTIMIZATION_TECHNIQUE BALANCED
+set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP ON
+set_global_assignment -name OPTIMIZE_HOLD_TIMING "ALL PATHS"
+set_global_assignment -name OPTIMIZE_MULTI_CORNER_TIMING ON
+set_global_assignment -name AUTO_MERGE_PLLS OFF
+set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
+set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING OFF
+set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION OFF
+set_global_assignment -name TIMING_ANALYZER_MULTICORNER_ANALYSIS ON
+set_global_assignment -name SMART_RECOMPILE ON
+set_global_assignment -name RESERVE_DATA0_AFTER_CONFIGURATION "USE AS REGULAR IO"
+set_global_assignment -name RESERVE_DATA1_AFTER_CONFIGURATION "USE AS REGULAR IO"
+set_global_assignment -name RESERVE_FLASH_NCE_AFTER_CONFIGURATION "USE AS REGULAR IO"
+set_global_assignment -name RESERVE_DCLK_AFTER_CONFIGURATION "USE AS REGULAR IO"
+
+
+
+set_global_assignment -name PRE_FLOW_SCRIPT_FILE "quartus_sh:make_datetime.tcl"
+
+
+
+
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firromHd.v
+set_global_assignment -name QIP_FILE Polyphase_FIR/firromHd.qip
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firromHc.v
+set_global_assignment -name QIP_FILE Polyphase_FIR/firromHc.qip
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firromHb.v
+set_global_assignment -name QIP_FILE Polyphase_FIR/firromHb.qip
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firromHa.v
+set_global_assignment -name QIP_FILE Polyphase_FIR/firromHa.qip
+set_global_assignment -name VERILOG_FILE mux_clear.v
+set_global_assignment -name VERILOG_FILE Rx_fifo_ctrl0.v
+set_global_assignment -name VERILOG_FILE Multiply2.v
+set_global_assignment -name QIP_FILE Multiply2.qip
+set_global_assignment -name VERILOG_FILE Ethernet/Rx_fifo.v
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firram48.v
+set_global_assignment -name VERILOG_FILE sine_table_256.v
+set_global_assignment -name QIP_FILE sine_table_256.qip
+set_global_assignment -name MIF_FILE sine_256.mif
+set_global_assignment -name VERILOG_FILE Ethernet/send_data.v
+set_global_assignment -name VERILOG_FILE byte_to_32bits.v
+set_global_assignment -name VERILOG_FILE audio_I2S.v
+set_global_assignment -name VERILOG_FILE Rx_fifo_ctrl.v
+set_global_assignment -name VERILOG_FILE Mic_fifo_ctrl.v
+set_global_assignment -name VERILOG_FILE Ethernet/rgmii_recv.v
+set_global_assignment -name VERILOG_FILE iambic.v
+set_global_assignment -name VERILOG_FILE Ethernet/udp_send.v
+set_global_assignment -name VERILOG_FILE Ethernet/udp_recv.v
+set_global_assignment -name VERILOG_FILE Ethernet/tx_pll.v
+set_global_assignment -name VERILOG_FILE Ethernet/sync.v
+set_global_assignment -name VERILOG_FILE Ethernet/sdr_send.v
+set_global_assignment -name VERILOG_FILE Ethernet/sdr_receive.v
+set_global_assignment -name VERILOG_FILE Ethernet/rgmii_send.v
+set_global_assignment -name VERILOG_FILE Ethernet/phy_cfg.v
+set_global_assignment -name VERILOG_FILE Ethernet/network.v
+set_global_assignment -name VERILOG_FILE Ethernet/mdio.v
+set_global_assignment -name VERILOG_FILE Ethernet/mac_send.v
+set_global_assignment -name VERILOG_FILE Ethernet/mac_recv.v
+set_global_assignment -name VERILOG_FILE Ethernet/ip_send.v
+set_global_assignment -name VERILOG_FILE Ethernet/ip_recv.v
+set_global_assignment -name VERILOG_FILE Ethernet/icmp.v
+set_global_assignment -name VERILOG_FILE Ethernet/eeprom.v
+set_global_assignment -name VERILOG_FILE Ethernet/dhcp.v
+set_global_assignment -name VERILOG_FILE Ethernet/ddio_out.v
+set_global_assignment -name VERILOG_FILE Ethernet/ddio_in.v
+set_global_assignment -name VERILOG_FILE Ethernet/crc32.v
+set_global_assignment -name VERILOG_FILE Ethernet/arp.v
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/firx2r2.v
+set_global_assignment -name VERILOG_FILE receiver2.v
+set_global_assignment -name VERILOG_FILE sidetone.v
+set_global_assignment -name VERILOG_FILE profile_ROM.v
+set_global_assignment -name QIP_FILE profile_ROM.qip
+set_global_assignment -name VERILOG_FILE profile.v
+set_global_assignment -name MIF_FILE profile.mif
+set_global_assignment -name SDC_FILE Orion.sdc
+set_global_assignment -name VERILOG_FILE PHY_fifo.v
+set_global_assignment -name VERILOG_FILE Orion_ADC.v
+set_global_assignment -name VERILOG_FILE Orion.v
+set_global_assignment -name VERILOG_FILE sp_rcv_ctrl.v
+set_global_assignment -name VERILOG_FILE Attenuator.v
+set_global_assignment -name VERILOG_FILE ASMI.v
+set_global_assignment -name VERILOG_FILE Led_control.v
+set_global_assignment -name VERILOG_FILE Led_flash.v
+set_global_assignment -name VERILOG_FILE MDIO.v
+set_global_assignment -name VERILOG_FILE ASMI_interface.v
+set_global_assignment -name VERILOG_FILE DHCP.v
+set_global_assignment -name VERILOG_FILE EEPROM.v
+set_global_assignment -name VERILOG_FILE EPCS_fifo.v
+set_global_assignment -name VERILOG_FILE Apollo.v
+set_global_assignment -name VERILOG_FILE cdc_mcp.v
+set_global_assignment -name VERILOG_FILE cdc_sync.v
+set_global_assignment -name VERILOG_FILE cic.v
+set_global_assignment -name VERILOG_FILE cordic.v
+set_global_assignment -name VERILOG_FILE cpl_cordic.v
+set_global_assignment -name VERILOG_FILE debounce.v
+set_global_assignment -name VERILOG_FILE FIFO.v
+set_global_assignment -name VERILOG_FILE pulsegen.v
+set_global_assignment -name VERILOG_FILE SPI.v
+set_global_assignment -name VERILOG_FILE TLV320_SPI.v
+set_global_assignment -name QIP_FILE PLL_IF.qip
+set_global_assignment -name QIP_FILE SP_fifo.qip
+set_global_assignment -name QIP_FILE ASMI.qip
+set_global_assignment -name VERILOG_FILE Polyphase_FIR/CicInterpM5.v
+set_global_assignment -name VERILOG_FILE mic_I2S.v
+set_global_assignment -name QIP_FILE Rx_Audio_fifo.qip
+set_global_assignment -name QIP_FILE Mic_fifo.qip
+set_global_assignment -name QIP_FILE Tx1_IQ_fifo.qip
+set_global_assignment -name VERILOG_FILE cdc_sync_strobe.v
+set_global_assignment -name VERILOG_FILE CC_encoder.v
+set_global_assignment -name QIP_FILE Ethernet/icmp_fifo.qip
+set_global_assignment -name VERILOG_FILE byte_to_48bits.v
+set_global_assignment -name VERILOG_FILE Tx_specific_C&C.v
+set_global_assignment -name VERILOG_FILE Rx_specific_C&C.v
+set_global_assignment -name VERILOG_FILE High_Priority_CC.v
+set_global_assignment -name VERILOG_FILE General_CC.v
+set_global_assignment -name QIP_FILE Polyphase_FIR/firram48.qip
+set_global_assignment -name QIP_FILE Ethernet/Rx_mux.qip
+set_global_assignment -name CDF_FILE Chain1.cdf
+set_global_assignment -name QIP_FILE Ethernet/tx_pll.qip
+set_global_assignment -name QIP_FILE C122_PLL.qip
+set_global_assignment -name QIP_FILE EXT_C10_PLL.qip
+set_global_assignment -name QIP_FILE C10_PLL.qip
+set_global_assignment -name QIP_FILE C122_shift.qip
+set_global_assignment -name QIP_FILE PLL_CMCLK.qip
+set_global_assignment -name QIP_FILE PLL_CBCLK.qip
+set_global_assignment -name QIP_FILE PLL_CLRCLK.qip
+set_global_assignment -name QIP_FILE tx_pll.qip
+set_global_assignment -name SEARCH_PATH polyphase_fir/
+set_global_assignment -name SEARCH_PATH ethernet/
+set_global_assignment -name SEARCH_PATH Ethernet/ -tag from_archive
+set_global_assignment -name SEARCH_PATH I2S_receive_test/output_files/ -tag from_archive
+set_global_assignment -name SEARCH_PATH VE3NEA/ -tag from_archive
+set_global_assignment -name SEARCH_PATH Angelia_Joe_7Rx/ -tag from_archive
+set_global_assignment -name SEARCH_PATH Polyphase_FIR/ -tag from_archive
+set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top

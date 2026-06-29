@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the
@@ -45,8 +46,19 @@
 import { useEffect, useRef, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
 import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { useConnectionStore } from '../state/connection-store';
-import { setFilter } from '../api/client';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
+import {
+  displayFilterEdgesHz,
+  getReceiverFilterHighHz,
+  getReceiverFilterLowHz,
+  getReceiverFilterPresetName,
+  getReceiverMode,
+  getReceiverVfoHz,
+  optimisticSetReceiverFilter,
+  optimisticSetReceiverPreset,
+  postReceiverFilter,
+  type ReceiverKey,
+} from '../state/receiver-state';
 import * as viewCenter from '../state/view-center';
 
 // Edge-resize tuning constants — shared with the advanced filter mini-pan.
@@ -74,7 +86,7 @@ type PassbandOverlayProps = {
   resizable?: boolean;
   /** The spectrum surface container, for mapping a pointer X to a frequency. */
   containerRef?: RefObject<HTMLElement | null>;
-  receiver?: 'A' | 'B';
+  receiver?: ReceiverKey;
 };
 
 type EdgeDrag = {
@@ -96,15 +108,11 @@ export function PassbandOverlay({
   const hzPerPixel = useDisplayStore((s) => selectDisplaySlice(s, receiver).hzPerPixel);
   // Header width — survives frames whose pan payload is invalid.
   const width = useDisplayStore((s) => selectDisplaySlice(s, receiver).width);
-  const filterLowHz = useConnectionStore((s) =>
-    receiver === 'B' ? s.filterLowHzB : s.filterLowHz,
-  );
-  const filterHighHz = useConnectionStore((s) =>
-    receiver === 'B' ? s.filterHighHzB : s.filterHighHz,
-  );
-  const selectedVfoHz = useConnectionStore((s) =>
-    receiver === 'B' ? s.vfoBHz : s.vfoHz,
-  );
+  const filterLowHz = useConnectionStore((s) => getReceiverFilterLowHz(s, receiver));
+  const filterHighHz = useConnectionStore((s) => getReceiverFilterHighHz(s, receiver));
+  const selectedVfoHz = useConnectionStore((s) => getReceiverVfoHz(s, receiver));
+  const mode = useConnectionStore((s) => getReceiverMode(s, receiver));
+  const cwPitchHz = useConnectionStore((s) => s.cwPitchHz);
 
   const rectRef = useRef<HTMLDivElement | null>(null);
   const drag = useRef<EdgeDrag | null>(null);
@@ -127,7 +135,7 @@ export function PassbandOverlay({
     const c = useConnectionStore.getState();
     const visualCenter = Number(s.centerHz);
     const absHz = visualCenter - span / 2 + frac * span;
-    return absHz - Number(receiver === 'B' ? c.vfoBHz : c.vfoHz);
+    return absHz - getReceiverVfoHz(c, receiver);
   };
 
   // Throttled live write while dragging (50 ms), so a drag resizes the real
@@ -137,7 +145,7 @@ export function PassbandOverlay({
     if (!d) return;
     d.flushTimer = null;
     d.lastWriteAt = performance.now();
-    setFilter(d.pendingLo, d.pendingHi, d.slot, undefined, receiver).catch(() => {});
+    postReceiverFilter(receiver, d.pendingLo, d.pendingHi, d.slot).catch(() => {});
   };
   const scheduleWrite = () => {
     const d = drag.current;
@@ -153,9 +161,9 @@ export function PassbandOverlay({
     e.stopPropagation();
     e.preventDefault();
     const c = useConnectionStore.getState();
-    const filterPresetName = receiver === 'B' ? c.filterPresetNameB : c.filterPresetName;
-    const filterLowHz = receiver === 'B' ? c.filterLowHzB : c.filterLowHz;
-    const filterHighHz = receiver === 'B' ? c.filterHighHzB : c.filterHighHz;
+    const filterPresetName = getReceiverFilterPresetName(c, receiver);
+    const filterLowHz = getReceiverFilterLowHz(c, receiver);
+    const filterHighHz = getReceiverFilterHighHz(c, receiver);
     const slot = variableSlot(filterPresetName);
     drag.current = {
       side,
@@ -167,7 +175,7 @@ export function PassbandOverlay({
       pointerId: e.pointerId,
     };
     if (slot !== filterPresetName) {
-      useConnectionStore.setState(receiver === 'B' ? { filterPresetNameB: slot } : { filterPresetName: slot });
+      optimisticSetReceiverPreset(receiver, slot);
     }
     try { (e.target as Element).setPointerCapture(e.pointerId); } catch { /* ok */ }
   };
@@ -182,9 +190,7 @@ export function PassbandOverlay({
     else hi = Math.max(d.pendingLo + MIN_PASSBAND_HZ, Math.round(offset));
     d.pendingLo = lo;
     d.pendingHi = hi;
-    useConnectionStore.setState(
-      receiver === 'B' ? { filterLowHzB: lo, filterHighHzB: hi } : { filterLowHz: lo, filterHighHz: hi },
-    );
+    optimisticSetReceiverFilter(receiver, lo, hi);
     scheduleWrite();
   };
   const onEdgeUp = (e: ReactPointerEvent) => {
@@ -195,7 +201,7 @@ export function PassbandOverlay({
     drag.current = null;
     try { (e.target as Element).releasePointerCapture(e.pointerId); } catch { /* ok */ }
     const applyState = useConnectionStore.getState().applyState;
-    setFilter(pendingLo, pendingHi, slot, undefined, receiver).then(applyState).catch(() => {});
+    postReceiverFilter(receiver, pendingLo, pendingHi, slot).then(applyState).catch(() => {});
   };
 
   const showHandles = resizable && !!containerRef;
@@ -227,11 +233,23 @@ export function PassbandOverlay({
       // marker uses. Outside CTUN the dial sits on the view center so this is
       // ~0 and the filter stays pinned to the zero line during a glide; under
       // CTUN the dial roams off-centre and the passband tracks it.
-      const vfoHz = receiver === 'B' ? conn.vfoBHz : conn.vfoHz;
-      const filterLowHz = receiver === 'B' ? conn.filterLowHzB : conn.filterLowHz;
-      const filterHighHz = receiver === 'B' ? conn.filterHighHzB : conn.filterHighHz;
+      const vfoHz = getReceiverVfoHz(conn, receiver);
+      const rxMode = getReceiverMode(conn, receiver);
+      // FreeDV stores its passband USB-positive regardless of band; re-sign it
+      // to the convention sideband (LSB < 10 MHz) so the rect lands where the
+      // demod actually is. No-op for every other mode.
+      const { lowHz: filterLowHz, highHz: filterHighHz } = displayFilterEdgesHz(
+        rxMode,
+        vfoHz,
+        getReceiverFilterLowHz(conn, receiver),
+        getReceiverFilterHighHz(conn, receiver),
+      );
+      // filterLow/HighHz are audio offsets from the hardware LO, not the VFO
+      // dial. In CW modes the LO is shifted by ±cwPitchHz from VFO, so
+      // passCenter must land on the LO (not VFO) to place the rect correctly.
+      const cwOffset = rxMode === 'CWU' ? -conn.cwPitchHz : rxMode === 'CWL' ? conn.cwPitchHz : 0;
       const dialOffsetHz = vc.isInitialized() ? vfoHz - vc.getTargetCenterHz() : 0;
-      const passCenter = view + dialOffsetHz;
+      const passCenter = view + dialOffsetHz + cwOffset;
       const startHz = view - spanHz / 2;
       const leftPct = ((passCenter + filterLowHz - startHz) / spanHz) * 100;
       const rightPct = ((passCenter + filterHighHz - startHz) / spanHz) * 100;
@@ -249,10 +267,12 @@ export function PassbandOverlay({
       if (
         s.filterLowHz !== prev.filterLowHz ||
         s.filterHighHz !== prev.filterHighHz ||
-        s.filterLowHzB !== prev.filterLowHzB ||
-        s.filterHighHzB !== prev.filterHighHzB ||
         s.vfoHz !== prev.vfoHz ||
-        s.vfoBHz !== prev.vfoBHz
+        s.mode !== prev.mode ||
+        s.cwPitchHz !== prev.cwPitchHz ||
+        // RX1 is the flat primary; every secondary (RX2 = index 1, RX3+) lives in
+        // the receivers[] array — its reference changes on any filter/vfo/mode edit.
+        s.receivers !== prev.receivers
       ) {
         schedule();
       }
@@ -276,8 +296,17 @@ export function PassbandOverlay({
   const startHz = center - spanHz / 2;
 
   // Initial (pre-draw-bus) geometry; the callback refines it next frame.
-  const passLowHz = selectedVfoHz + filterLowHz;
-  const passHighHz = selectedVfoHz + filterHighHz;
+  const cwOffset = mode === 'CWU' ? -cwPitchHz : mode === 'CWL' ? cwPitchHz : 0;
+  // Re-sign FreeDV's USB-positive stored passband to the convention sideband
+  // (LSB < 10 MHz) for display — same as the draw-bus path. No-op otherwise.
+  const { lowHz: dispLowHz, highHz: dispHighHz } = displayFilterEdgesHz(
+    mode,
+    selectedVfoHz,
+    filterLowHz,
+    filterHighHz,
+  );
+  const passLowHz = selectedVfoHz + cwOffset + dispLowHz;
+  const passHighHz = selectedVfoHz + cwOffset + dispHighHz;
   const leftPct = ((passLowHz - startHz) / spanHz) * 100;
   const rightPct = ((passHighHz - startHz) / spanHz) * 100;
   const widthPct = rightPct - leftPct;

@@ -2,7 +2,8 @@
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//                         Douglas J. Cerrato (KB2UKA),
+//                         Christian Suarez (N9WAR), and contributors.
 //
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
@@ -115,7 +116,16 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
     // Pinned portable Node (current LTS). Downloaded into PortableNodeRoot when
     // the system has no Node, so Install works on a machine with none
     // preinstalled. Override the version only by editing this constant.
-    private const string PortableNodeVersion = "v22.11.0";
+    //
+    // MUST be >= MinNodeVersion: HamClock's deps (axios-cookiejar-support,
+    // @electron/rebuild) are ESM-only and are reached via require(), which Node
+    // only permits unflagged from v22.12.0 on. v22.11.0 throws ERR_REQUIRE_ESM
+    // at server startup ("require() of ES Module ... not supported").
+    private const string PortableNodeVersion = "v22.23.0";
+
+    // Minimum Node that can run HamClock without ERR_REQUIRE_ESM (see above).
+    // A resolved Node below this is rejected in favour of the bundled copy.
+    private static readonly Version MinNodeVersion = new(22, 12, 0);
 
     public HamClockService(ILogger<HamClockService> log)
     {
@@ -188,6 +198,104 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             var raw = Environment.GetEnvironmentVariable(PortOverrideEnvVar);
             return int.TryParse(raw, out var p) && p is > 0 and <= 65535 ? p : DefaultStablePort;
         }
+    }
+
+    // -- DX push (outbound "set the worked station on the map") ----------
+
+    // Short-timeout client for the DX-push GET — distinct from the 10-minute
+    // download client. A push must never stall the FT8 UI, so we cap it tight and
+    // swallow every failure.
+    private static readonly HttpClient PushHttp = new() { Timeout = TimeSpan.FromSeconds(4) };
+
+    /// <summary>
+    /// Push a worked station's grid to HamClock's map as the new DX location.
+    /// SEND-ONLY: issues a single HTTP GET to the classic-HamClock REST surface
+    /// (<c>set_newdx?grid=...</c>) and never reads anything back; it cannot key TX.
+    /// Never throws — returns false on any skip/failure.
+    /// </summary>
+    /// <param name="grid">4- or 6-char Maidenhead locator. Required: classic
+    /// HamClock's set_newdx sets the DX by grid (or lat/long); there is no
+    /// set-DX-by-callsign, so a null/invalid grid is a no-op.</param>
+    /// <param name="target">"external" (a classic HamClock at host:port) or
+    /// "bundled" (the OpenHamClock sidecar — NOT supported today; no-op).</param>
+    public async Task<bool> PushDxAsync(
+        string? grid, string target, string externalHost, int externalPort, CancellationToken ct = default)
+    {
+        if (!TryNormalizeGrid(grid, out var locator))
+        {
+            _log.LogDebug("hamclock.dx skipped: no valid grid ({Grid})", grid);
+            return false;
+        }
+
+        // The bundled accius/openhamclock sidecar has no set-DX endpoint yet, so a
+        // real push only works against an external classic HamClock. Gate the
+        // bundled path as a logged no-op until an upstream OpenHamClock PR lands.
+        if (string.Equals(target, "bundled", StringComparison.OrdinalIgnoreCase))
+        {
+            _log.LogInformation(
+                "hamclock.dx: bundled OpenHamClock has no set-DX endpoint; push not supported " +
+                "(use an external classic HamClock, or await an upstream OpenHamClock PR). grid={Grid}",
+                locator);
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(externalHost))
+        {
+            _log.LogDebug("hamclock.dx skipped: external host not configured");
+            return false;
+        }
+
+        var url = BuildSetDxUrl(externalHost, externalPort, locator);
+        try
+        {
+            using var resp = await PushHttp.GetAsync(url, ct).ConfigureAwait(false);
+            if (resp.IsSuccessStatusCode)
+            {
+                _log.LogInformation("hamclock.dx pushed grid={Grid} -> {Url}", locator, url);
+                return true;
+            }
+            _log.LogWarning("hamclock.dx push HTTP {Code} -> {Url}", (int)resp.StatusCode, url);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "hamclock.dx push failed -> {Url}", url);
+            return false;
+        }
+    }
+
+    /// <summary>Build the classic-HamClock set-DX REST URL. The grid is passed as
+    /// a named <c>grid=</c> query parameter per the HamClock API
+    /// (tardate/ESPHamClock doc/api.md, verified June 2026) — NOT a bare arg.</summary>
+    internal static string BuildSetDxUrl(string host, int port, string grid)
+        => $"http://{host.Trim()}:{port}/set_newdx?grid={Uri.EscapeDataString(grid)}";
+
+    /// <summary>Validate + normalize a Maidenhead locator to 4 or 6 chars
+    /// (field pair A-R, square 0-9, optional subsquare a-x). Returns false for
+    /// null/empty/malformed grids.</summary>
+    internal static bool TryNormalizeGrid(string? grid, out string normalized)
+    {
+        normalized = "";
+        if (string.IsNullOrWhiteSpace(grid)) return false;
+        var g = grid.Trim();
+        if (g.Length != 4 && g.Length != 6) return false;
+
+        // Canonical Maidenhead casing: field upper, subsquare lower.
+        char f1 = char.ToUpperInvariant(g[0]), f2 = char.ToUpperInvariant(g[1]);
+        char s1 = g[2], s2 = g[3];
+        if (f1 is < 'A' or > 'R' || f2 is < 'A' or > 'R') return false;   // field A-R
+        if (s1 is < '0' or > '9' || s2 is < '0' or > '9') return false;   // square 0-9
+
+        if (g.Length == 4)
+        {
+            normalized = $"{f1}{f2}{s1}{s2}";
+            return true;
+        }
+
+        char u1 = char.ToLowerInvariant(g[4]), u2 = char.ToLowerInvariant(g[5]);
+        if (u1 is < 'a' or > 'x' || u2 is < 'a' or > 'x') return false;   // subsquare a-x
+        normalized = $"{f1}{f2}{s1}{s2}{u1}{u2}";
+        return true;
     }
 
     public HamClockStatus Snapshot()
@@ -433,6 +541,18 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
         }
     }
 
+    /// <summary>True if a "vX.Y.Z" Node version string is at least
+    /// <see cref="MinNodeVersion"/>. Tolerant of a missing 'v' prefix and any
+    /// prerelease/build suffix; an unparseable string fails closed (false).</summary>
+    internal static bool NodeMeetsMinimum(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version)) return false;
+        var v = version.Trim().TrimStart('v', 'V');
+        var cut = v.IndexOfAny(['-', '+']);
+        if (cut >= 0) v = v[..cut];
+        return Version.TryParse(v, out var parsed) && parsed >= MinNodeVersion;
+    }
+
     /// <summary>Cached Node availability for Snapshot — probes once, then reuses
     /// the result (refreshed by EnsureNodeAsync). Also adopts a previously
     /// downloaded private Node if the system has none.</summary>
@@ -469,12 +589,14 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
     {
         // (1) Whatever's already resolved (system, or a _nodeDir set earlier).
         var (ok, ver) = DetectNode();
-        if (ok)
+        if (ok && NodeMeetsMinimum(ver))
         {
             Append($"Using {(_nodeBundled ? "bundled" : "system")} Node {ver}.");
             SetNodeInfo((true, ver));
             return true;
         }
+        if (ok)
+            Append($"System Node {ver} is older than the required {MinNodeVersion} — using a private copy for HamClock.");
 
         // (2) A private Node from a previous install.
         var portable = FindPortableNodeBinDir();
@@ -482,7 +604,7 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
         {
             _nodeDir = portable;
             (ok, ver) = DetectNode();
-            if (ok)
+            if (ok && NodeMeetsMinimum(ver))
             {
                 _nodeBundled = true;
                 Append($"Using bundled Node {ver}.");
@@ -512,18 +634,20 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
 
     /// <summary>The PATH-prependable bin dir of a previously downloaded private
     /// Node, or null. Windows: the extracted folder (node.exe + npm.cmd at root);
-    /// Unix: its <c>bin/</c> subdir.</summary>
+    /// Unix: its <c>bin/</c> subdir. Matches only the currently pinned
+    /// <see cref="PortableNodeVersion"/> dir, so bumping that constant makes an
+    /// existing install fall through to a fresh download instead of reusing a
+    /// stale (e.g. ERR_REQUIRE_ESM-prone) Node left on disk.</summary>
     private static string? FindPortableNodeBinDir()
     {
         try
         {
             if (!Directory.Exists(PortableNodeRoot)) return null;
-            foreach (var dir in Directory.GetDirectories(PortableNodeRoot))
-            {
-                var binDir = OperatingSystem.IsWindows() ? dir : Path.Combine(dir, "bin");
-                var exe = Path.Combine(binDir, OperatingSystem.IsWindows() ? "node.exe" : "node");
-                if (File.Exists(exe)) return binDir;
-            }
+            var (_, _, _, dirName) = PortableNodeArtifact();
+            var dir = Path.Combine(PortableNodeRoot, dirName);
+            var binDir = OperatingSystem.IsWindows() ? dir : Path.Combine(dir, "bin");
+            var exe = Path.Combine(binDir, OperatingSystem.IsWindows() ? "node.exe" : "node");
+            if (File.Exists(exe)) return binDir;
         }
         catch { /* best effort */ }
         return null;
@@ -656,8 +780,10 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
 
     /// <summary>
     /// Build a ProcessStartInfo that resolves PATH-installed tools on every
-    /// OS. npm is a .cmd shim on Windows (not a PATH-resolvable .exe), so it
-    /// must be invoked through cmd.exe; node.exe resolves directly.
+    /// OS. npm/npx are run by invoking their JS entrypoint with node directly
+    /// (node "…/npm-cli.js" …) rather than through the npm/npm.cmd shim, so the
+    /// working directory can never hijack which npm runs; node.exe resolves
+    /// directly. See <see cref="CreateToolProcessStartInfo"/>.
     /// </summary>
     private ProcessStartInfo MakePsi(string tool, string args, string cwd)
     {
@@ -674,6 +800,34 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+
+        // For npm/npx, run their JS entrypoint with node directly
+        // (node "<…>/npm-cli.js" <args>) instead of going through the
+        // npm / npm.cmd shim. cmd.exe resolves a bare `npm` against the working
+        // directory *before* PATH, so a stray or half-written node_modules\npm
+        // in the install dir (e.g. left by an interrupted `npm ci`) can shadow
+        // the real npm and fail with "Cannot find module npm-cli.js". Calling
+        // node with an absolute entrypoint removes every shim / PATH / CWD
+        // ambiguity, and is identical on Windows, macOS and Linux.
+        if (tool is "npm" or "npx")
+        {
+            var nodeExe = ResolveNodeExe(nodeDir);
+            var cliJs = nodeExe is null ? null : ResolveNpmCliJs(nodeExe, tool);
+            if (nodeExe is not null && cliJs is not null)
+            {
+                psi.FileName = nodeExe;
+                var quotedCli = $"\"{cliJs}\"";
+                psi.Arguments = args.Length == 0 ? quotedCli : $"{quotedCli} {args}";
+                if (nodeDir is not null)
+                    PrependPath(psi, nodeDir);
+                return psi;
+            }
+        }
+
+        // Fallback (and the normal path for node/tar/etc.): the npm/npx CLI
+        // entrypoint couldn't be located, so fall back to the shim. npm is a
+        // .cmd shim on Windows (not a PATH-resolvable .exe), so it must be
+        // invoked through cmd.exe; node.exe and tar resolve directly.
         var bundledTool = nodeDir is null ? null : ResolveBundledToolPath(tool, nodeDir);
         if (OperatingSystem.IsWindows() && (tool is "npm" or "npx"))
         {
@@ -694,6 +848,56 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
         if (nodeDir is not null)
             PrependPath(psi, nodeDir);
         return psi;
+    }
+
+    /// <summary>
+    /// Resolve the absolute path to the node executable to run: the bundled copy
+    /// when <paramref name="nodeDir"/> is set, otherwise the first <c>node</c>
+    /// found on PATH. Returns null if none is found.
+    /// </summary>
+    private static string? ResolveNodeExe(string? nodeDir)
+    {
+        var exeName = OperatingSystem.IsWindows() ? "node.exe" : "node";
+        if (nodeDir is not null)
+        {
+            var bundled = Path.Combine(nodeDir, exeName);
+            return File.Exists(bundled) ? bundled : null;
+        }
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrEmpty(path)) return null;
+        foreach (var dir in path.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(dir)) continue;
+            string candidate;
+            try { candidate = Path.Combine(dir.Trim(), exeName); }
+            catch { continue; } // malformed PATH entry — skip
+            if (File.Exists(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Resolve the absolute path to npm-cli.js / npx-cli.js for the given node
+    /// executable. Checks the Windows / portable-archive layout (npm beside
+    /// node) and the Unix system layout (node in <c>&lt;prefix&gt;/bin</c>, npm
+    /// under <c>&lt;prefix&gt;/lib</c>). Returns null if not found.
+    /// </summary>
+    private static string? ResolveNpmCliJs(string nodeExe, string tool)
+    {
+        var cliName = tool == "npx" ? "npx-cli.js" : "npm-cli.js";
+        var dir = Path.GetDirectoryName(nodeExe);
+        if (string.IsNullOrEmpty(dir)) return null;
+        string[] candidates =
+        [
+            Path.Combine(dir, "node_modules", "npm", "bin", cliName),              // Windows install / portable archive
+            Path.Combine(dir, "..", "lib", "node_modules", "npm", "bin", cliName), // Unix system (node in <prefix>/bin)
+        ];
+        foreach (var c in candidates)
+        {
+            try { if (File.Exists(c)) return Path.GetFullPath(c); }
+            catch { /* malformed candidate — try the next */ }
+        }
+        return null;
     }
 
     private static string? ResolveBundledToolPath(string tool, string nodeDir)
