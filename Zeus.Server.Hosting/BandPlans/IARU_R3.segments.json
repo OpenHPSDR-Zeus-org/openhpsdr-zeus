@@ -14,6 +14,7 @@
     { "lowHz": 18068000, "highHz": 18168000, "label": "17M",             "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
     { "lowHz": 21000000, "highHz": 21450000, "label": "15M",             "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
     { "lowHz": 24890000, "highHz": 24990000, "label": "12M",             "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
+    { "lowHz": 26965000, "highHz": 27405000, "label": "11M (CB / 27 MHz)","allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": "Citizens Band / 11m — not an amateur allocation; provided for export/freeband operation" },
     { "lowHz": 28000000, "highHz": 29700000, "label": "10M",             "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
     { "lowHz": 50000000, "highHz": 54000000, "label": "6M",              "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null }
   ]

@@ -73,8 +73,10 @@ type PendingBandHzSave = {
   hz: number;
 };
 
-// HF bands only (160m-10m) for Hermes Lite 2 coverage
-const HF_BANDS: readonly BandEntry[] = BANDS.slice(0, 10).map((b) => ({
+// All selectable bands (160m–6m, including 11m / CB). The shared BANDS list is
+// the single source of truth so the selector, favorites, and bandOf() stay in
+// sync — don't slice it here or new bands silently drop off the toolbar.
+const HF_BANDS: readonly BandEntry[] = BANDS.map((b) => ({
   name: b.n + 'm',
   centerHz: b.center,
   rangeStart: b.range[0],

@@ -42,7 +42,9 @@ type PendingBandHzSave = {
   hz: number;
 };
 
-const HF_BANDS: readonly BandEntry[] = BANDS.slice(0, 10).map((b) => ({
+// Mirror the full shared BANDS list (160m–6m, including 11m / CB) so a band can
+// be pinned as a toolbar favorite. Don't slice — new bands must not drop off.
+const HF_BANDS: readonly BandEntry[] = BANDS.map((b) => ({
   name: b.n + 'm',
   centerHz: b.center,
 }));
