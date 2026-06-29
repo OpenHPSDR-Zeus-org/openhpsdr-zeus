@@ -4189,15 +4189,31 @@ public static class ZeusEndpoints
             return Results.BadRequest(new { error = $"native audio device enumeration unavailable: {ex.Message}" });
         }
 
-        if (inputDeviceId is not null && snapshot.Inputs.All(d => d.Id != inputDeviceId))
-            return Results.BadRequest(new { error = "inputDeviceId is not in the current native input device list" });
-        if (outputDeviceId is not null && snapshot.Outputs.All(d => d.Id != outputDeviceId))
-            return Results.BadRequest(new { error = "outputDeviceId is not in the current native output device list" });
+        // Only validate/apply the side that is actually changing. A carried-over
+        // (unchanged) id — even one now stale because its device was unplugged or
+        // the prefs DB came from another machine — must NOT block a change to the
+        // other side. This is the #1128 snap-back: selecting an OUTPUT device was
+        // rejected with an INPUT-device error because the previously-saved mic was
+        // gone, so RX audio could never be pointed at a real Windows device.
+        var plan = NativeAudioDevicePlan.Plan(
+            hasMic: mic is not null,
+            currentInput: mic?.ConfiguredInputDeviceId,
+            requestedInput: inputDeviceId,
+            availableInputIds: snapshot.Inputs.Select(d => d.Id).ToArray(),
+            hasSink: sink is not null,
+            currentOutput: sink?.ConfiguredOutputDeviceId,
+            requestedOutput: outputDeviceId,
+            availableOutputIds: snapshot.Outputs.Select(d => d.Id).ToArray());
 
-        if (mic is not null)
-            await mic.SetInputDeviceAsync(inputDeviceId, ct);
-        if (sink is not null)
-            await sink.SetOutputDeviceAsync(outputDeviceId, ct);
+        if (plan.InputError is not null)
+            return Results.BadRequest(new { error = plan.InputError });
+        if (plan.OutputError is not null)
+            return Results.BadRequest(new { error = plan.OutputError });
+
+        if (plan.ApplyInput)
+            await mic!.SetInputDeviceAsync(inputDeviceId, ct);
+        if (plan.ApplyOutput)
+            await sink!.SetOutputDeviceAsync(outputDeviceId, ct);
 
         return Results.Ok(BuildNativeAudioDevicesResponse(
             sink,
