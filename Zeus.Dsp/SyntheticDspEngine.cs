@@ -145,7 +145,7 @@ public sealed class SyntheticDspEngine : IDspEngine
 
     // No RNNoise backend in the synthetic engine — report "unavailable" so the
     // server surfaces NR3 as off rather than pretending a model loaded.
-    public bool LoadNr3Model(string? modelFilePath) => false;
+    public Nr3ModelLoadResult LoadNr3Model(string? modelFilePath) => Nr3ModelLoadResult.Unavailable;
 
     // Manual notch filters have no audio effect in the synthetic engine; accept
     // and ignore so dev/CI exercises the full plumbing without a WDSP backend.

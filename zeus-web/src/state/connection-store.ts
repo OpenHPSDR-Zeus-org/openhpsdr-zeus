@@ -141,11 +141,13 @@ export type ConnectionState = {
   radioLoHz: number;
   cwPitchHz: number;
   nr: NrConfigDto;
-  // NR3 (RNNoise): native availability (libwdsp RNNR exports) + the operator-
-  // installed model name (null = none). NR3 appears in the NR cycle only when
-  // available AND a model is installed.
+  // NR3 (RNNoise): native availability (libwdsp RNNR exports) + the active model
+  // name (operator file, bundled-default display name, or null). NR3 appears in
+  // the NR cycle when available AND a model is active. nr3UsingBundledDefault is
+  // true when running on the shipped default (no operator model installed).
   wdspNr3RnnrAvailable: boolean;
   nr3ModelName: string | null;
+  nr3UsingBundledDefault: boolean;
   zoomLevel: ZoomLevel;
   // Workspace UI zoom (whole-percent cell-pitch scale; 100 = authored size).
   // Server-persisted; FlexWorkspace reads this to scale the panel grid.
@@ -249,6 +251,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   nr: { ...NR_CONFIG_DEFAULT },
   wdspNr3RnnrAvailable: false,
   nr3ModelName: null,
+  nr3UsingBundledDefault: false,
   zoomLevel: 1,
   workspaceZoomPct: 100,
   inflight: false,
@@ -309,6 +312,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
         nr: s.nr,
         wdspNr3RnnrAvailable: s.wdspNr3RnnrAvailable,
         nr3ModelName: s.nr3ModelName,
+        nr3UsingBundledDefault: s.nr3UsingBundledDefault,
         zoomLevel: s.zoomLevel,
         workspaceZoomPct: s.workspaceZoomPct,
       };

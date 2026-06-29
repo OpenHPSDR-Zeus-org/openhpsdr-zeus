@@ -69,17 +69,23 @@ One rule to know: preview follows your receive audio. **Muting RX also mutes pre
 
 Above the chain you can save the whole chain — the blocks, their order, and their settings — as a **named profile**. Use the **+** to capture the current chain under a new name (for example "Ragchew" or "DX"), **Save** to overwrite the selected profile in place, and **Delete** to remove one. Selecting a profile applies it instantly. This lets you keep one chain tuned for relaxed local audio and another for cutting through a pileup, and switch between them in a click. (The RX suite keeps its own separate profiles.)
 
-### VST3 hosting and the plugin system
+### VST3 / Audio Unit hosting and the plugin system
 
-Beyond the built-in blocks, Zeus can host third-party **VST3** audio plugins in-process — the same plugins you'd use in a digital audio workstation — on both the transmit chain and the RX chain. This is a desktop feature and the scan controls target standard **Windows** VST3 folders.
+Beyond the built-in blocks, Zeus can host third-party audio plugins **in-process** — the same plugins you'd use in a digital audio workstation — on both the transmit chain and the RX chain. This is a desktop feature, and it works across platforms:
 
-To bring VSTs in, use the scan controls at the bottom of the Plugins browser:
+- **Windows** — VST3 plugins, from the standard VST3 folders.
+- **macOS** — VST3 plugins *and* native **Audio Units (AU)**, so the Apple-format plugins you already own show up too.
+- **Linux** — native, in-process VST3 hosting with working plugin editors (X11).
 
-- **Scan VSTs** sweeps the common Windows VST3 locations in one click; folders that don't exist are simply skipped.
+Transmit plugin hosting is now **enabled by default**, so your TX chain is ready to take plugins without flipping a setting first.
+
+To bring plugins in, use the scan controls at the bottom of the Plugins browser:
+
+- **Scan** sweeps the common plugin locations for your platform in one click — VST3 everywhere, plus Audio Units on macOS; folders that don't exist are simply skipped.
 - **Scan Both Suites** does the same sweep for both the TX and RX suites.
-- **+ Add VST folder** scans one specific folder you name.
+- **+ Add folder** scans one specific folder you name.
 
-A VST chip in the chain carries a small **VST** tag and a star you can use to mark favourites (favourites sort to the top of the browser). Because a VST3's real interface is a native operating-system window — not browser HTML — Zeus can't draw it inside the suite window. Instead, selecting a VST chip opens its **real editor as a separate desktop window**, exactly like a standalone VST host, with an Open Editor / Close Editor button in the detail pane. The plugin processes your audio whether or not its editor window is open; closing the editor just hides the GUI.
+A hosted plugin chip in the chain carries a small format tag (**VST** / **AU**) and a star you can use to mark favourites (favourites sort to the top of the browser). Because a plugin's real interface is a native operating-system window — not browser HTML — Zeus can't draw it inside the suite window. Instead, selecting a plugin chip opens its **real editor as a separate desktop window**, exactly like a standalone host, with an Open Editor / Close Editor button in the detail pane. The plugin processes your audio whether or not its editor window is open; closing the editor just hides the GUI. If a plugin ever misbehaves, the host process is self-healing — it recovers on its own rather than taking the radio down with it.
 
 The RX suite header shows a **VST** status pill — ON when receive VSTs are processing, IDLE when the engine is available but unused, OFF when no VST engine is installed — plus its own Bypass toggle for the whole receive chain.
 

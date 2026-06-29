@@ -152,7 +152,7 @@ jobs:
       - name: Verify RNNR exports
         run: |
           # NR3/RNNoise: confirm the rebuild links the vendored librnnoise-backed
-          # rnnr.c (3 RNNR exports: SetRXARNNRRun/Position, RNNRloadModel). If this
+          # rnnr.c (4 RNNR exports: SetRXARNNRRun/Position, RNNRloadModel, RNNRmodelLoaded). If this
           # fails the build is silently stub-based and NR3 won't work at runtime.
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vsInstall = & $vswhere -latest -property installationPath
@@ -163,8 +163,8 @@ jobs:
           $count = ($exports | Measure-Object).Count
           Write-Host "Found $count RNNR exports:"
           $exports
-          if ($count -ne 3) {
-            throw "Expected 3 RNNR exports, got $count. NR3 did not link correctly."
+          if ($count -ne 4) {
+            throw "Expected 4 RNNR exports, got $count. NR3 did not link correctly."
           }
 
       - name: Stage DLL
@@ -371,7 +371,7 @@ jobs:
       - name: Verify RNNR exports
         run: |
           # NR3/RNNoise: confirm libwdsp.so carries the 3 RNNR exports
-          # (SetRXARNNRRun/Position, RNNRloadModel). A stub-based build would have
+          # (SetRXARNNRRun/Position, RNNRloadModel, RNNRmodelLoaded). A stub-based build would have
           # zero and NR3 would be silently broken at runtime.
           nm_tool="nm"
           if [ "${{ matrix.arch }}" = "arm64" ]; then
@@ -380,8 +380,8 @@ jobs:
           count=$($nm_tool -D native/build/libwdsp.so | grep -c "RNNR" || true)
           echo "Found $count RNNR exports:"
           $nm_tool -D native/build/libwdsp.so | grep "RNNR" || true
-          if [ "$count" -ne 3 ]; then
-            echo "ERROR: Expected 3 RNNR exports, got $count. NR3 did not link correctly."
+          if [ "$count" -ne 4 ]; then
+            echo "ERROR: Expected 4 RNNR exports, got $count. NR3 did not link correctly."
             exit 1
           fi
 
@@ -580,12 +580,12 @@ jobs:
 
       - name: Verify RNNR exports
         run: |
-          # NR3/RNNoise: 3 RNNR exports (SetRXARNNRRun/Position, RNNRloadModel).
+          # NR3/RNNoise: 4 RNNR exports (SetRXARNNRRun/Position, RNNRloadModel, RNNRmodelLoaded).
           # macOS nm prefixes C symbols with an underscore; match the RNNR substring.
           count=$(nm -gU native/build/libwdsp.dylib | grep -c "RNNR" || true)
           echo "Found $count RNNR exports"
-          if [ "$count" -ne 3 ]; then
-            echo "ERROR: Expected 3 RNNR exports, got $count. NR3 did not link correctly."
+          if [ "$count" -ne 4 ]; then
+            echo "ERROR: Expected 4 RNNR exports, got $count. NR3 did not link correctly."
             exit 1
           fi
 

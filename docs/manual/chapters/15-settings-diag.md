@@ -28,7 +28,7 @@ A note on one tab in particular: **PA Settings** is the only tab with an explici
 | **Radio** | Board-specific firmware options. Only appears when your radio has any. |
 | **Calibration** | Per-radio frequency (crystal-drift) correction against WWV. |
 | **Updates** | Check for and download new Zeus releases. |
-| **About** | Version, release date, and credits. |
+| **About** | Version, release date, credits, and a Danger Zone with **Reset & Uninstall Zeus**. |
 
 #### DSP
 
@@ -83,6 +83,20 @@ At the bottom transport bar there's a **⚠ Report a problem** button. It opens 
 1. Pick the closest match from the symptom list and/or describe the issue in your own words, then click **Run diagnostic**. Zeus quietly collects a snapshot of your radio, DSP, and connection state.
 2. Zeus packages that into a ready-to-file bug report and shows you plain, step-by-step instructions to send it: click **Open bug report page** (it opens in your browser), sign in or make a free account if asked, and submit the pre-filled report.
 3. If the page doesn't fill itself in, click **Copy report** and paste it into the description box. You can expand "This is exactly what will be sent" to read the full report before sending — nothing leaves your machine until you submit it.
+
+The snapshot now also records your radio's **firmware version**, and behind the scenes Zeus keeps a rolling on-disk log and captures verbose diagnostics if it ever crashes, so a follow-up report has the detail a maintainer needs.
+
+### Maintainer support sessions (opt-in, read-only)
+
+When a problem is hard to pin down over text, you can let a Zeus maintainer look at your running station directly — but **only with your explicit permission, every time**. A support session is **read-only**: the maintainer can observe your diagnostics and state to help you troubleshoot, and cannot operate your radio.
+
+You grant access from the diagnostics controls; nothing connects until you do, and the session ends when you close it. If you've opted in, a crash can be **auto-shared** with the maintainer to speed up a fix. This is strictly opt-in plumbing — by default Zeus shares nothing, and there is no way for anyone to start a session without your action.
+
+### Reset & Uninstall Zeus
+
+The **About** tab includes a **Danger Zone** with a **Reset & Uninstall Zeus** tool for when you want to start completely fresh or remove Zeus cleanly. It wipes Zeus's settings and data across the whole system — and, on a desktop install, removes the application itself the proper way for your platform (the Windows uninstaller, the macOS app bundle, or the Linux AppImage).
+
+Because this is destructive, Zeus first writes an **inline backup** of your settings to your **Downloads** folder, so you can recover or move your configuration if you change your mind. As with any wipe, read the confirmation carefully before you proceed.
 
 ### Keyboard and mouse shortcuts
 

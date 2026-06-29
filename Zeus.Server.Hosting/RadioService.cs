@@ -600,6 +600,7 @@ public sealed class RadioService : IDisposable
             // are present (symbols available AND a model installed).
             WdspNr3RnnrAvailable: Zeus.Dsp.Wdsp.WdspDspEngine.Nr3RnnrAvailable,
             Nr3ModelName: _nr3ModelStore?.GetActiveModelName(),
+            Nr3UsingBundledDefault: _nr3ModelStore?.UsingBundledDefault() ?? false,
             ZoomLevel: rsSnap?.ZoomLevel ?? 1,
             WorkspaceZoomPct: ClampWorkspaceZoomPct(rsSnap?.WorkspaceZoomPct ?? DefaultWorkspaceZoomPct),
             AutoAttEnabled: _adcProtection.Enabled,
@@ -3460,9 +3461,22 @@ public sealed class RadioService : IDisposable
         ArgumentNullException.ThrowIfNull(content);
         if (_nr3ModelStore is null)
             throw new InvalidOperationException("NR3 model store is not configured.");
+        // Install writes the file and synchronously fires Changed, which the DSP
+        // pipeline observes to (re)load it into a live engine. After that returns,
+        // the store carries the load outcome — reject a model the native RNNoise
+        // loader couldn't parse instead of silently leaving NR3 inert. When no
+        // engine is live the result is null (unverified) and we accept it; the
+        // load is re-attempted on the next connect.
         _nr3ModelStore.Install(content, fileName);
+        if (_nr3ModelStore.LastLoadResult == Zeus.Dsp.Nr3ModelLoadResult.LoadFailed)
+        {
+            _nr3ModelStore.Remove(); // drop the bad file — reverts to the bundled default
+            throw new ArgumentException(
+                "That file isn't a compatible RNNoise model — it failed to load. " +
+                "Use an RNNoise weights file (DNNw format) matching the bundled model's architecture.");
+        }
         var name = _nr3ModelStore.GetActiveModelName();
-        Mutate(s => s with { Nr3ModelName = name });
+        Mutate(s => s with { Nr3ModelName = name, Nr3UsingBundledDefault = false });
         return Snapshot();
     }
 
@@ -3470,12 +3484,22 @@ public sealed class RadioService : IDisposable
     {
         if (_nr3ModelStore is null || !_nr3ModelStore.Remove())
             return Snapshot();
-        Mutate(s => s with { Nr3ModelName = null });
-        // If NR3 was the active mode, fall back to Off (persisted via SetNr) so
-        // the operator isn't stranded on a now-model-less, inert NR3.
-        var cur = Snapshot().Nr;
-        if (cur?.NrMode == NrMode.Rnnr)
-            return SetNr(cur with { NrMode = NrMode.Off });
+        // Removing the operator model reverts to the bundled default (if shipped),
+        // not to inert. Mirror the now-active model (default name, or null when no
+        // default exists) into StateDto.
+        Mutate(s => s with
+        {
+            Nr3ModelName = _nr3ModelStore.GetActiveModelName(),
+            Nr3UsingBundledDefault = _nr3ModelStore.UsingBundledDefault(),
+        });
+        // Only strand-proof the NR mode when NO model remains active (no bundled
+        // default). With a default still active, NR3 stays valid — leave it be.
+        if (!_nr3ModelStore.UsingBundledDefault())
+        {
+            var cur = Snapshot().Nr;
+            if (cur?.NrMode == NrMode.Rnnr)
+                return SetNr(cur with { NrMode = NrMode.Off });
+        }
         return Snapshot();
     }
 

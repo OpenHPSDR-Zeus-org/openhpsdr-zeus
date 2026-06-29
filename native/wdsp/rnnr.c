@@ -91,6 +91,13 @@ static int _rnnr_capacity = 0;
 // the model to use when creating new RNNR instances
 static RNNModel* _rnnr_model = NULL;
 
+// 1 when a custom model file is currently loaded (rnnoise_model_from_filename
+// succeeded), 0 when none is loaded (cleared, or a requested load failed).
+// Queried by the managed side via RNNRmodelLoaded() to tell a successful
+// install from a parse/architecture failure — without it a bad model silently
+// falls back to the inert pass-through and the operator gets no feedback.
+static int _rnnr_model_loaded = 0;
+
 //ringbuffer
 static void ring_buffer_init(rnnr_ring_buffer* rb, int capacity) {
   rb->buf = malloc0(capacity * sizeof(float));
@@ -302,8 +309,14 @@ void destroy_rnnr(RNNR a) {
   }
 }
 
+// Loads the process-global RNNR model from file_path (every RNNR channel uses
+// it). A NULL/empty path clears to the baked-in model (inert pass-through in
+// Zeus's USE_WEIGHTS_FILE build). Returns 1 on success — either an intentional
+// clear, or a requested file that loaded — and 0 when a file was requested but
+// rnnoise_model_from_filename failed (bad/incompatible weights). The current
+// loaded-state is also queryable via RNNRmodelLoaded().
 PORT
-void RNNRloadModel(const char* file_path) {
+int RNNRloadModel(const char* file_path) {
   // destroy any in use
   for (int i = 0; i < _rnnr_count; i++) {
     RNNR a = _rnnr_instances[i];
@@ -320,10 +333,28 @@ void RNNRloadModel(const char* file_path) {
   }
 
   _rnnr_model = NULL; // default to baked in model
+  _rnnr_model_loaded = 0;
 
   // try to load
-  if (file_path && file_path[0]) {
-    _rnnr_model = rnnoise_model_from_filename(file_path);
+  const int requested = (file_path && file_path[0]) ? 1 : 0;
+  if (requested) {
+    RNNModel* m = rnnoise_model_from_filename(file_path);
+    if (m) {
+      // Parsing can succeed yet the model still be unusable: a weights file
+      // from a different RNNoise architecture parses fine but rnnoise_create
+      // fails (a required layer is missing / wrong-sized). Probe with a trial
+      // create so RNNRmodelLoaded reflects a model that actually works, not one
+      // that merely parsed — otherwise a mismatched model silently passes audio
+      // through with no feedback.
+      DenoiseState* probe = rnnoise_create(m);
+      if (probe) {
+        rnnoise_destroy(probe);
+        _rnnr_model = m;
+        _rnnr_model_loaded = 1;
+      } else {
+        rnnoise_model_free(m); // unusable architecture — treat as a load failure
+      }
+    }
   }
 
   // recreate any we had created previously and restart if needed
@@ -334,6 +365,19 @@ void RNNRloadModel(const char* file_path) {
     a->run = a->run_old;
     LeaveCriticalSection(&a->cs);
   }
+
+  // success = intentional clear, or a requested model that actually loaded.
+  return requested ? _rnnr_model_loaded : 1;
+}
+
+// Returns 1 when a custom RNNR model is currently loaded, 0 otherwise. Additive
+// query (paired with RNNRloadModel) so the managed side can verify a model
+// actually parsed even on hosts whose RNNRloadModel return value it can't rely
+// on. New export — absent on older libwdsp builds, where the managed side falls
+// back to its prior best-effort behaviour.
+PORT
+int RNNRmodelLoaded(void) {
+  return _rnnr_model_loaded;
 }
 
 PORT

@@ -1277,7 +1277,15 @@ public class DspPipelineService : BackgroundService,
     private void LoadNr3ModelInto(IDspEngine engine)
     {
         var path = _nr3ModelStore?.GetActiveModelPath();
-        lock (_engineLock) { engine.LoadNr3Model(path); }
+        Zeus.Dsp.Nr3ModelLoadResult result;
+        lock (_engineLock) { result = engine.LoadNr3Model(path); }
+        // Record the outcome so RadioService.InstallNr3Model — which triggers this
+        // synchronously via the store's Changed event — can reject a model the
+        // native loader couldn't parse.
+        _nr3ModelStore?.ReportLoadStatus(result);
+        if (result == Zeus.Dsp.Nr3ModelLoadResult.LoadFailed)
+            _log.LogWarning(
+                "dsp.nr3.loadFailed path=\"{Path}\" — not a compatible RNNoise weights file", path);
     }
 
     private void ReloadNr3ModelToCurrentEngine()
