@@ -1,7 +1,12 @@
 import type { Env } from './types';
 import { verifyQrzSessionCached } from './qrz';
 import { mintIceServers } from './turn';
-import { handleAdmin, verifyAdminToken, ensureAdminBootstrap } from './admin-api';
+import {
+  handleAdmin,
+  verifyAdminToken,
+  ensureAdminBootstrap,
+  corsHeaders as adminCorsHeaders,
+} from './admin-api';
 import { validateCrashBody } from './crash-validate';
 import { sanitizeOperatorMeta, cleanCountry } from './presence-meta';
 
@@ -221,7 +226,11 @@ async function handleAdminCrashes(
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> {
-  const cors = adminCorsHeaders(env);
+  // Reuse the SAME origin-allowlist CORS as the rest of /admin (admin-api), which
+  // echoes the matching ADMIN_ORIGINS origin (the dashboard runs at the apex, NOT
+  // WEB_APP_ORIGIN). Using a WEB_APP_ORIGIN-pinned header here blocked the
+  // dashboard's /admin/crashes fetch with a CORS preflight failure.
+  const cors = adminCorsHeaders(env, request);
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
   if (request.method !== 'GET') {
     return Response.json({ error: 'method not allowed' }, { status: 405, headers: cors });
@@ -244,23 +253,6 @@ async function handleAdminCrashes(
   const res = await env.CRASH_STORE.get(id).fetch(internalUrl);
   const body = await res.json<unknown>();
   return Response.json(body, { status: res.status, headers: cors });
-}
-
-/**
- * CORS for the dashboard's cross-origin /admin/crashes fetch. Mirrors
- * admin-api's fail-closed policy: name exactly WEB_APP_ORIGIN, never '*', and
- * omit the header entirely if it is unset so a misconfigured deploy can't expose
- * the admin surface to every site.
- */
-function adminCorsHeaders(env: Env): Record<string, string> {
-  const headers: Record<string, string> = {
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'content-type, authorization, x-qrz-session, x-qrz-callsign',
-    'Access-Control-Max-Age': '86400',
-    Vary: 'Origin',
-  };
-  if (env.WEB_APP_ORIGIN) headers['Access-Control-Allow-Origin'] = env.WEB_APP_ORIGIN;
-  return headers;
 }
 
 // CORS for the browser web client's cross-origin /turn fetch. Allow exactly the
