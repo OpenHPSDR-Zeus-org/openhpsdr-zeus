@@ -108,6 +108,42 @@ const WF_SCROLL_SPEED_STORAGE_KEY = 'zeus.display.wfScrollSpeed';
 const BAND_OVERLAY_STORAGE_KEY = 'zeus.display.bandOverlay';
 const BAND_EDGE_ALERT_STORAGE_KEY = 'zeus.display.bandEdgeAlert';
 const CHAT_ROSTER_OVERLAY_STORAGE_KEY = 'zeus.display.chatRosterOverlay';
+const SPOT_LABEL_FONT_PX_STORAGE_KEY = 'zeus.display.spotLabelFontPx';
+
+// TCI / DX-cluster spot label font size on the panadapter. Issue #1175: the
+// previous hardcoded 11px was hard to read at operating distance; 13px is the
+// new readable default. Range 10–18 matches what we expose in the Display
+// settings panel; out-of-range or non-finite stored values fall back to the
+// default so a hand-edited localStorage entry can't render unreadable labels.
+export const SPOT_LABEL_FONT_PX_MIN = 10;
+export const SPOT_LABEL_FONT_PX_MAX = 18;
+export const DEFAULT_SPOT_LABEL_FONT_PX = 13;
+
+function normalizeSpotLabelFontPx(raw: unknown): number {
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_SPOT_LABEL_FONT_PX;
+  return Math.min(SPOT_LABEL_FONT_PX_MAX, Math.max(SPOT_LABEL_FONT_PX_MIN, Math.round(n)));
+}
+
+function readSavedSpotLabelFontPx(): number {
+  try {
+    if (typeof localStorage === 'undefined') return DEFAULT_SPOT_LABEL_FONT_PX;
+    const raw = localStorage.getItem(SPOT_LABEL_FONT_PX_STORAGE_KEY);
+    if (raw === null) return DEFAULT_SPOT_LABEL_FONT_PX;
+    return normalizeSpotLabelFontPx(raw);
+  } catch {
+    return DEFAULT_SPOT_LABEL_FONT_PX;
+  }
+}
+
+function writeSavedSpotLabelFontPx(value: number): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(SPOT_LABEL_FONT_PX_STORAGE_KEY, String(value));
+  } catch {
+    // quota exceeded / private mode — accept silently.
+  }
+}
 
 // Legacy localStorage keys — pre-server-side storage. Read once on first
 // load to migrate the operator's existing image / colour up to the backend,
@@ -470,9 +506,13 @@ export type DisplaySettingsState = {
   // panadapter at the frequency they're tuned to. Local-only display
   // preference; the overlay itself lives in components/ChatRosterOverlay.tsx.
   showChatRosterOverlay: boolean;
+  // Issue #1175: font size in px for the panadapter spot callsign labels
+  // (TCI / DX-cluster). Range SPOT_LABEL_FONT_PX_MIN..MAX.
+  spotLabelFontPx: number;
   setShowBandOverlay: (v: boolean) => void;
   setBandEdgeAlertEnabled: (v: boolean) => void;
   setShowChatRosterOverlay: (v: boolean) => void;
+  setSpotLabelFontPx: (v: number) => void;
   setPanBackground: (v: PanBackgroundMode) => Promise<void>;
   setBackgroundImage: (dataUrl: string | null) => Promise<boolean>;
   setBackgroundImageFit: (v: BackgroundImageFit) => Promise<void>;
@@ -559,6 +599,7 @@ const initialWaterfallScrollSpeed = readSavedWaterfallScrollSpeed();
 const initialShowBandOverlay = readBoolFlag(BAND_OVERLAY_STORAGE_KEY, true);
 const initialBandEdgeAlertEnabled = readBoolFlag(BAND_EDGE_ALERT_STORAGE_KEY, true);
 const initialShowChatRosterOverlay = readBoolFlag(CHAT_ROSTER_OVERLAY_STORAGE_KEY, true);
+const initialSpotLabelFontPx = readSavedSpotLabelFontPx();
 
 export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) => ({
   autoRange: false,
@@ -601,6 +642,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   showBandOverlay: initialShowBandOverlay,
   bandEdgeAlertEnabled: initialBandEdgeAlertEnabled,
   showChatRosterOverlay: initialShowChatRosterOverlay,
+  spotLabelFontPx: initialSpotLabelFontPx,
   setShowBandOverlay: (v) => {
     set({ showBandOverlay: v });
     writeBoolFlag(BAND_OVERLAY_STORAGE_KEY, v);
@@ -612,6 +654,11 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   setShowChatRosterOverlay: (v) => {
     set({ showChatRosterOverlay: v });
     writeBoolFlag(CHAT_ROSTER_OVERLAY_STORAGE_KEY, v);
+  },
+  setSpotLabelFontPx: (v) => {
+    const next = normalizeSpotLabelFontPx(v);
+    set({ spotLabelFontPx: next });
+    writeSavedSpotLabelFontPx(next);
   },
   setPanBackground: async (panBackground) => {
     const prev = get().panBackground;

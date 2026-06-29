@@ -16,11 +16,17 @@
 // natural home for future panadapter-overlay preferences.
 
 import type { CSSProperties } from 'react';
-import { useDisplaySettingsStore } from '../state/display-settings-store';
+import {
+  SPOT_LABEL_FONT_PX_MAX,
+  SPOT_LABEL_FONT_PX_MIN,
+  useDisplaySettingsStore,
+} from '../state/display-settings-store';
 
 export function PanadapterOverlaySettingsPanel() {
   const showChatRoster = useDisplaySettingsStore((s) => s.showChatRosterOverlay);
   const setShowChatRoster = useDisplaySettingsStore((s) => s.setShowChatRosterOverlay);
+  const spotLabelFontPx = useDisplaySettingsStore((s) => s.spotLabelFontPx);
+  const setSpotLabelFontPx = useDisplaySettingsStore((s) => s.setSpotLabelFontPx);
 
   return (
     <section>
@@ -47,6 +53,30 @@ export function PanadapterOverlaySettingsPanel() {
             the panadapter at the frequency they're tuned to. Only operators who
             share their frequency (friends) appear. Also toggleable from the Chat
             panel header.
+          </span>
+        </div>
+
+        <div style={autoRow}>
+          <label style={switchLabel}>
+            Spot Label Size
+            <input
+              type="range"
+              min={SPOT_LABEL_FONT_PX_MIN}
+              max={SPOT_LABEL_FONT_PX_MAX}
+              step={1}
+              value={spotLabelFontPx}
+              onChange={(event) => setSpotLabelFontPx(Number(event.currentTarget.value))}
+              style={{ accentColor: 'var(--accent)' }}
+            />
+            <span style={{ fontFamily: 'var(--font-mono)', minWidth: 32, textAlign: 'right' }}>
+              {spotLabelFontPx}px
+            </span>
+          </label>
+          <span style={autoHint}>
+            Font size for TCI and DX-cluster callsign labels painted at the top of
+            the panadapter. Range {SPOT_LABEL_FONT_PX_MIN}–{SPOT_LABEL_FONT_PX_MAX}px.
+            Larger sizes are easier to read at operating distance; smaller sizes
+            fit more spots side-by-side on a busy band.
           </span>
         </div>
       </div>
