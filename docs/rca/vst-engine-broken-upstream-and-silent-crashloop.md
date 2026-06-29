@@ -52,13 +52,29 @@ the next launch once a good engine is published.
 
 ## Operator action: publish a known-good engine
 
-This is the one manual step the code can't do — host the verified engine + manifest:
+This is the one step CI can't fully automate (the engine isn't built in this repo),
+but it no longer has to be done by hand. Run the **Publish VST engine** workflow
+(`.github/workflows/publish-vst-engine.yml`, `workflow_dispatch`) with:
+
+- `engine_url` — a direct download URL for the bridge-compatible `VSTHostEngine.exe`
+- `version` — e.g. `2026.06.14`
+- `expected_sha256` — the known-good hash (optional but recommended; the run is
+  rejected on mismatch)
+
+The workflow generates the manifest with `tools/vst-engine-manifest.mjs`, uploads the
+engine + `latest.json` to the R2 bucket with `--remote`, and verifies the public URLs
+end-to-end before passing. (The `--remote` flag is load-bearing: without it wrangler
+writes to a local simulator and still reports success — publishing nothing. That, plus
+the un-published manifest, is the failure mode this RCA is about.)
+
+Equivalent manual fallback, hosting the verified engine + manifest yourself:
 
 1. Generate the manifest from a known-good `VSTHostEngine.exe`:
    ```
    node tools/vst-engine-manifest.mjs <VSTHostEngine.exe> <version>
    ```
-2. Upload, to `https://downloads.openhpsdrzeus.com/vst-engine/`:
+2. Upload, to `https://downloads.openhpsdrzeus.com/vst-engine/` (wrangler needs
+   `--remote`, or use the dashboard):
    - the engine as the versioned name it prints (e.g. `VSTHostEngine-2026.06.14.exe`)
    - the manifest as `latest.json`
 

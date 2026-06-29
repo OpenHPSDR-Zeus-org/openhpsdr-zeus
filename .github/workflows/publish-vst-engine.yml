@@ -1,0 +1,133 @@
+name: Publish VST engine
+
+# Manual publish of the out-of-process VST engine to the Cloudflare R2 bucket
+# behind downloads.openhpsdrzeus.com, where VstEngineInstaller fetches it
+# (vst-engine/latest.json + the SHA-256-pinned engine binary it names).
+#
+# Why workflow_dispatch and not part of the release build: the engine is a
+# headless VSTHost build (JUCE/GPLv3) that is deliberately NOT vendored or built
+# in this repo — see Zeus.Server.Hosting/VstEngineInstaller.cs and
+# docs/designs/vst-out-of-process-engine.md. So CI can't produce the binary on a
+# tag; a maintainer points this workflow at a known-good, bridge-compatible
+# VSTHostEngine.exe and it does the rest: generate the manifest with the repo
+# tool, verify the hash, upload both to R2 (--remote — the local-simulator
+# default silently "succeeds" without it), and confirm the public URLs.
+#
+# This replaces the by-hand wrangler dance recorded in
+# docs/rca/vst-engine-broken-upstream-and-silent-crashloop.md, whose un-published
+# manifest is exactly what made every in-app "Get VST Engine" 404.
+
+on:
+  workflow_dispatch:
+    inputs:
+      engine_url:
+        description: 'Direct download URL for the bridge-compatible VSTHostEngine.exe (e.g. a GitHub release asset).'
+        type: string
+        required: true
+      version:
+        description: 'Engine version published in the manifest and baked into the immutable filename (e.g. 2026.06.14).'
+        type: string
+        required: true
+      expected_sha256:
+        description: 'Optional lowercase-hex SHA-256 of the engine. When set, the download is rejected unless it matches — guards against publishing the wrong build.'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish VST engine to downloads.openhpsdrzeus.com
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      DOWNLOAD_BASE_URL: https://downloads.openhpsdrzeus.com
+      WRANGLER_SEND_METRICS: "false"
+      ENGINE_URL: ${{ inputs.engine_url }}
+      ENGINE_VERSION: ${{ inputs.version }}
+      EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download engine binary
+        run: |
+          set -euo pipefail
+          curl -fSL --retry 3 "$ENGINE_URL" -o VSTHostEngine.exe
+          size=$(stat -c %s VSTHostEngine.exe)
+          if [ "$size" -lt 1048576 ]; then
+            echo "::error::Downloaded engine is only ${size} bytes — that is not a VSTHostEngine.exe build."
+            exit 1
+          fi
+          echo "Downloaded ${size} bytes from ${ENGINE_URL}"
+
+      - name: Verify expected SHA-256 (when supplied)
+        run: |
+          set -euo pipefail
+          if [ -z "${EXPECTED_SHA256}" ]; then
+            echo "::warning::No expected_sha256 supplied — publishing whatever the URL returned. Pass the known-good hash to gate this."
+            exit 0
+          fi
+          actual=$(sha256sum VSTHostEngine.exe | cut -d' ' -f1)
+          expected=$(echo "${EXPECTED_SHA256}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::Engine SHA-256 mismatch — expected ${expected}, got ${actual}. Refusing to publish."
+            exit 1
+          fi
+          echo "Engine SHA-256 verified: ${actual}"
+
+      - name: Generate manifest
+        # The tool computes the immutable, versioned download name
+        # (VSTHostEngine-<version>.exe), the size, and the SHA-256, and writes the
+        # exact latest.json the client verifies against.
+        run: node tools/vst-engine-manifest.mjs VSTHostEngine.exe "$ENGINE_VERSION" latest.json
+
+      - name: Resolve published object keys
+        # Single source of truth: read the filename the tool just baked into the
+        # manifest, so the R2 key always matches the manifest's asset URL.
+        run: |
+          set -euo pipefail
+          filename=$(node -e "console.log(require('./latest.json').assets[0].filename)")
+          echo "ENGINE_KEY=vst-engine/${filename}" >> "$GITHUB_ENV"
+          echo "Manifest names engine asset: ${filename}"
+          cat latest.json
+
+      - name: Upload engine + manifest to R2
+        run: |
+          set -euo pipefail
+          # --remote is load-bearing: without it wrangler writes to the local
+          # miniflare simulator and still prints "Upload complete", publishing
+          # nothing. content-type matches the object already live in the bucket.
+          npx --yes wrangler@4.103.0 r2 object put "openhpsdrzeus-downloads/${ENGINE_KEY}" \
+            --file VSTHostEngine.exe \
+            --content-type application/octet-stream \
+            --remote
+          npx --yes wrangler@4.103.0 r2 object put openhpsdrzeus-downloads/vst-engine/latest.json \
+            --file latest.json \
+            --content-type application/json \
+            --remote
+
+      - name: Verify public manifest + engine
+        run: |
+          set -euo pipefail
+          echo "Manifest:"
+          curl -fsSL "$DOWNLOAD_BASE_URL/vst-engine/latest.json"
+          # The client refuses to stage a binary whose bytes don't match the
+          # manifest hash, so prove the end-to-end chain here before declaring
+          # success: re-download the published engine and compare its SHA-256
+          # to the manifest's advertised value.
+          expected=$(node -e "console.log(require('./latest.json').assets[0].sha256)")
+          engine_url=$(node -e "console.log(require('./latest.json').assets[0].url)")
+          actual=$(curl -fsSL "$engine_url" | sha256sum | cut -d' ' -f1)
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::Published engine hash ${actual} != manifest ${expected}."
+            exit 1
+          fi
+          echo "Published and verified VST engine ${ENGINE_VERSION} (sha256 ${actual})."
