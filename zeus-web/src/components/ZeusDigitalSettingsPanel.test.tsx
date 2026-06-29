@@ -223,7 +223,7 @@ describe('ZeusDigitalSettingsPanel', () => {
 
   it('writing My Call persists the shared (global) operator identity', () => {
     const { container, unmount } = render(createElement(ZeusDigitalSettingsPanel));
-    const callInput = container.querySelector('input.ft8-set-input') as HTMLInputElement;
+    const callInput = container.querySelector('input.zd-input') as HTMLInputElement;
     setInputValue(callInput, 'k1abc');
     expect(operatorApi.postOperator).toHaveBeenCalledWith({ callsign: 'K1ABC', grid: '' });
     unmount();
@@ -275,13 +275,13 @@ describe('ZeusDigitalSettingsPanel', () => {
     act(() => palette!.click());
     expect(ft8SettingsApi.postFt8Settings).not.toHaveBeenCalled();
     // The numeric inputs WITHIN the waterfall section are disabled too (scope to
-    // that section so the live TX-section number inputs aren't swept in).
-    const wfSection = Array.from(container.querySelectorAll('section')).find((s) =>
-      s.querySelector('.ft8-region__head')?.textContent?.includes('Waterfall / display'),
+    // that card so the live TX-section number inputs aren't swept in).
+    const wfSection = Array.from(container.querySelectorAll('.ps-card')).find((s) =>
+      s.querySelector('h4')?.textContent?.includes('Waterfall / display'),
     );
     expect(wfSection).toBeTruthy();
     const numInputs = Array.from(
-      wfSection!.querySelectorAll('input.ft8-set-input--num'),
+      wfSection!.querySelectorAll('input.zd-num'),
     ) as HTMLInputElement[];
     expect(numInputs.length).toBeGreaterThan(0);
     expect(numInputs.every((i) => i.disabled)).toBe(true);
@@ -407,7 +407,7 @@ describe('ZeusDigitalSettingsPanel', () => {
       'div[aria-label="Cloud logging (Wavelog / Club Log)"]',
     ) as HTMLElement;
     const baseUrl = group.querySelector(
-      'input.ft8-set-input:not([type="password"]):not([type="number"])',
+      'input.zd-input:not([type="password"]):not([type="number"])',
     ) as HTMLInputElement;
     setInputValue(baseUrl, 'https://log.example.com');
     const apiKey = group.querySelector('input[type="password"]') as HTMLInputElement;

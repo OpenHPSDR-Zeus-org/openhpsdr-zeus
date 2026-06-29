@@ -1,0 +1,156 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * Zeus Digital — main-Settings tab skin.
+ *
+ * The Zeus Digital settings tab uses the SAME surface family as every other
+ * Settings tab: `.ps-shell` ▸ `.ps-card` ▸ `.ps-field` (shared with
+ * PsSettings / DSP / Radio …, defined in ps-settings.css). This file only adds
+ * the few digital-specific bits that the shared `.ps-*` set does not cover —
+ * a tokenised text input, a "soon" badge, status chips, a sub-section divider,
+ * an advanced disclosure and the read-only value cell. Everything is global
+ * tokens (tokens.css); no raw hex, no --hud-* layer.
+ *
+ * Scoped under `.zd-settings` so it can never leak onto another panel. */
+
+/* "Coming soon" rows — persisted but not yet wired: dimmed, with a small badge.
+   (Mirrors the live controls so the disabled state still reads as a setting.) */
+.zd-settings .ps-field.is-disabled {
+  opacity: 0.55;
+}
+.zd-settings .zd-soon {
+  margin-left: 6px;
+  padding: 0 5px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-xs);
+  vertical-align: middle;
+}
+
+/* QRZ-home fallback hint inside a .ps-name <em>. */
+.zd-settings .zd-resolved {
+  color: var(--fg-2);
+}
+.zd-settings .zd-resolved strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Tokenised text input — matches the .ps-ninput / .ps-select-mini house look
+   but left-aligned and flexible-width for callsigns, hosts, URLs, macros. */
+.zd-settings .zd-input {
+  min-width: 150px;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  color: var(--fg-0);
+  border-radius: var(--r-sm);
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+}
+.zd-settings .zd-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.zd-settings .zd-input:disabled {
+  opacity: 0.5;
+}
+/* Number cells reuse the shared .ps-ninput input styling; just tag them. */
+.zd-settings .zd-num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The shared .ps-select-mini is a fixed 110px; the digital panel has longer
+   option labels (e.g. "Custom (raw WSJT-X UDP)"), so let it grow a little. */
+.zd-settings .ps-select-mini {
+  width: auto;
+  min-width: 110px;
+  max-width: 220px;
+}
+
+/* Standalone explanatory note (not a field). */
+.zd-settings .zd-note {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--fg-3);
+}
+
+/* Read-only value cell (e.g. the fixed TX watchdog). */
+.zd-settings .zd-readonly-val {
+  font-size: 12.5px;
+  color: var(--fg-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Status chips (PSK Reporter / WSPRnet / internal logbook / cloud loggers). */
+.zd-settings .zd-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0 8px;
+}
+.zd-settings .zd-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--fg-3);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 2px 10px;
+}
+.zd-settings .zd-chip__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--fg-3);
+}
+.zd-settings .zd-chip.is-on {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.zd-settings .zd-chip.is-on .zd-chip__dot {
+  background: var(--ok);
+}
+
+/* Small live-status dot reused inline in the logger SAVE rows. */
+.zd-settings .zd-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: var(--fg-3);
+}
+.zd-settings .zd-dot.is-on {
+  background: var(--ok);
+}
+
+/* Sub-section divider WITHIN a card (between additive logger groups). */
+.zd-settings .zd-divider {
+  height: 1px;
+  background: var(--panel-border);
+  margin: 12px 0;
+}
+
+/* Advanced disclosure (JTDX sequence options). */
+.zd-settings .zd-advanced {
+  margin-top: 4px;
+}
+.zd-settings .zd-advanced > summary {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  cursor: pointer;
+  padding: 8px 0;
+}
+.zd-settings .zd-advanced[open] > summary {
+  color: var(--fg-2);
+}
