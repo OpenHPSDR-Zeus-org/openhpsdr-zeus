@@ -31,6 +31,7 @@ import { RadioOptionsPanel } from './RadioOptionsPanel';
 import { RadioSettingsPanel } from './RadioSettingsPanel';
 import { ReceiversPanel } from './ReceiversPanel';
 import { RotatorSettingsPanel } from './RotatorSettingsPanel';
+import { MidiSettingsPanel } from './MidiSettingsPanel';
 import { ServerUrlPanel } from './ServerUrlPanel';
 import { NetworkSettingsPanel } from './NetworkSettingsPanel';
 import { RadioSelector } from './RadioSelector';
@@ -57,6 +58,7 @@ export type SettingsTabId =
   | 'bandplan'
   | 'qrz'
   | 'rotator'
+  | 'midi'
   | 'network'
   | 'display'
   | 'plugins'
@@ -80,6 +82,7 @@ const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
   { id: 'bandplan', label: 'BAND PLAN' },
   { id: 'qrz', label: 'QRZ' },
   { id: 'rotator', label: 'ROTATOR' },
+  { id: 'midi', label: 'MIDI' },
   { id: 'network', label: 'NETWORK' },
   { id: 'display', label: 'DISPLAY' },
   { id: 'plugins', label: 'PLUGINS' },
@@ -211,6 +214,7 @@ export function SettingsView({ initialTab, onClose }: Props) {
           {activeTab === 'bandplan' && <BandPlanEditor />}
           {activeTab === 'qrz' && <QrzSettingsPanel />}
           {activeTab === 'rotator' && <RotatorSettingsPanel />}
+          {activeTab === 'midi' && <MidiSettingsPanel />}
           {activeTab === 'network' && <NetworkSettingsPanel />}
           {activeTab === 'display' && <DisplayPanel />}
           {activeTab === 'plugins' && <PluginsPanel />}

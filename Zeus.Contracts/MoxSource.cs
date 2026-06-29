@@ -70,4 +70,13 @@ public enum MoxSource : byte
     /// staged message — it never arms PureSignal and never auto-keys on connect
     /// or startup.</summary>
     Ft8 = 7,
+    /// <summary>A hardware MIDI controller (DJ deck / control surface) mapped
+    /// to the MOX / TUNE / 2-Tone commands via the MIDI controller subsystem
+    /// (<c>MidiService</c> / <c>MidiCommandDispatcher</c>). Same release rule as
+    /// <see cref="Tci"/> / <see cref="Cat"/> / <see cref="Ft8"/>: only this
+    /// source releases what it itself claimed, and <see cref="UI"/> remains the
+    /// master override. A MIDI button keys TX only on an explicit operator
+    /// press; it never arms PureSignal (PureSignal arm is deliberately excluded
+    /// from the MIDI command surface) and never auto-keys on connect.</summary>
+    Midi = 8,
 }
