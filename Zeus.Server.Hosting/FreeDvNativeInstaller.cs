@@ -187,7 +187,8 @@ public sealed class FreeDvNativeInstaller
         if (response.StatusCode == HttpStatusCode.NotFound)
             throw new PlatformUnavailableException(
                 $"FreeDV isn't published for this platform yet ({rid}). "
-                + "The codec2 modem ships for win-x64, linux-x64, linux-arm64 and osx-arm64.");
+                + "The prebuilt codec2 modem currently ships only for Windows (win-x64); "
+                + "Linux and macOS builds are tracked for a future release.");
         response.EnsureSuccessStatusCode();
 
         long total = response.Content.Headers.ContentLength ?? 0;
