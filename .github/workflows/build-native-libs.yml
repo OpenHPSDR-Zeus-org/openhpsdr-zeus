@@ -638,7 +638,10 @@ jobs:
           set -eux
           cmake -S native/codec2 -B native/build-codec2 -DCMAKE_BUILD_TYPE=Release
           cmake --build native/build-codec2 --config Release --target codec2 --parallel
-          dylib=$(find native/build-codec2 -name 'libcodec2.dylib' ! -type l | head -n1)
+          # codec2's CMake emits a versioned dylib (libcodec2.1.2.dylib) with
+          # libcodec2.dylib as a symlink — match the real file, not the symlink,
+          # and stage it under the plain soname the loader probes for.
+          dylib=$(find native/build-codec2 -name 'libcodec2*.dylib' ! -type l | head -n1)
           test -n "$dylib"
           cp "$dylib" Zeus.Dsp/runtimes/osx-arm64/native/libcodec2.dylib
           otool -L Zeus.Dsp/runtimes/osx-arm64/native/libcodec2.dylib
