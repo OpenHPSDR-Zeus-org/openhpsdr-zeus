@@ -19,7 +19,7 @@ A note on one tab in particular: **PA Settings** is the only tab with an explici
 | **Band Plan** | The frequency/mode band plan editor. |
 | **QRZ** | Sign in to QRZ.com for callsign lookups and your home grid. |
 | **Rotator** | Connect to a Hamlib `rotctld` antenna rotator. |
-| **Network** | Expose Zeus to external software two ways: **TCI** (ExpertSDR3 Transceiver Control Interface) and **CAT** (Kenwood TS-2000 emulation), for logging, contest, and digital-mode programs. |
+| **Network** | Expose Zeus to external software two ways: **TCI** (ExpertSDR3 Transceiver Control Interface) and **CAT** (Kenwood TS-2000 emulation), for logging, contest, and digital-mode programs. Also home to the direct **DX-cluster** (Telnet) client. |
 | **Display** | Theme, panadapter background, trace color, spectrum scale, waterfall colormap. |
 | **Plugins** | Install and manage backend/UI/audio plugins from the registry or by URL. |
 | **HamClock** | Install and embed the OpenHamClock dashboard as a workspace panel. |
