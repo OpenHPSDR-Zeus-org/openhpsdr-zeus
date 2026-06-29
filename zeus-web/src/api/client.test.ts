@@ -107,10 +107,13 @@ import {
   setMode,
   setNr,
   setPreamp,
+  setRadioLo,
+  setReceiverLo,
   setSampleRate,
   setTun,
   setTxVfo,
   setZoom,
+  toWireHz,
 } from './client';
 
 describe('normalizeStatus', () => {
@@ -500,6 +503,72 @@ describe('POST helpers', () => {
     expect(url).toBe('/api/rx/zoom');
     expect(init?.method).toBe('POST');
     expect(JSON.parse((init?.body ?? '') as string)).toEqual({ level: 4 });
+  });
+
+  // Regression (#1191): the CTUN zoom/recenter path computes a fractional LO
+  // and used to POST it raw; the Int64 RadioLoSetRequest/ReceiverLoSetRequest
+  // rejected the decimal with HTTP 400, the hardware LO never moved, and the
+  // panadapter/waterfall blanked under CTUN. toWireHz rounds + clamps at the
+  // wire seam so no caller can emit a non-integer or out-of-range Hz.
+  describe('toWireHz', () => {
+    it('rounds a fractional Hz to the nearest integer', () => {
+      expect(toWireHz(3_853_999.9999)).toBe(3_854_000);
+      expect(toWireHz(7_100_000.4)).toBe(7_100_000);
+      expect(toWireHz(7_100_000.5)).toBe(7_100_001);
+    });
+    it('clamps to the supported radio range', () => {
+      expect(toWireHz(-5)).toBe(0);
+      expect(toWireHz(99_000_000)).toBe(60_000_000);
+    });
+    it('coerces non-finite values to 0 (never NaN/Infinity on the wire)', () => {
+      expect(toWireHz(Number.NaN)).toBe(0);
+      expect(toWireHz(Number.POSITIVE_INFINITY)).toBe(0);
+      expect(toWireHz(Number.NEGATIVE_INFINITY)).toBe(0);
+    });
+    it('passes a clean integer through unchanged', () => {
+      expect(toWireHz(3_854_000)).toBe(3_854_000);
+    });
+  });
+
+  it('setRadioLo posts an integer hz to /api/radio/lo even when given a fraction', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(okState));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await setRadioLo(3_853_999.9999);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/radio/lo');
+    expect(init?.method).toBe('POST');
+    const body = JSON.parse((init?.body ?? '') as string);
+    expect(body).toEqual({ hz: 3_854_000 });
+    expect(Number.isInteger(body.hz)).toBe(true);
+  });
+
+  it('setReceiverLo posts an integer hz to /api/receivers/{i}/lo even when given a fraction', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(okState));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await setReceiverLo(2, 14_204_300.75);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/receivers/2/lo');
+    const body = JSON.parse((init?.body ?? '') as string);
+    expect(body).toEqual({ hz: 14_204_301 });
+    expect(Number.isInteger(body.hz)).toBe(true);
+  });
+
+  it('setReceiverLo(index<=0) delegates to /api/radio/lo, still rounding', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(okState));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await setReceiverLo(0, 3_853_999.9999);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/radio/lo');
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({ hz: 3_854_000 });
   });
 
   it('setAttenuator posts { db } to /api/attenuator', async () => {
