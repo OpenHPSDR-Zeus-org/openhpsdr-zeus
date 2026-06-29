@@ -184,6 +184,7 @@ describe('InstalledPlugins', () => {
       installed: [
         {
           id: 'demo',
+          scanned: false,
           name: 'Demo Plugin',
           version: '0.1.0',
           author: 'EI6LF',
@@ -241,6 +242,7 @@ describe('InstalledPlugins', () => {
       installed: [
         {
           id: 'demo',
+          scanned: false,
           name: 'Demo Plugin',
           version: '0.1.0',
           author: '',

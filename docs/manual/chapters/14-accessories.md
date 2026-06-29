@@ -95,6 +95,26 @@ Everything is configured under **Settings → Spots**:
   blocked when no radio is connected, CW sideband, and small dial offsets
   for CW and digital so you can land slightly off the published frequency.
 
+### DX Cluster (direct Telnet)
+
+Separately from the aggregated **Spots** feed above, Zeus can connect
+**directly** to a DX cluster node over Telnet — a DXSpider, AR-Cluster, or
+CC-Cluster server — and drop its spots straight onto the panadapter, with no
+third-party bridge (such as Cluster-TCI) in between. The spots arrive on the
+same overlay as every other source, so click-to-tune and the rest work
+exactly as before.
+
+You set it up under **Settings → Network**, beside TCI: enter the cluster's
+**host** and **port** (clusters commonly use 7300, 7373, or 8000), your
+**callsign**, an optional **password** if the node requires one, and any
+**login commands** you want sent once after you're logged in (for example a
+filter that limits which bands or spotters you receive). Tick **Auto-connect**
+to have Zeus log in automatically at startup, or use the **Connect** /
+**Disconnect** button to do it by hand. A live status indicator shows the
+connection state and how many spots have come in. If the link drops, Zeus
+reconnects on its own with a backing-off retry so a brief network hiccup
+doesn't leave you spot-blind.
+
 ### Space Weather & Propagation
 
 The **Solar · Space Weather** panel is a propagation dashboard fed by the

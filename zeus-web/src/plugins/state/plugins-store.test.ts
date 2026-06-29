@@ -67,6 +67,34 @@ describe('usePluginsStore', () => {
     expect(s.sdkAbi).toBe(1);
   });
 
+  it('refreshInstalled excludes operator-scanned VST3 / AU plugins', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(
+        jsonResponse({
+          sdkAbi: 1,
+          sdkVersion: '0.6.0',
+          plugins: [
+            { id: 'com.openhpsdr.zeus.samples.eq', name: 'EQ', version: '1', author: '', description: '', license: 'GPL', capabilities: [] },
+            { id: 'com.example.repo', name: 'Repo Plugin', version: '1', author: '', description: '', license: 'GPL', capabilities: [] },
+            { id: 'com.openhpsdr.zeus.vst.tdrnova', name: 'TDR Nova', version: '1', author: '', description: '', license: 'Unknown', capabilities: [], scanned: true },
+            { id: 'com.openhpsdr.zeus.rxau.clear', name: 'Clear RX', version: '1', author: '', description: '', license: 'Unknown', capabilities: [], scanned: true },
+          ],
+        }),
+      ),
+    );
+
+    await usePluginsStore.getState().refreshInstalled();
+
+    const s = usePluginsStore.getState();
+    expect(s.installedLoad.loaded).toBe(true);
+    // Both scanned audio plugins are filtered out; only the repo plugins remain.
+    expect(s.installed.map((p) => p.id)).toEqual([
+      'com.openhpsdr.zeus.samples.eq',
+      'com.example.repo',
+    ]);
+  });
+
   it('refreshInstalled records loadError on a 500', async () => {
     vi.stubGlobal(
       'fetch',
