@@ -118,29 +118,36 @@ public static class DxSpotLineParser
     }
 
     // Best-effort mode from the comment text. Only the common, unambiguous modes
-    // the issue calls out; "" when nothing matches.
-    private static readonly (string Token, string Mode)[] ModeTokens =
+    // the issue calls out; "" when nothing matches. Each token's word-boundary
+    // pattern is compiled once (static), so a firehose of spots never churns the
+    // shared static Regex cache or re-allocates pattern strings per spot.
+    private static readonly (Regex Pattern, string Mode)[] ModePatterns =
     {
-        ("FT8", "FT8"),
-        ("FT4", "FT4"),
-        ("RTTY", "RTTY"),
-        ("PSK", "PSK"),
-        ("JT65", "JT65"),
-        ("CW", "CW"),
-        ("USB", "SSB"),
-        ("LSB", "SSB"),
-        ("SSB", "SSB"),
+        (ModeRegex("FT8"),  "FT8"),
+        (ModeRegex("FT4"),  "FT4"),
+        (ModeRegex("RTTY"), "RTTY"),
+        (ModeRegex("PSK"),  "PSK"),
+        (ModeRegex("JT65"), "JT65"),
+        (ModeRegex("CW"),   "CW"),
+        (ModeRegex("USB"),  "SSB"),
+        (ModeRegex("LSB"),  "SSB"),
+        (ModeRegex("SSB"),  "SSB"),
     };
+
+    // Word-boundary match (against the upper-cased comment) so "FT8" matches in
+    // "FT8 -12 dB" but not inside a serial number.
+    private static Regex ModeRegex(string token) => new(
+        $@"\b{Regex.Escape(token)}\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static string DeriveMode(string comment)
     {
         if (string.IsNullOrWhiteSpace(comment))
             return "";
         var upper = comment.ToUpperInvariant();
-        foreach (var (token, mode) in ModeTokens)
+        foreach (var (pattern, mode) in ModePatterns)
         {
-            // Word-boundary match so "FT8" in "FT8" but not inside a serial number.
-            if (Regex.IsMatch(upper, $@"\b{Regex.Escape(token)}\b"))
+            if (pattern.IsMatch(upper))
                 return mode;
         }
         return "";

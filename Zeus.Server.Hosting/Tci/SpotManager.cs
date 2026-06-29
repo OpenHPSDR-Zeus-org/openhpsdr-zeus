@@ -46,14 +46,39 @@
 namespace Zeus.Server.Tci;
 
 /// <summary>
-/// In-memory storage for DX cluster spots received via TCI.
-/// Fires <see cref="SpotsChanged"/> after every mutation so
-/// SpotBroadcastService can push a fresh snapshot to all WS clients.
+/// In-memory storage for DX cluster spots received via TCI or a native Telnet
+/// DX-cluster connection. Fires <see cref="SpotsChanged"/> after every mutation
+/// so SpotBroadcastService can push a fresh snapshot to all WS clients.
+///
+/// <para>The store is bounded (LRU): once <see cref="MaxSpots"/> distinct
+/// callsigns are held, adding a new one evicts the least-recently-spotted call.
+/// Re-spotting an existing call refreshes its recency. This matters for the
+/// native DX-cluster path, where a busy/contest cluster is a firehose of unique
+/// callsigns that would otherwise accumulate without bound for the whole
+/// session (the TCI path self-expires via RemoveSpot, so it never hits the
+/// cap). The bound also caps the per-broadcast snapshot size.</para>
 /// </summary>
 public sealed class SpotManager
 {
+    /// <summary>Default upper bound on retained distinct callsigns.</summary>
+    public const int DefaultMaxSpots = 1000;
+
     private readonly object _sync = new();
-    private readonly Dictionary<string, Spot> _spots = new();
+    // LRU ordering: head = least-recently-spotted, tail = most-recent. The
+    // dictionary indexes nodes by callsign for O(1) add/update/remove.
+    private readonly LinkedList<Spot> _order = new();
+    private readonly Dictionary<string, LinkedListNode<Spot>> _index = new();
+
+    /// <summary>Maximum number of distinct callsigns retained before the
+    /// least-recently-spotted is evicted.</summary>
+    public int MaxSpots { get; }
+
+    public SpotManager() : this(DefaultMaxSpots) { }
+
+    public SpotManager(int maxSpots)
+    {
+        MaxSpots = maxSpots > 0 ? maxSpots : DefaultMaxSpots;
+    }
 
     /// <summary>
     /// Raised after any mutation (add, remove, or clear). Fired while the
@@ -63,13 +88,32 @@ public sealed class SpotManager
     public event Action? SpotsChanged;
 
     /// <summary>
-    /// Add or update a spot.
+    /// Add or update a spot. Adding a brand-new callsign past <see cref="MaxSpots"/>
+    /// evicts the least-recently-spotted one. Updating an existing callsign
+    /// refreshes its value and its recency.
     /// </summary>
     public void AddSpot(string callsign, string mode, long freqHz, uint argb, string? comment = null)
     {
         lock (_sync)
         {
-            _spots[callsign] = new Spot(callsign, mode, freqHz, argb, comment);
+            var spot = new Spot(callsign, mode, freqHz, argb, comment);
+            if (_index.TryGetValue(callsign, out var existing))
+            {
+                // Update in place and move to the MRU end.
+                existing.Value = spot;
+                _order.Remove(existing);
+                _order.AddLast(existing);
+            }
+            else
+            {
+                _index[callsign] = _order.AddLast(spot);
+                if (_index.Count > MaxSpots)
+                {
+                    var oldest = _order.First!; // count > cap >= 1 ⇒ non-null
+                    _order.RemoveFirst();
+                    _index.Remove(oldest.Value.Callsign);
+                }
+            }
         }
         SpotsChanged?.Invoke();
     }
@@ -81,7 +125,11 @@ public sealed class SpotManager
     {
         lock (_sync)
         {
-            _spots.Remove(callsign);
+            if (_index.TryGetValue(callsign, out var node))
+            {
+                _order.Remove(node);
+                _index.Remove(callsign);
+            }
         }
         SpotsChanged?.Invoke();
     }
@@ -93,19 +141,24 @@ public sealed class SpotManager
     {
         lock (_sync)
         {
-            _spots.Clear();
+            _order.Clear();
+            _index.Clear();
         }
         SpotsChanged?.Invoke();
     }
 
     /// <summary>
-    /// Get a snapshot of all spots.
+    /// Get a snapshot of all spots, oldest-spotted first.
     /// </summary>
     public Spot[] GetAll()
     {
         lock (_sync)
         {
-            return _spots.Values.ToArray();
+            var arr = new Spot[_order.Count];
+            int i = 0;
+            foreach (var s in _order)
+                arr[i++] = s;
+            return arr;
         }
     }
 

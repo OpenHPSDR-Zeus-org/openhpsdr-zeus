@@ -115,6 +115,36 @@ describe('DxClusterSettingsPanel', () => {
     unmount();
   });
 
+  it('SAVE with an out-of-range port surfaces an error and does not persist', async () => {
+    const saveConfig = vi.fn(async () => ({
+      ...OFF,
+      hasPassword: false,
+      state: 'Disconnected' as const,
+      spotsReceived: 0,
+      lastSpotCallsign: null,
+      error: null,
+    }));
+    act(() => useDxClusterStore.setState({ saveConfig } as never));
+
+    const { container, unmount } = render(createElement(DxClusterSettingsPanel));
+    setInputValue(container.querySelector('input[placeholder="dxc.example.org"]') as HTMLInputElement, 'dxc.example.org');
+    setInputValue(container.querySelector('input[type="number"]') as HTMLInputElement, '99999');
+
+    clickByText(container, 'SAVE');
+    // The submit handler is async; flush its synchronous state update to the DOM.
+    await act(async () => {});
+    expect(saveConfig).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Port must be a whole number between 1 and 65535.');
+
+    // Editing the port clears the error, and a valid value now saves.
+    setInputValue(container.querySelector('input[type="number"]') as HTMLInputElement, '7300');
+    expect(container.textContent).not.toContain('Port must be a whole number');
+    clickByText(container, 'SAVE');
+    await act(async () => {});
+    expect(saveConfig).toHaveBeenCalledWith(expect.objectContaining({ port: 7300 }));
+    unmount();
+  });
+
   it('CONNECT calls the store connect action', () => {
     const connect = vi.fn(async () => ({
       ...OFF,

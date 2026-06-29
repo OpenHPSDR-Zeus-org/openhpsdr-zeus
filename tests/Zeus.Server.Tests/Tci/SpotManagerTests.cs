@@ -151,4 +151,61 @@ public class SpotManagerTests
         Assert.Single(spots);
         Assert.Null(spots[0].Comment);
     }
+
+    [Fact]
+    public void AddSpot_PastCap_EvictsLeastRecentlySpotted()
+    {
+        // A DX-cluster firehose of unique callsigns must not accumulate without
+        // bound: the store is capped and evicts the least-recently-spotted call.
+        var manager = new SpotManager(maxSpots: 3);
+        manager.AddSpot("A1AA", "CW", 14000000, 0xFF000000);
+        manager.AddSpot("B2BB", "CW", 14001000, 0xFF000000);
+        manager.AddSpot("C3CC", "CW", 14002000, 0xFF000000);
+        manager.AddSpot("D4DD", "CW", 14003000, 0xFF000000); // evicts A1AA (oldest)
+
+        var spots = manager.GetAll();
+        Assert.Equal(3, spots.Length);
+        Assert.DoesNotContain(spots, s => s.Callsign == "A1AA");
+        Assert.Contains(spots, s => s.Callsign == "B2BB");
+        Assert.Contains(spots, s => s.Callsign == "C3CC");
+        Assert.Contains(spots, s => s.Callsign == "D4DD");
+    }
+
+    [Fact]
+    public void AddSpot_RespottingExisting_RefreshesRecency_DoesNotGrow()
+    {
+        var manager = new SpotManager(maxSpots: 3);
+        manager.AddSpot("A1AA", "CW", 14000000, 0xFF000000);
+        manager.AddSpot("B2BB", "CW", 14001000, 0xFF000000);
+        manager.AddSpot("C3CC", "CW", 14002000, 0xFF000000);
+
+        // Re-spot the oldest call — it becomes most-recent, so the NEXT add must
+        // evict B2BB (now the oldest), not A1AA.
+        manager.AddSpot("A1AA", "SSB", 14000500, 0xFF000000);
+        manager.AddSpot("D4DD", "CW", 14003000, 0xFF000000);
+
+        var spots = manager.GetAll();
+        Assert.Equal(3, spots.Length);
+        Assert.DoesNotContain(spots, s => s.Callsign == "B2BB");
+        Assert.Contains(spots, s => s.Callsign == "A1AA");
+        // The re-spot updated the value in place.
+        Assert.Equal("SSB", Assert.Single(spots, s => s.Callsign == "A1AA").Mode);
+    }
+
+    [Fact]
+    public void AddSpot_NeverExceedsCap_UnderFirehose()
+    {
+        var manager = new SpotManager(maxSpots: 50);
+        for (int i = 0; i < 5000; i++)
+            manager.AddSpot($"CALL{i}", "FT8", 14074000, 0xFF000000);
+
+        Assert.Equal(50, manager.GetAll().Length);
+    }
+
+    [Fact]
+    public void Ctor_NonPositiveCap_FallsBackToDefault()
+    {
+        Assert.Equal(SpotManager.DefaultMaxSpots, new SpotManager(0).MaxSpots);
+        Assert.Equal(SpotManager.DefaultMaxSpots, new SpotManager(-5).MaxSpots);
+    }
 }

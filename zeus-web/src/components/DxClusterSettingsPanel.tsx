@@ -50,6 +50,7 @@ export function DxClusterSettingsPanel() {
   const [autoConnect, setAutoConnect] = useState(config.autoConnect);
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [portError, setPortError] = useState<string | null>(null);
 
   // Rehydrate the form when the store syncs from the backend.
   useEffect(() => {
@@ -67,10 +68,16 @@ export function DxClusterSettingsPanel() {
 
   async function onSave(e: React.FormEvent) {
     e.preventDefault();
+    const portNum = Number(port);
+    if (!Number.isInteger(portNum) || portNum <= 0 || portNum >= 65536) {
+      // Don't silently swallow an out-of-range / pasted value — tell the operator
+      // why SAVE did nothing instead of leaving a dead button.
+      setPortError('Port must be a whole number between 1 and 65535.');
+      return;
+    }
+    setPortError(null);
     setSaving(true);
     try {
-      const portNum = Number(port);
-      if (!Number.isFinite(portNum) || portNum <= 0 || portNum >= 65536) return;
       await saveConfig({
         enabled,
         host: host.trim(),
@@ -135,7 +142,11 @@ export function DxClusterSettingsPanel() {
         callsign; add a password only if your cluster requires one.
       </div>
 
-      <form onSubmit={onSave} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* noValidate: bypass the browser's native constraint-validation bubble for
+          the number field (its max would silently block submit and the operator
+          never learns why). We validate the port in onSave and surface an
+          in-app, in-palette message instead. */}
+      <form noValidate onSubmit={onSave} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input
             type="checkbox"
@@ -163,14 +174,21 @@ export function DxClusterSettingsPanel() {
           <input
             type="number"
             value={port}
-            onChange={(e) => setPort(e.target.value)}
+            onChange={(e) => {
+              setPort(e.target.value);
+              if (portError) setPortError(null);
+            }}
             min={1}
             max={65535}
-            style={inputStyle}
+            style={portError ? { ...inputStyle, borderColor: 'var(--tx)' } : inputStyle}
           />
-          <span style={{ fontSize: 10, color: 'var(--fg-3)' }}>
-            Default: 7373. Common cluster telnet ports are 7300, 7373, and 8000.
-          </span>
+          {portError ? (
+            <span style={{ fontSize: 10, color: 'var(--tx)' }}>{portError}</span>
+          ) : (
+            <span style={{ fontSize: 10, color: 'var(--fg-3)' }}>
+              Default: 7373. Common cluster telnet ports are 7300, 7373, and 8000.
+            </span>
+          )}
         </label>
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
