@@ -15,6 +15,7 @@ import { useEffect, type RefObject } from 'react';
 import { setRadioLo } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
+import { useVfoLockStore } from '../state/vfo-lock-store';
 import {
   getReceiverVfoFromState,
   getReceiverVfoHz,
@@ -135,6 +136,10 @@ export function useRulerPanGesture(
     };
 
     const queueLo = (nextLoHz: number) => {
+      // VFO lock freezes the panadapter view entirely, so a ruler drag never
+      // pans — whether it would move the dial (CTUN off / secondary) or only
+      // the display window (CTUN on).
+      if (useVfoLockStore.getState().locked) return;
       const loHz = clampHz(nextLoHz);
       if (loHz === pendingLoHz) return;
       vc.nudgeTargetHz(loHz - commandedLoHz());

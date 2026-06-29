@@ -44,7 +44,7 @@
 // License for details.
 
 import type { CSSProperties } from 'react';
-import { Headphones, Send, Volume2, VolumeX } from 'lucide-react';
+import { Headphones, Lock, Send, Unlock, Volume2, VolumeX } from 'lucide-react';
 import {
   setReceiver,
   setReceiverMuted,
@@ -63,6 +63,7 @@ import {
   optimisticSetReceiverVfo,
   setExposedReceiverCount,
 } from '../../state/receiver-state';
+import { useVfoLockStore } from '../../state/vfo-lock-store';
 
 export function VfoPanel() {
   const applyState = useConnectionStore((s) => s.applyState);
@@ -76,6 +77,8 @@ export function VfoPanel() {
   const setFocusedRxIndex = useConnectionStore((s) => s.setFocusedRxIndex);
   const selectedRxIndices = useConnectionStore((s) => s.selectedRxIndices);
   const toggleRxSelection = useConnectionStore((s) => s.toggleRxSelection);
+  const vfoLocked = useVfoLockStore((s) => s.locked);
+  const toggleVfoLock = useVfoLockStore((s) => s.toggle);
 
   const patchRx2 = (req: {
     enabled?: boolean;
@@ -238,6 +241,20 @@ export function VfoPanel() {
             aria-pressed={activeAudible}
           >
             {activeAudible ? <Volume2 size={13} /> : <VolumeX size={13} />}
+          </button>
+          <button
+            type="button"
+            className={`vfo-lock-key ${vfoLocked ? 'is-on' : ''}`}
+            onClick={toggleVfoLock}
+            title={
+              vfoLocked
+                ? 'VFO LOCKED — click to unlock and tune'
+                : 'Lock VFO — block all retune (dial, wheel, panadapter, keyboard)'
+            }
+            aria-label={vfoLocked ? 'VFO locked — click to unlock' : 'Lock VFO'}
+            aria-pressed={vfoLocked}
+          >
+            {vfoLocked ? <Lock size={13} /> : <Unlock size={13} />}
           </button>
           <button
             type="button"

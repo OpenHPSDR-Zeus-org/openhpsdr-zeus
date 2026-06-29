@@ -5680,6 +5680,13 @@ export function setReceiver(
   },
   signal?: AbortSignal,
 ): Promise<RadioStateDto> {
+  // VFO-lock gate for the RX3+ write path (postReceiverVfo routes here for
+  // index >= 2). Mirrors the gates on setVfo / setVfoB so a locked dial can't
+  // be moved through the multi-DDC endpoint either; only the VFO write is
+  // refetched — enabled / adcSource / mode / filter / AF still pass through.
+  if (req.vfoHz !== undefined && vfoLockStore.getState().locked) {
+    return fetchState(signal);
+  }
   return jsonFetch(
     `/api/receivers/${index}`,
     {
