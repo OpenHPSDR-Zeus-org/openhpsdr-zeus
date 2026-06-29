@@ -7,6 +7,7 @@
 
 using System.Buffers.Binary;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 
 namespace Zeus.Server;
@@ -18,6 +19,10 @@ public sealed record Protocol3PresenceResult(
     uint CapabilityFlags,
     uint FirmwareVersion,
     uint GatewareVersion);
+
+public sealed record Protocol3DiscoveredRadio(
+    IPAddress Ip,
+    Protocol3PresenceResult Presence);
 
 public sealed class Protocol3PresenceProbe
 {
@@ -45,6 +50,89 @@ public sealed class Protocol3PresenceProbe
         TimeSpan timeout,
         CancellationToken ct = default) =>
         await ProbeAsync(radioIp, DefaultPort, timeout, ct).ConfigureAwait(false);
+
+    public async Task<IReadOnlyList<Protocol3DiscoveredRadio>> DiscoverAsync(
+        TimeSpan timeout,
+        CancellationToken ct = default) =>
+        await DiscoverAsync(GetIPv4BroadcastAddresses(), DefaultPort, timeout, ct).ConfigureAwait(false);
+
+    internal async Task<IReadOnlyList<Protocol3DiscoveredRadio>> DiscoverAsync(
+        IReadOnlyCollection<IPAddress> targetAddresses,
+        int port,
+        TimeSpan timeout,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(targetAddresses);
+        if (port <= 0 || port > 65535) throw new ArgumentOutOfRangeException(nameof(port));
+        if (targetAddresses.Count == 0) return Array.Empty<Protocol3DiscoveredRadio>();
+
+        using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        DisableUdpConnReset(socket);
+        socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, true);
+        socket.Bind(new IPEndPoint(IPAddress.Any, 0));
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(timeout);
+
+        var packet = BuildDiscoveryPacket();
+        foreach (var address in targetAddresses.Where(a => a.AddressFamily == AddressFamily.InterNetwork).Distinct())
+        {
+            try
+            {
+                await socket.SendToAsync(
+                    packet,
+                    SocketFlags.None,
+                    new IPEndPoint(address, port),
+                    timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return Array.Empty<Protocol3DiscoveredRadio>();
+            }
+            catch (SocketException ex)
+            {
+                _log.LogDebug(ex, "p3.discovery.send.error target={Target}", address);
+            }
+        }
+
+        var byIp = new Dictionary<IPAddress, Protocol3PresenceResult>();
+        var receiveBuffer = new byte[ReceiveBufferSize];
+        var any = new IPEndPoint(IPAddress.Any, 0);
+        while (!timeoutCts.IsCancellationRequested)
+        {
+            SocketReceiveFromResult res;
+            try
+            {
+                res = await socket.ReceiveFromAsync(
+                    receiveBuffer,
+                    SocketFlags.None,
+                    any,
+                    timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+            {
+                continue;
+            }
+            catch (SocketException ex)
+            {
+                _log.LogDebug(ex, "p3.discovery.socket.error");
+                break;
+            }
+
+            var fromIp = ((IPEndPoint)res.RemoteEndPoint).Address;
+            var slice = new ReadOnlySpan<byte>(receiveBuffer, 0, res.ReceivedBytes);
+            if (TryParseCapabilities(slice, port, out var result))
+            {
+                byIp[fromIp] = result;
+            }
+        }
+
+        return byIp.Select(kv => new Protocol3DiscoveredRadio(kv.Key, kv.Value)).ToArray();
+    }
 
     internal async Task<Protocol3PresenceResult?> ProbeAsync(
         IPAddress radioIp,
@@ -91,44 +179,51 @@ public sealed class Protocol3PresenceProbe
 
         var receiveBuffer = new byte[ReceiveBufferSize];
         var any = new IPEndPoint(IPAddress.Any, 0);
-        while (!timeoutCts.IsCancellationRequested)
+        try
         {
-            SocketReceiveFromResult res;
-            try
+            while (!timeoutCts.IsCancellationRequested)
             {
-                res = await socket.ReceiveFromAsync(
-                    receiveBuffer,
-                    SocketFlags.None,
-                    any,
-                    timeoutCts.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
-            {
-                continue;
-            }
-            catch (SocketException ex)
-            {
-                _log.LogDebug(ex, "p3.presence.socket.error radio={Radio}", radioIp);
-                break;
-            }
+                SocketReceiveFromResult res;
+                try
+                {
+                    res = await socket.ReceiveFromAsync(
+                        receiveBuffer,
+                        SocketFlags.None,
+                        any,
+                        timeoutCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+                {
+                    continue;
+                }
+                catch (SocketException ex)
+                {
+                    _log.LogDebug(ex, "p3.presence.socket.error radio={Radio}", radioIp);
+                    break;
+                }
 
-            var fromIp = ((IPEndPoint)res.RemoteEndPoint).Address;
-            if (!fromIp.Equals(radioIp)) continue;
+                var fromIp = ((IPEndPoint)res.RemoteEndPoint).Address;
+                if (!fromIp.Equals(radioIp)) continue;
 
-            var slice = new ReadOnlySpan<byte>(receiveBuffer, 0, res.ReceivedBytes);
-            if (TryParseCapabilities(slice, port, out var result))
-            {
-                _log.LogInformation(
-                    "p3.presence.reply radio={Radio} maxRx={MaxRx} flags=0x{Flags:X8}",
-                    radioIp,
-                    result.MaxRxStreams,
-                    result.CapabilityFlags);
-                return result;
+                var slice = new ReadOnlySpan<byte>(receiveBuffer, 0, res.ReceivedBytes);
+                if (TryParseCapabilities(slice, port, out var result))
+                {
+                    _log.LogInformation(
+                        "p3.presence.reply radio={Radio} maxRx={MaxRx} flags=0x{Flags:X8}",
+                        radioIp,
+                        result.MaxRxStreams,
+                        result.CapabilityFlags);
+                    return result;
+                }
             }
+        }
+        finally
+        {
+            try { socket.Shutdown(SocketShutdown.Both); } catch (SocketException) { }
         }
 
         return null;
@@ -170,6 +265,40 @@ public sealed class Protocol3PresenceProbe
             FirmwareVersion: BinaryPrimitives.ReadUInt32BigEndian(payload.Slice(32, 4)),
             GatewareVersion: BinaryPrimitives.ReadUInt32BigEndian(payload.Slice(36, 4)));
         return true;
+    }
+
+    private static IReadOnlyCollection<IPAddress> GetIPv4BroadcastAddresses()
+    {
+        var addresses = new HashSet<IPAddress> { IPAddress.Broadcast };
+        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (nic.OperationalStatus != OperationalStatus.Up) continue;
+            if (nic.NetworkInterfaceType is NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel) continue;
+
+            IPInterfaceProperties properties;
+            try { properties = nic.GetIPProperties(); }
+            catch (NetworkInformationException) { continue; }
+
+            foreach (var uni in properties.UnicastAddresses)
+            {
+                if (uni.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                if (uni.IPv4Mask is null) continue;
+                addresses.Add(GetBroadcastAddress(uni.Address, uni.IPv4Mask));
+            }
+        }
+        return addresses;
+    }
+
+    private static IPAddress GetBroadcastAddress(IPAddress address, IPAddress mask)
+    {
+        var ipBytes = address.GetAddressBytes();
+        var maskBytes = mask.GetAddressBytes();
+        var broadcast = new byte[ipBytes.Length];
+        for (var i = 0; i < broadcast.Length; i++)
+        {
+            broadcast[i] = (byte)(ipBytes[i] | ~maskBytes[i]);
+        }
+        return new IPAddress(broadcast);
     }
 
     private const int SIO_UDP_CONNRESET = -1744830452; // 0x9800000C
