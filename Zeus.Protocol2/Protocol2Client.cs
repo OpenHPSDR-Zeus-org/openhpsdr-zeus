@@ -1795,12 +1795,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     ///       wire on connect/arm in
     ///       <c>RadioService.ApplyPsHwPeakForConnection</c>. The single shared
     ///       LTC2208's TX-time input attenuator is muxed by transmit state in
-    ///       gateware — Hermes.v:1704
+    ///       gateware — Hermes.v:1710
     ///       <c>assign atten0 = FPGA_PTT ? atten0_on_Tx : Attenuator0</c>, where
     ///       <c>atten0_on_Tx = Angelia_atten_Tx0 =</c> TxSpecific byte 59
-    ///       (Tx_specific_C&amp;C.v:182-185). Zeus never pushes byte 59 today (it
-    ///       defaults 0), so a fresh G2E first key-down with PS armed would slam
-    ///       the PA coupler into the one ADC at 0 dB. Seeding it touches a PS
+    ///       (Tx_specific_C&amp;C.v:182-185). Zeus emits byte 59 on every
+    ///       TxSpecific packet but only ever as <c>_txStepAttnDb</c>, which
+    ///       defaults to 0 — it never seeds a PS-protective value there, so a
+    ///       fresh G2E first key-down with PS armed would slam the PA coupler
+    ///       into the one ADC at 0 dB. Seeding it touches a PS
     ///       calibration default — a PS-hard-rule change, NOT done autonomously.
     ///   (B) OK1BR bench-verifies first-key-down ADC-overload on a real G2E
     ///       (#289) — Zeus has no G2E bench.
