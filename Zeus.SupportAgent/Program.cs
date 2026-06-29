@@ -63,7 +63,10 @@ if (endpoints is not null)
     // Seed identity from the launch env (best-effort; usually blank because QRZ
     // login hadn't settled at launch). The IPC SupportHello/SupportStateChanged
     // refresh it the moment the operator's QRZ identity is known.
-    broker = new HttpSupportBrokerClient(http, endpoints, opts.OperatorCallsign ?? "", qrzSession);
+    broker = new HttpSupportBrokerClient(
+        http, endpoints, opts.OperatorCallsign ?? "", qrzSession,
+        platform: RuntimeInformation.OSDescription,
+        appVersion: opts.AppVersion ?? "");
 
     // initiallyAvailable is false: presence only advertises once the backend
     // confirms BOTH the L1 switch on and a usable identity over IPC.

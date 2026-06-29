@@ -3,6 +3,7 @@ import { verifyQrzSessionCached } from './qrz';
 import { mintIceServers } from './turn';
 import { handleAdmin, verifyAdminToken, ensureAdminBootstrap } from './admin-api';
 import { validateCrashBody } from './crash-validate';
+import { sanitizeOperatorMeta, cleanCountry } from './presence-meta';
 
 export { SignalRoom } from './signal-room';
 export { RateLimiter } from './rate-limiter';
@@ -64,9 +65,24 @@ export default {
       const verified = await verifyOperator(request, env, ctx);
       if (!verified) return new Response('qrz auth required', { status: 401 });
       const presenceAction = url.pathname.slice('/presence/'.length); // register | heartbeat | drop
+      // register/heartbeat may carry an untrusted JSON metadata body (platform,
+      // app version, connected radio); sanitise it here and stamp the verified
+      // callsign + edge-observed IP/country before forwarding to the DO so the
+      // operator can never spoof its own callsign/IP.
+      const meta = presenceAction === 'drop' ? null : sanitizeOperatorMeta(await request.text());
+      const upsert = {
+        callsign: verified,
+        ip: clientIp(request),
+        country: clientCountry(request),
+        ...(meta ?? {}),
+      };
       const id = env.PRESENCE.idFromName('global');
       return env.PRESENCE.get(id).fetch(
-        `https://presence.internal/${presenceAction}?callsign=${encodeURIComponent(verified)}`,
+        new Request(`https://presence.internal/${presenceAction}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(upsert),
+        }),
       );
     }
 
@@ -84,8 +100,14 @@ export default {
       if (!verdict.ok) return new Response(verdict.message, { status: verdict.status });
 
       const id = env.CRASH_STORE.idFromName('global');
+      const ip = clientIp(request);
+      const country = clientCountry(request);
+      const putUrl =
+        `https://crash.internal/put?callsign=${encodeURIComponent(verified)}` +
+        `&ip=${encodeURIComponent(ip)}` +
+        (country ? `&country=${encodeURIComponent(country)}` : '');
       return env.CRASH_STORE.get(id).fetch(
-        new Request(`https://crash.internal/put?callsign=${encodeURIComponent(verified)}`, {
+        new Request(putUrl, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body,
@@ -156,6 +178,16 @@ function clientIp(request: Request): string {
 }
 
 /**
+ * Edge-observed 2-letter country for the request (Cloudflare's geo-IP), or null.
+ * Used to annotate presence/crash rows in the maintainer dashboard. Never an
+ * identity signal — purely informational triage context.
+ */
+function clientCountry(request: Request): string | null {
+  const cf = (request as Request & { cf?: { country?: string } }).cf;
+  return cleanCountry(cf?.country);
+}
+
+/**
  * QRZ-gate an operator-authenticated request (presence/crash), returning the
  * verified upper-cased callsign or null. Identical model to the host side of
  * /signal: when QRZ_VERIFY is on (default), the X-QRZ-Session must validate the
@@ -201,13 +233,15 @@ async function handleAdminCrashes(
   if (!auth) return Response.json({ error: 'unauthorized' }, { status: 401, headers: cors });
 
   const callsign = (new URL(request.url).searchParams.get('callsign') ?? '').trim().toUpperCase();
-  if (!callsign) return Response.json({ error: 'callsign required' }, { status: 400, headers: cors });
 
   void ctx; // reserved (audit logging could go here as the admin-api routes do)
   const id = env.CRASH_STORE.idFromName('global');
-  const res = await env.CRASH_STORE.get(id).fetch(
-    `https://crash.internal/list?callsign=${encodeURIComponent(callsign)}`,
-  );
+  // No callsign → the crash-bearing-operator index (overview); with a callsign →
+  // that operator's records. Both are admin-Bearer-gated above.
+  const internalUrl = callsign
+    ? `https://crash.internal/list?callsign=${encodeURIComponent(callsign)}`
+    : 'https://crash.internal/index';
+  const res = await env.CRASH_STORE.get(id).fetch(internalUrl);
   const body = await res.json<unknown>();
   return Response.json(body, { status: res.status, headers: cors });
 }

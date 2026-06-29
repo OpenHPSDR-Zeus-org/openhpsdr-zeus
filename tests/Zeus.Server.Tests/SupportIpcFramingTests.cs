@@ -86,6 +86,68 @@ public class SupportIpcFramingTests
             "v2 added QrzSessionKey to the identity messages; version must not regress.");
 
     [Fact]
+    public void ProtocolVersion_IsAtLeastV3_ForRadioMetadataOverIpc()
+        => Assert.True(SupportIpc.ProtocolVersion >= 3,
+            "v3 added RadioBoard/RadioModel/RadioConnected to the identity messages; version must not regress.");
+
+    [Fact]
+    public async Task Hello_WithRadioMetadata_RoundTrips()
+    {
+        // v3 radio metadata: board / model / connected must survive the round-trip
+        // so the sidecar can publish the operator's hardware in its presence body.
+        var hello = new SupportHello(
+            ProtocolVersion: SupportIpc.ProtocolVersion,
+            BackendPid: 1, AppVersion: "v", Platform: "p",
+            QrzCallsign: "N9WAR",
+            RemoteDiagnosticsEnabled: true,
+            AutoShareOnCrash: false,
+            AppLogPath: "a", StartupLogPath: "s",
+            QrzSessionKey: "sess",
+            RadioBoard: "ANAN-G2", RadioModel: "G2", RadioConnected: true);
+
+        var result = Assert.IsType<SupportHello>(await RoundTripAsync(hello));
+        Assert.Equal(hello, result);
+        Assert.Equal("ANAN-G2", result.RadioBoard);
+        Assert.Equal("G2", result.RadioModel);
+        Assert.True(result.RadioConnected);
+    }
+
+    [Fact]
+    public async Task StateChanged_WithRadioMetadata_RoundTrips()
+    {
+        var state = new SupportStateChanged(
+            QrzCallsign: "N9WAR",
+            RemoteDiagnosticsEnabled: true,
+            AutoShareOnCrash: true,
+            QrzSessionKey: "sess",
+            RadioBoard: "Hermes-Lite 2", RadioModel: null, RadioConnected: true);
+
+        var result = Assert.IsType<SupportStateChanged>(await RoundTripAsync(state));
+        Assert.Equal(state, result);
+        Assert.Equal("Hermes-Lite 2", result.RadioBoard);
+        Assert.Null(result.RadioModel);
+        Assert.True(result.RadioConnected);
+    }
+
+    [Fact]
+    public async Task Hello_WithoutRadioMetadata_DefaultsToDisconnected()
+    {
+        // Omitting the v3 params (older-style construction) must default to "no radio".
+        var hello = new SupportHello(
+            ProtocolVersion: SupportIpc.ProtocolVersion,
+            BackendPid: 1, AppVersion: "v", Platform: "p",
+            QrzCallsign: "N9WAR",
+            RemoteDiagnosticsEnabled: true,
+            AutoShareOnCrash: false,
+            AppLogPath: "a", StartupLogPath: "s");
+
+        var result = Assert.IsType<SupportHello>(await RoundTripAsync(hello));
+        Assert.Null(result.RadioBoard);
+        Assert.Null(result.RadioModel);
+        Assert.False(result.RadioConnected);
+    }
+
+    [Fact]
     public async Task PromptResult_PreservesEnumDecision()
     {
         var msg = new SupportPromptResult("req-1", SupportPromptDecision.Timeout);

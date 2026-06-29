@@ -54,6 +54,7 @@ public sealed class SupportSidecarBridge : BackgroundService
 
     private readonly SupportAvailabilityStore _availability;
     private readonly Zeus.Server.QrzService _qrz;
+    private readonly Zeus.Server.RadioService _radio;
     private readonly ILogger<SupportSidecarBridge> _log;
 
     // Signalled (max count 1) when posture changes so the loop pushes a fresh
@@ -63,10 +64,12 @@ public sealed class SupportSidecarBridge : BackgroundService
     public SupportSidecarBridge(
         SupportAvailabilityStore availability,
         Zeus.Server.QrzService qrz,
+        Zeus.Server.RadioService radio,
         ILogger<SupportSidecarBridge> log)
     {
         _availability = availability;
         _qrz = qrz;
+        _radio = radio;
         _log = log;
 
         // The endpoint forwards the operator's availability toggle here.
@@ -157,6 +160,7 @@ public sealed class SupportSidecarBridge : BackgroundService
     private async Task<SupportHello> BuildHelloAsync(CancellationToken ct)
     {
         var (callsign, sessionKey) = await ResolveIdentityAsync(ct).ConfigureAwait(false);
+        var (radioBoard, radioModel, radioConnected) = ResolveRadioMetadata();
         return new SupportHello(
             ProtocolVersion: SupportIpc.ProtocolVersion,
             BackendPid: Environment.ProcessId,
@@ -167,18 +171,78 @@ public sealed class SupportSidecarBridge : BackgroundService
             AutoShareOnCrash: _availability.AutoShareOnCrash,
             AppLogPath: PrefsDbPath.AppLogPath(),
             StartupLogPath: Path.Combine(PrefsDbPath.DataDir, "zeus-startup.log"),
-            QrzSessionKey: sessionKey);
+            QrzSessionKey: sessionKey,
+            RadioBoard: radioBoard,
+            RadioModel: radioModel,
+            RadioConnected: radioConnected);
     }
 
     private async Task<SupportStateChanged> BuildStateAsync(CancellationToken ct)
     {
         var (callsign, sessionKey) = await ResolveIdentityAsync(ct).ConfigureAwait(false);
+        var (radioBoard, radioModel, radioConnected) = ResolveRadioMetadata();
         return new SupportStateChanged(
             QrzCallsign: callsign,
             RemoteDiagnosticsEnabled: _availability.IsAvailable,
             AutoShareOnCrash: _availability.AutoShareOnCrash,
-            QrzSessionKey: sessionKey);
+            QrzSessionKey: sessionKey,
+            RadioBoard: radioBoard,
+            RadioModel: radioModel,
+            RadioConnected: radioConnected);
     }
+
+    // Resolve the operator's connected radio for the broker presence body. Null-safe:
+    // when nothing is connected we report (null, null, false). The board name is the
+    // discovered ConnectedBoardKind, refined by EffectiveOrionMkIIVariant for the
+    // 0x0A alias family; the model is the variant name (or null for non-0x0A boards).
+    // Best-effort — never throws out of the build path.
+    private (string? Board, string? Model, bool Connected) ResolveRadioMetadata()
+    {
+        try
+        {
+            if (!_radio.IsConnected) return (null, null, false);
+
+            var board = _radio.ConnectedBoardKind;
+            if (board == Zeus.Contracts.HpsdrBoardKind.Unknown) return (null, null, true);
+
+            if (board == Zeus.Contracts.HpsdrBoardKind.OrionMkII)
+            {
+                var variant = _radio.EffectiveOrionMkIIVariant;
+                return (DescribeBoard(board, variant), variant.ToString(), true);
+            }
+
+            return (DescribeBoard(board, null), null, true);
+        }
+        catch
+        {
+            return (null, null, false);
+        }
+    }
+
+    // Human-readable board name. The 0x0A wire byte aliases several radios, so the
+    // variant refines the display string when present.
+    private static string DescribeBoard(Zeus.Contracts.HpsdrBoardKind board, Zeus.Contracts.OrionMkIIVariant? variant) => board switch
+    {
+        Zeus.Contracts.HpsdrBoardKind.Metis => "Metis",
+        Zeus.Contracts.HpsdrBoardKind.Hermes => "Hermes",
+        Zeus.Contracts.HpsdrBoardKind.HermesII => "Hermes-II",
+        Zeus.Contracts.HpsdrBoardKind.Angelia => "Angelia",
+        Zeus.Contracts.HpsdrBoardKind.Orion => "Orion",
+        Zeus.Contracts.HpsdrBoardKind.HermesLite2 => "Hermes-Lite 2",
+        Zeus.Contracts.HpsdrBoardKind.HermesC10 => "ANAN-G2E",
+        Zeus.Contracts.HpsdrBoardKind.OrionMkII => variant switch
+        {
+            Zeus.Contracts.OrionMkIIVariant.G2 => "ANAN-G2",
+            Zeus.Contracts.OrionMkIIVariant.G2_1K => "ANAN-G2-1K",
+            Zeus.Contracts.OrionMkIIVariant.Anan7000DLE => "ANAN-7000DLE",
+            Zeus.Contracts.OrionMkIIVariant.Anan8000DLE => "ANAN-8000DLE",
+            Zeus.Contracts.OrionMkIIVariant.OrionMkII => "OrionMkII",
+            Zeus.Contracts.OrionMkIIVariant.AnvelinaPro3 => "ANVELINA-PRO3",
+            Zeus.Contracts.OrionMkIIVariant.RedPitaya => "Red Pitaya",
+            _ => "ANAN-G2",
+        },
+        _ => board.ToString(),
+    };
 
     // Resolve the operator's QRZ identity fresh, bounded so a slow/blocked QRZ
     // call never stalls the loop. Null identity → the sidecar stays unconfigured

@@ -10,6 +10,7 @@
 
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using Zeus.Support.Contracts;
 
 namespace Zeus.SupportAgent;
@@ -35,6 +36,11 @@ public sealed class HttpSupportBrokerClient : IMutableSupportBrokerClient
     private readonly HttpClient _http;
     private readonly BrokerEndpoints _endpoints;
 
+    // Static process identity for the presence body: the host's platform and the
+    // app version. Set once at construction (they never change for a process).
+    private readonly string _platform;
+    private readonly string _appVersion;
+
     // Identity is mutable: the host hands the sidecar a launch-time seed (often
     // blank, because QRZ silent-login races process launch) and then refreshes it
     // over the IPC pipe once QRZ identity is available. Each is a lone reference
@@ -43,12 +49,23 @@ public sealed class HttpSupportBrokerClient : IMutableSupportBrokerClient
     private volatile string _callsign;
     private volatile string _sessionKey;
 
-    public HttpSupportBrokerClient(HttpClient http, BrokerEndpoints endpoints, string callsign, string sessionKey)
+    // Radio metadata for the presence body, refreshed over IPC as the operator
+    // connects/disconnects a radio. Volatile reference/flag writes — a presence
+    // POST that observes a transient mix just publishes slightly stale metadata.
+    private volatile string? _radioBoard;
+    private volatile string? _radioModel;
+    private volatile bool _radioConnected;
+
+    public HttpSupportBrokerClient(
+        HttpClient http, BrokerEndpoints endpoints, string callsign, string sessionKey,
+        string platform, string appVersion)
     {
         _http = http;
         _endpoints = endpoints;
         _callsign = callsign ?? "";
         _sessionKey = sessionKey ?? "";
+        _platform = platform ?? "";
+        _appVersion = appVersion ?? "";
     }
 
     /// <summary>
@@ -67,8 +84,23 @@ public sealed class HttpSupportBrokerClient : IMutableSupportBrokerClient
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(_callsign) && !string.IsNullOrWhiteSpace(_sessionKey);
 
-    public Task<bool> RegisterAsync(CancellationToken ct) => PostAsync(_endpoints.PresenceRegister, null, ct);
-    public Task<bool> HeartbeatAsync(CancellationToken ct) => PostAsync(_endpoints.PresenceHeartbeat, null, ct);
+    /// <summary>
+    /// Swap the operator's radio metadata advertised in the presence body. Called
+    /// over IPC as the operator connects/disconnects a radio. A no-op on auth — only
+    /// affects what register/heartbeat bodies report.
+    /// </summary>
+    public void UpdateMetadata(string? radioBoard, string? radioModel, bool radioConnected)
+    {
+        _radioBoard = radioBoard;
+        _radioModel = radioModel;
+        _radioConnected = radioConnected;
+    }
+
+    // Presence register/heartbeat carry a metadata body so the broker can show the
+    // operator's platform / app version / radio. Drop stays body-less (it only needs
+    // identity headers to clear presence).
+    public Task<bool> RegisterAsync(CancellationToken ct) => PostAsync(_endpoints.PresenceRegister, BuildPresenceBody(), ct);
+    public Task<bool> HeartbeatAsync(CancellationToken ct) => PostAsync(_endpoints.PresenceHeartbeat, BuildPresenceBody(), ct);
     public Task<bool> DropAsync(CancellationToken ct) => PostAsync(_endpoints.PresenceDrop, null, ct);
 
     public Task<bool> UploadCrashAsync(string crashRecordJson, CancellationToken ct) =>
@@ -94,5 +126,29 @@ public sealed class HttpSupportBrokerClient : IMutableSupportBrokerClient
             // throw out of the sidecar's presence/crash path.
             return false;
         }
+    }
+
+    // Build the presence body the broker reads off register/heartbeat. Written with
+    // a Utf8JsonWriter (no reflection, trim-safe) so every string is correctly
+    // escaped and nulls are emitted as JSON null. Snapshot the volatile fields once
+    // so the body is internally consistent.
+    private string BuildPresenceBody()
+    {
+        var board = _radioBoard;
+        var model = _radioModel;
+        var connected = _radioConnected;
+
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("platform", _platform);
+            writer.WriteString("appVersion", _appVersion);
+            if (board is null) writer.WriteNull("radioBoard"); else writer.WriteString("radioBoard", board);
+            if (model is null) writer.WriteNull("radioModel"); else writer.WriteString("radioModel", model);
+            writer.WriteBoolean("radioConnected", connected);
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.ToArray());
     }
 }

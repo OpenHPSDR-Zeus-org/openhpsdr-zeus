@@ -33,8 +33,13 @@ public static class SupportIpc
     /// v2 adds the optional <c>QrzSessionKey</c> to the identity-bearing messages so
     /// the sidecar can build its broker client lazily when QRZ identity arrives over
     /// IPC, instead of depending on a launch-time env var that races QRZ login.
+    /// v3 appends the optional operator-RADIO metadata (<c>RadioBoard</c> /
+    /// <c>RadioModel</c> / <c>RadioConnected</c>) to the identity-bearing messages so
+    /// the sidecar can publish "what hardware is this operator on, and is it live" in
+    /// its broker presence body. Older v2 peers omit the trailing params and still
+    /// deserialise (positional optionals with defaults).
     /// </summary>
-    public const int ProtocolVersion = 2;
+    public const int ProtocolVersion = 3;
 
     /// <summary>
     /// Hard ceiling on a single framed message (a diagnostics snapshot is the
@@ -114,6 +119,12 @@ public abstract record SupportIpcMessage;
 /// launcher already uses — so the sidecar can authenticate presence/crash without
 /// the env var being present (and correct) at the instant of launch. Null when the
 /// operator is signed out.</para>
+///
+/// <para><see cref="RadioBoard"/> / <see cref="RadioModel"/> /
+/// <see cref="RadioConnected"/> (v3+) describe the operator's current radio for the
+/// broker presence body: a human-readable board name (e.g. "Hermes-Lite 2"), an
+/// optional variant/model refinement (e.g. "G2-1K", null when N/A), and whether a
+/// radio is actually connected right now. All null/false when no radio is up.</para>
 /// </summary>
 public sealed record SupportHello(
     int ProtocolVersion,
@@ -125,7 +136,10 @@ public sealed record SupportHello(
     bool AutoShareOnCrash,
     string AppLogPath,
     string StartupLogPath,
-    string? QrzSessionKey = null) : SupportIpcMessage;
+    string? QrzSessionKey = null,
+    string? RadioBoard = null,
+    string? RadioModel = null,
+    bool RadioConnected = false) : SupportIpcMessage;
 
 /// <summary>
 /// Backend → sidecar. The operator changed an opt-in setting (the L1 master
@@ -135,12 +149,20 @@ public sealed record SupportHello(
 /// <para><see cref="QrzSessionKey"/> (v2+) lets the sidecar (re)build its broker
 /// client when QRZ identity becomes available after launch — see
 /// <see cref="SupportHello.QrzSessionKey"/>. Null when signed out.</para>
+///
+/// <para><see cref="RadioBoard"/> / <see cref="RadioModel"/> /
+/// <see cref="RadioConnected"/> (v3+) refresh the operator's radio metadata in the
+/// broker presence body — see <see cref="SupportHello.RadioBoard"/>. All null/false
+/// when no radio is connected.</para>
 /// </summary>
 public sealed record SupportStateChanged(
     string? QrzCallsign,
     bool RemoteDiagnosticsEnabled,
     bool AutoShareOnCrash,
-    string? QrzSessionKey = null) : SupportIpcMessage;
+    string? QrzSessionKey = null,
+    string? RadioBoard = null,
+    string? RadioModel = null,
+    bool RadioConnected = false) : SupportIpcMessage;
 
 /// <summary>Either direction. Liveness ping; the peer is considered gone if these stop.</summary>
 public sealed record SupportHeartbeat(long UnixMs) : SupportIpcMessage;
