@@ -38,11 +38,17 @@ public sealed class SupportIpcListener
     /// <param name="RemoteDiagnosticsEnabled">L1 master switch.</param>
     /// <param name="AutoShareOnCrash">Crash auto-share sub-toggle.</param>
     /// <param name="QrzSessionKey">QRZ session key for broker auth (v2+), or null when signed out.</param>
+    /// <param name="RadioBoard">Human-readable connected board name (v3+), or null when no radio.</param>
+    /// <param name="RadioModel">Variant/model refinement (v3+), or null when N/A.</param>
+    /// <param name="RadioConnected">True when a radio is actually connected (v3+).</param>
     public readonly record struct SupportState(
         string? QrzCallsign,
         bool RemoteDiagnosticsEnabled,
         bool AutoShareOnCrash,
-        string? QrzSessionKey = null);
+        string? QrzSessionKey = null,
+        string? RadioBoard = null,
+        string? RadioModel = null,
+        bool RadioConnected = false);
 
     private readonly string _pipeName;
     private readonly Action<SupportState> _onState;
@@ -123,12 +129,14 @@ public sealed class SupportIpcListener
                 case SupportHello hello:
                     _onState(new SupportState(
                         hello.QrzCallsign, hello.RemoteDiagnosticsEnabled, hello.AutoShareOnCrash,
-                        hello.QrzSessionKey));
+                        hello.QrzSessionKey,
+                        hello.RadioBoard, hello.RadioModel, hello.RadioConnected));
                     break;
                 case SupportStateChanged state:
                     _onState(new SupportState(
                         state.QrzCallsign, state.RemoteDiagnosticsEnabled, state.AutoShareOnCrash,
-                        state.QrzSessionKey));
+                        state.QrzSessionKey,
+                        state.RadioBoard, state.RadioModel, state.RadioConnected));
                     break;
                 // Heartbeats and other kinds are not needed by the presence/crash
                 // subsystem; ignore them so the contract can grow without breaking us.

@@ -275,6 +275,12 @@ function RemoteDiagnosticsSection() {
   const [autoShare, setAutoShare] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // Presence (appearing in the maintainer's "online operators" list) is
+  // QRZ-authenticated: the sidecar can only register/heartbeat with a verified
+  // callsign + session key. So "available" is necessary but NOT sufficient — if
+  // QRZ is not signed in, the operator silently never appears. Surface that.
+  const qrzConnected = useQrzStore((s) => s.connected);
+  const qrzCallsign = useQrzStore((s) => s.home?.callsign ?? null);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -391,6 +397,32 @@ function RemoteDiagnosticsSection() {
           re-creating it.
         </span>
       </label>
+
+      {isOn && !qrzConnected && (
+        <div
+          style={{
+            marginTop: 12,
+            padding: '8px 10px',
+            fontSize: 11,
+            lineHeight: 1.5,
+            color: 'var(--tx)',
+            border: '1px solid var(--tx)',
+            borderRadius: 4,
+            background: 'rgba(230, 58, 43, 0.08)',
+          }}
+        >
+          <strong>Not visible to maintainers yet.</strong> Appearing in the
+          maintainer dashboard requires you to be <strong>signed in to QRZ</strong>{' '}
+          (your verified callsign is how you are listed). Sign in under QRZ
+          settings and you will show as online here.
+        </div>
+      )}
+      {isOn && qrzConnected && qrzCallsign && (
+        <div style={{ marginTop: 12, fontSize: 11, color: 'var(--fg-2)' }}>
+          Visible to maintainers as <strong>{qrzCallsign}</strong> while Zeus is
+          running.
+        </div>
+      )}
 
       {notice && (
         <div style={{ marginTop: 12, fontSize: 11, color: 'var(--tx)' }}>{notice}</div>
