@@ -12,10 +12,27 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ActivationSpotDto } from '../../api/client';
+import { openExternalUrl } from '../../components/report-problem/openExternalUrl';
 import { hamclockIframeUrl, useHamClockStore } from '../../state/hamclock-store';
 import { useSpotsStore } from '../../state/spots-store';
 
 const HAMCLOCK_DX_TUNE_MESSAGE = 'zeus.hamclock.dxSpotTune';
+const ZEUS_OPEN_EXTERNAL_MESSAGE = 'zeus.openExternal';
+
+interface ZeusOpenExternalMessage {
+  type: typeof ZEUS_OPEN_EXTERNAL_MESSAGE;
+  url: string;
+}
+
+function isZeusOpenExternalMessage(value: unknown): value is ZeusOpenExternalMessage {
+  if (!value || typeof value !== 'object') return false;
+  const msg = value as Partial<ZeusOpenExternalMessage>;
+  return (
+    msg.type === ZEUS_OPEN_EXTERNAL_MESSAGE &&
+    typeof msg.url === 'string' &&
+    /^https?:\/\//i.test(msg.url)
+  );
+}
 
 interface HamClockDxTuneMessage {
   type: typeof HAMCLOCK_DX_TUNE_MESSAGE;
@@ -136,6 +153,16 @@ export function HamClockPanel() {
     const onMessage = (event: MessageEvent<unknown>) => {
       if (event.source !== iframeRef.current?.contentWindow) return;
       if (event.origin !== expectedOrigin) return;
+
+      // External links / Rig-Bridge downloads the iframe forwarded because the
+      // Photino webview swallows window.open and has no download handler. Hand
+      // them to the OS browser via the existing host bridge (which re-validates
+      // http/https C#-side before launching).
+      if (isZeusOpenExternalMessage(event.data)) {
+        openExternalUrl(event.data.url);
+        return;
+      }
+
       if (!isHamClockDxTuneMessage(event.data)) return;
       const msg = event.data;
 
@@ -161,7 +188,7 @@ export function HamClockPanel() {
         style={{ flex: 1, width: '100%', height: '100%', border: 'none', display: 'block', minHeight: 0 }}
         // HamClock is a trusted local sidecar; allow scripts + same-origin so
         // its app (storage, its own /api fetches) works.
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
       />
     );
   }
