@@ -116,7 +116,11 @@ export const usePluginsStore = create<PluginsStoreState>((set, get) => ({
     try {
       const resp: PluginListResponse = await fetchInstalledPlugins();
       set({
-        installed: resp.plugins,
+        // Operator-scanned VST3 / AU plugins (resp.plugins[].scanned) live in
+        // the Audio Suite rack only — they are not Zeus plugin-repo plugins, so
+        // the Settings ▸ Plugins list excludes them. The Audio Suite has its own
+        // consumer (pluginRuntime.fetchInstalledPlugins) that still sees them.
+        installed: resp.plugins.filter((p) => !p.scanned),
         sdkAbi: resp.sdkAbi,
         sdkVersion: resp.sdkVersion,
         installedLoad: { loaded: true, inflight: false, loadError: null },
