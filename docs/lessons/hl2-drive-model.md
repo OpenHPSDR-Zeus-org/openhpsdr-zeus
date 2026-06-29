@@ -161,6 +161,21 @@ in the PA Settings panel to seed the mi0bot defaults (100 % HF / 38.8 %
 worse than the 100 % default. Stored `26` (the old workaround) now means
 "26 % output" (~nibble 0x4, 27 %) — also worse. Either way: hit Reset.
 
+The same cross-board persistence cuts the other way too: an HL2 session
+that stored `100` (HL2 percentage = full output) on every HF band, then
+reconnected to an ANAN-class radio, would surface `100` as "100 dB
+forward gain" through `FullByteDriveProfile`. The dB math floors the
+drive byte to 0 (`5 W / 10^10 → ~0 V → byte 0`), `Protocol1Client`
+short-circuits the IQ payload to all zeros when `DriveLevel == 0`
+(`ControlFrame.cs:858`), and the radio keys MOX with no RF. Issue #1180
+is that exact trace. `PaSettingsStore` now sanity-checks each stored
+`PaGainDb` against the connected board's drive-profile range on read
+(HL2: 0..100 percentage; everything else: 0..70 dB) — when the stored
+row sits outside the range it substitutes the per-board default and logs
+`pa.gain.cross_board_substituted` so the operator sees the swap. The
+stored row is not rewritten; an explicit Reset → APPLY is still the way
+to persist the board-appropriate value.
+
 ## When adding a new board
 
 If the new board is Hermes / ANAN / Orion family with 8-bit drive: it

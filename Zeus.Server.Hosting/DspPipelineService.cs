@@ -1095,6 +1095,16 @@ public class DspPipelineService : BackgroundService,
     // disposed-check guards cover engine-swap-mid-call); engine swaps
     // serialise through _engineLock (writer side only).
     private volatile bool _rxSinkAttached;
+    // issue #1167: during the RX-sink attach/detach window the timer thread and
+    // the RX inline-tick thread can both be live, so Tick can run on two threads
+    // at once. FloatSpscRing's producer side is strict single-thread; this gate
+    // makes Tick mutually exclusive so the producer stays single-threaded.
+    private readonly SingleEntryGate _tickGate = new();
+    private long _tickReentrySkips;
+    /// <summary>Count of Tick calls skipped because another thread held the
+    /// gate — non-zero only during the sink attach/detach window (issue #1167).
+    /// Telemetry/test seam.</summary>
+    internal long TickReentrySkips => Interlocked.Read(ref _tickReentrySkips);
     // Reference to the protocol client this pipeline is currently sinking RX
     // packets from. Cached so we can explicitly DetachRxSink on disconnect —
     // RadioService nulls its ActiveClient before raising Disconnected, so the
@@ -5354,6 +5364,14 @@ public class DspPipelineService : BackgroundService,
 
     private void Tick(float[] panBuf, float[] wfBuf, float[] audioBuf)
     {
+        // issue #1167: the timer thread and the RX inline-tick thread can both
+        // be live during the sink attach/detach window. FloatSpscRing is strict
+        // single-producer; this gate guarantees only one Tick runs at a time so
+        // the producer side stays single-threaded. ~30 Hz, so the CompareExchange
+        // is free. A skipped tick is harmless — the holder is ticking ~now.
+        if (!_tickGate.TryEnter()) { Interlocked.Increment(ref _tickReentrySkips); return; }
+        try
+        {
         // iter5 pass-2: lock-free hot path. Tick runs inline on the RX OS
         // thread when a sink is attached (paced via Stopwatch elapsed in
         // OnIqFrame), and on the PeriodicTimer thread otherwise. Volatile
@@ -6015,6 +6033,8 @@ public class DspPipelineService : BackgroundService,
             _hub.Broadcast(v2);
             RxMetersV2Updated?.Invoke(channel, v2);
         }
+        }
+        finally { _tickGate.Exit(); }
     }
 
     /// <summary>
