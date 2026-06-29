@@ -4189,14 +4189,19 @@ public static class ZeusEndpoints
             return Results.BadRequest(new { error = $"native audio device enumeration unavailable: {ex.Message}" });
         }
 
-        if (inputDeviceId is not null && snapshot.Inputs.All(d => d.Id != inputDeviceId))
-            return Results.BadRequest(new { error = "inputDeviceId is not in the current native input device list" });
-        if (outputDeviceId is not null && snapshot.Outputs.All(d => d.Id != outputDeviceId))
-            return Results.BadRequest(new { error = "outputDeviceId is not in the current native output device list" });
+        var decision = NativeAudioDeviceChange.Decide(
+            inputDeviceId,
+            outputDeviceId,
+            mic?.ConfiguredInputDeviceId,
+            sink?.ConfiguredOutputDeviceId,
+            snapshot);
 
-        if (mic is not null)
+        if (decision.RejectReason is not null)
+            return Results.BadRequest(new { error = decision.RejectReason });
+
+        if (decision.ChangeInput && mic is not null)
             await mic.SetInputDeviceAsync(inputDeviceId, ct);
-        if (sink is not null)
+        if (decision.ChangeOutput && sink is not null)
             await sink.SetOutputDeviceAsync(outputDeviceId, ct);
 
         return Results.Ok(BuildNativeAudioDevicesResponse(
