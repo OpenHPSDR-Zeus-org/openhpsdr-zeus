@@ -190,6 +190,8 @@ export function ChatRosterOverlay() {
   const openDm = useChatStore((s) => s.openDm);
   const freqPublic = useChatStore((s) => s.freqPublic);
   const myCallsign = useChatStore((s) => s.callsign);
+  const acceptedFriends = useChatStore((s) => s.acceptedFriends);
+  const seeAllFreq = useChatStore((s) => s.seeAllFreq);
   const show = useDisplaySettingsStore((s) => s.showChatRosterOverlay);
 
   const centerHz = useDisplayStore((s) => s.centerHz);
@@ -226,8 +228,22 @@ export function ChatRosterOverlay() {
     // pinned to your own panadapter after you've hidden. Drop it so "hidden"
     // means hidden everywhere, including your own view.
     const mine = (myCallsign ?? '').toUpperCase();
+    // Friend gate — mirror the chat roster's rule: you only see a friend's
+    // callsign on the panadapter, never a stranger's. The relay already enforces
+    // this (it strips freqHz from every non-friend before the roster leaves the
+    // server, so a stranger arrives unplaceable), but assert it here too so the
+    // intent is explicit and a future relay change can't silently leak callsigns.
+    // Yourself and the admin "see all" override are the deliberate exceptions:
+    // see-all is meant to reveal every operator on the panadapter regardless of
+    // friendship, so it bypasses the gate exactly as it does on the relay.
+    const friendSet = new Set(acceptedFriends.map((c) => c.toUpperCase()));
+    const canPlace = (op: ChatOperator) => {
+      const call = op.callsign.toUpperCase();
+      return call === mine || seeAllFreq || friendSet.has(call);
+    };
     const inView = roster
       .filter((op) => typeof op.freqHz === 'number' && Number.isFinite(op.freqHz))
+      .filter(canPlace)
       .filter((op) => freqPublic || !mine || op.callsign.toUpperCase() !== mine)
       .map((op) => ({ op, pct: ((op.freqHz! - startHz) / spanHz) * 100 }))
       .filter(({ pct }) => pct >= -2 && pct <= 102)
@@ -247,7 +263,7 @@ export function ChatRosterOverlay() {
       laneLastPct[lane] = pct;
       return { op, pct, lane };
     });
-  }, [show, enabled, connected, roster, centerHz, hzPerPixel, width, freqPublic, myCallsign]);
+  }, [show, enabled, connected, roster, centerHz, hzPerPixel, width, freqPublic, myCallsign, acceptedFriends, seeAllFreq]);
 
   if (placed.length === 0) return null;
 
