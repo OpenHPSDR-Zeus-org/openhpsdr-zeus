@@ -206,8 +206,43 @@ public sealed class SaturnSpeakerAudioSinkTests : IDisposable
         Assert.True(sw.ElapsedMilliseconds < 200,
             $"Publish loop took {sw.ElapsedMilliseconds} ms; expected the DSP-thread path to be near-free");
 
+        // ...and the deferred work must actually have happened: the sender
+        // thread drained the ring and emitted packets (sequence advanced). A
+        // regression where the worker silently skips all sends would keep the
+        // timing assertion green but fail here.
+        WaitForIdle(sink);
+        Assert.True(SequenceOf(sink) > 0u,
+            "expected the sender thread to have emitted packets after 50 Publish calls");
+
         await sink.StopAsync(default);
         sink.Dispose();
+    }
+
+    // Issue #1148 follow-up — the wake event is disposed in Dispose, but the
+    // sink stays registered as an IRxAudioSink, so a late RX frame can still be
+    // fanned to Publish during host shutdown. Signalling a disposed
+    // ManualResetEventSlim must not throw ObjectDisposedException onto the
+    // real-time audio thread.
+    [Fact]
+    public async Task Publish_AfterDispose_DoesNotThrow()
+    {
+        using var radio = NewRadio();
+        using var settings = new RadioSpeakerSettingsStore(
+            NullLogger<RadioSpeakerSettingsStore>.Instance, _dbPath + ".spk");
+        var sink = new SaturnSpeakerAudioSink(radio, settings, NullLogger<SaturnSpeakerAudioSink>.Instance);
+
+        await sink.StartAsync(default);
+        settings.Set(true);
+        radio.MarkProtocol2Connected("127.0.0.1:1024", 192_000, client: null, boardKind: HpsdrBoardKind.HermesII);
+
+        // Dispose without StopAsync — the harness can tear the sink down while
+        // the DSP pipeline is still ticking frames at it.
+        sink.Dispose();
+
+        // A frame fanned in after disposal must be a no-op, not a crash on the
+        // (now disposed) wake event.
+        var ex = Record.Exception(() => sink.Publish(MakeMonoFrame(64)));
+        Assert.Null(ex);
     }
 
     private static uint SequenceOf(SaturnSpeakerAudioSink sink)

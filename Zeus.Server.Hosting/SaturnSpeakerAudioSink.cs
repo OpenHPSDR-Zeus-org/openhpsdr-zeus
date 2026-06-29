@@ -90,6 +90,10 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
     private volatile bool _refreshRequested;
     private volatile bool _drainRequested;
 
+    // Set first thing in Dispose so the cross-thread signallers stop touching
+    // _wake before it is disposed. See SignalWake.
+    private volatile bool _disposed;
+
     private Thread? _worker;
 
     public SaturnSpeakerAudioSink(
@@ -146,7 +150,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         if (_radio.IsMox)
         {
             _drainRequested = true;
-            _wake.Set();
+            SignalWake();
             return;
         }
 
@@ -156,13 +160,27 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         {
             Interlocked.Add(ref _droppedSamples, src.Length - written);
         }
-        _wake.Set();
+        SignalWake();
+    }
+
+    // Wake the sender, tolerating a late call that races Dispose. Publish (on
+    // the DSP tick thread) and the RadioService / settings event handlers can
+    // all fire after the sink is disposed during host shutdown — the sink stays
+    // registered as an IRxAudioSink, so PublishAudio can still fan a frame to
+    // us, and a state/settings event can still arrive in the unsubscribe window.
+    // Setting a disposed ManualResetEventSlim would throw ObjectDisposedException
+    // on the real-time audio thread and take it down; swallow that one race.
+    private void SignalWake()
+    {
+        if (_disposed) return;
+        try { _wake.Set(); }
+        catch (ObjectDisposedException) { /* raced Dispose — nothing to wake */ }
     }
 
     private void OnRadioStateChanged(StateDto state)
     {
         _refreshRequested = true;
-        _wake.Set();
+        SignalWake();
     }
 
     private void OnSettingsChanged()
@@ -173,7 +191,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         // inside RefreshTarget so a flip-on path is covered by the same refresh.
         if (!_settings.Enabled) _drainRequested = true;
         _refreshRequested = true;
-        _wake.Set();
+        SignalWake();
     }
 
     private void WorkerLoop()
@@ -409,6 +427,8 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
 
     public void Dispose()
     {
+        // Stop the cross-thread signallers before tearing _wake down.
+        _disposed = true;
         _radio.StateChanged -= OnRadioStateChanged;
         _settings.Changed -= OnSettingsChanged;
 
