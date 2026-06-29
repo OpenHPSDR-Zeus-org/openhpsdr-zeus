@@ -1823,12 +1823,17 @@ export function ChatPanel() {
     };
   }, [syncTabScroll]);
 
-  // Auto-grow textarea
+  // Auto-grow textarea. The empty field MUST stay a single row: a textarea's
+  // scrollHeight counts the (word-wrapped) placeholder, and ours wraps to two
+  // lines, so measuring scrollHeight here would inflate the empty composer to
+  // the placeholder's height — the "starts big until you click into it" bug.
+  // Clear the inline height when empty so rows=1 / minHeight govern; only grow
+  // to fit real content.
   useEffect(() => {
     const el = inputRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 90)}px`;
+    el.style.height = el.value ? `${Math.min(el.scrollHeight, 90)}px` : '';
   }, [draft]);
 
   // Hydrate on mount
