@@ -3912,6 +3912,33 @@ public static class ZeusEndpoints
             return Results.Ok(svc.TestPort(req));
         });
 
+        // MIDI controller + Stream Deck (issue #18). Input-only control surface;
+        // PureSignal arm is deliberately excluded. status = engine availability +
+        // live device lists + enable flag; config = enable flag + bindings doc;
+        // commands = the full ZeusMidiCommand catalogue (label + control type +
+        // wired-vs-parity) for the mapping UI. Learn frames are pushed over the
+        // hub (MsgType 0x3B), not returned here.
+        app.MapGet("/api/midi/status", (Midi.MidiService midi) => Results.Ok(midi.GetStatus()));
+
+        app.MapGet("/api/midi/config", (Midi.MidiService midi) => Results.Ok(midi.GetConfig()));
+
+        app.MapPut("/api/midi/config", (MidiConfigDto req, Midi.MidiService midi) =>
+        {
+            log.LogInformation("api.midi.config enabled={En} mappings={M} sdMappings={S}",
+                req.Enabled, req.Bindings?.Mappings?.Count ?? 0, req.Bindings?.StreamDeckMappings?.Count ?? 0);
+            return Results.Ok(midi.SetConfig(req));
+        });
+
+        app.MapGet("/api/midi/commands",
+            () => Results.Ok(Midi.MidiCommandCatalog.All));
+
+        app.MapPost("/api/midi/learn/start", (Midi.MidiService midi) => Results.Ok(midi.StartLearn()));
+
+        app.MapPost("/api/midi/learn/stop", (Midi.MidiService midi) => Results.Ok(midi.StopLearn()));
+
+        app.MapGet("/api/midi/streamdeck/devices",
+            (Midi.MidiService midi) => Results.Ok(midi.GetStreamDeckDevices()));
+
         // WSJT-X logged-QSO UDP broadcaster (outbound QSO-record push to
         // JTAlert / Log4OM / GridTracker / N1MM). Default OFF / loopback; config
         // applies live (no restart — there is no listener, only a UDP sender).

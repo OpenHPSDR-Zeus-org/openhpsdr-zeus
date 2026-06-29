@@ -21,6 +21,7 @@
   <Project Path="Zeus.Plugins.VstHostStub/Zeus.Plugins.VstHostStub.csproj" />
   <Project Path="Zeus.Protocol1/Zeus.Protocol1.csproj" />
   <Project Path="Zeus.Protocol2/Zeus.Protocol2.csproj" />
+  <Project Path="Zeus.Midi/Zeus.Midi.csproj" />
   <Project Path="OpenhpsdrZeus/OpenhpsdrZeus.csproj" />
   <Project Path="Zeus.Server.Hosting/Zeus.Server.Hosting.csproj" />
   <Project Path="Zeus.Diagnostics.TestGen/Zeus.Diagnostics.TestGen.csproj" />
