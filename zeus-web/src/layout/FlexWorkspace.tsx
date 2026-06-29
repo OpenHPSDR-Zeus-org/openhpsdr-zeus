@@ -65,6 +65,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { TerminatorLines } from '../components/design/TerminatorLines';
 import { MeterGroupPanel } from '../components/meter-group/MeterGroupPanel';
 import {
+  computeMeterGroupAutoFit,
   parseMeterGroupConfig,
   type MeterGroupConfig,
 } from '../components/meter-group/meterGroupConfig';
@@ -1092,28 +1093,38 @@ function MeterGroupTileBody({
 
   // Auto-fit the tile to its widget set. Operators add a Meter Group, drop
   // in two vertical bars, and expect the tile to snap to bar-width — not
-  // to leave four grid columns of empty space waiting to be filled. The
-  // effect deps are widget count + direction only (live tile geometry is
-  // read through a ref) so an operator can still drag-resize the cross
-  // axis without the effect snapping it back on every render.
+  // to leave four grid columns of empty space waiting to be filled.
+  //
+  // The first run after a fresh mount is a no-op: FlexWorkspace tears
+  // down and remounts whenever the operator opens Settings, so a
+  // mount-time snap would clobber the operator's manual resize every
+  // time they closed the gear panel (issue #1160). Subsequent runs only
+  // snap on a real widget add/remove or direction flip. Live tile
+  // geometry is read through a ref so drag-resizing the cross axis does
+  // not retrigger the effect.
   const tileRef = useRef(tile);
   tileRef.current = tile;
+  const prevWidgetCountRef = useRef<number | null>(null);
+  const prevDirectionRef = useRef<MeterGroupConfig['direction'] | null>(null);
   useEffect(() => {
     const t = tileRef.current;
-    const widgetCount = Math.max(1, config.widgets.length);
-    // Row: one grid col per widget on the main axis. Column: ~3 grid rows
-    // per widget so vertical bars get enough vertical span to read.
-    const targetW = config.direction === 'row' ? widgetCount : t.w;
-    const targetH =
-      config.direction === 'column' ? Math.max(3, widgetCount * 3) : t.h;
-    if (targetW !== t.w || targetH !== t.h) {
-      updateTilePlacement(layoutId, t.uid, {
-        x: t.x,
-        y: t.y,
-        w: targetW,
-        h: targetH,
-      });
-    }
+    const result = computeMeterGroupAutoFit({
+      prevWidgetCount: prevWidgetCountRef.current,
+      prevDirection: prevDirectionRef.current,
+      widgetCount: config.widgets.length,
+      direction: config.direction,
+      tileW: t.w,
+      tileH: t.h,
+    });
+    prevWidgetCountRef.current = config.widgets.length;
+    prevDirectionRef.current = config.direction;
+    if (!result) return;
+    updateTilePlacement(layoutId, t.uid, {
+      x: t.x,
+      y: t.y,
+      w: result.w,
+      h: result.h,
+    });
   }, [config.widgets.length, config.direction, layoutId, updateTilePlacement]);
 
   return (
