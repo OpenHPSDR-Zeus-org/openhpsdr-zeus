@@ -97,3 +97,47 @@ export function effectiveKind(widget: MeterGroupWidget): MeterDefaultKind {
   const def = METER_CATALOG[widget.reading];
   return def.defaultKind;
 }
+
+export interface MeterGroupAutoFitInput {
+  /** widgets.length observed on the previous effect run, or null when
+   *  this is the first run after a fresh mount. */
+  prevWidgetCount: number | null;
+  /** direction observed on the previous effect run, or null on first run. */
+  prevDirection: MeterGroupDirection | null;
+  /** widgets.length on the current effect run. */
+  widgetCount: number;
+  /** direction on the current effect run. */
+  direction: MeterGroupDirection;
+  /** Current tile width (grid units). */
+  tileW: number;
+  /** Current tile height (grid units). */
+  tileH: number;
+}
+
+/** Decide whether the Meter Group tile should auto-snap to fit its widget
+ *  set on this effect run. Returns the target {w, h} when a snap is
+ *  warranted, or null when the effect should leave the tile alone.
+ *
+ *  The first call after mount (prev* === null) is always null so the
+ *  operator's saved size survives FlexWorkspace teardown/remount on
+ *  Settings open/close. Subsequent calls only snap when widget count or
+ *  direction changed since the previous run (i.e. a real add/remove or
+ *  direction flip), and only when the computed target differs from the
+ *  current geometry. */
+export function computeMeterGroupAutoFit(
+  input: MeterGroupAutoFitInput,
+): { w: number; h: number } | null {
+  if (input.prevWidgetCount === null) return null;
+  if (
+    input.prevWidgetCount === input.widgetCount &&
+    input.prevDirection === input.direction
+  ) {
+    return null;
+  }
+  const count = Math.max(1, input.widgetCount);
+  const targetW = input.direction === 'row' ? count : input.tileW;
+  const targetH =
+    input.direction === 'column' ? Math.max(3, count * 3) : input.tileH;
+  if (targetW === input.tileW && targetH === input.tileH) return null;
+  return { w: targetW, h: targetH };
+}
