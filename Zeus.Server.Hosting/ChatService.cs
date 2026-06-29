@@ -497,13 +497,35 @@ public sealed class ChatService : BackgroundService
     private async Task RunConnectionAsync(string callsign, string sessionKey, CancellationToken ct)
     {
         using var socket = new ClientWebSocket();
+        // Capture the HTTP status of a rejected upgrade so we can tell a stale
+        // QRZ session (403/401) apart from a transient transport failure.
+        socket.Options.CollectHttpResponseDetails = true;
         socket.Options.SetRequestHeader("X-QRZ-Session", sessionKey);
         socket.Options.SetRequestHeader("X-QRZ-Callsign", callsign);
         if (_relaySecret is not null)
             socket.Options.SetRequestHeader("Authorization", $"Bearer {_relaySecret}");
 
         _log.LogInformation("chat: connecting to relay {Url} as {Callsign}", _relayUrl, callsign);
-        await socket.ConnectAsync(new Uri(_relayUrl), ct);
+        try
+        {
+            await socket.ConnectAsync(new Uri(_relayUrl), ct);
+        }
+        catch (WebSocketException) when (
+            socket.HttpStatusCode is System.Net.HttpStatusCode.Forbidden
+                                  or System.Net.HttpStatusCode.Unauthorized)
+        {
+            // The relay validates our QRZ session on the upgrade and rejected it
+            // (403 = "qrz session invalid", 401 = "qrz auth required"). Our local
+            // 1-hour session cache still believes the key is live, so without
+            // evicting it the reconnect loop would replay the dead key forever.
+            // Drop it so the next attempt re-authenticates with QRZ.
+            _log.LogWarning(
+                "chat: relay rejected QRZ session ({Status}); forcing re-auth",
+                socket.HttpStatusCode);
+            await _qrz.InvalidateSessionAsync(ct);
+            throw new InvalidOperationException(
+                "QRZ session expired — re-authenticating");
+        }
 
         _socket = socket;
         _connected = true;

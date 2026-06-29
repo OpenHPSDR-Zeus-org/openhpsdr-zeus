@@ -408,6 +408,40 @@ public class ChatServiceTests : IDisposable
             () => chat.AcceptFriendAsync("  ", CancellationToken.None));
     }
 
+    // ── QRZ session self-heal (relay 403/401 → drop the cached key) ──────────
+
+    // The chat path hands the relay a QRZ session key that the local cache
+    // optimistically trusts for an hour. When the relay rejects the upgrade
+    // (the key died QRZ-side before that hour elapsed), ChatService calls
+    // InvalidateSessionAsync so the *next* attempt re-authenticates instead of
+    // replaying the dead key into a 403 loop. This proves that contract.
+    [Fact]
+    public async Task InvalidateSessionAsync_forces_fresh_login_on_next_identity()
+    {
+        var handler = new StubQrzHandler();
+        var qrz = new QrzService(
+            new StubFactory(handler), NullLogger<QrzService>.Instance,
+            new CredentialStore(NullLogger<CredentialStore>.Instance, Path.Combine(_root, "creds2.db")));
+
+        var status = await qrz.LoginAsync("N9WAR", "pw", CancellationToken.None);
+        Assert.True(status.Connected);
+        Assert.Equal(1, handler.LoginCount);
+
+        // Cached: a second identity fetch must not re-hit the QRZ login endpoint.
+        var first = await qrz.GetChatIdentityAsync(CancellationToken.None);
+        Assert.NotNull(first);
+        Assert.Equal("N9WAR", first!.Value.Callsign);
+        Assert.Equal("SESSION123", first.Value.SessionKey);
+        Assert.Equal(1, handler.LoginCount);
+
+        // Relay rejected the key → evict it; the next fetch re-authenticates.
+        await qrz.InvalidateSessionAsync(CancellationToken.None);
+        var second = await qrz.GetChatIdentityAsync(CancellationToken.None);
+        Assert.NotNull(second);
+        Assert.Equal("SESSION123", second!.Value.SessionKey);
+        Assert.Equal(2, handler.LoginCount);
+    }
+
     // ── helpers ────────────────────────────────────────────────────────────
 
     private static ChatMessage Msg(int i) =>
@@ -436,5 +470,47 @@ public class ChatServiceTests : IDisposable
     private sealed class SingleClientFactory : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new();
+    }
+
+    // Canned QRZ XML so the self-heal test can drive a real login → cache →
+    // re-login cycle without touching the network. Login requests (those with a
+    // username=) are counted; lookups return a minimal home-callsign record.
+    private sealed class StubQrzHandler : HttpMessageHandler
+    {
+        public int LoginCount { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var query = request.RequestUri!.Query;
+            string xml;
+            if (query.Contains("username=", StringComparison.Ordinal))
+            {
+                LoginCount++;
+                xml = "<?xml version=\"1.0\" encoding=\"utf-8\" ?>"
+                    + "<QRZDatabase version=\"1.36\" xmlns=\"http://xmldata.qrz.com\">"
+                    + "<Session><Key>SESSION123</Key>"
+                    + "<SubExp>Wed Dec 31 23:59:59 2031</SubExp></Session></QRZDatabase>";
+            }
+            else
+            {
+                xml = "<?xml version=\"1.0\" encoding=\"utf-8\" ?>"
+                    + "<QRZDatabase version=\"1.36\" xmlns=\"http://xmldata.qrz.com\">"
+                    + "<Session><Key>SESSION123</Key></Session>"
+                    + "<Callsign><call>N9WAR</call><fname>Test</fname></Callsign></QRZDatabase>";
+            }
+
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(xml),
+            });
+        }
+    }
+
+    private sealed class StubFactory : IHttpClientFactory
+    {
+        private readonly HttpMessageHandler _handler;
+        public StubFactory(HttpMessageHandler handler) => _handler = handler;
+        public HttpClient CreateClient(string name) => new(_handler, disposeHandler: false);
     }
 }
