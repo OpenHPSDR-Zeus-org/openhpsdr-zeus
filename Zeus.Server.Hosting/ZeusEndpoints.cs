@@ -3219,6 +3219,12 @@ public static class ZeusEndpoints
             return Results.Ok(store.SetActive(req.RadioKey ?? "default", req.LayoutId));
         });
 
+        // Tag (or clear) which named layout auto-activates while transmitting
+        // (issue #1162). A null/empty LayoutId clears the designation; an id
+        // outside the radio's saved layouts is a no-op.
+        app.MapPost("/api/ui/layouts/tx", (SetTxLayoutRequest req, LayoutStore store) =>
+            Results.Ok(store.SetTxLayout(req.RadioKey ?? "default", req.LayoutId)));
+
         app.MapDelete("/api/ui/layouts", (string? radio, string? id, LayoutStore store) =>
         {
             if (string.IsNullOrWhiteSpace(id))

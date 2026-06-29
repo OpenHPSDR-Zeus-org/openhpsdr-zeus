@@ -694,3 +694,66 @@ describe('layout-store / pruneOffscreenTilesFromLayout', () => {
     expect(useLayoutStore.getState().workspace.tiles.length).toBe(1);
   });
 });
+
+describe('layout-store / setTxLayout (issue #1162)', () => {
+  beforeEach(() => {
+    useLayoutStore.setState({
+      radioKey: 'radio-1',
+      layouts: [
+        { id: 'layout-a', name: 'A', layoutJson: JSON.stringify(DEFAULT_WORKSPACE_LAYOUT) },
+        { id: 'layout-b', name: 'B', layoutJson: JSON.stringify(EMPTY_WORKSPACE_LAYOUT) },
+      ],
+      activeLayoutId: 'layout-a',
+      txLayoutId: '',
+      workspace: DEFAULT_WORKSPACE_LAYOUT,
+      isLoaded: true,
+    });
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+  });
+
+  it('marks a known layout as the TX layout and POSTs the new id', () => {
+    useLayoutStore.getState().setTxLayout('layout-b');
+    expect(useLayoutStore.getState().txLayoutId).toBe('layout-b');
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const txPost = fetchMock.mock.calls.find(
+      (call) =>
+        call[0] === '/api/ui/layouts/tx' &&
+        (call[1] as RequestInit | undefined)?.method === 'POST',
+    );
+    expect(txPost).toBeDefined();
+    const body = JSON.parse((txPost![1] as RequestInit).body as string);
+    expect(body).toMatchObject({ radioKey: 'radio-1', layoutId: 'layout-b' });
+  });
+
+  it('clearing (null) wipes the designation', () => {
+    useLayoutStore.setState({ txLayoutId: 'layout-b' });
+    useLayoutStore.getState().setTxLayout(null);
+    expect(useLayoutStore.getState().txLayoutId).toBe('');
+  });
+
+  it('ignores an unknown layout id (no orphan TX-layout pointer)', () => {
+    useLayoutStore.getState().setTxLayout('layout-does-not-exist');
+    expect(useLayoutStore.getState().txLayoutId).toBe('');
+  });
+
+  it('removeLayout clears txLayoutId when the deleted layout was the TX one', () => {
+    useLayoutStore.setState({ txLayoutId: 'layout-b' });
+    useLayoutStore.getState().removeLayout('layout-b');
+    expect(useLayoutStore.getState().txLayoutId).toBe('');
+  });
+
+  it('removeLayout preserves txLayoutId when a different layout is deleted', () => {
+    useLayoutStore.setState({
+      layouts: [
+        { id: 'layout-a', name: 'A', layoutJson: JSON.stringify(DEFAULT_WORKSPACE_LAYOUT) },
+        { id: 'layout-b', name: 'B', layoutJson: JSON.stringify(EMPTY_WORKSPACE_LAYOUT) },
+        { id: 'layout-c', name: 'C', layoutJson: JSON.stringify(EMPTY_WORKSPACE_LAYOUT) },
+      ],
+      txLayoutId: 'layout-b',
+    });
+    useLayoutStore.getState().removeLayout('layout-c');
+    expect(useLayoutStore.getState().txLayoutId).toBe('layout-b');
+  });
+});

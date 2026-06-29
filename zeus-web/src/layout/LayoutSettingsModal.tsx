@@ -40,6 +40,9 @@ export interface LayoutSettingsValue {
   icon: string;
   description: string;
   locked: boolean;
+  /** Tag this layout as the one Zeus auto-switches to while transmitting
+   *  (issue #1162). Manager mode only — ignored in create mode. */
+  useAsTxLayout: boolean;
 }
 
 /** One workspace tab in the manager dropdown. */
@@ -123,6 +126,7 @@ export function LayoutSettingsModal({
   const [icon, setIcon] = useState(initial.icon);
   const [description, setDescription] = useState(initial.description);
   const [locked, setLocked] = useState(initial.locked);
+  const [useAsTxLayout, setUseAsTxLayout] = useState(initial.useAsTxLayout);
   // Manager-only transient state.
   const [confirmDelete, setConfirmDelete] = useState(false);
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -143,6 +147,7 @@ export function LayoutSettingsModal({
     setIcon(initial.icon);
     setDescription(initial.description);
     setLocked(initial.locked);
+    setUseAsTxLayout(initial.useAsTxLayout);
     setConfirmDelete(false);
     // Resync only when the managed selection changes, not on every keystroke.
   }, [manager?.selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -155,6 +160,7 @@ export function LayoutSettingsModal({
       icon: icon.trim(),
       description: description.trim(),
       locked,
+      useAsTxLayout,
     });
   };
 
@@ -374,6 +380,27 @@ export function LayoutSettingsModal({
               </span>
             </span>
           </label>
+
+          {manager && (
+            <label className="layout-settings-lock-row">
+              <input
+                type="checkbox"
+                checked={useAsTxLayout}
+                aria-label="Use as TX layout"
+                onChange={(e) => setUseAsTxLayout(e.target.checked)}
+              />
+              <span className="layout-settings-lock-copy">
+                <span className="layout-settings-field-label">
+                  Use as TX layout
+                </span>
+                <span className="layout-settings-field-hint">
+                  Switch to this workspace automatically while transmitting
+                  (MOX or TUNE), then back when you stop. Only one workspace
+                  per radio can be the TX layout.
+                </span>
+              </span>
+            </label>
+          )}
 
           {manager && <SavedLayoutsLibrary manager={manager} />}
         </div>

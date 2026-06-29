@@ -53,7 +53,9 @@ export function LeftLayoutBar() {
   const barRef = useRef<HTMLElement | null>(null);
   const layouts = useLayoutStore((s) => s.layouts);
   const activeLayoutId = useLayoutStore((s) => s.activeLayoutId);
+  const txLayoutId = useLayoutStore((s) => s.txLayoutId);
   const setActiveLayout = useLayoutStore((s) => s.setActiveLayout);
+  const setTxLayout = useLayoutStore((s) => s.setTxLayout);
   const addLayout = useLayoutStore((s) => s.addLayout);
   const removeLayout = useLayoutStore((s) => s.removeLayout);
   const updateLayoutMeta = useLayoutStore((s) => s.updateLayoutMeta);
@@ -153,6 +155,14 @@ export function LeftLayoutBar() {
         description: value.description,
       });
       setWorkspaceLockedInLayout(modal.id, value.locked);
+      // TX-layout tag is a per-radio singleton: marking THIS layout TX implicitly
+      // unmarks any other. Clearing it (when it was previously this layout)
+      // disables the auto-switch entirely.
+      if (value.useAsTxLayout) {
+        setTxLayout(modal.id);
+      } else if (txLayoutId === modal.id) {
+        setTxLayout(null);
+      }
     }
     setModal({ kind: 'closed' });
   };
@@ -337,6 +347,7 @@ export function LeftLayoutBar() {
             icon: '',
             description: '',
             locked: false,
+            useAsTxLayout: false,
           }}
           createSource={{
             savedLayouts,
@@ -355,6 +366,7 @@ export function LeftLayoutBar() {
             icon: editingLayout.icon ?? '',
             description: editingLayout.description ?? '',
             locked: parseLayoutOrDefault(editingLayout.layoutJson).locked === true,
+            useAsTxLayout: txLayoutId === editingLayout.id,
           }}
           manager={{
             workspaces: layouts.map((l) => ({

@@ -279,6 +279,37 @@ public sealed class LayoutStore : IDisposable
             entry.Layouts.RemoveAll(l => l.LayoutId == layoutId);
             if (entry.ActiveLayoutId == layoutId)
                 entry.ActiveLayoutId = entry.Layouts.FirstOrDefault()?.LayoutId ?? string.Empty;
+            if (entry.TxLayoutId == layoutId)
+                entry.TxLayoutId = string.Empty;
+            _v2.Update(entry);
+            return ToDto(entry);
+        }
+    }
+
+    /// <summary>
+    /// Designate which layout the client auto-switches to while keyed
+    /// (MOX/TUN). Pass null/empty to clear the designation. No-op when the
+    /// id isn't among the radio's saved layouts.
+    /// </summary>
+    public RadioLayoutsDto SetTxLayout(string radioKey, string? layoutId)
+    {
+        radioKey = NormalizeRadioKey(radioKey);
+        lock (_lock)
+        {
+            var entry = _v2.FindOne(x => x.RadioKey == radioKey);
+            if (entry is null)
+                return new RadioLayoutsDto(radioKey, Array.Empty<NamedLayoutDto>(), string.Empty);
+            if (string.IsNullOrWhiteSpace(layoutId))
+            {
+                entry.TxLayoutId = string.Empty;
+            }
+            else
+            {
+                var normalised = NormalizeLayoutId(layoutId);
+                if (!entry.Layouts.Any(l => l.LayoutId == normalised))
+                    return ToDto(entry);
+                entry.TxLayoutId = normalised;
+            }
             _v2.Update(entry);
             return ToDto(entry);
         }
@@ -400,7 +431,8 @@ public sealed class LayoutStore : IDisposable
                 string.IsNullOrEmpty(l.Icon) ? null : l.Icon,
                 string.IsNullOrEmpty(l.Description) ? null : l.Description))
             .ToList(),
-        e.ActiveLayoutId);
+        e.ActiveLayoutId,
+        e.TxLayoutId ?? string.Empty);
 
     // The radio key keeps to a small alphabet so it survives JSON round-trips
     // and URL query params without escaping. BoardKind values already match
@@ -462,6 +494,10 @@ public sealed class RadioLayoutsEntry
     public string RadioKey { get; set; } = string.Empty;
     public string ActiveLayoutId { get; set; } = string.Empty;
     public List<NamedLayoutEntry> Layouts { get; set; } = new();
+    // Layout to auto-activate while keyed (MOX/TUN), issue #1162. Empty when
+    // no TX-layout has been designated. Rows persisted before this field was
+    // introduced deserialise to empty under LiteDB.
+    public string TxLayoutId { get; set; } = string.Empty;
 }
 
 public sealed class NamedLayoutEntry

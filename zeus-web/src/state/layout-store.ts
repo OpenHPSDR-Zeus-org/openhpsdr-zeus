@@ -55,6 +55,9 @@ interface RadioLayoutsResponse {
     description?: string | null;
   }>;
   activeLayoutId: string;
+  // Layout designated as the "use while transmitting" layout (issue #1162).
+  // Empty/undefined means no TX layout is set — auto-switch is disabled.
+  txLayoutId?: string;
 }
 
 export interface LayoutMetaUpdate {
@@ -74,6 +77,11 @@ interface LayoutState {
    *  layout's parsed WorkspaceLayout so existing FlexWorkspace consumers
    *  don't need to re-parse on every render. */
   activeLayoutId: string;
+  /** Id of the layout tagged "use while transmitting" (issue #1162). The
+   *  MOX/TUN watcher effect in App.tsx flips to this layout on key-down and
+   *  back to the prior active layout on key-up. Empty string disables
+   *  auto-switch. Persisted server-side per radio. */
+  txLayoutId: string;
   /** The active layout's parsed WorkspaceLayout. Always non-null — falls
    *  back to DEFAULT_WORKSPACE_LAYOUT when the server returns invalid data. */
   workspace: WorkspaceLayout;
@@ -130,6 +138,9 @@ interface LayoutState {
   /** Switch the active layout. Re-parses the layout's JSON into `workspace`
    *  and POSTs the new active id to the server. */
   setActiveLayout: (id: string) => void;
+  /** Tag (or clear) which layout auto-activates on MOX/TUN. Pass null/empty
+   *  to disable the auto-switch. Persisted server-side. */
+  setTxLayout: (id: string | null) => void;
   /** Reset the active layout's tiles to DEFAULT_WORKSPACE_LAYOUT. The
    *  layout itself (id + name) is preserved. */
   resetActiveLayout: () => void;
@@ -271,6 +282,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   radioKey: '',
   layouts: [],
   activeLayoutId: DEFAULT_LAYOUT_ID,
+  txLayoutId: '',
   workspace: DEFAULT_WORKSPACE_LAYOUT,
   isLoaded: false,
   viewportCols: WORKSPACE_GRID_COLS,
@@ -323,10 +335,18 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
         });
       }
       const active = findActive(layouts, activeId) ?? layouts[0]!;
+      // The server only echoes a TX-layout id that's still present in the
+      // current layouts list. If the operator deleted that layout in another
+      // tab the field falls back to '' and the auto-switch disengages.
+      const txId =
+        dto.txLayoutId && findActive(layouts, dto.txLayoutId)
+          ? dto.txLayoutId
+          : '';
       set({
         radioKey: safeKey,
         layouts,
         activeLayoutId: active.id,
+        txLayoutId: txId,
         workspace: parseLayoutOrDefault(active.layoutJson),
         isLoaded: true,
       });
@@ -337,6 +357,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
         radioKey: safeKey,
         layouts: [seed],
         activeLayoutId: seed.id,
+        txLayoutId: '',
         workspace: DEFAULT_WORKSPACE_LAYOUT,
         isLoaded: true,
       });
@@ -384,7 +405,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   },
 
   removeLayout: (id) => {
-    const { radioKey, layouts, activeLayoutId } = get();
+    const { radioKey, layouts, activeLayoutId, txLayoutId } = get();
     if (!radioKey) return;
     if (layouts.length <= 1) return; // never delete the last one
     cancelScheduledSave(radioKey, id);
@@ -395,7 +416,16 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       nextActive = remaining[0]!.id;
       nextWorkspace = parseLayoutOrDefault(remaining[0]!.layoutJson);
     }
-    set({ layouts: remaining, activeLayoutId: nextActive, workspace: nextWorkspace });
+    // The server's DeleteNamed clears TxLayoutId when the deleted layout was
+    // the TX layout; mirror that locally so the watcher disengages
+    // immediately rather than waiting for the next radio reload.
+    const nextTx = txLayoutId === id ? '' : txLayoutId;
+    set({
+      layouts: remaining,
+      activeLayoutId: nextActive,
+      workspace: nextWorkspace,
+      txLayoutId: nextTx,
+    });
     void fetch(`/api/ui/layouts?radio=${encodeURIComponent(radioKey)}&id=${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
@@ -448,6 +478,14 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       settingsInitialTab: undefined,
     });
     void postActiveLayout(radioKey, id);
+  },
+
+  setTxLayout: (id) => {
+    const { layouts, radioKey, txLayoutId } = get();
+    const next = id && findActive(layouts, id) ? id : '';
+    if (next === txLayoutId) return;
+    set({ txLayoutId: next });
+    void postTxLayout(radioKey, next);
   },
 
   resetActiveLayout: () => {
@@ -845,6 +883,16 @@ function postActiveLayout(radioKey: string, layoutId: string): Promise<unknown> 
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ radioKey, layoutId }),
+  });
+}
+
+// POST the TX-layout designation (issue #1162). layoutId === '' clears it.
+function postTxLayout(radioKey: string, layoutId: string): Promise<unknown> {
+  if (!radioKey) return Promise.resolve();
+  return fetch('/api/ui/layouts/tx', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ radioKey, layoutId: layoutId || null }),
   });
 }
 

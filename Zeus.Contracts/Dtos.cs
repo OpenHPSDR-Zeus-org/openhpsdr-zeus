@@ -1864,7 +1864,15 @@ public sealed record NamedLayoutDto(
     string? Icon = null,
     string? Description = null);
 
-public sealed record RadioLayoutsDto(string RadioKey, IReadOnlyList<NamedLayoutDto> Layouts, string ActiveLayoutId);
+// `TxLayoutId` — id of the layout the operator tagged as "use while
+// transmitting" (issue #1162). When MOX/TUN goes on the client switches to
+// this layout and back to the prior one on release. Empty string means "no
+// TX layout designated" (auto-switch disabled).
+public sealed record RadioLayoutsDto(
+    string RadioKey,
+    IReadOnlyList<NamedLayoutDto> Layouts,
+    string ActiveLayoutId,
+    string TxLayoutId = "");
 
 public sealed record SaveNamedLayoutRequest(
     string RadioKey,
@@ -1875,6 +1883,10 @@ public sealed record SaveNamedLayoutRequest(
     string? Description = null);
 
 public sealed record SetActiveLayoutRequest(string RadioKey, string LayoutId);
+
+// Sets which layout auto-activates on MOX/TUN (issue #1162). An empty/null
+// LayoutId clears the designation — no auto-switch on key-up.
+public sealed record SetTxLayoutRequest(string RadioKey, string? LayoutId);
 
 // Saved-layouts library — a per-radio pool of reusable layout PRESETS, kept
 // separate from the working tabs (`RadioLayoutsDto`). The operator snapshots a
