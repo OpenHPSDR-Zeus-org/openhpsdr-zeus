@@ -32,6 +32,10 @@ public sealed class RxVstEngineService : IHostedService, IAsyncDisposable
     private readonly HashSet<string> _openEditors = new(StringComparer.Ordinal);
     private Dictionary<string, string> _pluginStates = new(StringComparer.Ordinal);
     private int _activeVstCount;
+    // One-shot "next sync must be a full load_chain" flag, guarded by _editorLock.
+    // Set when plugin states are replaced wholesale (RX profile apply) so the new
+    // voicing reaches the engine even when the chain order is unchanged.
+    private bool _forceFullReload;
 
     public RxVstEngineService(
         PluginManager manager,
@@ -71,6 +75,10 @@ public sealed class RxVstEngineService : IHostedService, IAsyncDisposable
     private void OnEngineReconnected()
     {
         _log.LogInformation("RX VST engine reconnected (restart #{Count}); replaying chain.", _engine.RestartCount);
+        // The relaunched engine comes back EMPTY while our slot map is still stale-
+        // populated from before the crash. Force a full load_chain so the incremental
+        // diff can't see "no change" and leave the recovered engine with no plugins.
+        lock (_editorLock) _forceFullReload = true;
         _ = SyncEngineAsync(_chainOrder.CurrentOrder, CancellationToken.None);
     }
 
@@ -224,7 +232,10 @@ public sealed class RxVstEngineService : IHostedService, IAsyncDisposable
     public void SetPluginStates(IReadOnlyDictionary<string, string> states)
     {
         lock (_editorLock)
+        {
             _pluginStates = new Dictionary<string, string>(states, StringComparer.Ordinal);
+            _forceFullReload = true;
+        }
     }
 
     private async Task SyncEngineAsync(IReadOnlyList<string> activeOrder, CancellationToken ct)
@@ -240,17 +251,18 @@ public sealed class RxVstEngineService : IHostedService, IAsyncDisposable
 
         try
         {
-            var chain = BuildEngineChain(activeOrder);
-            Volatile.Write(ref _activeVstCount, chain.Slots.Count);
+            var desired = BuildDesiredSlots(activeOrder);
+            Volatile.Write(ref _activeVstCount, desired.Count);
 
-            if (chain.Slots.Count == 0)
+            if (desired.Count == 0)
             {
                 _engine.Deactivate();
                 ClearEngineMaps();
                 return;
             }
 
-            var result = _engine.IsActive
+            bool wasActive = _engine.IsActive;
+            var result = wasActive
                 ? VstEngineStartResult.Started
                 : await _engine.ActivateAsync(ReadyTimeout, ct).ConfigureAwait(false);
 
@@ -263,17 +275,41 @@ public sealed class RxVstEngineService : IHostedService, IAsyncDisposable
                 return;
             }
 
-            lock (_editorLock)
+            bool forceFull;
+            lock (_editorLock) forceFull = _forceFullReload;
+
+            // Engine already running an edit (add / remove / reorder): diff against
+            // its current slots and emit only the needed incremental commands so we
+            // don't re-instantiate the whole RX rack and glitch live receive audio.
+            if (wasActive && !forceFull)
             {
-                _idToEngineSlot = chain.IdToSlot;
-                _fileToId = chain.FileToId;
-                _uidToId = chain.UidToId;
-                _openEditors.Clear();
+                List<string> current;
+                lock (_editorLock)
+                    current = _idToEngineSlot.OrderBy(kv => kv.Value).Select(kv => kv.Key).ToList();
+
+                var cmds = VstChainDiff.Compute(current, desired);
+                if (cmds is not null)
+                {
+                    if (cmds.Count == 0) return; // already in sync — nothing to push
+                    RebuildEngineMaps(desired, full: false);
+                    foreach (var cmd in cmds) _engine.SendCommand(cmd);
+                    _log.LogInformation(
+                        "RX VST engine: incremental chain update — {Ops} op(s), {Count} plugin(s).",
+                        cmds.Count, desired.Count);
+                    return;
+                }
+                // null → no usable current state; fall through to a full load.
             }
-            _engine.SendCommand(new { cmd = "load_chain", chain = chain.Slots });
+
+            lock (_editorLock) _forceFullReload = false;
+            RebuildEngineMaps(desired, full: true);
+            var slots = desired
+                .Select(d => (object)new { file = d.File, identifier = d.Uid, state = d.State })
+                .ToList();
+            _engine.SendCommand(new { cmd = "load_chain", chain = slots });
             _log.LogInformation(
                 "RX VST engine loaded {Count} receive VST3 plugin(s).",
-                chain.Slots.Count);
+                slots.Count);
         }
         catch (Exception ex)
         {
@@ -285,7 +321,11 @@ public sealed class RxVstEngineService : IHostedService, IAsyncDisposable
         }
     }
 
-    private EngineChain BuildEngineChain(IReadOnlyList<string> activeOrder)
+    /// <summary>
+    /// Build the desired RX engine chain: active <c>rx.*</c> VST3 inserts in chain
+    /// order, each with its absolute path, descriptor uid, and last-known state.
+    /// </summary>
+    private List<VstChainDiff.DesiredSlot> BuildDesiredSlots(IReadOnlyList<string> activeOrder)
     {
         var active = new Dictionary<string, ActivatedPlugin>(StringComparer.Ordinal);
         foreach (var p in _manager.Active)
@@ -294,11 +334,7 @@ public sealed class RxVstEngineService : IHostedService, IAsyncDisposable
         Dictionary<string, string> savedStates;
         lock (_editorLock) savedStates = new(_pluginStates, StringComparer.Ordinal);
 
-        var slots = new List<object>();
-        var idToSlot = new Dictionary<string, int>(StringComparer.Ordinal);
-        var fileToId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var uidToId = new Dictionary<string, string>(StringComparer.Ordinal);
-
+        var desired = new List<VstChainDiff.DesiredSlot>();
         foreach (var id in activeOrder)
         {
             if (!active.TryGetValue(id, out var plugin)) continue;
@@ -314,19 +350,38 @@ public sealed class RxVstEngineService : IHostedService, IAsyncDisposable
                 ? audio.Vst3Path
                 : Path.Combine(plugin.Loaded.PluginDir, audio.Vst3Path);
             var uid = audio.Vst3Uid ?? string.Empty;
-            var key = NormalizePath(abs);
-            idToSlot[id] = slots.Count;
-            if (key is not null) fileToId[key] = id;
-            if (uid.Length > 0) uidToId[uid] = id;
-            slots.Add(new
-            {
-                file = abs,
-                identifier = uid,
-                state = savedStates.GetValueOrDefault(id, string.Empty),
-            });
+            var state = savedStates.GetValueOrDefault(id, string.Empty);
+            desired.Add(new VstChainDiff.DesiredSlot(id, abs, uid, state));
         }
+        return desired;
+    }
 
-        return new EngineChain(slots, idToSlot, fileToId, uidToId);
+    /// <summary>
+    /// Rebuild the id→slot / file→id / uid→id maps from the desired chain's final
+    /// shape. A full reload clears the optimistic open-editor set (the engine closes
+    /// all editors on load_chain); an incremental push keeps the survivors' editors.
+    /// </summary>
+    private void RebuildEngineMaps(IReadOnlyList<VstChainDiff.DesiredSlot> desired, bool full)
+    {
+        var map = new Dictionary<string, int>(StringComparer.Ordinal);
+        var fileToId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var uidToId = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (int i = 0; i < desired.Count; i++)
+        {
+            var d = desired[i];
+            map[d.Id] = i;
+            var key = NormalizePath(d.File);
+            if (key is not null) fileToId[key] = d.Id;
+            if (d.Uid.Length > 0) uidToId[d.Uid] = d.Id;
+        }
+        lock (_editorLock)
+        {
+            _idToEngineSlot = map;
+            _fileToId = fileToId;
+            _uidToId = uidToId;
+            if (full) _openEditors.Clear();
+            else _openEditors.IntersectWith(map.Keys);
+        }
     }
 
     private void OnEngineEvent(JsonElement e)
@@ -419,10 +474,4 @@ public sealed class RxVstEngineService : IHostedService, IAsyncDisposable
         if (_ownsEngine)
             await _engine.DisposeAsync().ConfigureAwait(false);
     }
-
-    private sealed record EngineChain(
-        List<object> Slots,
-        Dictionary<string, int> IdToSlot,
-        Dictionary<string, string> FileToId,
-        Dictionary<string, string> UidToId);
 }
