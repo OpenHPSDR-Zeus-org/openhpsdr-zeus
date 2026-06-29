@@ -2181,11 +2181,22 @@ public sealed class RadioService : IDisposable
     // and filter are pushed. RxMode.FreeDv stays the radio's mode everywhere else;
     // only the WDSP RXA/TXA orientation + bandpass sign follow this. Non-FreeDv
     // modes pass through unchanged.
+    // 60 m is the regulatory exception to "below 10 MHz → LSB": FCC §97.305,
+    // Ofcom IR 2002 and every other regulator that permits 60 m amateur
+    // operation mandate USB-only on that band, and the FreeDV community follows
+    // suit (5,403 kHz USB etc.). The window below covers every 60 m amateur
+    // allocation (IARU R1 5,351.5–5,366.5 kHz, FCC channels 5,330.5–5,403.5 kHz,
+    // Ofcom 5,258.5–5,406.5 kHz) with a small cushion. Outside the window the
+    // 10 MHz rule still applies.
     internal const long FreeDvUsbThresholdHz = 10_000_000;
+    internal const long FreeDvSixtyMeterLowHz = 5_250_000;
+    internal const long FreeDvSixtyMeterHighHz = 5_450_000;
     internal static RxMode EffectiveEngineMode(RxMode mode, long dialHz)
-        => mode == RxMode.FreeDv
-            ? (dialHz < FreeDvUsbThresholdHz ? RxMode.LSB : RxMode.USB)
-            : mode;
+    {
+        if (mode != RxMode.FreeDv) return mode;
+        if (dialHz >= FreeDvSixtyMeterLowHz && dialHz <= FreeDvSixtyMeterHighHz) return RxMode.USB;
+        return dialHz < FreeDvUsbThresholdHz ? RxMode.LSB : RxMode.USB;
+    }
 
     internal static (int low, int high) SignedFilterForMode(RxMode mode, int loAbs, int hiAbs)
     {
