@@ -55,6 +55,7 @@ public sealed class SaturnSpeakerAudioSinkTests : IDisposable
         // Default-off: publishing audio must not have opened the UDP target.
         var frame = MakeMonoFrame(64);
         sink.Publish(frame);
+        WaitForIdle(sink);
 
         Assert.False(IsSocketOpen(sink));
 
@@ -77,13 +78,15 @@ public sealed class SaturnSpeakerAudioSinkTests : IDisposable
         settings.Set(true);
         radio.MarkProtocol2Connected("127.0.0.1:1024", 192_000, client: null, boardKind: HpsdrBoardKind.HermesII);
 
-        // One audio frame opens the socket lazily.
+        // One audio frame opens the socket lazily (handled on the worker).
         sink.Publish(MakeMonoFrame(64));
+        WaitForIdle(sink);
         Assert.True(IsSocketOpen(sink));
 
         // Flip the operator opt-in off — the sink must release the socket so
         // sequence numbers reset cleanly on a later re-enable.
         settings.Set(false);
+        WaitForIdle(sink);
         Assert.False(IsSocketOpen(sink));
 
         await sink.StopAsync(default);
@@ -109,6 +112,7 @@ public sealed class SaturnSpeakerAudioSinkTests : IDisposable
         Assert.False(radio.IsProtocol2Active);
 
         sink.Publish(MakeMonoFrame(64));
+        WaitForIdle(sink);
         Assert.False(IsSocketOpen(sink));
 
         await sink.StopAsync(default);
@@ -130,6 +134,7 @@ public sealed class SaturnSpeakerAudioSinkTests : IDisposable
         radio.MarkProtocol2Connected("127.0.0.1:1024", 192_000, client: null, boardKind: HpsdrBoardKind.HermesLite2);
 
         sink.Publish(MakeMonoFrame(64));
+        WaitForIdle(sink);
         Assert.False(IsSocketOpen(sink));
 
         await sink.StopAsync(default);
@@ -150,16 +155,56 @@ public sealed class SaturnSpeakerAudioSinkTests : IDisposable
         await sink.StartAsync(default);
         settings.Set(true);
         radio.MarkProtocol2Connected("127.0.0.1:1024", 192_000, client: null, boardKind: HpsdrBoardKind.HermesII);
+        WaitForIdle(sink);
 
         radio.SetMox(true);
         // Keyed: a full packet's worth of frames must produce no outgoing packet.
         sink.Publish(MakeMonoFrame(64));
+        WaitForIdle(sink);
         Assert.Equal(0u, SequenceOf(sink));
 
         radio.SetMox(false);
         // Unkey: RX audio flows out again (the 4-byte sequence advances).
         sink.Publish(MakeMonoFrame(64));
+        WaitForIdle(sink);
         Assert.True(SequenceOf(sink) >= 1u, "expected at least one packet sent after unkey");
+
+        await sink.StopAsync(default);
+        sink.Dispose();
+    }
+
+    // Issue #1148 — the producer (DSP RX) thread must not be blocked on UDP
+    // syscalls while the sender does its 16 packets per audio frame. Verify
+    // Publish returns in well under a frame-time even when the socket target
+    // is unreachable (so packets queue / drop on the worker side without
+    // back-pressuring the DSP thread that also has to refill the host
+    // soundcard ring on time).
+    [Fact]
+    public async Task Publish_DoesNotBlockProducerOnSocketWork()
+    {
+        using var radio = NewRadio();
+        using var settings = new RadioSpeakerSettingsStore(
+            NullLogger<RadioSpeakerSettingsStore>.Instance, _dbPath + ".spk");
+        var sink = new SaturnSpeakerAudioSink(radio, settings, NullLogger<SaturnSpeakerAudioSink>.Instance);
+
+        await sink.StartAsync(default);
+        settings.Set(true);
+        // 192.0.2.0/24 is TEST-NET-1 (RFC 5737) — packets get dropped on the
+        // way out, so the sender thread will spin retries / WOULD_BLOCK while
+        // the producer keeps pushing.
+        radio.MarkProtocol2Connected("192.0.2.7:1024", 192_000, client: null, boardKind: HpsdrBoardKind.HermesII);
+        WaitForIdle(sink);
+
+        // 1024 samples is one DSP-tick batch at 48 kHz mono (~21.3 ms of audio).
+        // Producing 50 of these back-to-back is ~1 s of audio; the call must
+        // return in a small fraction of that since work is deferred.
+        var frame = MakeMonoFrame(1024);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < 50; i++) sink.Publish(frame);
+        sw.Stop();
+
+        Assert.True(sw.ElapsedMilliseconds < 200,
+            $"Publish loop took {sw.ElapsedMilliseconds} ms; expected the DSP-thread path to be near-free");
 
         await sink.StopAsync(default);
         sink.Dispose();
@@ -170,6 +215,17 @@ public sealed class SaturnSpeakerAudioSinkTests : IDisposable
         var f = typeof(SaturnSpeakerAudioSink)
             .GetField("_sequence", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         return f?.GetValue(sink) is uint v ? v : 0u;
+    }
+
+    // Wait for the sender thread (added in #1148) to flush every pending
+    // signal — settings change, MOX flip, state change, queued audio — so
+    // assertions on socket / sequence reflect the worker's view rather than
+    // racing it. Tight timeout: every signal in these tests is a flag flip
+    // that the worker handles in microseconds once it wakes.
+    private static void WaitForIdle(SaturnSpeakerAudioSink sink)
+    {
+        Assert.True(sink.WaitForIdleForTest(TimeSpan.FromSeconds(2)),
+            "sender thread did not become idle within 2 s");
     }
 
     private RadioService NewRadio() => new(

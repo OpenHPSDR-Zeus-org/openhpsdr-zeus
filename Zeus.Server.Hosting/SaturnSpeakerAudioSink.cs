@@ -27,6 +27,17 @@ namespace Zeus.Server;
 /// <see cref="RadioSpeakerAudioSink"/> (writes into the EP2 frame's L/R slots
 /// instead of opening a separate UDP socket); the two are mutually exclusive at
 /// runtime because they self-gate on which protocol is currently active.
+///
+/// <para>Threading: <see cref="Publish"/> is called on the DSP RX tick thread
+/// (the same thread that feeds <see cref="NativeAudioSink"/>'s playback ring).
+/// It writes mono float samples into an in-process SPSC ring and signals a
+/// dedicated sender thread that drains the ring, packs PCM packets, and runs
+/// the 16 UDP syscalls per audio frame. This keeps the DSP tick off the
+/// network hot path so the host soundcard's playback ring is filled on time
+/// (issue #1148). All socket lifecycle (open / refresh on state change /
+/// close on disable) also runs on the sender thread; cross-thread events from
+/// <see cref="RadioService"/> and <see cref="RadioSpeakerSettingsStore"/> are
+/// reduced to volatile flag flips + a wake on the worker.</para>
 /// </summary>
 internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDisposable
 {
@@ -36,21 +47,50 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
     private const int PacketBytes = 4 + PacketFrames * 2 * sizeof(short);
     private const int TargetRefreshMs = 1_000;
 
+    // ~170 ms @ 48 kHz mono = 8192 samples. Power of two for the FloatSpscRing
+    // mask wrap. The sender drains ~750 packets/sec (one packet per 64 samples
+    // ≈ 1.33 ms), so even worst-case scheduler latency between a DSP burst and
+    // the sender waking fits in a fraction of this. Sized for jitter slack, not
+    // capacity — keep small so a stalled sender doesn't accumulate seconds of
+    // stale audio queued for the radio's speaker jack.
+    private const int RingCapacity = 8_192;
+
+    // Sender wake timeout — covers the (rare) case where a wake signal was
+    // missed across a flag toggle (settings/state change racing the wait). At
+    // 100 ms it's well below human-perceptible latency; the common path is
+    // wake-on-publish (~46 Hz) and never hits the timer.
+    private static readonly TimeSpan WorkerWakeTimeout = TimeSpan.FromMilliseconds(100);
+
     private readonly RadioService _radio;
     private readonly RadioSpeakerSettingsStore _settings;
     private readonly ILogger<SaturnSpeakerAudioSink> _log;
-    private readonly object _sync = new();
+    private readonly FloatSpscRing _ring = new(RingCapacity);
+    private readonly ManualResetEventSlim _wake = new(false);
+    private readonly ManualResetEventSlim _idle = new(true);
+    private readonly CancellationTokenSource _cts = new();
     private readonly byte[] _packet = new byte[PacketBytes];
 
+    // Sender-thread state (single owner — only WorkerLoop reads/writes these
+    // after StartAsync completes). The reflection-based test helpers read
+    // _socket and _sequence after waiting for the worker to go idle.
     private Socket? _socket;
     private IPEndPoint? _target;
     private int _packetFrames;
     private uint _sequence;
     private long _nextRefreshMs;
     private long _droppedPackets;
+    private long _droppedSamples;
     private bool _wasEligible;
     private ConnectionStatus _lastStatus = ConnectionStatus.Disconnected;
     private string? _lastEndpoint;
+
+    // Cross-thread signals. Volatile reads/writes are sufficient — these are
+    // single-bit flags, not data values; the worker re-snapshots radio/settings
+    // state when it acts on them so there's nothing to atomicise.
+    private volatile bool _refreshRequested;
+    private volatile bool _drainRequested;
+
+    private Thread? _worker;
 
     public SaturnSpeakerAudioSink(
         RadioService radio,
@@ -66,10 +106,13 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
     {
         _radio.StateChanged += OnRadioStateChanged;
         _settings.Changed += OnSettingsChanged;
-        lock (_sync)
+        _refreshRequested = true;
+        _worker = new Thread(WorkerLoop)
         {
-            RefreshTargetLocked(_radio.Snapshot(), force: true);
-        }
+            IsBackground = true,
+            Name = "zeus-p2-speaker-tx",
+        };
+        _worker.Start();
         return Task.CompletedTask;
     }
 
@@ -77,10 +120,10 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
     {
         _radio.StateChanged -= OnRadioStateChanged;
         _settings.Changed -= OnSettingsChanged;
-        lock (_sync)
-        {
-            CloseSocketLocked();
-        }
+        _cts.Cancel();
+        _wake.Set();
+        try { _worker?.Join(TimeSpan.FromSeconds(2)); }
+        catch { /* best-effort */ }
         return Task.CompletedTask;
     }
 
@@ -96,75 +139,128 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         // socket re-flap. RadioSpeakerAudioSink owns P1 via IsProtocol1Active.
         if (!_radio.IsProtocol2Active) return;
 
-        lock (_sync)
+        // Mirror the P1 sink's MOX mute: while transmitting, don't carry the
+        // operator's TX-monitor / CW sidetone out to the radio's speaker jack.
+        // Ask the worker to drop the buffered tail (and the partial packet) so
+        // RX resumes clean on unkey instead of replaying the pre-key tail.
+        if (_radio.IsMox)
         {
-            // Mirror the P1 sink's MOX mute: while transmitting, don't carry the
-            // operator's TX-monitor / CW sidetone out to the radio's speaker jack.
-            // Drop the buffered partial packet so RX resumes clean on unkey.
-            if (_radio.IsMox)
-            {
-                _packetFrames = 0;
-                return;
-            }
-            if (_socket is null) RefreshTargetIfDueLocked();
-            if (_socket is null) return;
-
-            foreach (float sample in frame.Samples.Span)
-            {
-                int offset = 4 + _packetFrames * 2 * sizeof(short);
-                short pcm = FloatToPcm16(sample);
-                BinaryPrimitives.WriteInt16BigEndian(_packet.AsSpan(offset, sizeof(short)), pcm);
-                BinaryPrimitives.WriteInt16BigEndian(_packet.AsSpan(offset + sizeof(short), sizeof(short)), pcm);
-
-                _packetFrames++;
-                if (_packetFrames == PacketFrames)
-                {
-                    SendPacketLocked();
-                }
-            }
+            _drainRequested = true;
+            _wake.Set();
+            return;
         }
+
+        var src = frame.Samples.Span;
+        int written = _ring.Write(src);
+        if (written < src.Length)
+        {
+            Interlocked.Add(ref _droppedSamples, src.Length - written);
+        }
+        _wake.Set();
     }
 
     private void OnRadioStateChanged(StateDto state)
     {
-        lock (_sync)
-        {
-            RefreshTargetLocked(state, force: false);
-        }
+        _refreshRequested = true;
+        _wake.Set();
     }
 
     private void OnSettingsChanged()
     {
-        lock (_sync)
+        // Disable also asks the worker to drop the buffered tail so a later
+        // re-enable starts clean rather than replaying stale samples that
+        // pre-date the operator's last toggle. Worker re-reads _settings.Enabled
+        // inside RefreshTarget so a flip-on path is covered by the same refresh.
+        if (!_settings.Enabled) _drainRequested = true;
+        _refreshRequested = true;
+        _wake.Set();
+    }
+
+    private void WorkerLoop()
+    {
+        var ct = _cts.Token;
+        Span<float> scratch = stackalloc float[PacketFrames];
+
+        while (!ct.IsCancellationRequested)
         {
-            if (_settings.Enabled)
+            _idle.Set();
+            try { _wake.Wait(WorkerWakeTimeout, ct); }
+            catch (OperationCanceledException) { break; }
+            _wake.Reset();
+            _idle.Reset();
+
+            if (ct.IsCancellationRequested) break;
+
+            if (_refreshRequested)
             {
-                // Operator just opted in — re-evaluate the target so audio starts
-                // flowing on the next published frame rather than waiting up to a
-                // second for the lazy refresh path inside Publish.
-                RefreshTargetLocked(_radio.Snapshot(), force: true);
+                _refreshRequested = false;
+                RefreshTarget(_radio.Snapshot(), force: true);
             }
-            else
+
+            if (_drainRequested)
             {
-                // Drop the buffered tail and close the socket so a later re-enable
-                // starts clean rather than replaying stale samples or sequence
-                // numbers that pre-date the operator's last toggle.
+                _drainRequested = false;
+                _ring.Clear();
                 _packetFrames = 0;
-                CloseSocketLocked();
+            }
+
+            if (_socket is null)
+            {
+                RefreshTargetIfDue();
+                if (_socket is null)
+                {
+                    // No target yet — discard anything the producer wrote
+                    // before the gate evaluated (or while the socket was
+                    // being re-opened) so we don't carry stale audio across
+                    // a connection flap.
+                    _ring.Clear();
+                    _packetFrames = 0;
+                    continue;
+                }
+            }
+
+            DrainAndSend(scratch);
+        }
+
+        _idle.Set();
+        CloseSocket();
+    }
+
+    private void DrainAndSend(Span<float> scratch)
+    {
+        while (true)
+        {
+            int need = PacketFrames - _packetFrames;
+            int read = _ring.Read(scratch[..need]);
+            if (read == 0) return;
+
+            for (int i = 0; i < read; i++)
+            {
+                int offset = 4 + _packetFrames * 2 * sizeof(short);
+                short pcm = FloatToPcm16(scratch[i]);
+                BinaryPrimitives.WriteInt16BigEndian(_packet.AsSpan(offset, sizeof(short)), pcm);
+                BinaryPrimitives.WriteInt16BigEndian(_packet.AsSpan(offset + sizeof(short), sizeof(short)), pcm);
+                _packetFrames++;
+            }
+
+            if (_packetFrames == PacketFrames)
+            {
+                SendPacket();
+                if (_socket is null) return;
             }
         }
     }
 
-    private void RefreshTargetIfDueLocked()
+    private void RefreshTargetIfDue()
     {
         long now = Environment.TickCount64;
         if (now < _nextRefreshMs) return;
         _nextRefreshMs = now + TargetRefreshMs;
 
-        RefreshTargetLocked(_radio.Snapshot(), force: true);
+        RefreshTarget(_radio.Snapshot(), force: true);
     }
 
-    private void RefreshTargetLocked(StateDto state, bool force)
+    private void RefreshTarget(StateDto state, bool force)
     {
         if (!force
             && _lastStatus == state.Status
@@ -200,7 +296,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
                 _log.LogInformation("audio.radio.speaker.p2 disabled");
             }
             _wasEligible = false;
-            CloseSocketLocked();
+            CloseSocket();
             return;
         }
 
@@ -210,7 +306,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
             return;
         }
 
-        CloseSocketLocked();
+        CloseSocket();
 
         try
         {
@@ -232,12 +328,12 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         }
         catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
         {
-            CloseSocketLocked();
+            CloseSocket();
             _log.LogWarning(ex, "audio.radio.speaker.p2 open failed target={Target}", target);
         }
     }
 
-    private void SendPacketLocked()
+    private void SendPacket()
     {
         var socket = _socket;
         if (socket is null) return;
@@ -259,7 +355,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
         {
             var dropped = Interlocked.Read(ref _droppedPackets);
-            CloseSocketLocked();
+            CloseSocket();
             _wasEligible = false;
             _log.LogWarning(ex, "audio.radio.speaker.p2 send failed dropped={DroppedPackets}", dropped);
         }
@@ -269,7 +365,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         }
     }
 
-    private void CloseSocketLocked()
+    private void CloseSocket()
     {
         if (_socket is not null)
         {
@@ -291,14 +387,42 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         return (short)MathF.Round(sample * scale);
     }
 
+    /// <summary>Test-only: block until the worker has processed every signal
+    /// posted before this call and is parked back in its wake-wait. Lets tests
+    /// that mutate <see cref="RadioSpeakerSettingsStore"/> /
+    /// <see cref="RadioService"/> state assert against socket / sequence
+    /// snapshots without sleep-flake races against the worker thread.</summary>
+    internal bool WaitForIdleForTest(TimeSpan timeout)
+    {
+        long deadlineTicks = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+        while (true)
+        {
+            long remainingMs = deadlineTicks - Environment.TickCount64;
+            if (remainingMs <= 0) return false;
+            _wake.Set();
+            if (!_idle.Wait(TimeSpan.FromMilliseconds(Math.Min(20, remainingMs)))) continue;
+            // Worker may have just set _idle right before reading the next
+            // wake; loop until it actually settles with no pending work.
+            if (!_refreshRequested && !_drainRequested && _ring.Count == 0) return true;
+        }
+    }
+
     public void Dispose()
     {
         _radio.StateChanged -= OnRadioStateChanged;
         _settings.Changed -= OnSettingsChanged;
 
-        lock (_sync)
+        if (!_cts.IsCancellationRequested)
         {
-            CloseSocketLocked();
+            _cts.Cancel();
+            _wake.Set();
+            try { _worker?.Join(TimeSpan.FromSeconds(2)); }
+            catch { /* best-effort */ }
         }
+
+        _wake.Dispose();
+        _idle.Dispose();
+        _cts.Dispose();
+        CloseSocket();
     }
 }
