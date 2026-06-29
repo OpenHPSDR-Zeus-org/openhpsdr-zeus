@@ -84,6 +84,19 @@ import {
 
 const WORKSPACE_GRID_MARGIN_PX = 3;
 
+// Column-pitch latch retract guard (issue #1146). The 150 ms debounce above
+// catches a width that is still changing, but some Windows + Photino startups
+// hold the container at a too-narrow width STABLE for longer than that before
+// the flex pass settles. SETTLE_WINDOW_MS is how long after mount we still
+// trust a later, much larger width to override the latched value; once it
+// closes the pitch is committed and a window resize behaves as before.
+// RETRACT_GROWTH_RATIO is the multiplier on the latched width that flags the
+// growth as "the latch caught a transient" rather than a tiny mid-settle
+// jitter — 1.4× is well past layout noise and well under the actual bug ratios
+// observed (e.g. ~300 px transient on a 1900 px container).
+const SETTLE_WINDOW_MS = 3000;
+const RETRACT_GROWTH_RATIO = 1.4;
+
 type GridInteraction = 'drag' | 'resize' | null;
 
 interface FlexWorkspaceProps {
@@ -358,9 +371,25 @@ function WorkspaceCanvas({
   // (While frozenWidth is still 0 the render falls back to baseColWidth=0 →
   // cols=24 → gridWidth=live width, which already renders correctly; the latch
   // only fixes the pitch held constant across subsequent window resizes.)
+  //
+  // The debounce alone is not always enough: some Windows + Photino startups
+  // hold a too-narrow container width STABLE for longer than the debounce
+  // window before the real flex pass widens it (issue #1146). To catch that,
+  // we also allow ONE retract — if, within a short post-mount settling window,
+  // the live width grows substantially past the latched value, the latch was
+  // a transient and we re-evaluate from the new width. After the settling
+  // window closes, the pitch is committed and a window resize behaves as
+  // before (cells stay constant, columns grow/shrink).
   const [frozenWidth, setFrozenWidth] = useState(0);
+  const mountAtMsRef = useRef<number>(performance.now());
   useEffect(() => {
-    if (frozenWidth > 0) return;
+    if (frozenWidth > 0) {
+      const elapsedMs = performance.now() - mountAtMsRef.current;
+      if (elapsedMs < SETTLE_WINDOW_MS && width > frozenWidth * RETRACT_GROWTH_RATIO) {
+        setFrozenWidth(0);
+      }
+      return;
+    }
     if (!mounted || !(width > 0)) return;
     const id = window.setTimeout(() => setFrozenWidth(width), 150);
     return () => window.clearTimeout(id);
