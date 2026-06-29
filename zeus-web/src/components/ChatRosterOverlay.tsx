@@ -90,7 +90,11 @@ function RosterMarker({
 
   return (
     <div
-      className="pointer-events-none absolute inset-y-0 z-[9] -translate-x-1/2"
+      // z-[16] keeps the callsign pill ABOVE the frequency-scale chrome — the
+      // ruler (z-10), band overlay (z-11), and especially the green VFO dial
+      // marker / frequency line (z-15) — so the line never draws across a
+      // callsign. Stays below the VFO readout box (z-25), which owns the corner.
+      className="pointer-events-none absolute inset-y-0 z-[16] -translate-x-1/2"
       style={{ left: `${pct}%` }}
     >
       {/* vertical tick — non-interactive so it never blocks click-to-tune */}
