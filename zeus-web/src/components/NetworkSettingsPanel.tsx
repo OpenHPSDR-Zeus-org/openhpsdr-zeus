@@ -11,6 +11,7 @@
 import { CatSettingsPanel } from './CatSettingsPanel';
 import { CatSerialPortsPanel } from './CatSerialPortsPanel';
 import { TciSettingsPanel } from './TciSettingsPanel';
+import { DxClusterSettingsPanel } from './DxClusterSettingsPanel';
 import { WsjtxSettingsPanel } from './WsjtxSettingsPanel';
 import { SpottingSettingsPanel } from './SpottingSettingsPanel';
 
@@ -29,6 +30,8 @@ export function NetworkSettingsPanel() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       <TciSettingsPanel />
+      <div style={{ borderTop: '1px solid var(--panel-border)' }} />
+      <DxClusterSettingsPanel />
       <div style={{ borderTop: '1px solid var(--panel-border)' }} />
       <CatSettingsPanel />
       <div style={{ borderTop: '1px solid var(--panel-border)' }} />
