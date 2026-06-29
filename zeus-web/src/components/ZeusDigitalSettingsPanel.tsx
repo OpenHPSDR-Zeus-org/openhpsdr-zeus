@@ -26,7 +26,11 @@
 // external-logger form reuses the same wsjtx-store/api the Network tab uses (not
 // a fork); egress is OFF until the operator opts in and SAVES.
 //
-// Styling is HUD-token-only (ft8-theme.css --hud-*) — no raw hex.
+// Styling: this tab renders in the SAME surface family as every other Settings
+// tab — `.ps-shell` ▸ `.ps-card` ▸ `.ps-field`, shared with PsSettings / DSP /
+// Radio — using the house-skinned rows in zeus-digital-settings-controls. The
+// dark-HUD pop-out keeps its own controls; this menu reads as Settings, not as
+// the operating view. Global tokens only (tokens.css), no raw hex.
 
 import { useEffect, useState } from 'react';
 import { useOperatorStore } from '../state/operator-store';
@@ -59,7 +63,7 @@ import {
   SelectRow,
   TextRow,
   ToggleRow,
-} from '../layout/ft8/ft8-settings-controls';
+} from './zeus-digital-settings-controls';
 
 export function ZeusDigitalSettingsPanel({
   initialMode = 'FT8',
@@ -133,166 +137,162 @@ export function ZeusDigitalSettingsPanel({
     v === 'normal' ? 1 : v === 'deepest' ? 4 : 3;
 
   return (
-    <div className="ft8-settings" aria-label="Zeus Digital settings">
+    <div className="ps-shell zd-settings" aria-label="Zeus Digital settings">
       {/* § Mode selector — which per-mode config is being edited. */}
-      <section className="ft8-region ft8-set-section">
-        <div className="ft8-region__head">Mode</div>
-        <div className="ft8-set-body">
-          <SegRow
-            label="Editing settings for"
-            hint="FT8, FT4 and WSPR each remember their own configuration."
-            value={mode}
-            options={DIGITAL_MODES.map((m) => ({ value: m, label: m }))}
-            onChange={(m) => setMode(m)}
-          />
-        </div>
-      </section>
+      <div className="ps-card">
+        <h4>Mode</h4>
+        <SegRow
+          label="Editing settings for"
+          hint="FT8, FT4 and WSPR each remember their own configuration."
+          value={mode}
+          options={DIGITAL_MODES.map((m) => ({ value: m, label: m }))}
+          onChange={(m) => setMode(m)}
+        />
+      </div>
 
       {/* § Station / Operator — GLOBAL (shared across all modes). */}
-      <section className="ft8-region ft8-set-section">
-        <div className="ft8-region__head">Station / Operator</div>
-        <div className="ft8-set-body">
-          <TextRow
-            label="My Call"
-            hint="Your station callsign — required to transmit. Shared with spotting & FreeDV."
-            value={opCall}
-            placeholder={resolvedCall && callFromQrz ? resolvedCall : 'MYCALL'}
-            upper
-            resolved={{ value: resolvedCall, fromQrz: callFromQrz }}
-            onChange={setCall}
-          />
-          <TextRow
-            label="My Grid"
-            hint="Maidenhead locator (4 or 6 chars). Falls back to your QRZ home grid."
-            value={opGrid}
-            placeholder={resolvedGrid && gridFromQrz ? resolvedGrid : 'FN42'}
-            maxLength={6}
-            upper
-            resolved={{ value: resolvedGrid, fromQrz: gridFromQrz }}
-            onChange={setGrid}
-          />
-          <p className="ft8-set-note">
-            Identity is stored on the server, shared across FT8/FT4/WSPR, and survives restarts.
-            Leave a field blank to use your QRZ home station.
-          </p>
-        </div>
-      </section>
+      <div className="ps-card">
+        <h4>Station / Operator</h4>
+        <TextRow
+          label="My Call"
+          hint="Your station callsign — required to transmit. Shared with spotting & FreeDV."
+          value={opCall}
+          placeholder={resolvedCall && callFromQrz ? resolvedCall : 'MYCALL'}
+          upper
+          resolved={{ value: resolvedCall, fromQrz: callFromQrz }}
+          onChange={setCall}
+        />
+        <TextRow
+          label="My Grid"
+          hint="Maidenhead locator (4 or 6 chars). Falls back to your QRZ home grid."
+          value={opGrid}
+          placeholder={resolvedGrid && gridFromQrz ? resolvedGrid : 'FN42'}
+          maxLength={6}
+          upper
+          resolved={{ value: resolvedGrid, fromQrz: gridFromQrz }}
+          onChange={setGrid}
+        />
+        <p className="zd-note">
+          Identity is stored on the server, shared across FT8/FT4/WSPR, and survives restarts.
+          Leave a field blank to use your QRZ home station.
+        </p>
+      </div>
 
       {/* § TX & Auto-sequence — PER-MODE. Not shown for WSPR (beacon, no QSO). */}
       {!isWspr && (
-        <section className="ft8-region ft8-set-section">
-          <div className="ft8-region__head">TX &amp; Auto-sequence · {mode}</div>
-          <div className="ft8-set-body">
+        <div className="ps-card">
+          <h4>
+            TX &amp; Auto-sequence
+            <span className="ps-card-hint">{mode}</span>
+          </h4>
+          <ToggleRow
+            label="Auto-sequence"
+            hint="Run the QSO state machine. TX still requires ENABLE/arm — this never keys on its own."
+            checked={settings.autoSequence}
+            onChange={(v) => void update(mode, { autoSequence: v })}
+          />
+          <ToggleRow
+            label="Call 1st"
+            hint="Auto-answer the first decoded CQ while armed."
+            checked={settings.callFirst}
+            onChange={(v) => void update(mode, { callFirst: v })}
+          />
+          <ToggleRow
+            label="Hold TX freq"
+            hint="Lock the TX audio offset against waterfall clicks."
+            checked={settings.holdTxFreq}
+            onChange={(v) => void update(mode, { holdTxFreq: v })}
+          />
+          <ToggleRow
+            label="Disable TX after 73"
+            hint="Auto-disarm once a QSO completes (73 sent)."
+            checked={settings.disableTxAfter73}
+            onChange={(v) => void update(mode, { disableTxAfter73: v })}
+          />
+          <SegRow
+            label="Default TX slot"
+            hint="Which 15 s slot a fresh QSO transmits in."
+            value={settings.defaultTxSlot === 0 ? 'even' : 'odd'}
+            options={[
+              { value: 'even', label: '1ST (even)' },
+              { value: 'odd', label: '2ND (odd)' },
+            ]}
+            onChange={(v) => void update(mode, { defaultTxSlot: v === 'even' ? 0 : 1 })}
+          />
+          <NumberRow
+            label="Default TX audio offset"
+            hint="Where a fresh TX tone defaults inside the SSB passband."
+            value={settings.defaultTxOffsetHz}
+            min={FT8_MIN_OFFSET_HZ}
+            max={FT8_MAX_TX_OFFSET_HZ}
+            suffix="Hz"
+            onChange={(v) => void update(mode, { defaultTxOffsetHz: v })}
+          />
+          <div className="ps-field">
+            <div className="ps-name">
+              TX watchdog
+              <em>Backend hard cap on unattended TX. Fixed for safety.</em>
+            </div>
+            <span className="zd-readonly-val">10 min</span>
+          </div>
+
+          <details className="zd-advanced">
+            <summary>Advanced sequence (JTDX) — default off</summary>
             <ToggleRow
-              label="Auto-sequence"
-              hint="Run the QSO state machine. TX still requires ENABLE/arm — this never keys on its own."
-              checked={settings.autoSequence}
-              onChange={(v) => void update(mode, { autoSequence: v })}
+              label="Send RR73 instead of RRR"
+              checked={settings.rr73InsteadOfRrr}
+              onChange={(v) => void update(mode, { rr73InsteadOfRrr: v })}
             />
             <ToggleRow
-              label="Call 1st"
-              hint="Auto-answer the first decoded CQ while armed."
-              checked={settings.callFirst}
-              onChange={(v) => void update(mode, { callFirst: v })}
-            />
-            <ToggleRow
-              label="Hold TX freq"
-              hint="Lock the TX audio offset against waterfall clicks."
-              checked={settings.holdTxFreq}
-              onChange={(v) => void update(mode, { holdTxFreq: v })}
-            />
-            <ToggleRow
-              label="Disable TX after 73"
-              hint="Auto-disarm once a QSO completes (73 sent)."
-              checked={settings.disableTxAfter73}
-              onChange={(v) => void update(mode, { disableTxAfter73: v })}
-            />
-            <SegRow
-              label="Default TX slot"
-              hint="Which 15 s slot a fresh QSO transmits in."
-              value={settings.defaultTxSlot === 0 ? 'even' : 'odd'}
-              options={[
-                { value: 'even', label: '1ST (even)' },
-                { value: 'odd', label: '2ND (odd)' },
-              ]}
-              onChange={(v) => void update(mode, { defaultTxSlot: v === 'even' ? 0 : 1 })}
+              label="Skip grid (send report first)"
+              hint="JTDX-style opening with the report instead of the grid."
+              checked={settings.skipGrid}
+              comingSoon
+              onChange={(v) => void update(mode, { skipGrid: v })}
             />
             <NumberRow
-              label="Default TX audio offset"
-              hint="Where a fresh TX tone defaults inside the SSB passband."
-              value={settings.defaultTxOffsetHz}
-              min={FT8_MIN_OFFSET_HZ}
-              max={FT8_MAX_TX_OFFSET_HZ}
-              suffix="Hz"
-              onChange={(v) => void update(mode, { defaultTxOffsetHz: v })}
+              label="Caller max retries"
+              hint="0 = unlimited."
+              value={settings.callerMaxRetries}
+              min={0}
+              max={30}
+              onChange={(v) => void update(mode, { callerMaxRetries: v })}
             />
-            <div className="ft8-set-row ft8-set-row--readonly">
-              <span className="ft8-set-row__text">
-                <span className="ft8-set-row__label">TX watchdog</span>
-                <span className="ft8-set-row__hint">
-                  Backend hard cap on unattended TX. Fixed for safety.
-                </span>
-              </span>
-              <span className="ft8-set-readonly-value">10 min</span>
-            </div>
-
-            <details className="ft8-set-advanced">
-              <summary>Advanced sequence (JTDX) — default off</summary>
-              <ToggleRow
-                label="Send RR73 instead of RRR"
-                checked={settings.rr73InsteadOfRrr}
-                onChange={(v) => void update(mode, { rr73InsteadOfRrr: v })}
-              />
-              <ToggleRow
-                label="Skip grid (send report first)"
-                hint="JTDX-style opening with the report instead of the grid."
-                checked={settings.skipGrid}
-                comingSoon
-                onChange={(v) => void update(mode, { skipGrid: v })}
-              />
-              <NumberRow
-                label="Caller max retries"
-                hint="0 = unlimited."
-                value={settings.callerMaxRetries}
-                min={0}
-                max={30}
-                onChange={(v) => void update(mode, { callerMaxRetries: v })}
-              />
-            </details>
-          </div>
-        </section>
+          </details>
+        </div>
       )}
 
       {/* § Decode — PER-MODE. Not shown for WSPR (separate decoder). */}
       {!isWspr && (
-        <section className="ft8-region ft8-set-section">
-          <div className="ft8-region__head">Decode · {mode}</div>
-          <div className="ft8-set-body">
-            <SegRow
-              label="Decode depth"
-              hint="Deeper digs out weaker signals at higher CPU cost."
-              value={depth}
-              options={[
-                { value: 'normal', label: 'Normal' },
-                { value: 'deep', label: 'Deep' },
-                { value: 'deepest', label: 'Deepest' },
-              ]}
-              onChange={(v) => setDecodeDepth(depthToPasses(v))}
-            />
-            <ToggleRow
-              label="Show only CQ"
-              hint="Hide non-CQ rows (still shows stations calling you)."
-              checked={settings.showOnlyCq}
-              onChange={(v) => void update(mode, { showOnlyCq: v })}
-            />
-            <ToggleRow
-              label="Hide worked-before"
-              hint="Hide stations already in your logbook."
-              checked={settings.hideWorkedBefore}
-              onChange={(v) => void update(mode, { hideWorkedBefore: v })}
-            />
-          </div>
-        </section>
+        <div className="ps-card">
+          <h4>
+            Decode
+            <span className="ps-card-hint">{mode}</span>
+          </h4>
+          <SegRow
+            label="Decode depth"
+            hint="Deeper digs out weaker signals at higher CPU cost."
+            value={depth}
+            options={[
+              { value: 'normal', label: 'Normal' },
+              { value: 'deep', label: 'Deep' },
+              { value: 'deepest', label: 'Deepest' },
+            ]}
+            onChange={(v) => setDecodeDepth(depthToPasses(v))}
+          />
+          <ToggleRow
+            label="Show only CQ"
+            hint="Hide non-CQ rows (still shows stations calling you)."
+            checked={settings.showOnlyCq}
+            onChange={(v) => void update(mode, { showOnlyCq: v })}
+          />
+          <ToggleRow
+            label="Hide worked-before"
+            hint="Hide stations already in your logbook."
+            checked={settings.hideWorkedBefore}
+            onChange={(v) => void update(mode, { hideWorkedBefore: v })}
+          />
+        </div>
       )}
 
       {/* § Waterfall / display — PER-MODE. Persisted per mode (server-backed) and
@@ -301,182 +301,179 @@ export function ZeusDigitalSettingsPanel({
           "coming soon" (disabled) rather than as a live no-op. When the digital
           waterfall lands it reads byMode[mode] for these fields and the
           comingSoon flags come off. */}
-      <section className="ft8-region ft8-set-section">
-        <div className="ft8-region__head">Waterfall / display · {mode}</div>
-        <div className="ft8-set-body">
-          <p className="ft8-set-note">
-            The digital waterfall is still in progress (#1014). These views are saved per mode and
-            will take effect once it ships.
-          </p>
-          <NumberRow
-            label="Waterfall dB min"
-            hint="Bottom of the colour map (noise floor)."
-            value={settings.wfDbMin}
-            min={-200}
-            max={0}
-            suffix="dB"
-            comingSoon
-            onChange={(v) => void update(mode, { wfDbMin: v })}
-          />
-          <NumberRow
-            label="Waterfall dB max"
-            hint="Top of the colour map (strong signals)."
-            value={settings.wfDbMax}
-            min={-200}
-            max={200}
-            suffix="dB"
-            comingSoon
-            onChange={(v) => void update(mode, { wfDbMax: v })}
-          />
-          <SegRow
-            label="Palette"
-            value={settings.palette}
-            options={WF_PALETTES.map((p) => ({
-              value: p,
-              label: p.charAt(0).toUpperCase() + p.slice(1),
-            }))}
-            comingSoon
-            onChange={(v) => void update(mode, { palette: v })}
-          />
-          <TextRow
-            label="RBW"
-            hint='Resolution bandwidth ("auto" or an Hz value).'
-            value={settings.rbw}
-            maxLength={16}
-            comingSoon
-            onChange={(v) => void update(mode, { rbw: v })}
-          />
-          <NumberRow
-            label="Smoothing"
-            hint="Waterfall averaging frames (0 = none)."
-            value={settings.smoothing}
-            min={WF_SMOOTHING_MIN}
-            max={WF_SMOOTHING_MAX}
-            comingSoon
-            onChange={(v) => void update(mode, { smoothing: v })}
-          />
-          <NumberRow
-            label="Zoom"
-            hint="Display zoom factor (1 = full span)."
-            value={settings.zoom}
-            min={WF_ZOOM_MIN}
-            max={WF_ZOOM_MAX}
-            step={0.5}
-            suffix="×"
-            comingSoon
-            onChange={(v) => void update(mode, { zoom: v })}
-          />
-          <NumberRow
-            label="Span"
-            hint="Display span."
-            value={settings.spanHz}
-            min={WF_SPAN_MIN_HZ}
-            max={WF_SPAN_MAX_HZ}
-            step={100}
-            suffix="Hz"
-            comingSoon
-            onChange={(v) => void update(mode, { spanHz: v })}
-          />
-        </div>
-      </section>
+      <div className="ps-card">
+        <h4>
+          Waterfall / display
+          <span className="ps-card-hint">{mode}</span>
+        </h4>
+        <p className="zd-note">
+          The digital waterfall is still in progress (#1014). These views are saved per mode and
+          will take effect once it ships.
+        </p>
+        <NumberRow
+          label="Waterfall dB min"
+          hint="Bottom of the colour map (noise floor)."
+          value={settings.wfDbMin}
+          min={-200}
+          max={0}
+          suffix="dB"
+          comingSoon
+          onChange={(v) => void update(mode, { wfDbMin: v })}
+        />
+        <NumberRow
+          label="Waterfall dB max"
+          hint="Top of the colour map (strong signals)."
+          value={settings.wfDbMax}
+          min={-200}
+          max={200}
+          suffix="dB"
+          comingSoon
+          onChange={(v) => void update(mode, { wfDbMax: v })}
+        />
+        <SegRow
+          label="Palette"
+          value={settings.palette}
+          options={WF_PALETTES.map((p) => ({
+            value: p,
+            label: p.charAt(0).toUpperCase() + p.slice(1),
+          }))}
+          comingSoon
+          onChange={(v) => void update(mode, { palette: v })}
+        />
+        <TextRow
+          label="RBW"
+          hint='Resolution bandwidth ("auto" or an Hz value).'
+          value={settings.rbw}
+          maxLength={16}
+          comingSoon
+          onChange={(v) => void update(mode, { rbw: v })}
+        />
+        <NumberRow
+          label="Smoothing"
+          hint="Waterfall averaging frames (0 = none)."
+          value={settings.smoothing}
+          min={WF_SMOOTHING_MIN}
+          max={WF_SMOOTHING_MAX}
+          comingSoon
+          onChange={(v) => void update(mode, { smoothing: v })}
+        />
+        <NumberRow
+          label="Zoom"
+          hint="Display zoom factor (1 = full span)."
+          value={settings.zoom}
+          min={WF_ZOOM_MIN}
+          max={WF_ZOOM_MAX}
+          step={0.5}
+          suffix="×"
+          comingSoon
+          onChange={(v) => void update(mode, { zoom: v })}
+        />
+        <NumberRow
+          label="Span"
+          hint="Display span."
+          value={settings.spanHz}
+          min={WF_SPAN_MIN_HZ}
+          max={WF_SPAN_MAX_HZ}
+          step={100}
+          suffix="Hz"
+          comingSoon
+          onChange={(v) => void update(mode, { spanHz: v })}
+        />
+      </div>
 
       {/* § Reporting — spotting networks (owned by the Network tab, surfaced). */}
-      <section className="ft8-region ft8-set-section">
-        <div className="ft8-region__head">Reporting</div>
-        <div className="ft8-set-body">
-          <div className="ft8-set-chips">
-            <Chip label="PSK Reporter" on={!!spotStatus?.pskReporterEnabled} />
-            <Chip label="WSPRnet" on={!!spotStatus?.wsprnetEnabled} />
-          </div>
-          <button type="button" className="ft8-set-link" onClick={openNetworkSettings}>
-            Open Network settings →
-          </button>
-          <p className="ft8-set-note">
-            PSK Reporter and WSPRnet automatic spotting are configured on the Network tab.
-          </p>
+      <div className="ps-card">
+        <h4>Reporting</h4>
+        <div className="zd-chips">
+          <Chip label="PSK Reporter" on={!!spotStatus?.pskReporterEnabled} />
+          <Chip label="WSPRnet" on={!!spotStatus?.wsprnetEnabled} />
         </div>
-      </section>
+        <button type="button" className="btn sm" onClick={openNetworkSettings}>
+          Open Network settings →
+        </button>
+        <p className="zd-note">
+          PSK Reporter and WSPRnet automatic spotting are configured on the Network tab.
+        </p>
+      </div>
 
       {/* § Logging — Zeus internal logbook (ALWAYS on) + ADDITIVE external copies.
           The internal logbook is the default and is never bypassed; the external
           logger (WSJT-X UDP) and QRZ cloud upload only ADD copies. */}
-      <section className="ft8-region ft8-set-section">
-        <div className="ft8-region__head">Logging</div>
-        <div className="ft8-set-body">
-          <div className="ft8-set-chips">
-            <Chip label="Zeus internal logbook" on />
-          </div>
-          <p className="ft8-set-note">
-            Every QSO is always saved to the Zeus internal logbook. The options below ADD
-            external copies — they never replace it.
-          </p>
-
-          {/* Internal QSO-logging behaviour — non-WSPR (WSPR is a beacon mode
-              with no QSO/logbook path, so these toggles are hidden for it). */}
-          {!isWspr && (
-            <>
-              <ToggleRow
-                label="Auto-log QSO"
-                hint="Write completed QSOs to the logbook automatically."
-                checked={settings.autoLog}
-                onChange={(v) => void update(mode, { autoLog: v })}
-              />
-              <ToggleRow
-                label="Prompt before logging"
-                hint="Confirm each QSO before it is logged."
-                checked={settings.promptBeforeLog}
-                onChange={(v) => void update(mode, { promptBeforeLog: v })}
-              />
-              <ToggleRow
-                label="Clear DX call/grid after log"
-                hint="Reset the QSO panel once a contact is logged."
-                checked={settings.clearDxAfterLog}
-                comingSoon
-                onChange={(v) => void update(mode, { clearDxAfterLog: v })}
-              />
-              <ToggleRow
-                label="dB report → comment"
-                hint="Record the signal report in the QSO comment."
-                checked={settings.reportToComment}
-                onChange={(v) => void update(mode, { reportToComment: v })}
-              />
-              <p className="ft8-set-note">
-                Edit the CQ / CQ DX / free-text macros in the digital pop-out — they persist per
-                mode.
-              </p>
-            </>
-          )}
-
-          <div className="ft8-set-divider" />
-
-          {/* Additive external logger over the WSJT-X UDP protocol. */}
-          <ExternalLoggingGroup />
-
-          <div className="ft8-set-divider" />
-
-          {/* Additive N1MM-format UDP logger (HRD Logbook / DXKeeper gateway). */}
-          <N1mmLoggingGroup />
-
-          <div className="ft8-set-divider" />
-
-          {/* Additive per-QSO HTTP cloud loggers (Wavelog/Cloudlog + Club Log). */}
-          <CloudLoggingGroup />
-
-          <div className="ft8-set-divider" />
-
-          {/* QRZ cloud logbook — credential lives on the QRZ tab. */}
-          <div className="ft8-set-chips">
-            <Chip label="QRZ Logbook (cloud)" on={qrzHasApiKey} />
-          </div>
-          <button type="button" className="ft8-set-link" onClick={openQrzSettings}>
-            Open QRZ settings →
-          </button>
-          <p className="ft8-set-note">
-            Push logged QSOs to your QRZ.com logbook from the Logbook panel. Requires a QRZ
-            logbook API key, set on the QRZ tab.
-          </p>
+      <div className="ps-card">
+        <h4>Logging</h4>
+        <div className="zd-chips">
+          <Chip label="Zeus internal logbook" on />
         </div>
-      </section>
+        <p className="zd-note">
+          Every QSO is always saved to the Zeus internal logbook. The options below ADD
+          external copies — they never replace it.
+        </p>
+
+        {/* Internal QSO-logging behaviour — non-WSPR (WSPR is a beacon mode
+            with no QSO/logbook path, so these toggles are hidden for it). */}
+        {!isWspr && (
+          <>
+            <ToggleRow
+              label="Auto-log QSO"
+              hint="Write completed QSOs to the logbook automatically."
+              checked={settings.autoLog}
+              onChange={(v) => void update(mode, { autoLog: v })}
+            />
+            <ToggleRow
+              label="Prompt before logging"
+              hint="Confirm each QSO before it is logged."
+              checked={settings.promptBeforeLog}
+              onChange={(v) => void update(mode, { promptBeforeLog: v })}
+            />
+            <ToggleRow
+              label="Clear DX call/grid after log"
+              hint="Reset the QSO panel once a contact is logged."
+              checked={settings.clearDxAfterLog}
+              comingSoon
+              onChange={(v) => void update(mode, { clearDxAfterLog: v })}
+            />
+            <ToggleRow
+              label="dB report → comment"
+              hint="Record the signal report in the QSO comment."
+              checked={settings.reportToComment}
+              onChange={(v) => void update(mode, { reportToComment: v })}
+            />
+            <p className="zd-note">
+              Edit the CQ / CQ DX / free-text macros in the digital pop-out — they persist per
+              mode.
+            </p>
+          </>
+        )}
+
+        <div className="zd-divider" />
+
+        {/* Additive external logger over the WSJT-X UDP protocol. */}
+        <ExternalLoggingGroup />
+
+        <div className="zd-divider" />
+
+        {/* Additive N1MM-format UDP logger (HRD Logbook / DXKeeper gateway). */}
+        <N1mmLoggingGroup />
+
+        <div className="zd-divider" />
+
+        {/* Additive per-QSO HTTP cloud loggers (Wavelog/Cloudlog + Club Log). */}
+        <CloudLoggingGroup />
+
+        <div className="zd-divider" />
+
+        {/* QRZ cloud logbook — credential lives on the QRZ tab. */}
+        <div className="zd-chips">
+          <Chip label="QRZ Logbook (cloud)" on={qrzHasApiKey} />
+        </div>
+        <button type="button" className="btn sm" onClick={openQrzSettings}>
+          Open QRZ settings →
+        </button>
+        <p className="zd-note">
+          Push logged QSOs to your QRZ.com logbook from the Logbook panel. Requires a QRZ
+          logbook API key, set on the QRZ tab.
+        </p>
+      </div>
     </div>
   );
 }
@@ -651,24 +648,19 @@ export function ExternalLoggingGroup() {
         </>
       )}
 
-      <div className="ft8-set-row ft8-set-row--readonly">
-        <span className="ft8-set-row__text">
-          <span className="ft8-set-row__label">
-            <span
-              className="ft8-set-chip__dot"
-              style={{ background: live ? 'var(--hud-cq)' : 'var(--hud-text-dim)' }}
-            />{' '}
-            External logger
-          </span>
-          <span className="ft8-set-row__hint">
+      <div className="ps-field">
+        <div className="ps-name">
+          <span className={`zd-dot${live ? ' is-on' : ''}`} />
+          External logger
+          <em>
             {live
               ? status?.transport === 'multicast'
                 ? `Sending to multicast ${status?.multicastGroup}:${status?.port}`
                 : `Sending to ${status?.host}:${status?.port}`
               : 'Disabled — no QSO data leaves this machine.'}
-          </span>
-        </span>
-        <button type="button" className="ft8-set-link" disabled={saving} onClick={() => void onSave()}>
+          </em>
+        </div>
+        <button type="button" className="btn sm active" disabled={saving} onClick={() => void onSave()}>
           {saving ? 'SAVING…' : 'SAVE'}
         </button>
       </div>
@@ -740,22 +732,17 @@ function N1mmLoggingGroup() {
         </>
       )}
 
-      <div className="ft8-set-row ft8-set-row--readonly">
-        <span className="ft8-set-row__text">
-          <span className="ft8-set-row__label">
-            <span
-              className="ft8-set-chip__dot"
-              style={{ background: config.enabled ? 'var(--hud-cq)' : 'var(--hud-text-dim)' }}
-            />{' '}
-            N1MM-format logger
-          </span>
-          <span className="ft8-set-row__hint">
+      <div className="ps-field">
+        <div className="ps-name">
+          <span className={`zd-dot${config.enabled ? ' is-on' : ''}`} />
+          N1MM-format logger
+          <em>
             {config.enabled
               ? `Sending to ${config.host}:${config.port}`
               : 'Disabled — no QSO data leaves this machine.'}
-          </span>
-        </span>
-        <button type="button" className="ft8-set-link" disabled={saving} onClick={() => void onSave()}>
+          </em>
+        </div>
+        <button type="button" className="btn sm active" disabled={saving} onClick={() => void onSave()}>
           {saving ? 'SAVING…' : 'SAVE'}
         </button>
       </div>
@@ -780,13 +767,13 @@ function SecretRow(props: {
   onChange: (v: string) => void;
 }) {
   return (
-    <div className="ft8-set-row">
-      <span className="ft8-set-row__text">
-        <span className="ft8-set-row__label">{props.label}</span>
-        {props.hint && <span className="ft8-set-row__hint">{props.hint}</span>}
-      </span>
+    <div className="ps-field">
+      <div className="ps-name">
+        {props.label}
+        {props.hint && <em>{props.hint}</em>}
+      </div>
       <input
-        className="ft8-set-input"
+        className="zd-input"
         type="password"
         autoComplete="off"
         value={props.value}
@@ -900,7 +887,7 @@ function CloudLoggingGroup() {
         </>
       )}
 
-      <div className="ft8-set-divider" />
+      <div className="zd-divider" />
 
       {/* Club Log */}
       <ToggleRow
@@ -951,29 +938,21 @@ function CloudLoggingGroup() {
         </>
       )}
 
-      <div className="ft8-set-row ft8-set-row--readonly">
-        <span className="ft8-set-row__text">
-          <span className="ft8-set-row__label">
-            <span
-              className="ft8-set-chip__dot"
-              style={{
-                background:
-                  status.wavelog.enabled || status.clubLog.enabled
-                    ? 'var(--hud-cq)'
-                    : 'var(--hud-text-dim)',
-              }}
-            />{' '}
-            Cloud loggers
-          </span>
-          <span className="ft8-set-row__hint">
+      <div className="ps-field">
+        <div className="ps-name">
+          <span
+            className={`zd-dot${status.wavelog.enabled || status.clubLog.enabled ? ' is-on' : ''}`}
+          />
+          Cloud loggers
+          <em>
             {status.wavelog.enabled || status.clubLog.enabled
               ? `Active: ${[status.wavelog.enabled ? 'Wavelog' : null, status.clubLog.enabled ? 'Club Log' : null]
                   .filter(Boolean)
                   .join(' + ')}`
               : 'Disabled — no QSO data leaves this machine.'}
-          </span>
-        </span>
-        <button type="button" className="ft8-set-link" disabled={saving} onClick={() => void onSave()}>
+          </em>
+        </div>
+        <button type="button" className="btn sm active" disabled={saving} onClick={() => void onSave()}>
           {saving ? 'SAVING…' : 'SAVE'}
         </button>
       </div>

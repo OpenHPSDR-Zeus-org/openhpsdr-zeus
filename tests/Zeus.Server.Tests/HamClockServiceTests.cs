@@ -198,4 +198,71 @@ public sealed class HamClockServiceTests
         Assert.True(updated.IndexOf(HamClockService.ZeusCatBridgeScriptName, StringComparison.Ordinal) < updated.IndexOf("</head>", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(updated, second);
     }
+
+    [Fact]
+    public void InjectZeusExternalLinksTag_AddsBridgeOnceBeforeHeadClose()
+    {
+        const string html = """
+            <!doctype html>
+            <html>
+              <head>
+                <title>HamClock</title>
+              </head>
+              <body></body>
+            </html>
+            """;
+
+        var updated = HamClockService.InjectZeusExternalLinksTag(html);
+        var second = HamClockService.InjectZeusExternalLinksTag(updated);
+
+        Assert.Contains(
+            $"<script src=\"/{HamClockService.ZeusExternalLinksScriptName}\" defer></script>",
+            updated);
+        Assert.True(
+            updated.IndexOf(HamClockService.ZeusExternalLinksScriptName, StringComparison.Ordinal)
+            < updated.IndexOf("</head>", StringComparison.OrdinalIgnoreCase));
+        // Idempotent — injecting twice does not duplicate the tag.
+        Assert.Equal(updated, second);
+        var first = updated.IndexOf(HamClockService.ZeusExternalLinksScriptName, StringComparison.Ordinal);
+        Assert.Equal(
+            first,
+            updated.LastIndexOf(HamClockService.ZeusExternalLinksScriptName, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void InjectZeusExternalLinksTag_AppendsWhenNoHead()
+    {
+        const string html = "<div>no head here</div>";
+
+        var updated = HamClockService.InjectZeusExternalLinksTag(html);
+
+        Assert.Contains(
+            $"<script src=\"/{HamClockService.ZeusExternalLinksScriptName}\" defer></script>",
+            updated);
+    }
+
+    [Fact]
+    public void ZeusExternalLinksScript_ForwardsExternalAndRigDownloadClicks()
+    {
+        // The injected client script is the actual fix surface — assert it carries
+        // the forwarding handler, the once-guard, the capture-phase listener, the
+        // http/https + cross-origin gate, and the same-origin sidecar-download path.
+        var script = HamClockService.ZeusExternalLinksScript;
+
+        Assert.Contains("__zeusHamClockExternalLinksInstalled", script);
+        Assert.Contains("addEventListener('click'", script);
+        Assert.Contains("a[href]", script);
+        Assert.Contains("/api/rig/download/", script);
+        // The robust download gate: any same-origin anchor carrying a download
+        // attribute is forwarded, so the fix doesn't hinge on one literal prefix.
+        Assert.Contains("hasAttribute('download')", script);
+        Assert.Contains("url.origin !== location.origin", script);
+        Assert.Contains("'zeus.openExternal'", script);
+        Assert.Contains("window.parent?.postMessage", script);
+        // Plain left-clicks only: modifier/middle/already-handled clicks are skipped.
+        Assert.Contains("event.defaultPrevented", script);
+        Assert.Contains("event.button !== 0", script);
+        // Capture phase (true) so it beats HamClock's own handlers.
+        Assert.Contains(", true)", script);
+    }
 }

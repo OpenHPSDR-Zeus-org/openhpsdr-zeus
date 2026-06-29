@@ -3852,6 +3852,23 @@ public static class ZeusEndpoints
             return Results.Ok(result);
         });
 
+        // Native Telnet DX-cluster client. Mirrors /api/tci's shape. GET returns
+        // the config echo + live connection state; PUT persists config; POST
+        // connect/disconnect drive the outbound connection at runtime (no restart).
+        app.MapGet("/api/dxcluster/status", (DxClusterManagementService dx) => dx.GetStatus());
+
+        app.MapPut("/api/dxcluster/config", (DxClusterConfig req, DxClusterManagementService dx) =>
+        {
+            log.LogInformation(
+                "api.dxcluster.config enabled={En} host={Host} port={Port} auto={Auto}",
+                req.Enabled, req.Host, req.Port, req.AutoConnect);
+            return Results.Ok(dx.SetConfig(req));
+        });
+
+        app.MapPost("/api/dxcluster/connect", (DxClusterManagementService dx) => Results.Ok(dx.Connect()));
+
+        app.MapPost("/api/dxcluster/disconnect", (DxClusterManagementService dx) => Results.Ok(dx.Disconnect()));
+
         app.MapGet("/api/cat/status", (CatManagementService cat) => cat.GetStatus());
 
         app.MapPost("/api/cat/config", (CatRuntimeConfig req, CatManagementService cat, HttpContext ctx) =>

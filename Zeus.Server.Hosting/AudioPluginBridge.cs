@@ -1515,6 +1515,28 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         }
         catch (Exception ex)
         {
+            // The in-process load failed. If this is a VST and the out-of-process
+            // engine is INSTALLED, the engine can still host it — so reserve it
+            // rather than failing (a false return makes the caller DETACH it, which
+            // removes it from ChainOrderService and leaves it permanently
+            // un-addable). This is the boot-time race for plugins the in-process
+            // host can't load (Waves shells, status=5): they attach while the engine
+            // is still handshaking (State == Inactive, so the reservation above
+            // didn't fire), the in-process load throws here, and without this they'd
+            // be detached for the whole session. Keeping them reserved leaves them in
+            // the operator's chain — in-process Process passes through harmlessly
+            // (handle 0) until the engine comes up and LoadChainIntoEngine hosts them.
+            if (audioPlugin is VstHostAudioPlugin
+                && _vstEngine is not null
+                && VstEngineController.FindEngineExe() is not null)
+            {
+                _log.LogWarning(ex,
+                    "TX VST plugin {Id} failed the in-process load; reserving it for the "
+                    + "out-of-process VST engine instead of detaching", id);
+                lock (_lock) _txInitializedIds.Add(id);
+                return true;
+            }
+
             _log.LogError(ex,
                 "Audio plugin {Id} InitializeAudioAsync threw; leaving it inactive", id);
             return false;
