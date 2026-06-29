@@ -130,7 +130,7 @@ export function SquelchSlider() {
         type="button"
         onClick={toggleAdaptive}
         disabled={modeDisabled}
-        aria-pressed={squelch.adaptive}
+        aria-pressed={squelch.enabled && squelch.adaptive}
         aria-label={squelch.adaptive ? 'Adaptive squelch' : 'Fixed squelch'}
         title={
           !squelch.enabled
@@ -139,7 +139,7 @@ export function SquelchSlider() {
               ? 'Adaptive squelch tracks the noise floor'
               : 'Fixed WDSP squelch threshold'
         }
-        className={`btn sm ${squelch.adaptive ? 'active' : ''}`}
+        className={`btn sm ${squelch.enabled && squelch.adaptive ? 'active' : ''}`}
         style={{ whiteSpace: 'nowrap', minWidth: 42 }}
       >
         {squelch.adaptive ? 'DYN' : 'FIX'}

@@ -146,9 +146,9 @@ export function SquelchSettingsSection() {
         <button
           type="button"
           disabled={modeDisabled}
-          aria-pressed={squelch.adaptive}
+          aria-pressed={squelch.enabled && squelch.adaptive}
           onClick={() => !modeDisabled && send({ ...squelch, adaptive: !squelch.adaptive })}
-          className={`btn sm ${squelch.adaptive ? 'active' : ''}`}
+          className={`btn sm ${squelch.enabled && squelch.adaptive ? 'active' : ''}`}
           title={
             !squelch.enabled
               ? 'Enable SQL to switch between FIX and DYN'

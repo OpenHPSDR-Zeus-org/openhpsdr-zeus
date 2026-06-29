@@ -89,6 +89,15 @@ describe('SquelchSlider disabled-state matrix (issue #1130)', () => {
     expect(slider(container).disabled).toBe(true);
   });
 
+  // Issue #1176: SQL-off must also drop the "lit" visual on DYN — disabled
+  // alone wasn't enough; the active class made the button still look engaged.
+  it('drops FIX/DYN active styling while SQL is OFF', () => {
+    renderWith({ enabled: false, adaptive: true });
+    const dyn = btn(container, 'DYN');
+    expect(dyn.classList.contains('active')).toBe(false);
+    expect(dyn.getAttribute('aria-pressed')).toBe('false');
+  });
+
   it('enables the threshold slider when SQL is ON in FIX mode', () => {
     renderWith({ enabled: true, adaptive: false });
     expect(btn(container, 'FIX').disabled).toBe(false);
