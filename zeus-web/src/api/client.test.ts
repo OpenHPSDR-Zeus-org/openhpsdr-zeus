@@ -49,6 +49,7 @@ import type {
   CfcConfigDto,
   SquelchConfigDto,
   TxLevelingConfigDto,
+  TxPhaseRotatorConfigDto,
 } from './client';
 import {
   AGC_CONFIG_DEFAULT,
@@ -58,6 +59,7 @@ import {
   NR_CONFIG_DEFAULT,
   SQUELCH_CONFIG_DEFAULT,
   TX_LEVELING_CONFIG_DEFAULT,
+  TX_PHASE_ROTATOR_CONFIG_DEFAULT,
   createHardwareDiagnosticsMarker,
   fetchCfcPresets,
   fetchExternalPttStatus,
@@ -92,10 +94,12 @@ import {
   normalizeStatus,
   normalizeTxVfo,
   normalizeTxLeveling,
+  normalizeTxPhaseRotator,
   setAgc,
   setAgcTop,
   setSquelch,
   setTxLeveling,
+  setTxPhaseRotator,
   setAttenuator,
   setAutoAtt,
   setAdcProtection,
@@ -107,10 +111,13 @@ import {
   setMode,
   setNr,
   setPreamp,
+  setRadioLo,
+  setReceiverLo,
   setSampleRate,
   setTun,
   setTxVfo,
   setZoom,
+  toWireHz,
 } from './client';
 
 describe('normalizeStatus', () => {
@@ -235,6 +242,7 @@ describe('normalizeState', () => {
     const s = normalizeState({
       wireVersion: 2,
       maxReceivers: 8,
+      connectedProtocol: 'P2',
       receivers: [
         { index: 0, enabled: true, adcSource: 0, vfoHz: 7_100_000, mode: 'LSB' },
         { index: 1, enabled: true, adcSource: 0, vfoHz: 7_150_000, mode: 'USB' },
@@ -243,8 +251,22 @@ describe('normalizeState', () => {
     });
     expect(s.wireVersion).toBe(2);
     expect(s.maxReceivers).toBe(8);
+    expect(s.connectedProtocol).toBe('P2');
     expect(s.receivers).toHaveLength(3);
     expect(s.receivers?.[2]).toMatchObject({ index: 2, enabled: true, adcSource: 1, mode: 'USB' });
+  });
+  it('preserves Protocol 3 in normalized state', () => {
+    const s = normalizeState({
+      wireVersion: 2,
+      maxReceivers: 10,
+      connectedProtocol: 'P3',
+      receivers: [
+        { index: 0, enabled: true, adcSource: 0, vfoHz: 7_100_000, mode: 'LSB' },
+      ],
+    });
+
+    expect(s.connectedProtocol).toBe('P3');
+    expect(s.maxReceivers).toBe(10);
   });
   it('leaves receivers/maxReceivers undefined when a v1 server omits them', () => {
     // Undefined (not []/0) lets applyState keep the store's prior values rather
@@ -252,6 +274,7 @@ describe('normalizeState', () => {
     const s = normalizeState({});
     expect(s.receivers).toBeUndefined();
     expect(s.maxReceivers).toBeUndefined();
+    expect(s.connectedProtocol).toBeUndefined();
     expect(s.wireVersion).toBeUndefined();
   });
   it('reads zoomLevel from the server', () => {
@@ -500,6 +523,72 @@ describe('POST helpers', () => {
     expect(url).toBe('/api/rx/zoom');
     expect(init?.method).toBe('POST');
     expect(JSON.parse((init?.body ?? '') as string)).toEqual({ level: 4 });
+  });
+
+  // Regression (#1191): the CTUN zoom/recenter path computes a fractional LO
+  // and used to POST it raw; the Int64 RadioLoSetRequest/ReceiverLoSetRequest
+  // rejected the decimal with HTTP 400, the hardware LO never moved, and the
+  // panadapter/waterfall blanked under CTUN. toWireHz rounds + clamps at the
+  // wire seam so no caller can emit a non-integer or out-of-range Hz.
+  describe('toWireHz', () => {
+    it('rounds a fractional Hz to the nearest integer', () => {
+      expect(toWireHz(3_853_999.9999)).toBe(3_854_000);
+      expect(toWireHz(7_100_000.4)).toBe(7_100_000);
+      expect(toWireHz(7_100_000.5)).toBe(7_100_001);
+    });
+    it('clamps to the supported radio range', () => {
+      expect(toWireHz(-5)).toBe(0);
+      expect(toWireHz(99_000_000)).toBe(60_000_000);
+    });
+    it('coerces non-finite values to 0 (never NaN/Infinity on the wire)', () => {
+      expect(toWireHz(Number.NaN)).toBe(0);
+      expect(toWireHz(Number.POSITIVE_INFINITY)).toBe(0);
+      expect(toWireHz(Number.NEGATIVE_INFINITY)).toBe(0);
+    });
+    it('passes a clean integer through unchanged', () => {
+      expect(toWireHz(3_854_000)).toBe(3_854_000);
+    });
+  });
+
+  it('setRadioLo posts an integer hz to /api/radio/lo even when given a fraction', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(okState));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await setRadioLo(3_853_999.9999);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/radio/lo');
+    expect(init?.method).toBe('POST');
+    const body = JSON.parse((init?.body ?? '') as string);
+    expect(body).toEqual({ hz: 3_854_000 });
+    expect(Number.isInteger(body.hz)).toBe(true);
+  });
+
+  it('setReceiverLo posts an integer hz to /api/receivers/{i}/lo even when given a fraction', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(okState));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await setReceiverLo(2, 14_204_300.75);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/receivers/2/lo');
+    const body = JSON.parse((init?.body ?? '') as string);
+    expect(body).toEqual({ hz: 14_204_301 });
+    expect(Number.isInteger(body.hz)).toBe(true);
+  });
+
+  it('setReceiverLo(index<=0) delegates to /api/radio/lo, still rounding', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(okState));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await setReceiverLo(0, 3_853_999.9999);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/radio/lo');
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({ hz: 3_854_000 });
   });
 
   it('setAttenuator posts { db } to /api/attenuator', async () => {
@@ -2826,6 +2915,25 @@ describe('POST helpers', () => {
     expect(JSON.parse((init?.body ?? '') as string)).toEqual({ txLeveling: cfg });
   });
 
+  it('setTxPhaseRotator posts { txPhaseRotator } to /api/tx/phase-rotator', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(okState));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const cfg: TxPhaseRotatorConfigDto = {
+      enabled: true,
+      cornerHz: 472,
+      stages: 10,
+      reverse: false,
+    };
+    await setTxPhaseRotator(cfg);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/tx/phase-rotator');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({ txPhaseRotator: cfg });
+  });
+
   it('fetchCfcPresets gets saved CFC presets and normalizes configs', async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -3093,5 +3201,34 @@ describe('normalizeTxLeveling', () => {
   it('rounds fractional integer fields', () => {
     expect(normalizeTxLeveling({ alcDecayMs: 12.6 }).alcDecayMs).toBe(13);
     expect(normalizeTxLeveling({ levelerDecayMs: 100.4 }).levelerDecayMs).toBe(100);
+  });
+});
+
+describe('normalizeTxPhaseRotator', () => {
+  it('returns TX_PHASE_ROTATOR_CONFIG_DEFAULT for null/undefined and non-objects', () => {
+    expect(normalizeTxPhaseRotator(null)).toEqual(TX_PHASE_ROTATOR_CONFIG_DEFAULT);
+    expect(normalizeTxPhaseRotator(undefined)).toEqual(TX_PHASE_ROTATOR_CONFIG_DEFAULT);
+    expect(normalizeTxPhaseRotator('garbage')).toEqual(TX_PHASE_ROTATOR_CONFIG_DEFAULT);
+  });
+
+  it('round-trips a valid TxPhaseRotatorConfigDto through normalizeState', () => {
+    const cfg: TxPhaseRotatorConfigDto = {
+      enabled: true,
+      cornerHz: 472,
+      stages: 10,
+      reverse: true,
+    };
+    const s = normalizeState({ txPhaseRotator: cfg });
+    expect(s.txPhaseRotator).toEqual(cfg);
+  });
+
+  it('clamps numeric fields and coerces booleans strictly', () => {
+    expect(normalizeTxPhaseRotator({ cornerHz: -5 }).cornerHz).toBe(20);
+    expect(normalizeTxPhaseRotator({ cornerHz: 5000 }).cornerHz).toBe(2000);
+    expect(normalizeTxPhaseRotator({ stages: 0 }).stages).toBe(1);
+    expect(normalizeTxPhaseRotator({ stages: 99 }).stages).toBe(16);
+    const out = normalizeTxPhaseRotator({ enabled: 'yes', reverse: 1 });
+    expect(out.enabled).toBe(false);
+    expect(out.reverse).toBe(false);
   });
 });

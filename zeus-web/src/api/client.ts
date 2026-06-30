@@ -148,6 +148,31 @@ export const TX_LEVELING_CONFIG_DEFAULT: TxLevelingConfigDto = {
   compressorGainDb: 0,
 };
 
+// TX phase rotator — WDSP all-pass speech phase redistribution plus explicit
+// microphone polarity reverse. Mirrors Zeus.Contracts.TxPhaseRotatorConfig.
+// Thetis voice defaults are 338 Hz / 8 stages; fresh global state stays disabled
+// until an operator profile or Auto Tune enables it. Reverse is never guessed.
+export type TxPhaseRotatorConfigDto = {
+  enabled: boolean;
+  cornerHz: number;
+  stages: number;
+  reverse: boolean;
+};
+
+export const TX_PHASE_ROTATOR_CONFIG_DEFAULT: TxPhaseRotatorConfigDto = {
+  enabled: false,
+  cornerHz: 338,
+  stages: 8,
+  reverse: false,
+};
+
+export const TX_PHASE_ROTATOR_VOICE_DEFAULT: TxPhaseRotatorConfigDto = {
+  enabled: true,
+  cornerHz: 338,
+  stages: 8,
+  reverse: false,
+};
+
 export type NrConfigDto = {
   nrMode: NrMode;
   anfEnabled: boolean;
@@ -323,6 +348,8 @@ export type RadioStateDto = {
   squelch: SquelchConfigDto;
   // TX leveling (ALC + Leveler + Compressor). Leveler max-gain stays separate.
   txLeveling: TxLevelingConfigDto;
+  // TX phase rotator (Thetis DSP->CFC->PhaseRot parity).
+  txPhaseRotator: TxPhaseRotatorConfigDto;
   autoAgcEnabled: boolean;
   agcOffsetDb: number;
   rxAfGainDb: number;
@@ -422,8 +449,11 @@ export type RadioStateDto = {
   receivers?: ReceiverDto[];
   // Wire contract version (WireContract.Version). v2 = receivers[] present.
   wireVersion?: number;
-  // DDC / receiver ceiling for this build (WireContract.MaxReceivers).
+  // Active hardware DDC / receiver ceiling for this connection.
   maxReceivers?: number;
+  // Active backend wire protocol for the current connection. Present on v2+
+  // servers so reloads can recover protocol-gated Settings panels.
+  connectedProtocol?: 'P1' | 'P2' | 'P3' | null;
 };
 
 // Mirrors Zeus.Contracts.ReceiverDto — per-receiver (per-DDC) state. Index 0 is
@@ -434,8 +464,8 @@ export type ReceiverDto = {
   index: number;
   enabled: boolean;
   // Operator-facing display name. Hardware DDCs leave this null and fall back to
-  // an "RX{n}" label; the reserved KiwiSDR slice receiver (index
-  // WireContract.KiwiReceiverIndex) carries "Kiwi". See receiverLabel().
+  // an "RX{n}" label; the reserved KiwiSDR slice receiver carries "Kiwi". See
+  // receiverLabel().
   name?: string | null;
   // Which phase-synchronous 16-bit ADC feeds this DDC (0 or 1).
   adcSource: number;
@@ -533,6 +563,7 @@ export type TxAudioProfileDto = {
   levelerMaxGainDb: number;
   txLeveling: TxLevelingConfigDto;
   cfcConfig: CfcConfigDto;
+  txPhaseRotator: TxPhaseRotatorConfigDto;
   lowCutHz: number;
   highCutHz: number;
   processingMode: 'native' | 'vst';
@@ -616,6 +647,16 @@ export type RadioInfoDto = {
   firmwareVersion: string;
   busy: boolean;
   details: Record<string, string> | null;
+};
+
+export type Protocol3PresenceDto = {
+  available: boolean;
+  port: number | null;
+  maxRxStreams: number | null;
+  maxTxStreams: number | null;
+  capabilityFlags: string | null;
+  firmwareVersion: number | null;
+  gatewareVersion: number | null;
 };
 
 export type HardwareDiagnosticItemDto = {
@@ -2245,6 +2286,22 @@ export function normalizeTxLeveling(raw: unknown): TxLevelingConfigDto {
   };
 }
 
+export function normalizeTxPhaseRotator(raw: unknown): TxPhaseRotatorConfigDto {
+  if (!raw || typeof raw !== 'object')
+    return { ...TX_PHASE_ROTATOR_CONFIG_DEFAULT };
+  const r = raw as Record<string, unknown>;
+  const int = (v: unknown, fallback: number, min: number, max: number) =>
+    typeof v === 'number' && Number.isFinite(v)
+      ? Math.max(min, Math.min(max, Math.round(v)))
+      : fallback;
+  return {
+    enabled: typeof r.enabled === 'boolean' ? r.enabled : TX_PHASE_ROTATOR_CONFIG_DEFAULT.enabled,
+    cornerHz: int(r.cornerHz, TX_PHASE_ROTATOR_CONFIG_DEFAULT.cornerHz, 20, 2000),
+    stages: int(r.stages, TX_PHASE_ROTATOR_CONFIG_DEFAULT.stages, 1, 16),
+    reverse: typeof r.reverse === 'boolean' ? r.reverse : TX_PHASE_ROTATOR_CONFIG_DEFAULT.reverse,
+  };
+}
+
 // `null` means "no operator override yet — use engine default" and round-
 // trips that signal back to the server. Anything else (number/bool) is
 // preserved; missing keys collapse to null so an older server payload
@@ -2384,6 +2441,12 @@ function normalizeReceiver(raw: unknown, fallbackIndex: number): ReceiverDto {
   };
 }
 
+function normalizeConnectedProtocol(raw: unknown): 'P1' | 'P2' | 'P3' | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null) return null;
+  return raw === 'P1' || raw === 'P2' || raw === 'P3' ? raw : null;
+}
+
 export function normalizeState(raw: unknown): RadioStateDto {
   const r = (raw ?? {}) as Record<string, unknown>;
   return {
@@ -2419,6 +2482,7 @@ export function normalizeState(raw: unknown): RadioStateDto {
     agc: normalizeAgc(r.agc),
     squelch: normalizeSquelch(r.squelch),
     txLeveling: normalizeTxLeveling(r.txLeveling),
+    txPhaseRotator: normalizeTxPhaseRotator(r.txPhaseRotator),
     autoAgcEnabled: typeof r.autoAgcEnabled === 'boolean' ? r.autoAgcEnabled : false,
     agcOffsetDb: typeof r.agcOffsetDb === 'number' ? r.agcOffsetDb : 0,
     rxAfGainDb: typeof r.rxAfGainDb === 'number' ? r.rxAfGainDb : 0,
@@ -2508,6 +2572,7 @@ export function normalizeState(raw: unknown): RadioStateDto {
       : undefined,
     wireVersion: typeof r.wireVersion === 'number' ? r.wireVersion : undefined,
     maxReceivers: typeof r.maxReceivers === 'number' ? r.maxReceivers : undefined,
+    connectedProtocol: normalizeConnectedProtocol(r.connectedProtocol),
   };
 }
 
@@ -2593,6 +2658,7 @@ function normalizeTxAudioProfile(raw: unknown): TxAudioProfileDto | null {
     levelerMaxGainDb: typeof r.levelerMaxGainDb === 'number' ? r.levelerMaxGainDb : 8,
     txLeveling: normalizeTxLeveling(r.txLeveling),
     cfcConfig: normalizeCfc(r.cfcConfig),
+    txPhaseRotator: normalizeTxPhaseRotator(r.txPhaseRotator),
     lowCutHz: clampInt(r.lowCutHz, 0, 10000, 150),
     highCutHz: clampInt(r.highCutHz, 0, 10000, 2900),
     processingMode: r.processingMode === 'vst' ? 'vst' : 'native',
@@ -2688,6 +2754,19 @@ function normalizeRadios(raw: unknown): RadioInfoDto[] {
           : null,
     };
   });
+}
+
+function normalizeProtocol3Presence(raw: unknown): Protocol3PresenceDto {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    available: Boolean(r.available),
+    port: typeof r.port === 'number' ? r.port : null,
+    maxRxStreams: typeof r.maxRxStreams === 'number' ? r.maxRxStreams : null,
+    maxTxStreams: typeof r.maxTxStreams === 'number' ? r.maxTxStreams : null,
+    capabilityFlags: typeof r.capabilityFlags === 'string' ? r.capabilityFlags : null,
+    firmwareVersion: typeof r.firmwareVersion === 'number' ? r.firmwareVersion : null,
+    gatewareVersion: typeof r.gatewareVersion === 'number' ? r.gatewareVersion : null,
+  };
 }
 
 function asDiagRecord(raw: unknown): Record<string, unknown> {
@@ -4799,6 +4878,17 @@ export function fetchRadios(signal?: AbortSignal): Promise<RadioInfoDto[]> {
   return jsonFetch('/api/radios', { signal }, normalizeRadios);
 }
 
+export function fetchProtocol3Presence(
+  ip: string,
+  signal?: AbortSignal,
+): Promise<Protocol3PresenceDto> {
+  return jsonFetch(
+    `/api/protocol3/presence?ip=${encodeURIComponent(ip)}`,
+    { signal },
+    normalizeProtocol3Presence,
+  );
+}
+
 /** A POTA / SOTA / DX activation spot from GET /api/spots/activations. `freqHz`
  *  is absolute Hz (server normalizes POTA kHz / SOTA MHz / DX kHz). `mode` is
  *  the raw upstream string (SSB/CW/FT8/…) — map it to an RxMode at tune time. */
@@ -5481,6 +5571,22 @@ export function connectP2(
   );
 }
 
+export function connectP3(
+  req: ConnectRequest,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  return jsonFetch(
+    '/api/connect/p3',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+      signal,
+    },
+    (raw) => raw,
+  );
+}
+
 // Take over a Busy radio: ask the server to send a protocol stop so the radio
 // drops its current owner, freeing it for an immediate connect. `endpoint` is
 // the discovered "ip:port"; `protocol` is 'P1' or 'P2'. Resolves once the
@@ -5518,10 +5624,34 @@ export function disconnectP2(signal?: AbortSignal): Promise<unknown> {
   );
 }
 
+export function disconnectP3(signal?: AbortSignal): Promise<unknown> {
+  return jsonFetch(
+    '/api/disconnect/p3',
+    { method: 'POST', signal },
+    (raw) => raw,
+  );
+}
+
 // Move the hardware NCO center frequency without touching vfoHz. Called by
 // the panadapter pan gesture (use-pan-tune-gesture.ts) when a drag releases
 // past the edge of the current IQ capture window. Server returns the full
 // updated StateDto; 400 if hz is out of range for the connected radio.
+// LO frequencies cross the wire as a 64-bit integer (`RadioLoSetRequest.Hz` /
+// `ReceiverLoSetRequest.Hz` are `long`). Several callers — chiefly the CTUN
+// zoom/recenter and keep-in-view autopan paths — compute the LO from
+// floating-point view-center math and can hand us a FRACTIONAL Hz (e.g.
+// 3_853_999.9999). System.Text.Json cannot parse a decimal into an Int64 and
+// rejects the whole request with HTTP 400, so the hardware LO never moves; under
+// CTUN that leaves the frozen DDC window pointed at the wrong place and the
+// panadapter/waterfall blank out (issue #1191). Round + clamp at this single
+// wire seam so NO caller can emit a non-integer or out-of-range LO. Rounding is
+// sub-Hz on the LO — far below the radio's tuning resolution, no audible effect.
+const MAX_LO_HZ = 60_000_000;
+export function toWireHz(hz: number): number {
+  if (!Number.isFinite(hz)) return 0;
+  return Math.min(MAX_LO_HZ, Math.max(0, Math.round(hz)));
+}
+
 export function setRadioLo(
   hz: number,
   signal?: AbortSignal,
@@ -5531,7 +5661,7 @@ export function setRadioLo(
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ hz }),
+      body: JSON.stringify({ hz: toWireHz(hz) }),
       signal,
     },
     normalizeState,
@@ -5553,7 +5683,7 @@ export function setReceiverLo(
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ hz }),
+      body: JSON.stringify({ hz: toWireHz(hz) }),
       signal,
     },
     normalizeState,
@@ -5680,6 +5810,13 @@ export function setReceiver(
   },
   signal?: AbortSignal,
 ): Promise<RadioStateDto> {
+  // VFO-lock gate for the RX3+ write path (postReceiverVfo routes here for
+  // index >= 2). Mirrors the gates on setVfo / setVfoB so a locked dial can't
+  // be moved through the multi-DDC endpoint either; only the VFO write is
+  // refetched — enabled / adcSource / mode / filter / AF still pass through.
+  if (req.vfoHz !== undefined && vfoLockStore.getState().locked) {
+    return fetchState(signal);
+  }
   return jsonFetch(
     `/api/receivers/${index}`,
     {
@@ -5981,7 +6118,7 @@ export function setFavoriteFilterSlots(
   );
 }
 
-// 768/1536 kHz are Protocol-2 only (ANAN G2); Protocol 1 caps at 384 kHz.
+// 768/1536 kHz need a wide DDC transport (P2/P3); Protocol 1 caps at 384 kHz.
 // ConnectPanel gates the higher rungs to P2, and the backend rejects them on
 // a P1 connect.
 export type SampleRate = 48_000 | 96_000 | 192_000 | 384_000 | 768_000 | 1_536_000;
@@ -6227,6 +6364,22 @@ export function setTxLeveling(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ txLeveling }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+export function setTxPhaseRotator(
+  txPhaseRotator: TxPhaseRotatorConfigDto,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/phase-rotator',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ txPhaseRotator }),
       signal,
     },
     normalizeState,

@@ -10,6 +10,71 @@ see the corresponding GitHub Release page.
 
 ---
 
+## [0.10.7] — 2026-06-30
+
+> **🎛️ Hardware control + experimental PureSignal for single-ADC radios.** The headline is **MIDI controller and Stream Deck support** — drive Zeus from physical knobs, faders, and buttons. This release also brings **experimental single-ADC PureSignal for the ANAN-10E and ANAN-G2E**, validated end-to-end in Zeus's new virtual-radio test harness and now **looking for on-air feedback from operators with that hardware** (see the note below — it stays disabled by default). Rounding it out: the **Voyeur** net-monitor plugin is now at **v1.1.1** with a selectable NVIDIA Parakeet speech engine and watchword alerts, **6 m and 11 m** band support, and a deep round of transmit-fidelity, FreeDV/RADE, and web-UI improvements.
+
+### 🎛️ New — MIDI & Stream Deck control
+
+- **Control Zeus from a MIDI controller or an Elgato Stream Deck.** Map physical knobs, faders, and buttons to Zeus actions — VFO tuning, band/mode, AF/RF/drive, filter, MOX, and more — with a **Learn** mode that captures the next control you touch. A built-in **Stream Deck** grid lets you assign Zeus commands to the deck's keys. Set it all up under the new **Settings → MIDI** tab. MIDI **input** is available on Windows and macOS; Stream Deck (HID) works on Windows, macOS, and Linux. (PureSignal arm is deliberately excluded from MIDI mapping for safety.) *(#18, #1190)*
+
+### 🛰️ PureSignal — experimental single-ADC support for ANAN-10E & ANAN-G2E (virtual-tested; seeking on-air feedback)
+
+> **What this is, and what it is not.** The **ANAN-10E (HermesII)** and **ANAN-G2E (HermesC10)** have only a *single* receive ADC, which is why PureSignal — a system that needs to listen to the amplifier's output on a feedback receiver — has never been available on them. This release adds an **experimental single-ADC, time-multiplexed feedback path** that shares the one ADC between your receiver and the PureSignal feedback, so these boards can run predistortion for the first time.
+>
+> **It has been validated end-to-end in Zeus's new virtual-radio loopback harness** (the emulator below) — the feedback frames, ADC-protection bytes, and correction loop all behave correctly in software. **It has not yet been confirmed on real hardware.** Because PureSignal drives real power amplifiers, this path ships **disabled by default behind a safety interlock** — it does not arm itself, and PureSignal still always starts OFF on every board, every session. **We are looking for operators with a real ANAN-10E or ANAN-G2E who want to help validate it on the air.** If that's you, please get in touch via the [Zeus Discord / GitHub](https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus) so we can enable and bench it with you before it goes live for everyone. *(#1209, #1121, #960)*
+
+- **Virtual HPSDR radio emulator (developer/test tool).** A new software radio that speaks the real HPSDR wire protocol (Protocol 1 and Protocol 2), so Zeus — and its automated tests — can connect with **no hardware attached**. This is what let us validate the single-ADC PureSignal paths above in software, and it hardens the whole connect/stream/transmit pipeline against regressions. *(#1208, #1210)*
+
+### 🔎 Voyeur Mode — now v1.1.1, please update
+
+- **The Voyeur net-monitor plugin has a new release — update it.** Voyeur is your automatic net secretary: park it on a net and it records every over, transcribes the speech **on your own machine**, extracts and QRZ-validates callsigns, builds a live check-in roster, and writes a "what was discussed" summary — all offline. The new **v1.1.1** adds a **selectable speech engine** (the proven **Whisper**, plus an opt-in **NVIDIA Parakeet** engine with optional GPU acceleration) and **watchword alerts** that e-mail or push you — with a clip, time, and frequency — when your callsign or a keyword is heard.
+- **How to update:** open **Settings → Plugins**, find **Voyeur Mode · Net Monitor**, and **Update** to v1.1.1 (install it from **Browse** if you don't have it yet). Restart Zeus when prompted. The speech/AI engines download in-app on first enable; your existing archive and settings are carried over automatically. Whisper remains the default — switch to Parakeet in Voyeur's settings if you want to try it. *(#1198)*
+
+### 📻 Bands — 6 m and 11 m
+
+- **6 m and 11 m are now in the band selector and band plans**, so you can jump to them with a band button and Zeus keeps per-band memory for them like every other band. *(#1185)*
+
+### 🎚️ Transmit & DSP fidelity
+
+- **Dynamic TX phase-rotator auto-tune** and **TX fidelity auto-tune** improve transmit signal quality, with the auto-tune closure correctly wired through the TX path. *(#1205, #1203)*
+- **Smarter Smart-NR auto-notch decisions** — the automatic notch is less prone to grabbing the wrong thing. *(#1202)*
+- **Anti-denormal conditioning on the TX VST-engine feed** prevents denormal-number CPU stalls in the transmit audio path. *(#1196)*
+- **Cross-board PA-gain guard** — the Hermes-Lite 2's percentage-based drive value can no longer leak into another board's dB drive math. A correctness fix for mixed-board users; no operator-facing default changes. *(#1180, #1187)*
+- **DSP pipeline hardening** — the DSP tick is guarded against concurrent runs while a sink attaches or detaches, closing a rare race. *(#1167, #1188)*
+
+### 📡 FreeDV / RADE
+
+- **Cleaner RADE speech** — stop-talk artifacts removed and the RADE speech resampler widened, with a new objective fidelity test harness to keep it honest. *(#1195, #1197)*
+- **60 m is forced to USB** for FreeDV (USB-only by regulation on the 60 m channels). *(#1179, #1182)*
+- **codec2 native binaries now ship for linux-x64, linux-arm64, and macOS arm64**, so FreeDV works out of the box on more platforms. *(#1174)*
+
+### 🔊 Protocol-2 audio
+
+- **Radio-speaker telemetry + paced egress** — new RX-IQ / tick / speaker instrumentation, and the Protocol-2 radio-speaker send is paced rather than bursty, building on the 0.10.6 decoupling work to chase down speaker underruns. *(#1148, #1200)*
+
+### 🖥️ Web UI & operating
+
+- **VFO lock button** on the multi-DDC VFO panel, so you can lock a receiver's tuning. *(#644, #1183)*
+- **Panadapter spot labels** moved below the band-chip row and made size-configurable, so they no longer crowd the top of the display. *(#1175, #1177)*
+- **Squelch styling** — the FIX/DYN active styling drops when squelch is OFF. *(#1176, #1178)*
+- **Lightning Map** km/mi switch is now a dark toggle that matches the house style. *(#1193)*
+- **LO frequency is rounded to an integer at the wire seam**, avoiding sub-Hz drift in the local-oscillator command. *(#1191, #1192)*
+
+### 🛟 Remote diagnostics & connection robustness
+
+- **Richer support sessions** — operator presence and crash shares now include IP, platform, version, and radio, and host signaling + `/admin/crashes` CORS were fixed so maintainer support sessions connect reliably. *(#1170, #1173)*
+- **Protocol-1 disconnect fix** — the RX loop now raises *Disconnected* on a non-timeout socket error instead of silently stalling. *(#1204, #1206)*
+
+### 🧰 Under the hood
+
+- **Out-of-process VST/audio engine distribution** — the TX VST engine manifest is now published to Cloudflare R2 via a dispatchable workflow, so the engine and its updates fetch from a stable CDN. *(#1189)*
+- **Voyeur speech engines repacked** — upstream sherpa-onnx + NVIDIA Parakeet binaries are repacked into per-platform zips for the in-app installer (the .NET runtime can't unpack the upstream `.tar.bz2`). This is what backs the new Parakeet engine option in Voyeur v1.1.1 above. *(#1198)*
+
+**Credits.** The MIDI controller + Stream Deck support, the experimental single-ADC PureSignal paths for the ANAN-10E and ANAN-G2E, the virtual-radio test emulator, the Protocol-2 radio-speaker telemetry/pacing, the cross-platform codec2 binaries, the Voyeur v1.1.1 engine work, the DSP-tick race guard, the VFO lock, the cross-board PA-gain guard, and the LO-rounding fix are by **Douglas Cerrato (KB2UKA)**. The TX phase-rotator and TX-fidelity auto-tune, the Smart-NR auto-notch hardening, the FreeDV / RADE resampler and stop-talk fixes and fidelity harness, the anti-denormal TX-VST conditioning, the remote-diagnostics enrichment, the 6 m / 11 m bands, and the Lightning Map toggle are by **Christian Suarez (N9WAR)**.
+
+---
+
 ## [0.10.6] — 2026-06-29
 
 > **🔧 Hotfix on 0.10.5.** The headline is an audio-device fix for Windows: operators who couldn't select a Windows sound device for receive audio can now switch output devices freely again. This release also folds in every fix — and the one new feature — that landed since 0.10.5: a built-in **DX-cluster client**, HamClock link handling, audio-suite / VST robustness, and a round of web-UI polish.

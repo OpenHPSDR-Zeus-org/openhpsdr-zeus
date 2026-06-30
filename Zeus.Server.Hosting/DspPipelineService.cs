@@ -704,8 +704,10 @@ public class DspPipelineService : BackgroundService,
     // every DDC once B3/B4 wire the per-receiver state + UI. Today only slot 1 is
     // ever activated (Rx2Enabled), so behaviour is identical to the previous
     // hardcoded RX1/RX2 pair. ChannelId is read/written via Volatile on the hot
-    // path exactly as the old _rx2ChannelId was.
-    internal const int MaxReceivers = Zeus.Protocol2.Protocol2Client.MaxRxDdc;
+    // path exactly as the old _rx2ChannelId was. Size to the shared hardware
+    // receiver contract (10) rather than the P2 wire ceiling (8) so Protocol 3
+    // can expose every G2 receiver without another DSP array refactor.
+    internal const int MaxReceivers = Zeus.Contracts.WireContract.MaxReceivers;
     private sealed class SecondaryRx
     {
         public int ChannelId = -1; // -1 = inactive; Volatile.Read/Write(ref ChannelId)
@@ -936,6 +938,10 @@ public class DspPipelineService : BackgroundService,
     // defaults so a connect landing on defaults still matches what
     // ApplyStateToNewChannel force-pushed.
     private TxLevelingConfig _appliedTxLeveling = new();
+    // TX phase rotator latch (Thetis DSP->CFC->PhaseRot parity). Default-OFF
+    // matches the TXA-open baseline; every operator/Auto Tune edit is pushed
+    // live and replayed on reconnect.
+    private TxPhaseRotatorConfig _appliedTxPhaseRotator = new();
     // RX/TX bandpass "rectangularity" latches — issue #871. Seeded to
     // BandpassWindow.Normal (= byte 1), which resolves to the WDSP open-time tap
     // count, so a connect landing on the default matches what
@@ -1095,6 +1101,16 @@ public class DspPipelineService : BackgroundService,
     // disposed-check guards cover engine-swap-mid-call); engine swaps
     // serialise through _engineLock (writer side only).
     private volatile bool _rxSinkAttached;
+    // issue #1167: during the RX-sink attach/detach window the timer thread and
+    // the RX inline-tick thread can both be live, so Tick can run on two threads
+    // at once. FloatSpscRing's producer side is strict single-thread; this gate
+    // makes Tick mutually exclusive so the producer stays single-threaded.
+    private readonly SingleEntryGate _tickGate = new();
+    private long _tickReentrySkips;
+    /// <summary>Count of Tick calls skipped because another thread held the
+    /// gate — non-zero only during the sink attach/detach window (issue #1167).
+    /// Telemetry/test seam.</summary>
+    internal long TickReentrySkips => Interlocked.Read(ref _tickReentrySkips);
     // Reference to the protocol client this pipeline is currently sinking RX
     // packets from. Cached so we can explicitly DetachRxSink on disconnect —
     // RadioService nulls its ActiveClient before raising Disconnected, so the
@@ -1104,6 +1120,26 @@ public class DspPipelineService : BackgroundService,
     private long _lastTickStopwatchTicks;
     private static readonly long TickPeriodStopwatchTicks =
         (long)(Stopwatch.Frequency / 30.0);
+
+    // #1148 inline-tick cadence telemetry. The active RX packet thread drives
+    // Tick inline (one audio block per tick, nominally 30 Hz / 33.33 ms). If the
+    // radio-speaker UDP burst perturbs RX-IQ delivery, ticks slip from ~33 ms
+    // toward longer intervals and the host soundcard ring underruns (the #1148
+    // symptom). Emit mean / p99 / max interval + a count of intervals > 1.5×
+    // nominal (> 50 ms) at ~1 Hz. Single-threaded — only the active RX thread
+    // calls MaybeTickInline — so plain fields + a fixed ring suffice.
+    private long _tickDiagLastEmitTicks;
+    private long _tickDiagCount;
+    private long _tickDiagSumTicks;
+    private long _tickDiagMaxTicks;
+    private long _tickDiagSlowCount;
+    private readonly long[] _tickDiagRing = new long[256]; // power of two for the index wrap
+    private readonly long[] _tickDiagSortScratch = new long[256];
+    private int _tickDiagRingPos;
+    private int _tickDiagRingFill;
+    private static readonly long TickSlowThresholdTicks =
+        (long)(TickPeriodStopwatchTicks * 1.5);
+
     private readonly ConcurrentQueue<Action> _dspCommands = new();
 
     // DSP-thread-owned scratch buffers. Allocated once at construction so
@@ -3644,6 +3680,14 @@ public class DspPipelineService : BackgroundService,
             engine.SetTxLeveling(channel, txLeveling);
             _appliedTxLeveling = txLeveling;
         }
+        var txPhaseRotator = freeDvMode
+            ? new TxPhaseRotatorConfig()
+            : (s.TxPhaseRotator ?? new TxPhaseRotatorConfig());
+        if (!txPhaseRotator.Equals(_appliedTxPhaseRotator))
+        {
+            engine.SetTxPhaseRotator(channel, txPhaseRotator);
+            _appliedTxPhaseRotator = txPhaseRotator;
+        }
         if (s.ZoomLevel != _appliedZoomLevel)
         {
             engine.SetZoom(channel, s.ZoomLevel);
@@ -3926,6 +3970,7 @@ public class DspPipelineService : BackgroundService,
         var agc = s.Agc ?? new AgcConfig(AgcMode.Med);
         var squelch = s.Squelch ?? new SquelchConfig();
         var txLeveling = s.TxLeveling ?? new TxLevelingConfig();
+        var txPhaseRotator = s.TxPhaseRotator ?? new TxPhaseRotatorConfig();
         // FreeDV resolves to the band-convention sideband (LSB < 10 MHz, USB ≥);
         // every other mode passes through as itself. See RadioService.EffectiveEngineMode.
         var openEngineMode = RadioService.EffectiveEngineMode(s.Mode, s.VfoHz);
@@ -3982,6 +4027,10 @@ public class DspPipelineService : BackgroundService,
         // TUN/two-tone Leveler restore honours the operator's on/off). The
         // Leveler max-gain is pushed separately above (SetTxLevelerMaxGain).
         engine.SetTxLeveling(channelId, txLeveling);
+        // Force-apply TX phase rotator on a fresh engine so a saved profile or
+        // Auto Tune-locked setting survives reconnect. Reverse is part of the
+        // same config but remains operator-controlled.
+        engine.SetTxPhaseRotator(channelId, txPhaseRotator);
         // Manual notches: feed the LO first (notch positioning reference), then
         // re-apply the operator's notch set onto the fresh engine. A reconnect
         // builds a brand-new engine whose notch DB is empty; RadioService holds
@@ -4012,6 +4061,7 @@ public class DspPipelineService : BackgroundService,
         _appliedAgc = agc;
         _appliedSquelch = squelch;
         _appliedTxLeveling = txLeveling;
+        _appliedTxPhaseRotator = txPhaseRotator;
         _appliedRxBandpassWindow = s.RxFilterWindow;
         _appliedTxBandpassWindow = s.TxFilterWindow;
         _appliedZoomLevel = s.ZoomLevel;
@@ -5220,9 +5270,41 @@ public class DspPipelineService : BackgroundService,
         long last = _lastTickStopwatchTicks;
         if (last == 0 || (now - last) >= TickPeriodStopwatchTicks)
         {
+            if (last != 0) RecordTickInterval(now - last, now);
             _lastTickStopwatchTicks = now;
             Tick(_panBuf, _wfBuf, _audioBuf);
         }
+    }
+
+    // #1148: accumulate inline-tick interval stats and emit at ~1 Hz. Called
+    // only from MaybeTickInline (single active RX thread), so no synchronisation
+    // is needed and the buffers are plain instance fields.
+    private void RecordTickInterval(long intervalTicks, long now)
+    {
+        _tickDiagCount++;
+        _tickDiagSumTicks += intervalTicks;
+        if (intervalTicks > _tickDiagMaxTicks) _tickDiagMaxTicks = intervalTicks;
+        if (intervalTicks > TickSlowThresholdTicks) _tickDiagSlowCount++;
+        _tickDiagRing[_tickDiagRingPos] = intervalTicks;
+        _tickDiagRingPos = (_tickDiagRingPos + 1) & (_tickDiagRing.Length - 1);
+        if (_tickDiagRingFill < _tickDiagRing.Length) _tickDiagRingFill++;
+
+        if (_tickDiagLastEmitTicks == 0) { _tickDiagLastEmitTicks = now; return; }
+        if (now - _tickDiagLastEmitTicks < Stopwatch.Frequency) return;
+        _tickDiagLastEmitTicks = now;
+
+        double msPerTick = 1000.0 / Stopwatch.Frequency;
+        double mean = _tickDiagCount > 0 ? _tickDiagSumTicks * msPerTick / _tickDiagCount : 0;
+        double max = _tickDiagMaxTicks * msPerTick;
+        double p99 = Zeus.Protocol2.DiagStats.Percentile(
+            _tickDiagRing, _tickDiagSortScratch, _tickDiagRingFill, 0.99) * msPerTick;
+
+        _log.LogInformation(
+            "dsp.tickdiag mean={Mean:F1}ms p99={P99:F1}ms max={Max:F1}ms slow(>50ms)={Slow} n={N}",
+            mean, p99, max, _tickDiagSlowCount, _tickDiagCount);
+
+        _tickDiagCount = 0; _tickDiagSumTicks = 0; _tickDiagMaxTicks = 0;
+        _tickDiagSlowCount = 0; _tickDiagRingPos = 0; _tickDiagRingFill = 0;
     }
 
     /// <summary>
@@ -5354,6 +5436,14 @@ public class DspPipelineService : BackgroundService,
 
     private void Tick(float[] panBuf, float[] wfBuf, float[] audioBuf)
     {
+        // issue #1167: the timer thread and the RX inline-tick thread can both
+        // be live during the sink attach/detach window. FloatSpscRing is strict
+        // single-producer; this gate guarantees only one Tick runs at a time so
+        // the producer side stays single-threaded. ~30 Hz, so the CompareExchange
+        // is free. A skipped tick is harmless — the holder is ticking ~now.
+        if (!_tickGate.TryEnter()) { Interlocked.Increment(ref _tickReentrySkips); return; }
+        try
+        {
         // iter5 pass-2: lock-free hot path. Tick runs inline on the RX OS
         // thread when a sink is attached (paced via Stopwatch elapsed in
         // OnIqFrame), and on the PeriodicTimer thread otherwise. Volatile
@@ -5736,7 +5826,7 @@ public class DspPipelineService : BackgroundService,
             _mixSlices[mixSliceCount++] = new RxAudioSlice(sec.AudioBuf, n);
         }
 
-        // Kiwi slice (RxId 7): an INDEPENDENT remote receiver that rides the same
+        // Kiwi slice: an INDEPENDENT remote receiver that rides the same
         // RX1-clocked mix bus as the hardware secondaries. Drain at most
         // audioSampleCount samples so it's fed at exactly the RX rate (its own
         // clock differs from the radio ADC; IKiwiAudioBus.ReadAudio caps buffered
@@ -6015,6 +6105,8 @@ public class DspPipelineService : BackgroundService,
             _hub.Broadcast(v2);
             RxMetersV2Updated?.Invoke(channel, v2);
         }
+        }
+        finally { _tickGate.Exit(); }
     }
 
     /// <summary>

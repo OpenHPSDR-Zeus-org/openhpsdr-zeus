@@ -39,6 +39,7 @@ public sealed class RemoteBrokerClient : BackgroundService
     private readonly RemoteWebRtcService _rtc;
     private readonly SupportWebRtcService _support;
     private readonly SupportRequestCoordinator _coord;
+    private readonly SupportAvailabilityStore _availability;
     private readonly QrzService _qrz;
     private readonly ILogger<RemoteBrokerClient> _log;
     private readonly string _brokerUrl;
@@ -46,12 +47,14 @@ public sealed class RemoteBrokerClient : BackgroundService
     public RemoteBrokerClient(
         RemotePasswordStore passwords, RemoteWebRtcService rtc,
         SupportWebRtcService support, SupportRequestCoordinator coord,
+        SupportAvailabilityStore availability,
         QrzService qrz, ILogger<RemoteBrokerClient> log)
     {
         _passwords = passwords;
         _rtc = rtc;
         _support = support;
         _coord = coord;
+        _availability = availability;
         _qrz = qrz;
         _log = log;
         _brokerUrl = Environment.GetEnvironmentVariable("ZEUS_REMOTE_BROKER_URL")
@@ -63,8 +66,15 @@ public sealed class RemoteBrokerClient : BackgroundService
         var backoff = ReconnectMin;
         while (!stoppingToken.IsCancellationRequested)
         {
-            // Remote access off (no password) → stay disconnected.
-            if (!_passwords.HasPassword())
+            // Connect the host signaling socket when EITHER remote access is on
+            // (a session password is set) OR remote diagnostics is available (the
+            // L1 switch is on). The latter is what lets a maintainer's
+            // /admin/request reach this radio for a consent-gated support session
+            // without the operator also having to enable full remote access.
+            // Safe: remote-access *clients* are still deny-by-default (SPAKE2+) —
+            // with no password set, no client can authenticate, so opening the
+            // socket grants nothing but the support-request path (ADR-0008 intact).
+            if (!_passwords.HasPassword() && !_availability.IsAvailable)
             {
                 await Task.Delay(ReconnectMax, stoppingToken).ContinueWith(_ => { }, CancellationToken.None);
                 continue;

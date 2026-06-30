@@ -323,6 +323,13 @@ public static class ZeusHost
         builder.Services.AddSingleton<
             Zeus.Protocol2.Discovery.IRadioDiscovery,
             Zeus.Protocol2.Discovery.RadioDiscoveryService>();
+        builder.Services.AddSingleton<Protocol3PresenceProbe>();
+        builder.Services.AddHttpClient(Protocol3SidecarBridge.HttpClientName, c =>
+        {
+            c.Timeout = TimeSpan.FromSeconds(3);
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("OpenHPSDR-Zeus");
+        });
+        builder.Services.AddSingleton<Protocol3SidecarBridge>();
         // TxIqRing is shared: TxAudioIngest writes modulated IQ into it, Protocol1Client
         // (constructed inside RadioService) reads from it for the EP2 payload.
         builder.Services.AddSingleton<Zeus.Protocol1.TxIqRing>();
@@ -1069,6 +1076,22 @@ public static class ZeusHost
         builder.Services.AddSingleton<CatSerialConfigStore>();
         builder.Services.AddSingleton<Cat.CatSerialService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<Cat.CatSerialService>());
+
+        // MIDI controller + Elgato Stream Deck input (issue #18, full Thetis
+        // command-surface parity). Input-only: maps physical controls to the
+        // verified radio seams via MidiCommandDispatcher. PureSignal arm is NOT
+        // in the command surface. Both engines degrade gracefully to "no
+        // devices" when the platform/permissions deny MIDI/HID (headless, CI,
+        // Linux/Pi without a udev rule), so the server always starts. The
+        // bindings + enable flag persist via MidiConfigStore (shared LiteDB
+        // lease, same as CAT/TCI).
+        builder.Services.AddSingleton<Midi.MidiConfigStore>();
+        builder.Services.AddSingleton<Zeus.Midi.IMidiEngine>(sp =>
+            new Zeus.Midi.DryWetMidiEngine(sp.GetRequiredService<ILogger<Zeus.Midi.DryWetMidiEngine>>()));
+        builder.Services.AddSingleton<Zeus.Midi.IStreamDeckEngine>(sp =>
+            new Zeus.Midi.HidStreamDeckEngine(sp.GetRequiredService<ILogger<Zeus.Midi.HidStreamDeckEngine>>()));
+        builder.Services.AddSingleton<Midi.MidiService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Midi.MidiService>());
 
         // WSJT-X logged-QSO UDP broadcaster — outbound QSO-record push to
         // third-party loggers (JTAlert / Log4OM / GridTracker / N1MM). DISABLED

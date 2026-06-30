@@ -180,6 +180,7 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
         public void SetSquelch(int channelId, SquelchConfig cfg) { }
         public List<TxLevelingConfig> TxLevelingCalls { get; } = new();
         public void SetTxLeveling(int channelId, TxLevelingConfig cfg) => TxLevelingCalls.Add(cfg);
+        public void SetTxPhaseRotator(int channelId, TxPhaseRotatorConfig cfg) { }
     public void SetRxDisplayFastAttack(int channelId, bool fast) { }
         public void SetRxAfGainDb(int channelId, double db) { }
         public void SetNoiseReduction(int channelId, NrConfig cfg) { }

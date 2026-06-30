@@ -13,7 +13,7 @@
 
 import { useEffect } from 'react';
 import { fetchHardwareDiagnostics, setNr, type NrConfigDto, type RadioStateDto } from '../api/client';
-import { getNoiseFloor, getSignalConfidence, registerEstimatorConsumer } from '../dsp/signal-estimator';
+import { getNoiseFloor, getSignalConfidence, getSignalStationarity, registerEstimatorConsumer } from '../dsp/signal-estimator';
 import {
   adaptSmartNrToDspCapabilities,
   labelSmartNrProfile,
@@ -218,6 +218,7 @@ export function SmartNrController() {
         spectrum: display.panValid ? display.panDb : null,
         floor: getNoiseFloor(),
         confidence: getSignalConfidence(),
+        stationarity: getSignalStationarity(),
         rx: {
           signalDbm: rx.signalDbm,
           adcHeadroomDb: rx.adcHeadroomDb,

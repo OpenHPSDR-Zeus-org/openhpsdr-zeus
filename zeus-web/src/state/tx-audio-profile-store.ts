@@ -42,7 +42,8 @@ export interface TxAudioProfileMutationResult {
 
 // A stable, comparable snapshot of the live TX-audio settings the operator can
 // touch from the panels: mic/leveler scalars, the CFC config, the leveling
-// config (incl. decay), the TX bandpass, and the Audio Suite chain/mode/bypass.
+// config (incl. decay), the phase rotator, the TX bandpass, and the Audio Suite
+// chain/mode/bypass.
 // Used for dirty-tracking — if the live snapshot drifts from the snapshot taken
 // when a profile was last applied/saved, the loaded profile is "dirty" and the
 // operator is prompted to save before disconnecting or closing Zeus.
@@ -57,6 +58,7 @@ function snapshotTxAudioLive(): string {
     tx.levelerMaxGainDb,
     tx.cfcConfig,
     conn.txLeveling,
+    conn.txPhaseRotator,
     conn.txFilterLowHz,
     conn.txFilterHighHz,
     suite.processingMode,

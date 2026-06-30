@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-import type { CfcConfigDto, TxLevelingConfigDto } from '../api/client';
+import type { CfcConfigDto, TxLevelingConfigDto, TxPhaseRotatorConfigDto } from '../api/client';
+import { cleanSpectralDensityTarget } from './tx-fidelity';
 
 const DBFS_FLOOR = -200;
 const MIN_VOICED_SAMPLES = 8;
@@ -29,6 +30,10 @@ const LEVELER_DECAY_PUMP_CEIL = 400; // slow the leveler to stop pumping
 const COMP_GAIN_HARD_MIN = 0;
 const COMP_GAIN_HARD_MAX = 20;
 const COMP_GAIN_RAISE_CEIL = 10; // operational density ceiling
+const PHROT_CORNER_MIN = 20;
+const PHROT_CORNER_MAX = 2000;
+const PHROT_STAGES_MIN = 1;
+const PHROT_STAGES_MAX = 16;
 
 export type TxAutoTuneSample = {
   micPkDbfs: number | null;
@@ -56,6 +61,7 @@ export type TxAutoTuneSettings = {
   drivePercent: number;
   cfcConfig: CfcConfigDto;
   txLeveling: TxLevelingConfigDto;
+  txPhaseRotator: TxPhaseRotatorConfigDto;
   targetSpectralDensity: number;
   keyed: boolean;
   audioSuiteActive: boolean;
@@ -96,6 +102,12 @@ export type TxAutoTunePlan = {
   summary: string;
 };
 
+export type TxPhaseRotatorCandidateScore = {
+  score: number;
+  usable: boolean;
+  reason: string;
+};
+
 function finite(v: number | null | undefined): v is number {
   return typeof v === 'number' && Number.isFinite(v);
 }
@@ -111,6 +123,14 @@ function nonNegative(v: number | null | undefined): number {
 function clamp(v: number, min: number, max: number): number {
   if (!Number.isFinite(v)) return min;
   return Math.max(min, Math.min(max, v));
+}
+
+function pctBetween(v: number, low: number, high: number): number {
+  return clamp(((v - low) / (high - low)) * 100, 0, 100);
+}
+
+function clampScore(v: number): number {
+  return Math.max(0, Math.min(100, Math.round(v)));
 }
 
 function roundHalf(v: number): number {
@@ -222,6 +242,15 @@ function clampLeveling(c: TxLevelingConfigDto): TxLevelingConfigDto {
   };
 }
 
+function clampPhaseRotator(c: TxPhaseRotatorConfigDto): TxPhaseRotatorConfigDto {
+  return {
+    enabled: c.enabled,
+    cornerHz: roundInt(clamp(c.cornerHz, PHROT_CORNER_MIN, PHROT_CORNER_MAX)),
+    stages: roundInt(clamp(c.stages, PHROT_STAGES_MIN, PHROT_STAGES_MAX)),
+    reverse: c.reverse,
+  };
+}
+
 export function levelingChanged(a: TxLevelingConfigDto, b: TxLevelingConfigDto): boolean {
   return (
     a.alcMaxGainDb !== b.alcMaxGainDb ||
@@ -230,6 +259,15 @@ export function levelingChanged(a: TxLevelingConfigDto, b: TxLevelingConfigDto):
     a.levelerDecayMs !== b.levelerDecayMs ||
     a.compressorEnabled !== b.compressorEnabled ||
     a.compressorGainDb !== b.compressorGainDb
+  );
+}
+
+export function phaseRotatorChanged(a: TxPhaseRotatorConfigDto, b: TxPhaseRotatorConfigDto): boolean {
+  return (
+    a.enabled !== b.enabled ||
+    a.cornerHz !== b.cornerHz ||
+    a.stages !== b.stages ||
+    a.reverse !== b.reverse
   );
 }
 
@@ -249,7 +287,8 @@ function settingChanged(a: TxAutoTuneSettings, b: TxAutoTuneSettings): boolean {
         band.compLevelDb !== other.compLevelDb ||
         band.postGainDb !== other.postGainDb;
     }) ||
-    levelingChanged(a.txLeveling, b.txLeveling)
+    levelingChanged(a.txLeveling, b.txLeveling) ||
+    phaseRotatorChanged(a.txPhaseRotator, b.txPhaseRotator)
   );
 }
 
@@ -285,11 +324,84 @@ function resultClause(current: TxAutoTuneSettings, next: TxAutoTuneSettings): st
   if (next.txLeveling.levelerDecayMs !== current.txLeveling.levelerDecayMs) {
     parts.push(`leveler decay ${next.txLeveling.levelerDecayMs} ms`);
   }
+  if (phaseRotatorChanged(next.txPhaseRotator, current.txPhaseRotator)) {
+    parts.push(
+      next.txPhaseRotator.enabled
+        ? `phase rotator ${next.txPhaseRotator.cornerHz} Hz / ${next.txPhaseRotator.stages} stages`
+        : 'phase rotator off',
+    );
+  }
   return parts.join(', ');
 }
 
 function fmtDbfs(v: number | null): string {
   return v === null ? '--' : `${v.toFixed(1)} dBFS`;
+}
+
+export function scoreTxPhaseRotatorCandidate(
+  stats: TxAutoTuneStats,
+  targetSpectralDensity: number,
+): TxPhaseRotatorCandidateScore {
+  if (stats.voicedSampleCount < 4) {
+    return { score: Number.NEGATIVE_INFINITY, usable: false, reason: 'not enough voiced samples' };
+  }
+  if (stats.txBlocksProcessed <= 0) {
+    return { score: Number.NEGATIVE_INFINITY, usable: false, reason: 'no fresh TXA blocks' };
+  }
+  if (stats.swrP95 >= 2.5) {
+    return { score: Number.NEGATIVE_INFINITY, usable: false, reason: 'SWR too high' };
+  }
+  if (
+    stats.vstDegradedBlocks > 0 ||
+    stats.ingestDroppedFrames > 0 ||
+    stats.p2QueuedPacketsMax > 0 ||
+    stats.p2TransportFailures > 0 ||
+    stats.p2QueueFailures > 0
+  ) {
+    return { score: Number.NEGATIVE_INFINITY, usable: false, reason: 'transport counters moved' };
+  }
+
+  const target = clamp(targetSpectralDensity, 0, 100);
+  const crest = stats.crestMedianDb ?? 12;
+  const desiredCrest = target >= 95 ? 7.2 : target >= 80 ? 8.2 : 9.4;
+  let score = 100;
+  score -= Math.abs(crest - desiredCrest) * 7.0;
+  if (crest < 5.5) score -= (5.5 - crest) * 14.0;
+
+  if (stats.outMaxDbfs !== null && stats.outMaxDbfs > -0.5) score -= 70;
+  if (stats.outP95Dbfs !== null && stats.outP95Dbfs > -3) score -= 22;
+  if (stats.micMaxDbfs !== null && stats.micMaxDbfs > -1) score -= 18;
+  score -= stats.alcP95Db * 2.2;
+  score -= stats.lvlrP95Db * 0.7;
+  score -= stats.lvlrGrSpreadDb * 0.9;
+  score -= stats.cfcP95Db * 1.2;
+
+  const reason = `crest ${fmtDb(crest)}, ALC ${stats.alcP95Db.toFixed(1)} dB, spread ${stats.lvlrGrSpreadDb.toFixed(1)} dB`;
+  return { score, usable: Number.isFinite(score), reason };
+}
+
+function estimateCleanDensity(stats: TxAutoTuneStats): number | null {
+  if (stats.micP95Dbfs === null) return null;
+  const micDensity = pctBetween(stats.micP95Dbfs, -36, -6);
+  const outDensity =
+    stats.outP95Dbfs === null
+      ? micDensity
+      : pctBetween(stats.outP95Dbfs, -24, -4);
+  const dynamicsDensity = clamp(
+    stats.alcP95Db * 5 + stats.lvlrP95Db * 3 + stats.cfcP95Db * 2.5,
+    0,
+    100,
+  );
+  if (stats.crestMedianDb === null) {
+    return clampScore(micDensity * 0.3 + outDensity * 0.25 + dynamicsDensity * 0.45);
+  }
+  const crestDensity = clamp(((24 - stats.crestMedianDb) / 18) * 100, 0, 100);
+  return clampScore(
+    micDensity * 0.22 +
+      outDensity * 0.2 +
+      dynamicsDensity * 0.38 +
+      crestDensity * 0.2,
+  );
 }
 
 export function summarizeTxAutoTuneSamples(samples: ReadonlyArray<TxAutoTuneSample>): TxAutoTuneStats {
@@ -353,6 +465,7 @@ export function recommendTxAutoTune(
     drivePercent: roundInt(clamp(current.drivePercent, 0, 100)),
     cfcConfig: cloneCfc(current.cfcConfig),
     txLeveling: clampLeveling(current.txLeveling),
+    txPhaseRotator: clampPhaseRotator(current.txPhaseRotator),
   };
   const actions: string[] = [];
   const blockers: string[] = [];
@@ -494,6 +607,9 @@ export function recommendTxAutoTune(
   const protecting = suiteHot || outputHot || micHot || dynamicsHot;
   const mayRaise = blockers.length === 0 && !protecting;
   const target = clamp(current.targetSpectralDensity, 0, 100);
+  const cleanTarget = cleanSpectralDensityTarget(target);
+  const liveDensity = estimateCleanDensity(stats);
+  const densityShortfall = liveDensity === null ? null : Math.max(0, cleanTarget - liveDensity);
   if (mayRaise) {
     if (stats.micP95Dbfs !== null && stats.micP95Dbfs < -18) {
       const gain = clamp((-12 - stats.micP95Dbfs) * 0.4, 1, 3);
@@ -511,12 +627,24 @@ export function recommendTxAutoTune(
       actions.push('mic +1 dB for clean output density');
     }
 
-    if (target >= 70 && stats.lvlrP95Db < 2) {
-      next.levelerMaxGainDb = roundHalf(clamp(next.levelerMaxGainDb + 1, 0, 20));
-      actions.push('leveler max +1 dB');
+    if (
+      stats.audioSuiteOutP95Dbfs !== null &&
+      stats.audioSuiteOutP95Dbfs < -12 &&
+      stats.micP95Dbfs !== null &&
+      stats.micP95Dbfs >= -18 &&
+      stats.micP95Dbfs < -7
+    ) {
+      next.micGainDb = roundInt(clamp(next.micGainDb + 1, -40, 10));
+      actions.push('mic +1 dB for Audio Suite output target');
+    }
+
+    if (stats.lvlrP95Db < 2) {
+      const step = target >= 70 || (densityShortfall ?? 0) > 8 ? 1 : 0.5;
+      next.levelerMaxGainDb = roundHalf(clamp(next.levelerMaxGainDb + step, 0, 20));
+      actions.push(`leveler max +${step} dB`);
     }
     if (
-      target >= 80 &&
+      (target >= 80 || (densityShortfall ?? 0) > 8) &&
       stats.cfcP95Db < 3 &&
       stats.crestMedianDb !== null &&
       stats.crestMedianDb > (target >= 95 ? 8 : 10)
@@ -566,8 +694,9 @@ export function recommendTxAutoTune(
     // a little more make-up gain lifts the average without touching the
     // limiter. Bounded +1 dB, only below the raise guard/ceiling.
     if (
-      target >= 80 &&
-      stats.alcP95Db < 5 &&
+      ((target >= 80 && stats.alcP95Db < 5) ||
+        stats.alcP95Db < 1 ||
+        (stats.outP95Dbfs !== null && stats.outP95Dbfs < -10 && (densityShortfall ?? 0) > 6)) &&
       next.txLeveling.alcMaxGainDb < ALC_MAX_RAISE_GUARD
     ) {
       next.txLeveling = {
@@ -619,12 +748,24 @@ export function recommendTxAutoTune(
       };
       actions.push(enabling ? `compressor on +${step} dB` : `compressor +${step} dB`);
     }
+
+    if (
+      target < 90 &&
+      stats.crestMedianDb !== null &&
+      stats.crestMedianDb > 14 &&
+      stats.cfcP95Db < 4 &&
+      (stats.outP95Dbfs === null || stats.outP95Dbfs <= -5)
+    ) {
+      next.cfcConfig = withPreComp(next.cfcConfig, 0.3, true);
+      actions.push('CFC pre-comp +0.3 dB for crest target');
+    }
   }
 
   next.micGainDb = roundInt(clamp(next.micGainDb, -40, 10));
   next.levelerMaxGainDb = roundHalf(clamp(next.levelerMaxGainDb, 0, 20));
   next.drivePercent = roundInt(clamp(next.drivePercent, 0, 100));
   next.txLeveling = clampLeveling(next.txLeveling);
+  next.txPhaseRotator = clampPhaseRotator(next.txPhaseRotator);
   const changed = settingChanged(current, next);
   let summary = 'Auto tune held current settings';
   if (stats.voicedSampleCount < MIN_VOICED_SAMPLES) {

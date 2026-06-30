@@ -209,6 +209,11 @@ public sealed class RadioService : IDisposable
     // supply a byte, in which case ConnectedBoardKind falls back to OrionMkII
     // for backward compat.
     private HpsdrBoardKind _p2BoardKind = HpsdrBoardKind.Unknown;
+    // True while Zeus is connected through the private N9DSP Protocol 3
+    // sidecar. The public host deliberately keeps only connection metadata;
+    // the sidecar owns all P3/N9DSP runtime code and binaries.
+    private bool _p3Active;
+    private int _p3MaxReceivers = Zeus.Contracts.WireContract.MaxReceivers;
     // Firmware / gateware version string for the live connection, captured at
     // connect time from the discovery reply (P1: code-version byte raw[9];
     // P2: raw[13] + beta). Diagnostics-only — surfaced by ConnectionProbe so a
@@ -458,6 +463,11 @@ public sealed class RadioService : IDisposable
         // TxLevelingConfig defaults so first-connect behaviour is unchanged
         // (Thetis §6.1-6.3). The Leveler max-gain stays on LevelerMaxGainDb.
         var persistedTxLeveling = _dspSettingsStore.GetTxLeveling() ?? new TxLevelingConfig();
+        // TX phase rotator. Null on a fresh install / legacy DB row falls back
+        // to disabled defaults; Auto Tune or the operator can enable and lock it
+        // in later. Reverse stays an explicit operator polarity choice.
+        var persistedTxPhaseRotator = NormalizeTxPhaseRotator(
+            _dspSettingsStore.GetTxPhaseRotator() ?? new TxPhaseRotatorConfig());
         // SSB bandpass "rectangularity" (issue #871). Null on a fresh install
         // falls back to BandpassWindow.Normal, which resolves to the WDSP
         // open-time tap count (nc = max(2048, dsp_size)), so first-connect audio
@@ -486,6 +496,8 @@ public sealed class RadioService : IDisposable
             {
                 persistedCfc = lastProfile.CfcConfig ?? persistedCfc;
                 persistedTxLeveling = lastProfile.TxLeveling ?? persistedTxLeveling;
+                persistedTxPhaseRotator = NormalizeTxPhaseRotator(
+                    lastProfile.TxPhaseRotator ?? persistedTxPhaseRotator);
                 overlayMicGain = Math.Clamp(lastProfile.MicGainDb, -40, 10);
                 overlayLevelerMaxGain = Math.Clamp(lastProfile.LevelerMaxGainDb, 0.0, 20.0);
                 // Re-sign the operator-typed positive magnitudes for the startup
@@ -666,6 +678,8 @@ public sealed class RadioService : IDisposable
             CtunEnabled: rsSnap?.CtunEnabled ?? false,
             PreampOn: rsSnap?.PreampOn ?? false);
 
+        _state = _state with { TxPhaseRotator = persistedTxPhaseRotator };
+
         // Seed the canonical Receivers[] so RX2's hydrated tuning is the live
         // source of truth from the very first snapshot. RX1 (index 0) is rebuilt
         // from the flat RX1 fields by ProjectReceivers on every later Mutate;
@@ -837,7 +851,7 @@ public sealed class RadioService : IDisposable
     /// </summary>
     public bool IsConnected
     {
-        get { lock (_sync) return _activeClient is not null || _p2Active; }
+        get { lock (_sync) return _activeClient is not null || _p2Active || _p3Active; }
     }
 
     /// <summary>True while a Protocol-1 client owns the connection — i.e. the
@@ -859,6 +873,11 @@ public sealed class RadioService : IDisposable
         get { lock (_sync) return _p2Active; }
     }
 
+    internal bool IsProtocol3Active
+    {
+        get { lock (_sync) return _p3Active; }
+    }
+
     /// <summary>Cheap MOX accessor (no Receivers projection, unlike Snapshot).
     /// Used on the per-AudioFrame path to skip feeding RX audio to the radio
     /// codec while transmitting.</summary>
@@ -867,7 +886,18 @@ public sealed class RadioService : IDisposable
         get { lock (_sync) return _mox; }
     }
 
-    public StateDto Snapshot() { lock (_sync) return _state with { Receivers = ProjectReceivers(_state), MaxReceivers = EffectiveMaxReceivers }; }
+    public StateDto Snapshot()
+    {
+        lock (_sync)
+        {
+            return _state with
+            {
+                Receivers = ProjectReceivers(_state),
+                MaxReceivers = EffectiveMaxReceivers,
+                ConnectedProtocol = ConnectedProtocolLocked(),
+            };
+        }
+    }
 
     /// <summary>Current operator preamp toggle. PreampOn isn't on the
     /// StateDto wire format, so DspPipelineService reads it directly when
@@ -2181,11 +2211,22 @@ public sealed class RadioService : IDisposable
     // and filter are pushed. RxMode.FreeDv stays the radio's mode everywhere else;
     // only the WDSP RXA/TXA orientation + bandpass sign follow this. Non-FreeDv
     // modes pass through unchanged.
+    // 60 m is the regulatory exception to "below 10 MHz → LSB": FCC §97.305,
+    // Ofcom IR 2002 and every other regulator that permits 60 m amateur
+    // operation mandate USB-only on that band, and the FreeDV community follows
+    // suit (5,403 kHz USB etc.). The window below covers every 60 m amateur
+    // allocation (IARU R1 5,351.5–5,366.5 kHz, FCC channels 5,330.5–5,403.5 kHz,
+    // Ofcom 5,258.5–5,406.5 kHz) with a small cushion. Outside the window the
+    // 10 MHz rule still applies.
     internal const long FreeDvUsbThresholdHz = 10_000_000;
+    internal const long FreeDvSixtyMeterLowHz = 5_250_000;
+    internal const long FreeDvSixtyMeterHighHz = 5_450_000;
     internal static RxMode EffectiveEngineMode(RxMode mode, long dialHz)
-        => mode == RxMode.FreeDv
-            ? (dialHz < FreeDvUsbThresholdHz ? RxMode.LSB : RxMode.USB)
-            : mode;
+    {
+        if (mode != RxMode.FreeDv) return mode;
+        if (dialHz >= FreeDvSixtyMeterLowHz && dialHz <= FreeDvSixtyMeterHighHz) return RxMode.USB;
+        return dialHz < FreeDvUsbThresholdHz ? RxMode.LSB : RxMode.USB;
+    }
 
     internal static (int low, int high) SignedFilterForMode(RxMode mode, int loAbs, int hiAbs)
     {
@@ -3563,6 +3604,35 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
+    // TX phase rotator — WDSP all-pass phase redistribution plus explicit
+    // microphone polarity reverse. Replace-style like SetTxLeveling; the DSP
+    // apply happens in DspPipelineService so rapid Auto Tune edits are live and
+    // the final state is persisted as the locked-in optimized value.
+    public StateDto SetTxPhaseRotator(TxPhaseRotatorConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        var clamped = NormalizeTxPhaseRotator(cfg);
+        Mutate(s => s with { TxPhaseRotator = clamped });
+        _dspSettingsStore.SetTxPhaseRotator(clamped);
+        return Snapshot();
+    }
+
+    private static TxPhaseRotatorConfig NormalizeTxPhaseRotator(TxPhaseRotatorConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        return cfg with
+        {
+            CornerHz = Math.Clamp(
+                cfg.CornerHz,
+                TxPhaseRotatorConfig.MinCornerHz,
+                TxPhaseRotatorConfig.MaxCornerHz),
+            Stages = Math.Clamp(
+                cfg.Stages,
+                TxPhaseRotatorConfig.MinStages,
+                TxPhaseRotatorConfig.MaxStages),
+        };
+    }
+
     // SSB bandpass "rectangularity" — issue #871. Independent RX and TX
     // selectors push the operator's chosen WDSP FIR window (Soft = BH 4-term,
     // Sharp = BH 7-term) through DspPipelineService's _appliedRx/TxBandpassWindow
@@ -3986,7 +4056,12 @@ public sealed class RadioService : IDisposable
             // fields on every mutation so StateChanged subscribers and the
             // SignalR broadcast always carry an up-to-date Receivers[] (wire
             // v2). Pure function of the flat fields — cheap (1–2 elements).
-            next = next with { Receivers = ProjectReceivers(next), MaxReceivers = EffectiveMaxReceivers };
+            next = next with
+            {
+                Receivers = ProjectReceivers(next),
+                MaxReceivers = EffectiveMaxReceivers,
+                ConnectedProtocol = ConnectedProtocolLocked(),
+            };
             _state = next;
         }
         _stateDirty = true;
@@ -4189,6 +4264,8 @@ public sealed class RadioService : IDisposable
             _p2Client = client;
             _p2Active = true;
             _p2BoardKind = boardKind;
+            _p3Active = false;
+            _p3MaxReceivers = Zeus.Contracts.WireContract.MaxReceivers;
             // Record the discovered firmware for the diagnostics snapshot.
             _connectedFirmware = firmware;
             _attOffsetDb = 0;
@@ -4269,6 +4346,72 @@ public sealed class RadioService : IDisposable
         P2Disconnected?.Invoke();
     }
 
+    public void MarkProtocol3Connected(
+        string endpoint,
+        int sampleRateHz,
+        int maxReceivers,
+        string? firmware = null)
+    {
+        Protocol2Client? previous;
+        lock (_sync)
+        {
+            previous = _p2Client;
+            _p2Client = null;
+            _p2Active = false;
+            _p2BoardKind = HpsdrBoardKind.Unknown;
+            _p3Active = true;
+            _p3MaxReceivers = Math.Clamp(maxReceivers, 1, Zeus.Contracts.WireContract.MaxReceivers);
+            _connectedFirmware = firmware;
+            _attOffsetDb = 0;
+            _adcOverloadLevel = 0;
+            _overloadSeenInWindow = false;
+            _lastTickMs = long.MinValue;
+            _lastOverloadMs = long.MinValue;
+            _lastAppliedEffectiveDb = -1;
+            _lastAdcOverloadBits = 0;
+            _lastAdc0MaxMagnitude = null;
+            _lastAdc1MaxMagnitude = null;
+            _adc0MaxMagnitudeAtOverload = 0;
+            _adc1MaxMagnitudeAtOverload = 0;
+            _lastAdcTelemetryUtc = null;
+        }
+        if (previous is not null) previous.TelemetryReceived -= OnP2Telemetry;
+        Mutate(s => s with
+        {
+            Status = ConnectionStatus.Connected,
+            Endpoint = endpoint,
+            SampleRate = sampleRateHz,
+            AttOffsetDb = 0,
+            AdcOverloadWarning = false,
+        });
+        RecomputePaAndPush();
+    }
+
+    public void MarkProtocol3Disconnected()
+    {
+        lock (_sync)
+        {
+            _p3Active = false;
+            _p3MaxReceivers = Zeus.Contracts.WireContract.MaxReceivers;
+            _connectedFirmware = null;
+            _attOffsetDb = 0;
+            _adcOverloadLevel = 0;
+            _overloadSeenInWindow = false;
+            _lastTickMs = long.MinValue;
+            _lastOverloadMs = long.MinValue;
+            _lastAppliedEffectiveDb = -1;
+        }
+        Mutate(s => s with
+        {
+            Status = ConnectionStatus.Disconnected,
+            Endpoint = null,
+            AttOffsetDb = 0,
+            AdcOverloadWarning = false,
+        });
+        _currentPsBoardKey = string.Empty;
+        _currentPsTxAttnDb = -1;
+    }
+
     // Resolves the board class for ALL board-specific behavior: PA settings,
     // drive-byte encoding, ATT behavior, filter switching. Normally returns
     // the board ID from discovery (P1) or infers OrionMkII for P2. When the
@@ -4308,6 +4451,10 @@ public sealed class RadioService : IDisposable
                         ? _p2BoardKind
                         : HpsdrBoardKind.OrionMkII;
                 }
+                if (_p3Active)
+                {
+                    return HpsdrBoardKind.OrionMkII;
+                }
                 return HpsdrBoardKind.Unknown;
             }
         }
@@ -4328,6 +4475,14 @@ public sealed class RadioService : IDisposable
         }
     }
 
+    private string? ConnectedProtocolLocked()
+    {
+        if (_p2Active) return "P2";
+        if (_p3Active) return "P3";
+        if (_activeClient is not null) return "P1";
+        return null;
+    }
+
     // Board-aware count of user-visible receivers the connected radio can
     // actually expose, advertised to the frontend via StateDto.MaxReceivers so
     // the Receivers menu renders exactly the reachable slots. On Protocol-2 the
@@ -4346,6 +4501,8 @@ public sealed class RadioService : IDisposable
                 if (_p2Active)
                     return Zeus.Protocol2.Protocol2Client.MaxRxDdc
                          - Zeus.Protocol2.Protocol2Client.RxBaseDdc(ConnectedBoardKind);
+                if (_p3Active)
+                    return _p3MaxReceivers;
                 return Zeus.Contracts.WireContract.MaxReceivers;
             }
         }

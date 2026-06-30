@@ -66,6 +66,8 @@ import { useChatStore, type ChatEnvelope } from '../state/chat-store';
 import { useFt8Store, type Ft8DecodeBatch } from '../state/ft8-store';
 import { useWsprStore, type WsprSpotBatch } from '../state/wspr-store';
 import { useFt8TxStore, type Ft8TxStatus } from '../state/ft8-tx-store';
+import { useMidiStore } from '../state/midi-store';
+import type { MidiLearnFrame } from '../api/midi';
 import { usePttStore } from '../state/ptt-store';
 import { warnOnce } from '../util/logger';
 import { clampFinite } from '../util/number';
@@ -223,6 +225,13 @@ export const MSG_TYPE_WSPR_SPOT = 0x39;
 // byte, pushed on every FT8/FT4/WSPR keyer arm/stage/transmit edge; dispatched
 // into ft8-tx-store's ingest(). Contract: Zeus.Contracts/Ft8TxStatusFrame.cs.
 export const MSG_TYPE_FT8_TX_STATUS = 0x3a;
+
+// 0x3B MidiLearn: variable-length UTF-8 JSON MidiLearnFrame after the type
+// byte, pushed ONLY while the MIDI settings panel is in Learn mode (one frame
+// per inbound control event) so the panel can highlight + bind the live
+// control. Dispatched into midi-store's ingestLearn(). Contract:
+// Zeus.Contracts/MidiDtos.cs (MidiLearnFrame).
+export const MSG_TYPE_MIDI_LEARN = 0x3b;
 
 // CW engine status — broadcast on every state edge of the host-side CW
 // keyer so the macro pad can render in-flight text + queue depth without
@@ -554,6 +563,19 @@ export function dispatchServerFrame(data: ArrayBuffer): void {
         useFt8TxStore.getState().ingest(status);
       } catch (err) {
         warnOnce('ws-ft8-tx-status-parse', 'ft8 tx status frame parse failed', err);
+      }
+      return;
+    }
+    if (peekType === MSG_TYPE_MIDI_LEARN) {
+      // Variable-length UTF-8 JSON MidiLearnFrame after the type byte. Only
+      // emitted while the MIDI panel is in Learn mode.
+      const bytes = new Uint8Array(ev.data, 1);
+      const json = new TextDecoder('utf-8').decode(bytes);
+      try {
+        const frame = JSON.parse(json) as MidiLearnFrame;
+        useMidiStore.getState().ingestLearn(frame);
+      } catch (err) {
+        warnOnce('ws-midi-learn-parse', 'midi learn frame parse failed', err);
       }
       return;
     }

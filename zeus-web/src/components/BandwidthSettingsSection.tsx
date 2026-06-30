@@ -19,10 +19,9 @@
 // ladder as a live control so an operator can widen/narrow the spectrum without
 // reconnecting. Mirrors Thetis's Setup ▸ General ▸ "Sample Rate" selector.
 //
-// The 768/1536 kHz rungs are Protocol-2 only: Protocol-1's control frame carries
-// the rate in 2 bits (max 384 kHz), so they are gated to a P2 connection both
-// here and in the backend (RadioService.SetSampleRate clamps, the connect path
-// rejects). Sends are optimistic + applyState-reconciled like every other
+// The 768/1536 kHz rungs need a wide DDC transport: Protocol-1's control frame
+// carries the rate in 2 bits (max 384 kHz), so they are gated to P2/P3 here and
+// in the backend. Sends are optimistic + applyState-reconciled like every other
 // section, so the toolbar/connect view and this control stay in sync.
 
 import { useCallback, useEffect, useRef } from 'react';
@@ -57,10 +56,12 @@ export function BandwidthSettingsSection() {
     [applyState],
   );
 
-  // 768/1536 are P2-only and board-capability gated. Treat unknown protocol
+  // 768/1536 are P2/P3-only and board-capability gated. Treat unknown protocol
   // (null, e.g. after reload) conservatively as the P1 cap so we never offer
   // a rung the radio rejects.
-  const protocolMaxRateHz = protocol === 'P2' ? boardMaxRateHz : P1_MAX_SAMPLE_RATE;
+  const protocolMaxRateHz = protocol === 'P2' || protocol === 'P3'
+    ? boardMaxRateHz
+    : P1_MAX_SAMPLE_RATE;
 
   return (
     <div className="dsp-cfg">
@@ -71,7 +72,7 @@ export function BandwidthSettingsSection() {
         </span>
         <div className="dsp-cfg-btns">
           {RATES.map((r) => {
-            const protocolLocked = r > P1_MAX_SAMPLE_RATE && protocol !== 'P2';
+            const protocolLocked = r > P1_MAX_SAMPLE_RATE && protocol !== 'P2' && protocol !== 'P3';
             const capabilityLocked = r > protocolMaxRateHz;
             const locked = protocolLocked || capabilityLocked;
             const isActive = sampleRate === r;
@@ -85,7 +86,7 @@ export function BandwidthSettingsSection() {
                 className={`btn sm ${isActive ? 'active' : ''}`}
                 title={
                   protocolLocked
-                    ? `${r / 1000} kHz needs a Protocol-2 connection`
+                    ? `${r / 1000} kHz needs a Protocol-2 or Protocol-3 connection`
                     : capabilityLocked
                       ? `${r / 1000} kHz exceeds this radio's ${protocolMaxRateHz / 1000} kHz RX/DDC capability`
                     : `Set DDC bandwidth to ${r / 1000} kHz`

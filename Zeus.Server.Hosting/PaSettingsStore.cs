@@ -40,6 +40,12 @@ public sealed class PaSettingsStore : IDisposable
     private readonly ILiteCollection<PaGlobalEntry> _globals;
     private readonly ILogger<PaSettingsStore> _log;
     private readonly object _sync = new();
+    // Dedup key for the cross-board PA-gain substitution warning (issue #1180).
+    // PaBandEntry rows are not board-scoped, so a value stored under one board
+    // family's semantics survives a session into another board family — fired
+    // once per (band, board) pair on read so the operator sees the substitution
+    // in the log without flooding it on every recompute.
+    private readonly HashSet<(string Band, HpsdrBoardKind Board)> _crossBoardWarned = new();
 
     public event Action? Changed;
 
@@ -90,7 +96,8 @@ public sealed class PaSettingsStore : IDisposable
                     var auto = AutoOcMaskFor(board, b);
                     if (existing.TryGetValue(b, out var e))
                     {
-                        return new PaBandSettingsDto(e.Band, e.PaGainDb, e.DisablePa, e.OcTx, e.OcRx, auto, e.OcDxTx, e.OcDxRx);
+                        var gain = ResolvePaGainDbForBoard(e.PaGainDb, e.Band, board, variant);
+                        return new PaBandSettingsDto(e.Band, gain, e.DisablePa, e.OcTx, e.OcRx, auto, e.OcDxTx, e.OcDxRx);
                     }
                     return new PaBandSettingsDto(b, PaGainDb: PaDefaults.GetPaGainDb(board, b, variant), AutoOcMask: auto);
                 })
@@ -130,10 +137,47 @@ public sealed class PaSettingsStore : IDisposable
         {
             var auto = AutoOcMaskFor(board, band);
             var e = _bands.FindOne(x => x.Band == band);
-            return e is null
-                ? new PaBandSettingsDto(band, PaGainDb: PaDefaults.GetPaGainDb(board, band, variant), AutoOcMask: auto)
-                : new PaBandSettingsDto(e.Band, e.PaGainDb, e.DisablePa, e.OcTx, e.OcRx, auto, e.OcDxTx, e.OcDxRx);
+            if (e is null)
+                return new PaBandSettingsDto(band, PaGainDb: PaDefaults.GetPaGainDb(board, band, variant), AutoOcMask: auto);
+            var gain = ResolvePaGainDbForBoard(e.PaGainDb, e.Band, board, variant);
+            return new PaBandSettingsDto(e.Band, gain, e.DisablePa, e.OcTx, e.OcRx, auto, e.OcDxTx, e.OcDxRx);
         }
+    }
+
+    // Sanity-check a stored PA-gain value against the connected board's drive-
+    // profile range and substitute the per-board default when the stored value
+    // is outside it. The pa_bands collection is not board-scoped, so a value
+    // calibrated under one board's semantics (e.g. HL2 stores PaGainDb as a
+    // 0..100 percentage) survives into the next session against a different
+    // board family (Hermes / ANAN / Orion read PaGainDb as a 0..70 dB forward
+    // gain). When HL2's 100 % surfaces on Angelia as "100 dB", FullByteDriveProfile
+    // quantises the drive byte to 0 and TX goes silent (issue #1180:
+    // pa.recompute gainDb=100.00 -> byte=0 -> drv=0 -> p1 IQ-zero short-circuit
+    // at ControlFrame.cs:858 -> no RF). The substitute keeps RecomputePaAndPush
+    // sane on the next session; the stored row stays untouched so an explicit
+    // Reset → Apply is still required for the operator to persist the
+    // board-appropriate value.
+    private double ResolvePaGainDbForBoard(double stored, string band, HpsdrBoardKind board, OrionMkIIVariant variant)
+    {
+        // No connected board yet (preview / pre-discovery) — we can't reason
+        // about the right range, so leave the stored value as-is.
+        if (board == HpsdrBoardKind.Unknown) return stored;
+
+        // HL2: 0..100 percentage (HermesLite2DriveProfile). Everything else:
+        // dB forward gain. The PA Settings panel clamps non-HL2 input to
+        // 0..70 dB (see docs/lessons/hl2-drive-model.md), so any persisted
+        // value > 70 on a dB board is necessarily cross-board contamination.
+        double upper = board == HpsdrBoardKind.HermesLite2 ? 100.0 : 70.0;
+        if (stored >= 0.0 && stored <= upper) return stored;
+
+        var fallback = PaDefaults.GetPaGainDb(board, band, variant);
+        if (_crossBoardWarned.Add((band, board)))
+        {
+            _log.LogWarning(
+                "pa.gain.cross_board_substituted band={Band} board={Board} variant={Variant} stored={Stored:F2} validUpper={Upper:F1} -> using per-board default {Fallback:F2}. The value in pa_bands was persisted under a different board's semantics (likely HL2 ↔ Hermes/ANAN/Orion). Open PA Settings and press \"Reset to defaults\" then APPLY to overwrite the row.",
+                band, board, variant, stored, upper, fallback);
+        }
+        return fallback;
     }
 
     // Read-only mirror of the on-wire auto-filter mask for the connected

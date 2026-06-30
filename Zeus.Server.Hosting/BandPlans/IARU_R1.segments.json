@@ -24,6 +24,7 @@
     { "lowHz": 24890000, "highHz": 24915000, "label": "12M CW",          "allocation": "Amateur", "modeRestriction": "CwOnly",      "maxPowerW": null, "notes": null },
     { "lowHz": 24915000, "highHz": 24929000, "label": "12M Digital",     "allocation": "Amateur", "modeRestriction": "DigitalOnly", "maxPowerW": null, "notes": null },
     { "lowHz": 24929000, "highHz": 24990000, "label": "12M Phone",       "allocation": "Amateur", "modeRestriction": "Any",         "maxPowerW": null, "notes": null },
+    { "lowHz": 26965000, "highHz": 27405000, "label": "11M (CB / 27 MHz)","allocation": "Amateur", "modeRestriction": "Any",         "maxPowerW": null, "notes": "Citizens Band / 11m — not an amateur allocation; provided for export/freeband operation" },
     { "lowHz": 28000000, "highHz": 28070000, "label": "10M CW",          "allocation": "Amateur", "modeRestriction": "CwOnly",      "maxPowerW": null, "notes": null },
     { "lowHz": 28070000, "highHz": 28190000, "label": "10M Digital",     "allocation": "Amateur", "modeRestriction": "DigitalOnly", "maxPowerW": null, "notes": null },
     { "lowHz": 28190000, "highHz": 29700000, "label": "10M Phone",       "allocation": "Amateur", "modeRestriction": "Any",         "maxPowerW": null, "notes": null },

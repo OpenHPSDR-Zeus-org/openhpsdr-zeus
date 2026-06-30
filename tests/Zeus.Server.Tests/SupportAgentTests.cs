@@ -466,7 +466,7 @@ public class HttpSupportBrokerClientIdentityTests
     public void BlankSeed_IsNotConfigured()
     {
         using var http = new HttpClient();
-        var broker = new HttpSupportBrokerClient(http, Endpoints(), "", "");
+        var broker = new HttpSupportBrokerClient(http, Endpoints(), "", "", "test-platform", "1.0");
         Assert.False(broker.IsConfigured);
     }
 
@@ -474,7 +474,7 @@ public class HttpSupportBrokerClientIdentityTests
     public void UpdateIdentity_RequiresBothCallsignAndKey()
     {
         using var http = new HttpClient();
-        var broker = new HttpSupportBrokerClient(http, Endpoints(), "", "");
+        var broker = new HttpSupportBrokerClient(http, Endpoints(), "", "", "test-platform", "1.0");
 
         broker.UpdateIdentity("N9WAR", null);
         Assert.False(broker.IsConfigured); // callsign without key
@@ -487,6 +487,81 @@ public class HttpSupportBrokerClientIdentityTests
 
         broker.UpdateIdentity("N9WAR", "");
         Assert.False(broker.IsConfigured); // key cleared (sign-out)
+    }
+
+    [Fact]
+    public async Task RegisterAndHeartbeat_EmitMetadataJsonBody()
+    {
+        var handler = new RecordingHandler();
+        using var http = new HttpClient(handler);
+        var broker = new HttpSupportBrokerClient(
+            http, Endpoints(), "N9WAR", "KEY", "win32-test", "9.9");
+        broker.UpdateMetadata("ANAN-G2", "G2", radioConnected: true);
+
+        Assert.True(await broker.RegisterAsync(CancellationToken.None));
+        Assert.NotNull(handler.LastBody);
+        using (var doc = JsonDocument.Parse(handler.LastBody!))
+        {
+            var root = doc.RootElement;
+            Assert.Equal("win32-test", root.GetProperty("platform").GetString());
+            Assert.Equal("9.9", root.GetProperty("appVersion").GetString());
+            Assert.Equal("ANAN-G2", root.GetProperty("radioBoard").GetString());
+            Assert.Equal("G2", root.GetProperty("radioModel").GetString());
+            Assert.True(root.GetProperty("radioConnected").GetBoolean());
+        }
+        Assert.EndsWith("/presence/register", handler.LastUri!.AbsolutePath);
+
+        Assert.True(await broker.HeartbeatAsync(CancellationToken.None));
+        Assert.EndsWith("/presence/heartbeat", handler.LastUri!.AbsolutePath);
+        Assert.NotNull(handler.LastBody);
+    }
+
+    [Fact]
+    public async Task Register_NullRadio_EmitsJsonNulls()
+    {
+        var handler = new RecordingHandler();
+        using var http = new HttpClient(handler);
+        var broker = new HttpSupportBrokerClient(
+            http, Endpoints(), "N9WAR", "KEY", "win32-test", "9.9");
+        // No radio connected: board/model null, connected false.
+        broker.UpdateMetadata(null, null, radioConnected: false);
+
+        Assert.True(await broker.RegisterAsync(CancellationToken.None));
+        using var doc = JsonDocument.Parse(handler.LastBody!);
+        var root = doc.RootElement;
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("radioBoard").ValueKind);
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("radioModel").ValueKind);
+        Assert.False(root.GetProperty("radioConnected").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Drop_StaysBodyless()
+    {
+        var handler = new RecordingHandler();
+        using var http = new HttpClient(handler);
+        var broker = new HttpSupportBrokerClient(
+            http, Endpoints(), "N9WAR", "KEY", "win32-test", "9.9");
+
+        Assert.True(await broker.DropAsync(CancellationToken.None));
+        Assert.EndsWith("/presence/drop", handler.LastUri!.AbsolutePath);
+        Assert.Null(handler.LastBody); // drop carries no body
+    }
+
+    /// <summary>Captures the URI + request body of the last POST, replies 200 OK.</summary>
+    private sealed class RecordingHandler : HttpMessageHandler
+    {
+        public Uri? LastUri;
+        public string? LastBody;
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            LastUri = request.RequestUri;
+            LastBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+        }
     }
 }
 
@@ -502,7 +577,8 @@ public class PresenceCoordinatorTests
     {
         var http = new HttpClient();
         var broker = new HttpSupportBrokerClient(
-            http, BrokerEndpoints.FromBrokerUrl("wss://remote.openhpsdrzeus.com/signal")!, "", "");
+            http, BrokerEndpoints.FromBrokerUrl("wss://remote.openhpsdrzeus.com/signal")!, "", "",
+            "test-platform", "1.0");
         var presence = new PresenceClient(broker, initiallyAvailable: false);
         var coord = new PresenceCoordinator(broker, presence, initialAutoShare);
         return (broker, presence, coord);
@@ -568,6 +644,36 @@ public class PresenceCoordinatorTests
         coord.Apply(State(remoteDiag: true, callsign: "N9WAR", key: "K", autoShare: true));
         Assert.True(coord.AutoShareOnCrash);
     }
+
+    [Fact]
+    public void Apply_ForwardsRadioMetadataToBroker()
+    {
+        var broker = new FakeMutableBroker();
+        var presence = new PresenceClient(broker, initiallyAvailable: false);
+        var coord = new PresenceCoordinator(broker, presence);
+
+        // A connected radio: board + variant model + connected flag must reach the broker.
+        coord.Apply(new SupportIpcListener.SupportState(
+            QrzCallsign: "N9WAR", RemoteDiagnosticsEnabled: true, AutoShareOnCrash: false,
+            QrzSessionKey: "K",
+            RadioBoard: "ANAN-G2", RadioModel: "G2", RadioConnected: true));
+
+        Assert.Equal("ANAN-G2", broker.LastRadioBoard);
+        Assert.Equal("G2", broker.LastRadioModel);
+        Assert.True(broker.LastRadioConnected);
+        Assert.Equal(1, broker.MetadataUpdates);
+
+        // Disconnect: nulls + false propagate so the broker clears the radio.
+        coord.Apply(new SupportIpcListener.SupportState(
+            QrzCallsign: "N9WAR", RemoteDiagnosticsEnabled: true, AutoShareOnCrash: false,
+            QrzSessionKey: "K",
+            RadioBoard: null, RadioModel: null, RadioConnected: false));
+
+        Assert.Null(broker.LastRadioBoard);
+        Assert.Null(broker.LastRadioModel);
+        Assert.False(broker.LastRadioConnected);
+        Assert.Equal(2, broker.MetadataUpdates);
+    }
 }
 
 /// <summary>A mutable-identity fake broker for coordinator/pipe tests; counts calls thread-safely.</summary>
@@ -581,6 +687,13 @@ internal sealed class FakeMutableBroker : IMutableSupportBrokerClient
     public int Registers => Volatile.Read(ref _registers);
     public int Drops => Volatile.Read(ref _drops);
 
+    // Last radio metadata forwarded via UpdateMetadata, captured for assertions.
+    public string? LastRadioBoard;
+    public string? LastRadioModel;
+    public bool LastRadioConnected;
+    private int _metadataUpdates;
+    public int MetadataUpdates => Volatile.Read(ref _metadataUpdates);
+
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(_callsign) && !string.IsNullOrWhiteSpace(_sessionKey);
 
@@ -588,6 +701,14 @@ internal sealed class FakeMutableBroker : IMutableSupportBrokerClient
     {
         _callsign = callsign ?? "";
         _sessionKey = sessionKey ?? "";
+    }
+
+    public void UpdateMetadata(string? radioBoard, string? radioModel, bool radioConnected)
+    {
+        LastRadioBoard = radioBoard;
+        LastRadioModel = radioModel;
+        LastRadioConnected = radioConnected;
+        Interlocked.Increment(ref _metadataUpdates);
     }
 
     public Task<bool> RegisterAsync(CancellationToken ct) { Interlocked.Increment(ref _registers); return Task.FromResult(true); }

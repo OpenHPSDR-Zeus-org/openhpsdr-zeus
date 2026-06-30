@@ -25,4 +25,12 @@ public interface IMutableSupportBrokerClient : ISupportBrokerClient
 
     /// <summary>Swap the operator identity used to authenticate broker calls. Blank parts ⇒ not configured.</summary>
     void UpdateIdentity(string? callsign, string? sessionKey);
+
+    /// <summary>
+    /// Swap the operator's radio metadata advertised in the broker presence body
+    /// (board name, variant/model, connected state). Static identity (platform /
+    /// app version) is set once at construction; this carries the parts that change
+    /// as the operator connects/disconnects a radio.
+    /// </summary>
+    void UpdateMetadata(string? radioBoard, string? radioModel, bool radioConnected);
 }

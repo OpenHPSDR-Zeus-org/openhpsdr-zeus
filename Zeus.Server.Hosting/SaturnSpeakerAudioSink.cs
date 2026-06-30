@@ -13,6 +13,7 @@
 // instance is wired identically across the lineup (issue #1122).
 
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using Zeus.Contracts;
@@ -55,11 +56,37 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
     // stale audio queued for the radio's speaker jack.
     private const int RingCapacity = 8_192;
 
-    // Sender wake timeout — covers the (rare) case where a wake signal was
-    // missed across a flag toggle (settings/state change racing the wait). At
-    // 100 ms it's well below human-perceptible latency; the common path is
-    // wake-on-publish (~46 Hz) and never hits the timer.
-    private static readonly TimeSpan WorkerWakeTimeout = TimeSpan.FromMilliseconds(100);
+    // Sender wake timeout (ms) — covers the (rare) case where a wake signal was
+    // missed across a flag toggle (settings/state change racing the wait), and
+    // is the upper bound on the data-bound park (waiting for the next publish).
+    // At 100 ms it's well below human-perceptible latency; the common path is
+    // wake-on-publish (~30 Hz) and never hits this timer.
+    private const int WorkerWakeTimeoutMs = 100;
+
+    // #1148 candidate (bench-gated): pace the radio-speaker UDP egress at the
+    // codec's native 48 kHz cadence — one 64-sample packet per ~1333 µs ≈ 750
+    // pkt/s — instead of firing a whole DSP tick's worth of packets in one
+    // back-to-back burst (the one thing PR #1154 did NOT change). This mirrors
+    // deskHPSDR / Thetis, which pace audio to the radio at ~1333 µs spacing with
+    // 300-1000 µs adaptive waits (deskHPSDR new_protocol.c audio send loop). The
+    // ring is the jitter buffer; pacing only reshapes egress timing and never
+    // lowers AVERAGE throughput — catch-up (see DrainAndSend) keeps the long-run
+    // rate equal to the inbound rate. PENDING #1148 telemetry to confirm the
+    // burst is what perturbs inbound IQ; safe to ship because the worst case
+    // (coarse platform timer) degrades to small groups, never worse than the
+    // pre-existing single 16-burst.
+    private const int TargetPacketsPerSec = 750;
+    private static readonly long PacketIntervalTicks =
+        Math.Max(1, Stopwatch.Frequency / TargetPacketsPerSec);
+    // Bound how far the schedule may lag real time before we abandon the missed
+    // slots and realign to "now". This caps the catch-up burst after a scheduler
+    // stall so a stalled sender drains the ring at the paced rate rather than
+    // dumping it all at once — yet it is generous enough (≈48 packets ≈ 64 ms)
+    // that a coarse platform timer (Windows ~15 ms wake granularity) releases in
+    // small groups without ever throttling steady-state throughput.
+    private static readonly long MaxCatchupBehindTicks = PacketIntervalTicks * 48;
+    private static readonly double TicksPerMs = Math.Max(1.0, Stopwatch.Frequency / 1000.0);
+    private static readonly double UsPerTick = 1_000_000.0 / Stopwatch.Frequency;
 
     private readonly RadioService _radio;
     private readonly RadioSpeakerSettingsStore _settings;
@@ -83,6 +110,33 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
     private bool _wasEligible;
     private ConnectionStatus _lastStatus = ConnectionStatus.Disconnected;
     private string? _lastEndpoint;
+
+    // #1148 pacing schedule (sender-thread-owned). _nextSendTicks is the
+    // monotonic Stopwatch deadline for the next packet (0 = realign to "now" on
+    // the next drain — set on fresh start, drain, disable, and socket loss).
+    // _pacingWaitTicks is how long the worker should park before the next due
+    // packet (0 = no pending deadline, park for data / the full wake timeout).
+    private long _nextSendTicks;
+    private long _pacingWaitTicks;
+
+    // Injectable clock + send observer for deterministic pacing tests — no
+    // sockets, no real time. Null/Stopwatch in production.
+    private Func<long> _clock = Stopwatch.GetTimestamp;
+    private Action<long>? _sentObserverForTest;
+
+    // #1148 sender-side telemetry (sender-thread-owned). Emitted at ~1 Hz so an
+    // OFF-vs-ON radio-speaker capture can be correlated with p2.rxdiag /
+    // dsp.tickdiag by timestamp: packets/sec, the MAX burst sent in a single
+    // DrainAndSend (proves pacing spreads egress), inter-send gap mean/max, and
+    // the running WouldBlock drop counters.
+    private long _diagLastEmitTicks;
+    private long _diagPacketsSent;
+    private int _diagBurstThisDrain;
+    private int _diagMaxBurst;
+    private long _diagSendGapSumUs;
+    private long _diagSendGapMaxUs;
+    private long _diagSendGapCount;
+    private long _diagLastSendTicks;
 
     // Cross-thread signals. Volatile reads/writes are sufficient — these are
     // single-bit flags, not data values; the worker re-snapshots radio/settings
@@ -202,7 +256,15 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         while (!ct.IsCancellationRequested)
         {
             _idle.Set();
-            try { _wake.Wait(WorkerWakeTimeout, ct); }
+            // Deadline-bound park when a paced packet is pending; otherwise wait
+            // for the next publish (or the safety timeout). Round the pacing wait
+            // UP to at least 1 ms so we never spin on a sub-millisecond timeout —
+            // on a coarse platform timer this simply releases packets in small
+            // groups, which is the documented graceful degradation.
+            int waitMs = _pacingWaitTicks > 0
+                ? Math.Clamp((int)Math.Ceiling(_pacingWaitTicks / TicksPerMs), 1, WorkerWakeTimeoutMs)
+                : WorkerWakeTimeoutMs;
+            try { _wake.Wait(waitMs, ct); }
             catch (OperationCanceledException) { break; }
             _wake.Reset();
             _idle.Reset();
@@ -220,6 +282,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
                 _drainRequested = false;
                 _ring.Clear();
                 _packetFrames = 0;
+                _nextSendTicks = 0; // realign the pacing schedule on resume
             }
 
             if (_socket is null)
@@ -233,24 +296,64 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
                     // a connection flap.
                     _ring.Clear();
                     _packetFrames = 0;
+                    _nextSendTicks = 0;
+                    _pacingWaitTicks = 0;
                     continue;
                 }
             }
 
             DrainAndSend(scratch);
+            if (_socket is not null) MaybeEmitDiag();
         }
 
         _idle.Set();
         CloseSocket();
     }
 
+    // Drain the ring into 64-sample packets and release them on a monotonic
+    // 750 pkt/s schedule (issue #1148). The ring itself is the jitter buffer;
+    // this loop never busy-spins — when the next packet is not yet due it parks
+    // the worker (via _pacingWaitTicks) until the deadline or the next publish.
+    // Average throughput is preserved: when the schedule falls behind real time
+    // (a scheduler hiccup, or a coarse platform timer waking late) packets are
+    // released back-to-back to catch up, bounded by MaxCatchupBehindTicks so a
+    // stalled sender can't dump the whole ring at once.
     private void DrainAndSend(Span<float> scratch)
     {
+        _diagBurstThisDrain = 0;
         while (true)
         {
+            long now = _clock();
+
+            // Fresh start / post-drain: anchor the schedule to "now" so the
+            // first packet of a new RX burst ships promptly (no backlog of
+            // "due" slots accumulated across an idle gap).
+            if (_nextSendTicks == 0) _nextSendTicks = now;
+
+            // Catch-up cap: never let the schedule lag real time by more than
+            // MaxCatchupBehindTicks. This bounds the burst after a stall while
+            // still letting the long-run rate equal the inbound rate.
+            long earliest = now - MaxCatchupBehindTicks;
+            if (_nextSendTicks < earliest) _nextSendTicks = earliest;
+
+            if (now < _nextSendTicks)
+            {
+                // Next packet not due yet — park until the deadline (or an
+                // earlier publish wake). Bounded; never busy-spins.
+                _pacingWaitTicks = _nextSendTicks - now;
+                return;
+            }
+
             int need = PacketFrames - _packetFrames;
             int read = _ring.Read(scratch[..need]);
-            if (read == 0) return;
+            if (read == 0)
+            {
+                // Nothing buffered: realign the schedule and wait for the
+                // producer to wake us with fresh audio.
+                _nextSendTicks = 0;
+                _pacingWaitTicks = 0;
+                return;
+            }
 
             for (int i = 0; i < read; i++)
             {
@@ -261,12 +364,78 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
                 _packetFrames++;
             }
 
-            if (_packetFrames == PacketFrames)
+            if (_packetFrames < PacketFrames)
             {
-                SendPacket();
-                if (_socket is null) return;
+                // Partial packet — need more samples before this slot can ship.
+                // Wait for the next publish rather than the pacing deadline.
+                _pacingWaitTicks = 0;
+                return;
             }
+
+            if (!EmitPacket(now)) return; // socket died mid-drain
+            _nextSendTicks += PacketIntervalTicks;
         }
+    }
+
+    // Emit one full packet. Returns false only when the production socket went
+    // away (so the drain loop stops). The test observer simulates a successful
+    // send — advancing the sequence and recording the emit time — with no socket.
+    private bool EmitPacket(long now)
+    {
+        var obs = _sentObserverForTest;
+        if (obs is not null)
+        {
+            BinaryPrimitives.WriteUInt32BigEndian(_packet.AsSpan(0, sizeof(uint)), _sequence++);
+            _packetFrames = 0;
+            RecordSend(now);
+            obs(now);
+            return true;
+        }
+
+        SendPacket(); // resets _packetFrames in its finally
+        RecordSend(now);
+        return _socket is not null;
+    }
+
+    private void RecordSend(long now)
+    {
+        _diagPacketsSent++;
+        _diagBurstThisDrain++;
+        if (_diagBurstThisDrain > _diagMaxBurst) _diagMaxBurst = _diagBurstThisDrain;
+        if (_diagLastSendTicks != 0)
+        {
+            long gapUs = (long)((now - _diagLastSendTicks) * UsPerTick);
+            _diagSendGapSumUs += gapUs;
+            if (gapUs > _diagSendGapMaxUs) _diagSendGapMaxUs = gapUs;
+            _diagSendGapCount++;
+        }
+        _diagLastSendTicks = now;
+    }
+
+    // #1148 sender-side ~1 Hz diagnostic. Worker-thread-owned; called after each
+    // DrainAndSend while a socket is open.
+    private void MaybeEmitDiag()
+    {
+        long now = _clock();
+        if (_diagLastEmitTicks == 0) { _diagLastEmitTicks = now; return; }
+        long elapsed = now - _diagLastEmitTicks;
+        if (elapsed < Stopwatch.Frequency) return;
+        _diagLastEmitTicks = now;
+
+        double secs = elapsed / (double)Stopwatch.Frequency;
+        double pps = secs > 0 ? _diagPacketsSent / secs : 0;
+        long meanGapUs = _diagSendGapCount > 0 ? _diagSendGapSumUs / _diagSendGapCount : 0;
+
+        _log.LogInformation(
+            "audio.radio.speaker.p2.diag pkts/s={Pps:F0} maxBurst={MaxBurst} sendGapUs(mean/max)={Mean}/{Max} droppedPkts={DropPkts} droppedSamples={DropSamp}",
+            pps, _diagMaxBurst, meanGapUs, _diagSendGapMaxUs,
+            Interlocked.Read(ref _droppedPackets), Interlocked.Read(ref _droppedSamples));
+
+        _diagPacketsSent = 0;
+        _diagMaxBurst = 0;
+        _diagSendGapSumUs = 0;
+        _diagSendGapMaxUs = 0;
+        _diagSendGapCount = 0;
     }
 
     private void RefreshTargetIfDue()
@@ -393,6 +562,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         _socket = null;
         _target = null;
         _packetFrames = 0;
+        _nextSendTicks = 0; // realign the pacing schedule when a socket reopens
     }
 
     internal static short FloatToPcm16(float sample)
@@ -404,6 +574,42 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         float scale = sample < 0.0f ? 32768.0f : short.MaxValue;
         return (short)MathF.Round(sample * scale);
     }
+
+    // ---- Pacing test seams (#1148). No sockets, no real time: drive a virtual
+    // clock, feed the ring directly, observe simulated sends, and assert drain
+    // cadence + max-burst. None of these are used in production. ----
+
+    /// <summary>Test-only: override the monotonic clock the pacing schedule
+    /// reads (default <see cref="Stopwatch.GetTimestamp"/>).</summary>
+    internal Func<long> ClockForTest { set => _clock = value; }
+
+    /// <summary>Test-only: observe each simulated packet send (argument is the
+    /// virtual send time). Setting this routes <see cref="EmitPacket"/> through
+    /// the observer instead of the real socket.</summary>
+    internal Action<long>? SentObserverForTest { set => _sentObserverForTest = value; }
+
+    /// <summary>Test-only: write samples straight into the sender ring, as the
+    /// producer would, without going through <see cref="Publish"/>'s gates.
+    /// Returns the count actually written.</summary>
+    internal int WriteRingForTest(ReadOnlySpan<float> samples) => _ring.Write(samples);
+
+    /// <summary>Test-only: run one <see cref="DrainAndSend"/> pass on the
+    /// calling thread (the worker is not started in pacing tests).</summary>
+    internal void DrainForTest()
+    {
+        Span<float> scratch = stackalloc float[PacketFrames];
+        DrainAndSend(scratch);
+    }
+
+    /// <summary>Test-only: largest burst observed in a single
+    /// <see cref="DrainAndSend"/> since the last diag emit.</summary>
+    internal int MaxBurstForTest => _diagMaxBurst;
+
+    /// <summary>Test-only: the pacing packet interval in Stopwatch ticks.</summary>
+    internal static long PacketIntervalTicksForTest => PacketIntervalTicks;
+
+    /// <summary>Test-only: the catch-up clamp in Stopwatch ticks.</summary>
+    internal static long MaxCatchupBehindTicksForTest => MaxCatchupBehindTicks;
 
     /// <summary>Test-only: block until the worker has processed every signal
     /// posted before this call and is parked back in its wake-wait. Lets tests

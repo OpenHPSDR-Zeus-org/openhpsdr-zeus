@@ -2025,6 +2025,7 @@
 .vfo-tool-key,
 .vfo-focus-key,
 .vfo-listen-key,
+.vfo-lock-key,
 .vfo-tx-key {
   display: inline-flex;
   align-items: center;
@@ -2049,6 +2050,7 @@
 .vfo-tool-key:hover,
 .vfo-focus-key:hover,
 .vfo-listen-key:hover,
+.vfo-lock-key:hover,
 .vfo-tx-key:hover {
   color: var(--fg-0);
   background:
@@ -2060,6 +2062,7 @@
 .vfo-tool-key:disabled,
 .vfo-focus-key:disabled,
 .vfo-listen-key:disabled,
+.vfo-lock-key:disabled,
 .vfo-tx-key:disabled {
   opacity: 0.42;
   cursor: default;
@@ -2221,6 +2224,19 @@
     var(--vfo-filter-color, var(--accent))
   );
   border-color: color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 55%, transparent);
+}
+.vfo-lock-key {
+  width: 28px;
+  min-width: 28px;
+  height: 32px;
+  padding: 0;
+  color: var(--fg-3);
+}
+.vfo-lock-key.is-on {
+  color: #0b0d0f;
+  background: linear-gradient(180deg, #f0c14b, #d29a17);
+  border-color: rgba(210, 154, 23, 0.7);
+  box-shadow: 0 0 12px rgba(240, 193, 75, 0.32);
 }
 .vfo-tx-key {
   width: 36px;
@@ -2492,6 +2508,11 @@
   text-shadow: 0 0 10px var(--vfo-filter-color, var(--accent));
 }
 .freq-digits .digit.leading { color: var(--fg-4); }
+.freq-digits.is-locked { opacity: 0.78; }
+.freq-digits.is-locked .digit:hover {
+  color: inherit;
+  text-shadow: 0 0 12px color-mix(in srgb, var(--vfo-filter-color, var(--accent)) 25%, transparent);
+}
 .freq-digits .sep { color: var(--fg-1); padding: 0 1px; font-weight: 200; }
 .freq-bot {
   display: flex;

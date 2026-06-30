@@ -65,6 +65,7 @@ public sealed class PresenceCoordinator
     public void Apply(SupportIpcListener.SupportState state)
     {
         _broker.UpdateIdentity(state.QrzCallsign, state.QrzSessionKey);
+        _broker.UpdateMetadata(state.RadioBoard, state.RadioModel, state.RadioConnected);
         AutoShareOnCrash = state.AutoShareOnCrash;
 
         var available = state.RemoteDiagnosticsEnabled && _broker.IsConfigured;
@@ -73,6 +74,7 @@ public sealed class PresenceCoordinator
         _log?.Invoke(
             $"ipc: state remoteDiag={state.RemoteDiagnosticsEnabled} " +
             $"autoShare={state.AutoShareOnCrash} " +
-            $"identity={(_broker.IsConfigured ? "set" : "-")} -> available={available}");
+            $"identity={(_broker.IsConfigured ? "set" : "-")} " +
+            $"radio={(state.RadioConnected ? state.RadioBoard ?? "?" : "-")} -> available={available}");
     }
 }

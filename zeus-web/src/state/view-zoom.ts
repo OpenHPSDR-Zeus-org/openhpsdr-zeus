@@ -144,7 +144,7 @@ export function getDisplayedHzPerPixel(): number {
 /** The displayed hzPerPixel a given receiver's spectrum surfaces should scale
  *  their trace/history against.
  *
- *  Hardware DDCs (RX1..RX6) share the radio's one Hz/pixel scale and follow the
+ *  Hardware DDCs share the radio's one Hz/pixel scale and follow the
  *  global zoom tween, so they get `getDisplayedHzPerPixel()`. The Kiwi slice
  *  receiver (KIWI_RECEIVER_INDEX) is a remote KiwiSDR with its OWN independent
  *  Hz/pixel (its native ~29 kHz span over its own bin count), which the shared

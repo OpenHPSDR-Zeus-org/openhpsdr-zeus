@@ -65,6 +65,10 @@ public sealed class FreeDvModem : IDisposable
     private short[] _rxSpeechShort = new short[256];
     private float[] _rxSpeechFloat = new float[256];
     private float[] _rxInterp = new float[256];
+    // Sync-driven output squelch: mutes decoded speech (with a hold + smooth
+    // ramp) when the modem loses sync, so the far station unkeying doesn't leave
+    // an R2D2/warble tail. Owned by the RX hot path; reset in RetireRx.
+    private readonly RxSquelchGate _rxGate = RxSquelchGate.Default(FreeDvResampler.FsHigh);
 
     // TX chain
     private readonly FreeDvResampler.Decimator _txDown = FreeDvResampler.NewDecimator();
@@ -77,6 +81,10 @@ public sealed class FreeDvModem : IDisposable
     private short[] _txModemShort = new short[256];
     private float[] _txModemFloat = new float[256];
     private float[] _txInterp = new float[256];
+    // Pre-vocoder mic noise gate: drives the mic to digital silence during
+    // pauses so freedv_tx emits clean silence frames instead of vocoded
+    // background hiss. Owned by the TX hot path; reset in RetireTx / FlushTx.
+    private readonly MicNoiseGate _micGate = MicNoiseGate.Default(FreeDvResampler.FsHigh);
     private int _txNSpeech;                            // cached at open
     private int _txNNomModem;
 
@@ -327,6 +335,7 @@ public sealed class FreeDvModem : IDisposable
             SpinUntilIdle(ref _txBusy);
             _tx8In.Clear(); _txOut48.Clear();
             _txDown.Reset(); _txUp.Reset();
+            _micGate.Reset();
             Volatile.Write(ref _txFreedv, fd);
         }
     }
@@ -455,6 +464,13 @@ public sealed class FreeDvModem : IDisposable
 
             int filled = _rxOut48.Read(block48k);
             if (filled < block48k.Length) block48k.Slice(filled).Clear();
+
+            // Sync-gate the decoded speech: smooth fade-out on loss of sync kills
+            // the end-of-over warble tail (codec2's per-frame SNR squelch alone is
+            // twitchy). When fully closed, flush the decoded FIFO so a stale-noise
+            // backlog can't play at the head of the next over.
+            if (_rxGate.Process(block48k, _synced))
+                _rxOut48.Clear();
         }
         finally
         {
@@ -476,6 +492,10 @@ public sealed class FreeDvModem : IDisposable
 
             int nspeech = _txNSpeech, nmodem = _txNNomModem;
             if (nspeech <= 0 || nmodem <= 0) { block48k.Clear(); return; }
+
+            // Gate the mic to silence during pauses so freedv_tx encodes clean
+            // silence frames instead of vocoding background hiss into garble.
+            _micGate.Process(block48k);
 
             int n8 = _txDown.Process(block48k, _txDecScratch);
             _tx8In.Write(_txDecScratch.AsSpan(0, n8));
@@ -622,6 +642,7 @@ public sealed class FreeDvModem : IDisposable
         if (old != IntPtr.Zero) FreeDvNativeMethods.freedv_close(old);
         _rx8In.Clear(); _rxOut48.Clear();
         _rxDown.Reset(); _rxUp.Reset();
+        _rxGate.Reset();
         _rxTextRing.Clear(); // drop stale decoded chars across a resync/close
         Volatile.Write(ref _rxFreedv, replacement);
     }
@@ -635,6 +656,7 @@ public sealed class FreeDvModem : IDisposable
         if (old != IntPtr.Zero) FreeDvNativeMethods.freedv_close(old);
         _tx8In.Clear(); _txOut48.Clear();
         _txDown.Reset(); _txUp.Reset();
+        _micGate.Reset();
         Volatile.Write(ref _txFreedv, replacement);
     }
 

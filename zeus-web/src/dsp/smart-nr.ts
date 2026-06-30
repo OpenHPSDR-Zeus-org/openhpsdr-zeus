@@ -25,10 +25,12 @@ export type SmartNrCondition = {
   impulsiveOccupancy12: number;
   peakCount: number;
   coherentPeakCount: number;
+  stationaryPeakCount: number;
   coherentRidgeCount: number;
   widestCoherentRunBins: number;
   isolatedHotBinCount: number;
   confidenceAvailable: boolean;
+  stationarityAvailable: boolean;
   coherentSubthresholdSignal: boolean;
   rxAssistedWeakSignal: boolean;
   coherentCopySignal: boolean;
@@ -71,6 +73,7 @@ export type SmartNrInput = {
   spectrum: Float32Array | null;
   floor: Float32Array | null;
   confidence?: Float32Array | null;
+  stationarity?: Float32Array | null;
   rx?: SmartNrRxContext | null;
   dsp?: SmartNrDspCapabilities | null;
   current: NrConfigDto;
@@ -248,19 +251,29 @@ function finiteConfidence(confidence: Float32Array | null, index: number, useCon
   return Number.isFinite(c) ? Math.max(0, Math.min(1, c)) : 0;
 }
 
+function finiteStationarity(stationarity: Float32Array | null, index: number, useStationarity: boolean): number {
+  if (!useStationarity) return 0;
+  const s = stationarity![index]!;
+  return Number.isFinite(s) ? Math.max(0, Math.min(1, s)) : 0;
+}
+
 function nr3Ready(capabilities: SmartNrDspCapabilities | null | undefined): boolean {
   return capabilities?.wdspNr3RnnrAvailable === true && !!capabilities.nr3ModelName;
 }
+
+const SMART_NR_TONAL_STEADINESS = 0.65;
 
 export function analyzeSmartNrCondition(
   spectrum: Float32Array | null,
   floor: Float32Array | null,
   confidence: Float32Array | null = null,
+  stationarity: Float32Array | null = null,
 ): SmartNrCondition | null {
   if (!spectrum || spectrum.length < 8) return null;
   const n = spectrum.length;
   const useFloor = floor !== null && floor.length === n;
   const useConfidence = confidence !== null && confidence.length === n;
+  const useStationarity = stationarity !== null && stationarity.length === n;
   const globalFloor = useFloor ? 0 : fallbackFloorDb(spectrum);
   const snr = new Array<number>(n);
   let maxSnrDb = -Infinity;
@@ -282,12 +295,16 @@ export function analyzeSmartNrCondition(
 
   let peakCount = 0;
   let coherentPeakCount = 0;
+  let stationaryPeakCount = 0;
   for (let i = 1; i < n - 1; i++) {
     const v = snr[i]!;
     const localPeak = v >= 10 && v >= snr[i - 1]! && v > snr[i + 1]!;
     if (localPeak) {
       peakCount++;
       if (!useConfidence || confidence![i]! >= 0.45) coherentPeakCount++;
+      if (finiteStationarity(stationarity, i, useStationarity) >= SMART_NR_TONAL_STEADINESS) {
+        stationaryPeakCount++;
+      }
     }
   }
 
@@ -359,6 +376,7 @@ export function analyzeSmartNrCondition(
     !impulsiveNoise &&
     (occupancy6 > 0.18 || p90SnrDb > 8 || occupancy12 > 0.12 || coherentOccupancy6 > 0.14);
   const tonalPeakCount = useConfidence ? coherentPeakCount : peakCount;
+  const tonalEvidencePeakCount = useStationarity ? stationaryPeakCount : 0;
   const copyAssistSpread =
     (tonalPeakCount >= 12 && coherentOccupancy6 >= 0.055) ||
     (tonalPeakCount > 24 && coherentOccupancy6 >= 0.025);
@@ -387,7 +405,9 @@ export function analyzeSmartNrCondition(
     !impulsiveNoise &&
     !coherentCopySignal &&
     !speechLikeVoice &&
-    tonalPeakCount > 0 &&
+    useStationarity &&
+    tonalEvidencePeakCount > 0 &&
+    tonalEvidencePeakCount <= 12 &&
     tonalPeakCount <= 24 &&
     maxSnrDb >= 18 &&
     occupancy12 < 0.12;
@@ -403,10 +423,12 @@ export function analyzeSmartNrCondition(
     impulsiveOccupancy12,
     peakCount,
     coherentPeakCount,
+    stationaryPeakCount,
     coherentRidgeCount,
     widestCoherentRunBins,
     isolatedHotBinCount,
     confidenceAvailable: useConfidence,
+    stationarityAvailable: useStationarity,
     coherentSubthresholdSignal,
     rxAssistedWeakSignal: false,
     coherentCopySignal,
@@ -544,7 +566,12 @@ function quietProfile(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
 }
 
 export function recommendSmartNr(input: SmartNrInput): SmartNrRecommendation | null {
-  const baseCondition = analyzeSmartNrCondition(input.spectrum, input.floor, input.confidence ?? null);
+  const baseCondition = analyzeSmartNrCondition(
+    input.spectrum,
+    input.floor,
+    input.confidence ?? null,
+    input.stationarity ?? null,
+  );
   if (!baseCondition) return null;
   const condition = applyRxWeakSignalEvidence(baseCondition, input.rx);
   const neuralVoiceReady = nr3Ready(input.dsp);

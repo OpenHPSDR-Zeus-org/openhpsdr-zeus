@@ -21,6 +21,11 @@ public class FreeDvSidebandConventionTests
     [Theory]
     [InlineData(1_800_000, RxMode.LSB)]    // 160 m
     [InlineData(3_573_000, RxMode.LSB)]    // 80 m
+    [InlineData(5_249_999, RxMode.LSB)]    // just below 60 m window
+    [InlineData(5_330_500, RxMode.USB)]    // 60 m FCC channel 1 — USB-only by regulation
+    [InlineData(5_357_000, RxMode.USB)]    // 60 m IARU R1 FreeDV calling — USB-only
+    [InlineData(5_403_500, RxMode.USB)]    // 60 m FCC channel 5 — USB-only
+    [InlineData(5_450_001, RxMode.LSB)]    // just above 60 m window — back to the 10 MHz rule
     [InlineData(7_177_000, RxMode.LSB)]    // 40 m — the band that bit us
     [InlineData(9_999_999, RxMode.LSB)]    // just below the threshold
     [InlineData(10_000_000, RxMode.USB)]   // exactly 10 MHz → USB
@@ -29,6 +34,24 @@ public class FreeDvSidebandConventionTests
     public void FreeDv_resolves_sideband_from_dial(long dialHz, RxMode expected)
     {
         Assert.Equal(expected, RadioService.EffectiveEngineMode(RxMode.FreeDv, dialHz));
+    }
+
+    [Theory]
+    [InlineData(5_330_500)]   // 60 m FCC channel 1
+    [InlineData(5_357_000)]   // 60 m IARU R1 FreeDV calling
+    [InlineData(5_403_500)]   // 60 m FCC channel 5
+    public void FreeDv_on_60m_signs_the_bandpass_positive_for_USB(long dialHz)
+    {
+        // 60 m is USB-only by regulation (FCC §97.305, Ofcom IR 2002 et al.),
+        // so the FreeDV-on-60m demod must orient USB even though the dial is below
+        // the 10 MHz threshold. Without the exception, the OFDM carriers mirror to
+        // LSB and the operator transmits on a sideband that's not legally allowed.
+        var engineMode = RadioService.EffectiveEngineMode(RxMode.FreeDv, dialHz);
+        var (low, high) = RadioService.SignedFilterForMode(engineMode, 300, 2700);
+
+        Assert.Equal(RxMode.USB, engineMode);
+        Assert.Equal(300, low);
+        Assert.Equal(2700, high);
     }
 
     [Theory]

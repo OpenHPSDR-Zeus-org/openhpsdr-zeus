@@ -69,6 +69,107 @@ Validation steps:
    appear on strong signals, add headroom to the Fixed RX AGC seed (red-light:
    that's a level an operator feels — change with bench data, not blind).
 
+## Stop-talk artifacts — sync squelch (RX) + mic noise gate (TX)
+
+A second operator pass targeted "random artifacts when a user stops talking,"
+reported on **both** directions and primarily on **RADE V1**. Two new
+allocation-free, lock-free dynamics blocks in `Zeus.Dsp.FreeDv/FreeDvGates.cs`,
+wired into both `FreeDvModem` and `RadeModem`:
+
+- **`RxSquelchGate` (RX).** When the far station unkeys, the decoder keeps
+  turning band-noise into speech-shaped output. codec2's per-frame SNR squelch is
+  twitchy, and **RADE has no squelch at all** (`RadeModem.SetSquelch` is inert),
+  so you hear an R2D2/warble tail every un-key. The gate mutes decoded speech via
+  a smooth attack/release ramp driven by the modem sync flag, with a **hold**
+  window that rides brief mid-over sync dropouts so good copy is never chopped.
+  When it goes fully closed it flushes the decode FIFO (`_rxOut48.Clear()`) so a
+  stale-noise backlog can't play at the head of the next over. Applied at the end
+  of `ProcessRxInPlace` in both modems.
+- **`MicNoiseGate` (TX).** When the operator pauses mid-over, mic background hiss
+  fed into `freedv_tx` / `rade_tx` vocodes into garble at the far end. The gate
+  drives the mic to digital silence during pauses (the encoder then emits clean
+  silence frames — still valid modem frames, so far-end sync holds). It is
+  **adaptive**: the raw mic at this tap is pre-mic-gain, so its level varies
+  wildly by interface; a fixed dBFS threshold would clip a quiet mic or miss a hot
+  mic's hiss. Instead it tracks the noise floor (fast-down / slow-up follower so
+  speech bursts don't drag the floor up) and gates relative to it (`openMargin` /
+  `closeMargin` dB above floor) with hysteresis + hang. Resets to **open** each
+  over so the first syllable is never clipped. Applied at the start of
+  `ProcessTxInPlace` in both modems (before the mic decimation/encode).
+
+Both gates reset whenever the modem quiesces (`RetireRx`/`RetireTx`/`FlushTx`),
+so each over starts clean. Unit-tested in `FreeDvGatesTests.cs` (pure math, no
+native lib); the native loopback/perf/zero-alloc tests still pass with the gates
+inline.
+
+### "Pinched / nasal" RADE speech — widen the RADE speech resampler
+
+RADE decodes **wideband 16 kHz** speech (FARGAN synthesizes energy up to ~8 kHz)
+and that path uses `RadeResampler` (16↔48 kHz, ×3), which is SEPARATE from the
+codec2 `FreeDvResampler` widened earlier. Its prototype was a 60-tap Hamming
+sinc at 7.2 kHz cutoff — a ~2.6 kHz transition band that was only flat to
+~5.5 kHz (rolling off FARGAN's presence/brilliance → dull, "nasal" decode) and
+whose skirt spilled past the 8 kHz Nyquist, **aliasing on the 48→16 kHz mic
+decimation** (so what we TRANSMIT was coloured too). Bumped to a 96-tap prototype
+(32 taps/phase, cutoff unchanged at 7.2 kHz): transition ~1.6 kHz, flat to
+~6.5 kHz, stopband below Nyquist. More presence survives on RX and the mic
+anti-alias is clean on TX.
+
+**This is the only code-level lever for RADE decoded-speech timbre.** Remaining
+"nasal/underwater" quality on RADE is usually **low SNR** (the autoencoder
+degrades characteristically near threshold) or, on TX, the operator's mic itself
+— FreeDV deliberately bypasses the TX voice EQ/compressor (the vocoder wants flat
+speech), so a thin mic sounds thin. Those are not Zeus DSP bugs; confirm SNR via
+`/api/freedv/status` and compare against another FreeDV client on the same
+signal before changing DSP.
+
+### Bench-tuning the gates on the G2 (open knobs)
+
+Both are always-on with conservative defaults in `MicNoiseGate.Default` /
+`RxSquelchGate.Default`. If they ever over- or under-act, tune the `Default(...)`
+arguments:
+
+- **RX warble still audible after un-key** → shorten `holdMs` (250) or `releaseMs`
+  (60). **RX chops the start/end of weak-but-good copy** → lengthen `holdMs`.
+- **TX still passes background hiss during pauses** → lower `openMarginDb` (14) /
+  `closeMarginDb` (8). **TX swallows soft speech / first words** → raise the
+  margins or lengthen `hangMs` (250). If a very quiet shack lets the floor track
+  too low, raise `minFloorDb` (−75).
+
+Validate: key RADE/700D into a dummy load with a second station decoding; confirm
+no R2D2 tail when you unkey, and no garble when you pause mid-over. Confirm soft
+speech and word onsets are not clipped.
+
+## Objective fidelity testing (RADE methodology)
+
+RADE's upstream (drowe67/radae, "Testing RADE") insists results be **reproducible
+via CLI/objective metrics, not GUI/on-air listening** — calibrated stored-file
+channel sims scored by feature distortion (`loss.py`) and Whisper ASR WER, with
+documented SNR thresholds (V1 ≈ −2 dB AWGN, ~0 dB MPP). We adopt that discipline
+at the managed boundary so "nasal/artifacts" become measurable, not subjective:
+
+- **`RadeResamplerFidelityTests`** (deterministic, no native lib): single-bin DFT
+  magnitude response of the RADE 16↔48 kHz resampler. Asserts the passband is flat
+  through the **6 kHz presence band** (guards the 96-tap widening), images are
+  rejected (anti-imaging on RX), and out-of-band mic content doesn't alias
+  (anti-aliasing on the TX decimation). A hard regression guard on the filter.
+- **`RadeFidelityTests`** (native, skippable): end-to-end through the real
+  zeus_rade + FARGAN decoder. (1) decoded output carries energy and **does not
+  clip** — the objective answer to the "is the ×32768 shim scaling clipping?"
+  question (it is not, in practice; matches lpcnet_demo). (2) **the stop-talk gate
+  validated through the real decoder**: after a synced decode, pure band-noise
+  drives the decoded output to silence instead of an R2D2 tail.
+
+Gotcha encountered: `rade_sync()` is a debounced acquisition STATE, not a per-
+frame flag (RADE re-primes FARGAN on each loss — `zeus_rade.c`), and it
+deliberately drops sync on an **out-of-distribution** signal. A synthetic
+harmonic excitation triggers that mid-stream, and the gate (correctly) mutes
+there — so score "voice present" only over blocks where sync is actually held,
+never a fixed time window. For fully deterministic clean-channel scoring,
+`rade_api.h` exposes `rade_set_disable_unsync(seconds)` (radae's own test hook) —
+not yet surfaced through the shim; wire it through if a no-unsync fidelity sweep
+is wanted.
+
 ## Not yet changed (deliberately)
 
 - **Fixed RX AGC headroom** — instrumented, not auto-adjusted. Needs the clipping

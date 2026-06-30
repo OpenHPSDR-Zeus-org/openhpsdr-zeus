@@ -249,6 +249,114 @@ public class PaSettingsStoreDefaultsTests : IDisposable
     public static IEnumerable<object[]> BoardsWithDefaults() =>
         Enum.GetValues<HpsdrBoardKind>().Select(b => new object[] { b });
 
+    // Issue #1180: pa_bands is shared across boards. An HL2 session that
+    // persists PaGainDb=100.0 (HL2 stores it as a 0..100 percentage) leaves a
+    // row that, on the next session against a dB-based board (Hermes / ANAN /
+    // Orion), would surface as "100 dB forward gain". The FullByteDriveProfile
+    // dB math then floors the drive byte to 0 (10 W target → 1e-9 W source →
+    // 0.0002 V → byte 0), the Protocol1Client IQ path zeroes the wire payload
+    // when DriveLevel == 0 (ControlFrame.cs:858), and the radio keys MOX but
+    // emits no RF. The store should detect the cross-board row on read and
+    // substitute the connected board's per-band default.
+    [Fact]
+    public void GetAll_Substitutes_Default_When_Stored_Value_Out_Of_Range_For_DbBoard()
+    {
+        using (var seed = NewStore())
+        {
+            // Persist as if a prior HL2 session calibrated 40m at 100%.
+            var dto = seed.GetAll(HpsdrBoardKind.HermesLite2);
+            var bands = dto.Bands.Select(b =>
+                b.Band == "40m"
+                    ? new PaBandSettingsDto(b.Band, 100.0, b.DisablePa, b.OcTx, b.OcRx, b.AutoOcMask, b.OcDxTx, b.OcDxRx)
+                    : b).ToArray();
+            seed.Save(new PaSettingsDto(dto.Global, bands));
+        }
+
+        using var read = NewStore();
+        // ANAN-100 / 100B / 8000D → Angelia → Anan100Gains["40m"] = 50.0 dB.
+        var s = read.GetAll(HpsdrBoardKind.Angelia);
+        Assert.Equal(50.0, FindGain(s, "40m"));
+    }
+
+    [Fact]
+    public void GetBand_Substitutes_Default_When_Stored_Value_Out_Of_Range_For_DbBoard()
+    {
+        using (var seed = NewStore())
+        {
+            var dto = seed.GetAll(HpsdrBoardKind.HermesLite2);
+            var bands = dto.Bands.Select(b =>
+                b.Band == "40m"
+                    ? new PaBandSettingsDto(b.Band, 100.0, b.DisablePa, b.OcTx, b.OcRx, b.AutoOcMask, b.OcDxTx, b.OcDxRx)
+                    : b).ToArray();
+            seed.Save(new PaSettingsDto(dto.Global, bands));
+        }
+
+        using var read = NewStore();
+        var band = read.GetBand("40m", HpsdrBoardKind.Angelia);
+        Assert.Equal(50.0, band.PaGainDb);
+    }
+
+    [Fact]
+    public void GetAll_Keeps_In_Range_Stored_Value_On_DbBoard()
+    {
+        // Operator deliberately calibrated 40m to 45.0 dB on ANAN — that's
+        // inside the 0..70 dB range, so the substitution must NOT fire.
+        using (var seed = NewStore())
+        {
+            var dto = seed.GetAll(HpsdrBoardKind.Angelia);
+            var bands = dto.Bands.Select(b =>
+                b.Band == "40m"
+                    ? new PaBandSettingsDto(b.Band, 45.0, b.DisablePa, b.OcTx, b.OcRx, b.AutoOcMask, b.OcDxTx, b.OcDxRx)
+                    : b).ToArray();
+            seed.Save(new PaSettingsDto(dto.Global, bands));
+        }
+
+        using var read = NewStore();
+        var s = read.GetAll(HpsdrBoardKind.Angelia);
+        Assert.Equal(45.0, FindGain(s, "40m"));
+    }
+
+    [Fact]
+    public void GetAll_Keeps_100_Pct_Stored_Value_On_Hl2()
+    {
+        // 100 is the HL2 default percentage — must pass through unchanged
+        // (no substitution) when read back against HL2.
+        using (var seed = NewStore())
+        {
+            var dto = seed.GetAll(HpsdrBoardKind.HermesLite2);
+            var bands = dto.Bands.Select(b =>
+                b.Band == "40m"
+                    ? new PaBandSettingsDto(b.Band, 100.0, b.DisablePa, b.OcTx, b.OcRx, b.AutoOcMask, b.OcDxTx, b.OcDxRx)
+                    : b).ToArray();
+            seed.Save(new PaSettingsDto(dto.Global, bands));
+        }
+
+        using var read = NewStore();
+        var s = read.GetAll(HpsdrBoardKind.HermesLite2);
+        Assert.Equal(100.0, FindGain(s, "40m"));
+    }
+
+    [Fact]
+    public void GetAll_Leaves_Out_Of_Range_Stored_Value_Untouched_When_Board_Unknown()
+    {
+        // Pre-discovery (no radio connected yet) the store can't reason about
+        // the right range, so an out-of-range row must round-trip unchanged.
+        // The Reset/APPLY path repairs it once a radio is on the wire.
+        using (var seed = NewStore())
+        {
+            var dto = seed.GetAll(HpsdrBoardKind.HermesLite2);
+            var bands = dto.Bands.Select(b =>
+                b.Band == "40m"
+                    ? new PaBandSettingsDto(b.Band, 100.0, b.DisablePa, b.OcTx, b.OcRx, b.AutoOcMask, b.OcDxTx, b.OcDxRx)
+                    : b).ToArray();
+            seed.Save(new PaSettingsDto(dto.Global, bands));
+        }
+
+        using var read = NewStore();
+        var s = read.GetAll(HpsdrBoardKind.Unknown);
+        Assert.Equal(100.0, FindGain(s, "40m"));
+    }
+
     private static double FindGain(PaSettingsDto s, string band) =>
         s.Bands.First(b => b.Band == band).PaGainDb;
 }

@@ -236,11 +236,11 @@ describe('TxFidelityAdvisor', () => {
       await Promise.resolve();
     });
 
-    expect(metric(container, 'dens').textContent).toMatch(/DENS\d+\/100/);
+    expect(metric(container, 'dens').textContent).toMatch(/DENS\d+\/84/);
     expect(metric(container, 'dens').dataset.status).toBe('warn');
     expect(container.textContent).toContain('Under-driven');
-    expect(container.textContent).toContain('TX density is below profile target');
-    expect(container.textContent).toContain('NEXT Increase mic gain or profile density before adding drive');
+    expect(container.textContent).toContain('TX density is near but below clean profile target');
+    expect(container.textContent).toContain('NEXT Add controlled speech density, not RF drive');
 
     unmount();
   });

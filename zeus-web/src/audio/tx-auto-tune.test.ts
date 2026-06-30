@@ -5,11 +5,14 @@ import { describe, expect, it } from 'vitest';
 import {
   CFC_CONFIG_DEFAULT,
   TX_LEVELING_CONFIG_DEFAULT,
+  TX_PHASE_ROTATOR_CONFIG_DEFAULT,
   type CfcConfigDto,
   type TxLevelingConfigDto,
 } from '../api/client';
 import {
   recommendTxAutoTune,
+  scoreTxPhaseRotatorCandidate,
+  summarizeTxAutoTuneSamples,
   type TxAutoTuneSample,
   type TxAutoTuneSettings,
 } from './tx-auto-tune';
@@ -35,6 +38,7 @@ function settings(overrides: Partial<TxAutoTuneSettings> = {}): TxAutoTuneSettin
     drivePercent: 80,
     cfcConfig: cfc(),
     txLeveling: leveling(),
+    txPhaseRotator: { ...TX_PHASE_ROTATOR_CONFIG_DEFAULT },
     targetSpectralDensity: 95,
     keyed: false,
     audioSuiteActive: true,
@@ -225,6 +229,48 @@ describe('recommendTxAutoTune', () => {
     expect(plan.actions.join(' ')).toContain('compressor on');
   });
 
+  it('raises quiet dynamics into the green gauge windows even at baseline density', () => {
+    const plan = recommendTxAutoTune(
+      settings({
+        targetSpectralDensity: 55,
+        levelerMaxGainDb: 6,
+        txLeveling: leveling({ alcMaxGainDb: 3 }),
+      }),
+      samples({
+        micPkDbfs: -10,
+        outPkDbfs: -8,
+        outAvDbfs: -18,
+        alcGrDb: 0.2,
+        lvlrGrDb: 0.5,
+        cfcGrDb: 0,
+      }),
+    );
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.settings.levelerMaxGainDb).toBe(6.5);
+    expect(plan.settings.txLeveling.alcMaxGainDb).toBe(4);
+    expect(plan.actions).toContain('leveler max +0.5 dB');
+    expect(plan.actions).toContain('ALC max gain +1 dB');
+  });
+
+  it('adds controlled CFC density when crest is open but the chain has headroom', () => {
+    const plan = recommendTxAutoTune(
+      settings({ targetSpectralDensity: 80, cfcConfig: cfc(1) }),
+      samples({
+        micPkDbfs: -10,
+        outPkDbfs: -7,
+        outAvDbfs: -24,
+        alcGrDb: 2,
+        lvlrGrDb: 3,
+        cfcGrDb: 1,
+      }),
+    );
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.settings.cfcConfig.preCompDb).toBeGreaterThan(1);
+    expect(plan.actions.join(' ')).toContain('CFC pre-comp');
+  });
+
   it('reports the resulting values so consecutive runs are distinguishable', () => {
     const hot = samples({ micPkDbfs: -8, audioSuiteOutputDbfs: -0.4, outPkDbfs: -6 });
     const first = recommendTxAutoTune(settings({ micGainDb: -4 }), hot);
@@ -266,5 +312,43 @@ describe('recommendTxAutoTune', () => {
 
     expect(plan.settings.txLeveling.levelerDecayMs).toBe(90);
     expect(plan.actions.join(' ')).toContain('leveler decay slower');
+  });
+
+  it('does not hardcode phase rotator to the Thetis default in the static plan', () => {
+    const currentPhase = { enabled: true, cornerHz: 512, stages: 6, reverse: true };
+    const plan = recommendTxAutoTune(
+      settings({ txPhaseRotator: currentPhase }),
+      samples({
+        micPkDbfs: -14,
+        outPkDbfs: -7,
+        outAvDbfs: -18,
+        alcGrDb: 1,
+        lvlrGrDb: 1,
+        cfcGrDb: 1,
+      }),
+    );
+
+    expect(plan.settings.txPhaseRotator).toEqual(currentPhase);
+    expect(plan.actions.join(' ')).not.toContain('338');
+  });
+
+  it('scores phase rotator candidates from measured TX meter quality', () => {
+    const good = summarizeTxAutoTuneSamples(samples({
+      outPkDbfs: -7,
+      outAvDbfs: -15,
+      alcGrDb: 1,
+      lvlrGrDb: 1,
+      cfcGrDb: 1,
+    }));
+    const hot = summarizeTxAutoTuneSamples(samples({
+      outPkDbfs: -0.2,
+      outAvDbfs: -6,
+      alcGrDb: 9,
+      lvlrGrDb: 8,
+      cfcGrDb: 6,
+    }));
+
+    expect(scoreTxPhaseRotatorCandidate(good, 95).score)
+      .toBeGreaterThan(scoreTxPhaseRotatorCandidate(hot, 95).score);
   });
 });

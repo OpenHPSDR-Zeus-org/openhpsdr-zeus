@@ -271,4 +271,14 @@ public enum MsgType : byte
     // (Slot = ""). UI ignores unknown types so older builds tolerate it.
     // Payload: [type:1][UTF-8 JSON Ft8TxStatusDto]. See Ft8TxStatusFrame.cs.
     Ft8TxStatus = 0x3A,
+
+    // Server → client (MIDI / Stream Deck learn frame). Broadcast by MidiService
+    // ONLY while the operator has the MIDI settings panel in "Learn" mode: every
+    // incoming control event (a knob turn, a button press, a Stream Deck key) is
+    // forwarded as a frame so the panel can highlight the live control and let
+    // the operator bind it to a command. Outside learn mode nothing is emitted.
+    // Same low-rate JSON-envelope shape as Ft8Decode (0x38). Payload:
+    // [type:1][UTF-8 JSON MidiLearnFrame]. UI ignores unknown types so older
+    // builds tolerate it cleanly.
+    MidiLearn = 0x3B,
 }

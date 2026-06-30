@@ -707,14 +707,24 @@ export function LightningMapPanel() {
               value={Math.round(radiusDisplay)}
               onChange={(e) => onRadiusInput(e.target.value)}
             />
-            <select
-              className="lm-set-unit-sel"
-              value={alertCfg.unit}
-              onChange={(e) => onUnitChange(e.target.value === 'mi' ? 'mi' : 'km')}
-            >
-              <option value="km">km</option>
-              <option value="mi">mi</option>
-            </select>
+            <div className="lm-set-unit-sel" role="group" aria-label="Distance unit">
+              <button
+                type="button"
+                className={`lm-unit-opt ${alertCfg.unit === 'km' ? 'is-on' : ''}`}
+                aria-pressed={alertCfg.unit === 'km'}
+                onClick={() => onUnitChange('km')}
+              >
+                km
+              </button>
+              <button
+                type="button"
+                className={`lm-unit-opt ${alertCfg.unit === 'mi' ? 'is-on' : ''}`}
+                aria-pressed={alertCfg.unit === 'mi'}
+                onClick={() => onUnitChange('mi')}
+              >
+                mi
+              </button>
+            </div>
           </label>
 
           <label className="lm-set-row">

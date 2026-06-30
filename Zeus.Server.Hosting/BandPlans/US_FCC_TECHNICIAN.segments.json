@@ -16,6 +16,7 @@
     { "lowHz": 21025000, "highHz": 21200000, "label": "15M CW (Technician)",            "allocation": "Amateur",  "modeRestriction": "CwOnly",       "maxPowerW": 200,  "notes": "Tech/Novice CW only, 200 W PEP" },
     { "lowHz": 21200000, "highHz": 21450000, "label": "15M — no Technician privilege",  "allocation": "Reserved", "modeRestriction": "Any",         "maxPowerW": null, "notes": null },
     { "lowHz": 24890000, "highHz": 24990000, "label": "12M — no Technician privilege",  "allocation": "Reserved", "modeRestriction": "Any",         "maxPowerW": null, "notes": null },
+    { "lowHz": 26965000, "highHz": 27405000, "label": "11M (CB / 27 MHz) — no amateur privilege", "allocation": "Reserved", "modeRestriction": "Any",         "maxPowerW": null, "notes": "Citizens Band (27 MHz) — not a US amateur allocation" },
     { "lowHz": 28000000, "highHz": 28300000, "label": "10M CW/Data (Technician)",       "allocation": "Amateur",  "modeRestriction": "CwAndDigital", "maxPowerW": 200,  "notes": "Tech/Novice CW + RTTY/data, 200 W PEP" },
     { "lowHz": 28300000, "highHz": 28500000, "label": "10M Phone (Technician)",         "allocation": "Amateur",  "modeRestriction": "PhoneOnly",    "maxPowerW": 200,  "notes": "Tech/Novice SSB phone (CW also permitted), 200 W PEP" },
     { "lowHz": 28500000, "highHz": 29700000, "label": "10M >28.5 — no Technician privilege", "allocation": "Reserved", "modeRestriction": "Any",     "maxPowerW": null, "notes": null },

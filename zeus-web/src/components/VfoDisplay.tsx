@@ -59,6 +59,7 @@ import {
   optimisticSetReceiverVfo,
   postReceiverVfo,
 } from '../state/receiver-state';
+import { useVfoLockStore } from '../state/vfo-lock-store';
 import { receiverColorByIndex, type SpectrumReceiverId } from './spectrumReceiverColor';
 
 const MAX_HZ = 60_000_000;
@@ -146,6 +147,7 @@ export function VfoDisplay({
   const resolvedLabel = label ?? `RX${targetIndex + 1}`;
   const vfoHz = useConnectionStore((s) => getReceiverVfoHz(s, targetIndex));
   const applyState = useConnectionStore((s) => s.applyState);
+  const locked = useVfoLockStore((s) => s.locked);
   const postVfo = useCallback(
     (hz: number, signal?: AbortSignal) => postReceiverVfo(targetIndex, hz, signal),
     [targetIndex],
@@ -189,9 +191,10 @@ export function VfoDisplay({
   }, [applyState, editing, targetIndex]);
 
   const beginEdit = useCallback(() => {
+    if (locked) return;
     setDraft(formatKhz(vfoHz));
     setEditing(true);
-  }, [vfoHz]);
+  }, [vfoHz, locked]);
 
   const cancelEdit = useCallback(() => {
     setEditing(false);
@@ -258,6 +261,11 @@ export function VfoDisplay({
       const decade = Number.parseInt(decadeAttr, 10);
       if (!Number.isFinite(decade) || decade <= 0) return;
       e.preventDefault();
+      // Lock gate: keep the optimistic store untouched and skip the POST so
+      // the digits don't twitch under the wheel before the next poll snaps
+      // them back. The API layer would also refuse, but bailing here means
+      // zero visual jitter.
+      if (useVfoLockStore.getState().locked) return;
 
       const direction = e.deltaY < 0 ? 1 : -1;
       const current = readReceiverVfo(targetIndex);
@@ -331,13 +339,17 @@ export function VfoDisplay({
           ref={digitsContainerRef}
           type="button"
           onClick={beginEdit}
-          aria-label="Edit frequency"
-          title={`${resolvedLabel}: click to enter frequency in kHz - scroll the wheel over a digit to tune it`}
-          className="freq-digits mono"
+          aria-label={locked ? `${resolvedLabel} VFO locked — unlock to tune` : 'Edit frequency'}
+          title={
+            locked
+              ? `${resolvedLabel} VFO locked — unlock to tune`
+              : `${resolvedLabel}: click to enter frequency in kHz - scroll the wheel over a digit to tune it`
+          }
+          className={`freq-digits mono${locked ? ' is-locked' : ''}`}
           style={{
             background: 'none',
             border: 'none',
-            cursor: 'text',
+            cursor: locked ? 'not-allowed' : 'text',
             width: '100%',
           }}
         >
@@ -349,7 +361,7 @@ export function VfoDisplay({
                 <span
                   className={`digit ${isLeading ? 'leading' : ''}`}
                   data-decade={place.decade}
-                  style={{ cursor: 'ns-resize' }}
+                  style={{ cursor: locked ? 'not-allowed' : 'ns-resize' }}
                 >
                   {d}
                 </span>
@@ -365,7 +377,13 @@ export function VfoDisplay({
       )}
       <div className="freq-bot">
         <span className="label-xs">{resolvedLabel}</span>
-        <span className="label-xs">{compact ? 'MHz' : 'MHz · click to type · wheel on a digit to step'}</span>
+        <span className="label-xs">
+          {locked
+            ? 'LOCKED — unlock to tune'
+            : compact
+              ? 'MHz'
+              : 'MHz · click to type · wheel on a digit to step'}
+        </span>
       </div>
     </div>
   );
