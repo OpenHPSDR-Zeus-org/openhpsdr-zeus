@@ -47,6 +47,11 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Zeus.Contracts.Tests" />
     <InternalsVisibleTo Include="Zeus.Server.Tests" />
+    <!-- Virtual-radio emulator consumes the per-board calibration / PA /
+         capability tables (RadioCalibrations, PaDefaults, BoardCapabilitiesTable)
+         to invert Zeus's own forward-power math, so its UNMODIFIED meter path
+         reads back the watts the emulator intends. Zero new public surface. -->
+    <InternalsVisibleTo Include="Zeus.VirtualRadio" />
   </ItemGroup>
 
   <ItemGroup>
