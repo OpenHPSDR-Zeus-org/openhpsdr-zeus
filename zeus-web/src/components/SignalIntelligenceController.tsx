@@ -38,6 +38,13 @@ import { DIGITAL_PROTECTED_RANGES } from '../dsp/digital-segments';
 import { useConnectionStore } from '../state/connection-store';
 import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 import { useNotchStore } from '../state/notch-store';
+import {
+  displayFilterEdgesHz,
+  getReceiverFilterHighHz,
+  getReceiverFilterLowHz,
+  getReceiverMode,
+  getReceiverVfoHz,
+} from '../state/receiver-state';
 import { useTxStore } from '../state/tx-store';
 
 const SCENE_SAMPLE_INTERVAL_MS = 1000;
@@ -204,6 +211,16 @@ export function SignalIntelligenceController() {
     // console diagnostics below.
     const currentAutoNotchInput = () => {
       const display = useDisplayStore.getState();
+      const conn = useConnectionStore.getState();
+      const focused = conn.focusedRxIndex;
+      const dialHz = getReceiverVfoHz(conn, focused);
+      const mode = getReceiverMode(conn, focused);
+      const filter = displayFilterEdgesHz(
+        mode,
+        dialHz,
+        getReceiverFilterLowHz(conn, focused),
+        getReceiverFilterHighHz(conn, focused),
+      );
       return {
         spectrum: display.panValid ? display.panDb : null,
         floor: getNoiseFloor(),
@@ -212,6 +229,11 @@ export function SignalIntelligenceController() {
         centerHz: display.centerHz,
         hzPerPixel: display.hzPerPixel,
         existingNotches: useNotchStore.getState().notches,
+        tunedPassband: {
+          dialHz,
+          lowOffsetHz: filter.lowHz,
+          highOffsetHz: filter.highHz,
+        },
         protectedRanges: DIGITAL_PROTECTED_RANGES,
       };
     };

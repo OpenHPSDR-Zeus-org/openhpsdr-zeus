@@ -344,6 +344,39 @@ describe('SignalIntelligenceController display-intelligence sync', () => {
     });
   });
 
+  it('never emits auto notches inside the tuned RX passband', async () => {
+    vi.setSystemTime(new Date('2026-06-15T01:06:00Z'));
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(DISPLAY_INTELLIGENCE_DEFAULTS));
+    vi.stubGlobal('fetch', fetchMock);
+    useConnectionStore.setState({
+      status: 'Connected',
+      mode: 'USB',
+      vfoHz: 7_251_000,
+      filterLowHz: 150,
+      filterHighHz: 2850,
+      focusedRxIndex: 0,
+      nr: { ...NR_CONFIG_DEFAULT, anfEnabled: true },
+    });
+
+    await act(async () => {
+      root.render(<SignalIntelligenceController />);
+      await flushPromises();
+    });
+
+    await act(async () => {
+      useDisplayStore.getState().pushFrame(frameWithEmfBar(1));
+      vi.advanceTimersByTime(1000);
+      useDisplayStore.getState().pushFrame(frameWithEmfBar(2));
+      vi.advanceTimersByTime(1000);
+      useDisplayStore.getState().pushFrame(frameWithEmfBar(3));
+      vi.advanceTimersByTime(1000);
+      useDisplayStore.getState().pushFrame(frameWithEmfBar(4));
+      await flushPromises();
+    });
+
+    expect(useNotchStore.getState().notches.filter((n) => n.source === 'auto')).toEqual([]);
+  });
+
   it('keeps legacy Auto Notch settings inactive until ANF is enabled', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
       ...DISPLAY_INTELLIGENCE_DEFAULTS,

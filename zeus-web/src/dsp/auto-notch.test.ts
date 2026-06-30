@@ -258,6 +258,140 @@ describe('auto notch carrier detector', () => {
 
     expect(notches).toEqual([]);
   });
+
+  it('rejects a narrow low-end crest riding on a wider voice channel', () => {
+    const { spectrum, floor, stationarity } = arrays();
+    // A voice low end can present a locally narrow crest, but it sits on a
+    // broader occupied shoulder. Even if stationarity is fooled, it is signal
+    // body, not EMF/RFI.
+    for (let i = 56; i <= 88; i++) {
+      spectrum[i] = NOISE_DB + 20;
+      stationarity[i] = 0.9;
+    }
+    spectrum[64] = NOISE_DB + 32;
+
+    const notches = detectAutoNotches({
+      spectrum,
+      floor,
+      confidence: null,
+      stationarity,
+      centerHz: CENTER_HZ,
+      hzPerPixel: HZ_PER_PIXEL,
+    });
+
+    expect(notches).toEqual([]);
+    const report = explainAutoNotchAt(
+      { spectrum, floor, confidence: null, stationarity, centerHz: CENTER_HZ, hzPerPixel: HZ_PER_PIXEL },
+      CENTER_HZ,
+    );
+    expect(report?.verdict).toBe('occupied');
+    expect(report!.occupiedWidthHz).toBeGreaterThan(report!.maxOccupiedShoulderHz);
+  });
+
+  it('rejects voice low-end crests even before passband protection is considered', () => {
+    const { spectrum, floor, stationarity } = arrays();
+    for (let i = 64; i <= 98; i++) {
+      spectrum[i] = NOISE_DB + 20;
+      stationarity[i] = 0.9;
+    }
+    spectrum[84] = NOISE_DB + 32;
+
+    const notches = detectAutoNotches({
+      spectrum,
+      floor,
+      confidence: null,
+      stationarity,
+      centerHz: CENTER_HZ,
+      hzPerPixel: HZ_PER_PIXEL,
+      tunedPassband: {
+        dialHz: CENTER_HZ,
+        lowOffsetHz: 150,
+        highOffsetHz: 2850,
+      },
+    });
+
+    expect(notches).toEqual([]);
+    expect(
+      explainAutoNotchAt(
+        {
+          spectrum,
+          floor,
+          confidence: null,
+          stationarity,
+          centerHz: CENTER_HZ,
+          hzPerPixel: HZ_PER_PIXEL,
+          tunedPassband: {
+            dialHz: CENTER_HZ,
+            lowOffsetHz: 150,
+            highOffsetHz: 2850,
+          },
+        },
+        CENTER_HZ + 1_000,
+      )?.verdict,
+    ).toBe('occupied');
+  });
+
+  it('protects the tuned passband from automatic notches', () => {
+    const { spectrum, floor, stationarity } = arrays();
+    paintCarrier(spectrum, stationarity, 84, 32, 0.92); // +1 kHz from dial, inside USB passband
+
+    const notches = detectAutoNotches({
+      spectrum,
+      floor,
+      confidence: null,
+      stationarity,
+      centerHz: CENTER_HZ,
+      hzPerPixel: HZ_PER_PIXEL,
+      tunedPassband: {
+        dialHz: CENTER_HZ,
+        lowOffsetHz: 150,
+        highOffsetHz: 2850,
+      },
+    });
+
+    expect(notches).toEqual([]);
+    expect(
+      explainAutoNotchAt(
+        {
+          spectrum,
+          floor,
+          confidence: null,
+          stationarity,
+          centerHz: CENTER_HZ,
+          hzPerPixel: HZ_PER_PIXEL,
+          tunedPassband: {
+            dialHz: CENTER_HZ,
+            lowOffsetHz: 150,
+            highOffsetHz: 2850,
+          },
+        },
+        CENTER_HZ + 1_000,
+      )?.verdict,
+    ).toBe('passband');
+  });
+
+  it('detects a narrow adjacent blocker outside the tuned passband', () => {
+    const { spectrum, floor, stationarity } = arrays();
+    paintCarrier(spectrum, stationarity, 124, 32, 0.92); // +3 kHz from dial, just above USB passband
+
+    const notches = detectAutoNotches({
+      spectrum,
+      floor,
+      confidence: null,
+      stationarity,
+      centerHz: CENTER_HZ,
+      hzPerPixel: HZ_PER_PIXEL,
+      tunedPassband: {
+        dialHz: CENTER_HZ,
+        lowOffsetHz: 150,
+        highOffsetHz: 2850,
+      },
+    });
+
+    expect(notches).toHaveLength(1);
+    expect(notches[0]!.centerHz).toBeCloseTo(CENTER_HZ + 3_000, 0);
+    expect(notches[0]!.widthHz).toBeLessThanOrEqual(200);
+  });
 });
 
 describe('auto notch tracker', () => {
@@ -282,7 +416,7 @@ describe('auto notch tracker', () => {
     expect(verified[0]!.centerHz).toBeLessThan(CENTER_HZ + 120);
   });
 
-  it('locks a verified notch center after stable dynamic sampling', () => {
+  it('tracks slow drift after verification without unlocking the notch', () => {
     const tracker = createAutoNotchTracker({ verifySamples: 3 });
     const candidate: AutoNotchCandidate = {
       centerHz: CENTER_HZ + 100,
@@ -297,11 +431,15 @@ describe('auto notch tracker', () => {
     expect(locked).toHaveLength(1);
     const lockedCenter = locked[0]!.centerHz;
 
-    const afterRefine = tracker.update([{ ...candidate, centerHz: CENTER_HZ + 145 }]);
+    let afterRefine = locked;
+    for (const offsetHz of [140, 150, 160, 170, 175]) {
+      afterRefine = tracker.update([{ ...candidate, centerHz: CENTER_HZ + offsetHz }]);
+    }
 
     expect(afterRefine).toHaveLength(1);
     expect(afterRefine[0]!.locked).toBe(true);
-    expect(afterRefine[0]!.centerHz).toBe(lockedCenter);
+    expect(afterRefine[0]!.centerHz).toBeGreaterThan(lockedCenter);
+    expect(afterRefine[0]!.centerHz).toBeLessThan(CENTER_HZ + 175);
   });
 
   it('rejects candidates that wander before validation', () => {

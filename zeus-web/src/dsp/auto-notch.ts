@@ -32,8 +32,20 @@ export type AutoNotchInput = {
   centerHz: bigint | number;
   hzPerPixel: number;
   existingNotches?: readonly Notch[];
+  /** Tuned receiver passband. Candidates overlapping it are treated as wanted signal. */
+  tunedPassband?: AutoNotchPassband | null;
   /** Absolute-Hz windows the detector must never notch (e.g. FT8/FT4 segments). */
   protectedRanges?: readonly { lowHz: number; highHz: number }[];
+};
+
+export type AutoNotchPassband = {
+  /** Absolute dial/VFO Hz for the receiver the operator is listening to. */
+  dialHz: number;
+  /** Audio filter offsets from dial/VFO, signed for the current demod sideband. */
+  lowOffsetHz: number;
+  highOffsetHz: number;
+  /** Extra Hz on each side protected from auto notches. Defaults to a tight guard. */
+  guardHz?: number;
 };
 
 export type AutoNotchTrackerOptions = {
@@ -72,6 +84,9 @@ const MIN_PROMINENCE_DB = 8; // peak must stand this far above its local saddle
 const PROMINENCE_WINDOW_HZ = 3_000; // ± window the saddle reference is taken over
 const WIDTH_DROP_DB = 6; // carrier width is measured at −6 dB from the peak
 const MAX_CARRIER_WIDTH_HZ = 500; // wider than this is a signal/voice, not a carrier
+const OCCUPIED_SHOULDER_SNR_DB = 6; // broad above-floor energy around a peak is voice/signal body
+const OCCUPIED_SHOULDER_MAX_HZ = 1_250;
+const OCCUPIED_SHOULDER_MAX_MULTIPLIER = 2.5;
 // At a wide display span one FFT bin can be hundreds of Hz, so a genuine narrow
 // carrier smears across 2–3 bins and would blow the fixed Hz limit above — which
 // is why strong carriers were missed on a full-band view. Allow the narrowness
@@ -97,6 +112,7 @@ const TRACK_MATCH_HZ = 180;
 const REFINE_ALPHA = 0.22;
 const OUTPUT_QUANTUM_HZ = 10;
 const TRACK_JITTER_ALPHA = 0.28;
+const LOCKED_REFINE_ALPHA = 0.12;
 const CENTER_JITTER_MIN_HZ = 90;
 const CENTER_JITTER_MAX_HZ = 900;
 const CENTER_JITTER_WIDTH_FRACTION = 0.22;
@@ -104,6 +120,7 @@ const WIDTH_JITTER_MIN_HZ = 120;
 const WIDTH_JITTER_MAX_HZ = 1_500;
 const WIDTH_JITTER_WIDTH_FRACTION = 0.35;
 const LOCK_DRIFT_WIDTH_FRACTION = 0.45;
+const PASSBAND_GUARD_HZ = 50;
 
 function finite(v: number): boolean {
   return Number.isFinite(v);
@@ -171,6 +188,37 @@ function widthAtDropHz(spec: Float32Array, i: number, threshold: number, hzPerPi
   return (hi - lo + 1) * hzPerPixel;
 }
 
+function occupiedShoulderWidthHz(
+  spec: Float32Array,
+  floor: Float32Array,
+  i: number,
+  hzPerPixel: number,
+): number {
+  let lo = i;
+  let hi = i;
+  while (
+    lo > 0 &&
+    finite(spec[lo - 1]!) &&
+    finite(floor[lo - 1]!) &&
+    spec[lo - 1]! - floor[lo - 1]! >= OCCUPIED_SHOULDER_SNR_DB
+  ) {
+    lo--;
+  }
+  while (
+    hi < spec.length - 1 &&
+    finite(spec[hi + 1]!) &&
+    finite(floor[hi + 1]!) &&
+    spec[hi + 1]! - floor[hi + 1]! >= OCCUPIED_SHOULDER_SNR_DB
+  ) {
+    hi++;
+  }
+  return (hi - lo + 1) * hzPerPixel;
+}
+
+function occupiedShoulderLimitHz(maxCarrierWidthHz: number): number {
+  return Math.max(OCCUPIED_SHOULDER_MAX_HZ, maxCarrierWidthHz * OCCUPIED_SHOULDER_MAX_MULTIPLIER);
+}
+
 function quantizeHz(value: number): number {
   return Math.round(value / OUTPUT_QUANTUM_HZ) * OUTPUT_QUANTUM_HZ;
 }
@@ -191,6 +239,34 @@ function outputTrack(t: AutoNotchTrack): AutoNotchTrack {
 
 function isCoveredByManualTrack(track: AutoNotchTrack, notches: readonly Notch[]): boolean {
   return isCoveredByManualNotch(track, notches);
+}
+
+function protectedPassbandRange(
+  passband: AutoNotchPassband | null | undefined,
+): { lowHz: number; highHz: number; guardHz: number } | null {
+  if (!passband) return null;
+  const dialHz = passband.dialHz;
+  const lowOffsetHz = passband.lowOffsetHz;
+  const highOffsetHz = passband.highOffsetHz;
+  if (!finite(dialHz) || !finite(lowOffsetHz) || !finite(highOffsetHz)) return null;
+  const lowHz = dialHz + Math.min(lowOffsetHz, highOffsetHz);
+  const highHz = dialHz + Math.max(lowOffsetHz, highOffsetHz);
+  const guardHz = finite(passband.guardHz ?? Number.NaN)
+    ? Math.max(0, passband.guardHz!)
+    : PASSBAND_GUARD_HZ;
+  return { lowHz, highHz, guardHz };
+}
+
+function overlapsProtectedPassband(
+  centerHz: number,
+  widthHz: number,
+  passband: AutoNotchPassband | null | undefined,
+): boolean {
+  const range = protectedPassbandRange(passband);
+  if (!range) return false;
+  const lo = centerHz - widthHz / 2;
+  const hi = centerHz + widthHz / 2;
+  return hi >= range.lowHz - range.guardHz && lo <= range.highHz + range.guardHz;
 }
 
 export function createAutoNotchTracker(options: AutoNotchTrackerOptions = {}): AutoNotchTracker {
@@ -272,6 +348,10 @@ export function createAutoNotchTracker(options: AutoNotchTrackerOptions = {}): A
         track.confidence += (candidate.confidence - track.confidence) * refineAlpha;
         track.hits += 1;
         track.misses = 0;
+        if (track.locked) {
+          track.lockedCenterHz += (track.centerHz - track.lockedCenterHz) * LOCKED_REFINE_ALPHA;
+          track.lockedWidthHz = clampWidth(track.lockedWidthHz + (track.widthHz - track.lockedWidthHz) * LOCKED_REFINE_ALPHA);
+        }
         lockIfReady(track);
       } else {
         track.misses += 1;
@@ -360,6 +440,8 @@ export function detectAutoNotches(input: AutoNotchInput): AutoNotchCandidate[] {
     // zoom so wide-span views don't reject carriers smeared across a few bins.
     const widthHz = widthAtDropHz(spec, i, here - WIDTH_DROP_DB, hzPerPixel);
     if (widthHz > maxCarrierWidthHz) continue;
+    const occupiedWidthHz = occupiedShoulderWidthHz(spec, floor, i, hzPerPixel);
+    if (occupiedWidthHz > occupiedShoulderLimitHz(maxCarrierWidthHz)) continue;
 
     const candidateCenterHz = binToHz(i, n, centerHz, hzPerPixel);
 
@@ -375,6 +457,9 @@ export function detectAutoNotches(input: AutoNotchInput): AutoNotchCandidate[] {
       snrDb: prominence,
       confidence: steadiness,
     };
+    if (overlapsProtectedPassband(candidate.centerHz, candidate.widthHz, input.tunedPassband)) {
+      continue;
+    }
     if (!isCoveredByManualNotch(candidate, input.existingNotches ?? [])) {
       raw.push(candidate);
     }
@@ -403,11 +488,14 @@ export type AutoNotchGateReport = {
   snrDb: number;
   prominenceDb: number;
   widthHz: number;
+  occupiedWidthHz: number;
   maxCarrierWidthHz: number;
+  maxOccupiedShoulderHz: number;
   steadiness: number;
   inProtectedRange: boolean;
+  inTunedPassband: boolean;
   /** First gate that failed, or 'pass' when every gate is satisfied. */
-  verdict: 'pass' | 'localMax' | 'snr' | 'stationarity' | 'prominence' | 'narrowness' | 'protected' | 'nodata';
+  verdict: 'pass' | 'localMax' | 'snr' | 'stationarity' | 'prominence' | 'narrowness' | 'occupied' | 'passband' | 'protected' | 'nodata';
   thresholds: { minSnrDb: number; minProminenceDb: number; minSteadiness: number };
 };
 
@@ -428,10 +516,13 @@ function reportAtBin(input: AutoNotchInput, i: number, n: number, centerHz: numb
   const steadiness = steady[i]!;
   const prominence = saddleProminenceDb(spec, i, windowBins);
   const widthHz = widthAtDropHz(spec, i, here - WIDTH_DROP_DB, hzPerPixel);
+  const occupiedWidthHz = occupiedShoulderWidthHz(spec, floor, i, hzPerPixel);
+  const maxOccupiedShoulderHz = occupiedShoulderLimitHz(maxCarrierWidthHz);
   const freqHz = binToHz(i, n, centerHz, hzPerPixel);
   const inProtectedRange = (input.protectedRanges ?? []).some(
     (r) => freqHz >= r.lowHz && freqHz <= r.highHz,
   );
+  const inTunedPassband = overlapsProtectedPassband(freqHz, widthHz, input.tunedPassband);
 
   let verdict: AutoNotchGateReport['verdict'] = 'pass';
   if (!isLocalMax) verdict = 'localMax';
@@ -439,6 +530,8 @@ function reportAtBin(input: AutoNotchInput, i: number, n: number, centerHz: numb
   else if (!(steadiness >= MIN_STEADINESS)) verdict = 'stationarity';
   else if (!(prominence >= MIN_PROMINENCE_DB)) verdict = 'prominence';
   else if (widthHz > maxCarrierWidthHz) verdict = 'narrowness';
+  else if (occupiedWidthHz > maxOccupiedShoulderHz) verdict = 'occupied';
+  else if (inTunedPassband) verdict = 'passband';
   else if (inProtectedRange) verdict = 'protected';
 
   return {
@@ -448,9 +541,12 @@ function reportAtBin(input: AutoNotchInput, i: number, n: number, centerHz: numb
     snrDb: Math.round(snr * 10) / 10,
     prominenceDb: Math.round(prominence * 10) / 10,
     widthHz: Math.round(widthHz),
+    occupiedWidthHz: Math.round(occupiedWidthHz),
     maxCarrierWidthHz: Math.round(maxCarrierWidthHz),
+    maxOccupiedShoulderHz: Math.round(maxOccupiedShoulderHz),
     steadiness: Math.round(steadiness * 100) / 100,
     inProtectedRange,
+    inTunedPassband,
     verdict,
     thresholds: {
       minSnrDb: MIN_SNR_DB,
