@@ -228,9 +228,9 @@ public static class CallsignCountryResolver
         // ---- Oceania ----
         ["VK"] = "AUS", ["AX"] = "AUS", ["VI"] = "AUS",
         ["ZL"] = "NZL", ["ZM"] = "NZL", ["ZK"] = "NZL",
-        ["KH2"] = "GUM", ["FK"] = "NCL", ["FO"] = "FP", ["3D2"] = "FIJ",
+        ["KH2"] = "GUM", ["FK"] = "NCL", ["FO"] = "FPO", ["3D2"] = "FIJ",
         ["DU1"] = "PHL", ["P2"] = "PNG", ["H4"] = "SOL", ["YJ"] = "VUT",
-        ["KH8"] = "SAM", ["5W"] = "SAM", ["A3"] = "TON",
+        ["KH8"] = "ASA", ["5W"] = "SAM", ["A3"] = "TON",
 
         // ---- Africa ----
         ["ZS"] = "RSA", ["ZR"] = "RSA", ["ZT"] = "RSA", ["ZU"] = "RSA",

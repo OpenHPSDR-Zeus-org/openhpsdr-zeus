@@ -282,8 +282,9 @@
 }
 .ft8-decode-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 /* Country column — abbreviated DXCC entity, sits to the RIGHT of Message
-   (symmetric to Freq on the LEFT). Dim + compact so it never competes with the
-   message text; the row colour class still tints it. */
+   (symmetric to Freq on the LEFT). Always rendered dim + compact (its own
+   --hud-text-dim colour wins over the row class) so it never competes with the
+   message text. */
 .ft8-decode-table td.ft8-country {
   color: var(--hud-text-dim);
   text-align: left;
