@@ -46,7 +46,7 @@ describe('analyzeTxFidelity', () => {
     expect(a.state).toBe('under');
     expect(a.label).toBe('Under-driven');
     expect(a.detail).toContain('Mic peak is low');
-    expect(a.detail).toContain('TX density is below profile target');
+    expect(a.detail).toContain('TX density is below clean profile target');
     expect(a.recommendation).toBe('Raise mic gain toward -12 to -6 dBFS peaks');
     expect(a.actionTone).toBe('raise');
     expect(a.densityStatus).toBe('thin');
@@ -180,9 +180,31 @@ describe('analyzeTxFidelity', () => {
     const a = analyzeTxFidelity({ ...BASE, targetSpectralDensity: 100 });
     expect(a.state).toBe('under');
     expect(a.targetSpectralDensity).toBe(100);
+    expect(a.cleanSpectralDensityTarget).toBe(84);
     expect(a.liveSpectralDensity).toBeLessThan(80);
-    expect(a.detail).toContain('TX density is below profile target');
+    expect(a.detail).toContain('TX density is below clean profile target');
     expect(a.recommendation).toBe('Increase mic gain or profile density before adding drive');
+  });
+
+  it('lets max-density targets go green inside the clean dynamics windows', () => {
+    const a = analyzeTxFidelity({
+      ...BASE,
+      targetSpectralDensity: 100,
+      wdspMicPk: -6,
+      micAv: -16,
+      outPk: -4,
+      outAv: -11,
+      alcGr: 6,
+      lvlrGr: 6,
+      cfcGr: 5,
+    });
+
+    expect(a.state).toBe('sweet');
+    expect(a.cleanSpectralDensityTarget).toBe(84);
+    expect(a.densityStatus).toBe('matched');
+    expect(a.densityFit).toBeGreaterThanOrEqual(80);
+    expect(a.tuningMetrics.find((m) => m.id === 'dens')?.status).toBe('met');
+    expect(a.detail).toContain('All live TX fidelity targets are green');
   });
 
   it('flags forced density from an over-compressed speech chain', () => {

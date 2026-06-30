@@ -2,6 +2,7 @@
 
 const BYPASSED_DBFS_THRESHOLD = -200;
 const DEFAULT_SPECTRAL_DENSITY_TARGET = 55;
+const CLEAN_SPECTRAL_DENSITY_CEILING = 84;
 
 export type TxFidelitySnapshot = {
   moxOn: boolean;
@@ -75,6 +76,7 @@ export type TxFidelityAnalysis = {
   swr: number;
   psFeedbackLevel: number | null;
   targetSpectralDensity: number;
+  cleanSpectralDensityTarget: number;
   liveSpectralDensity: number | null;
   densityFit: number | null;
   densityStatus: TxDensityStatus;
@@ -103,6 +105,18 @@ function clampScore(v: number): number {
 
 function pctBetween(v: number, low: number, high: number): number {
   return clamp(((v - low) / (high - low)) * 100, 0, 100);
+}
+
+export function cleanSpectralDensityTarget(targetSpectralDensity: number): number {
+  const target = clampScore(targetSpectralDensity);
+  if (target <= DEFAULT_SPECTRAL_DENSITY_TARGET) return target;
+  const lift =
+    (target - DEFAULT_SPECTRAL_DENSITY_TARGET) /
+    (100 - DEFAULT_SPECTRAL_DENSITY_TARGET);
+  return clampScore(
+    DEFAULT_SPECTRAL_DENSITY_TARGET +
+      lift * (CLEAN_SPECTRAL_DENSITY_CEILING - DEFAULT_SPECTRAL_DENSITY_TARGET),
+  );
 }
 
 function validCount(v: number | null | undefined): number | null {
@@ -267,7 +281,7 @@ function estimateLiveSpectralDensity(
 
 function densityStatus(
   liveSpectralDensity: number | null,
-  targetSpectralDensity: number,
+  cleanTargetSpectralDensity: number,
   micDbfs: number | null,
   outDbfs: number | null,
   compCrestDb: number | null,
@@ -277,7 +291,7 @@ function densityStatus(
   audioSuiteOutputDbfs: number | null,
 ): TxDensityStatus {
   if (liveSpectralDensity === null) return 'unknown';
-  if (liveSpectralDensity < targetSpectralDensity - 18) return 'thin';
+  if (liveSpectralDensity < cleanTargetSpectralDensity - 18) return 'thin';
 
   const forcedByLimiter =
     (micDbfs !== null && micDbfs > -3) ||
@@ -288,7 +302,7 @@ function densityStatus(
     lvlrGr > 10 ||
     cfcGr > 7;
   const forcedByTargetOvershoot =
-    liveSpectralDensity > targetSpectralDensity + 30 &&
+    liveSpectralDensity > cleanTargetSpectralDensity + 30 &&
     (alcGr > 7 || lvlrGr > 8 || cfcGr > 6);
 
   if (forcedByLimiter || forcedByTargetOvershoot) return 'forced';
@@ -343,6 +357,7 @@ function buildTuningMetrics(args: {
   psFeedbackLevel: number | null;
   psEnabled: boolean;
   targetSpectralDensity: number;
+  cleanSpectralDensityTarget: number;
   liveSpectralDensity: number | null;
   densityFit: number | null;
   density: TxDensityStatus;
@@ -365,6 +380,7 @@ function buildTuningMetrics(args: {
     psFeedbackLevel,
     psEnabled,
     targetSpectralDensity,
+    cleanSpectralDensityTarget: cleanTargetSpectralDensity,
     liveSpectralDensity,
     densityFit,
     density,
@@ -400,36 +416,41 @@ function buildTuningMetrics(args: {
     );
   }
 
+  const densityTargetLabel =
+    cleanTargetSpectralDensity === targetSpectralDensity
+      ? `target ${targetSpectralDensity}`
+      : `clean ${cleanTargetSpectralDensity} / profile ${targetSpectralDensity}`;
+
   if (!activeVoiceChain || liveSpectralDensity === null || densityFit === null) {
-    metrics.push(idleMetric('dens', 'DENS', `target ${targetSpectralDensity}`, activeTarget));
+    metrics.push(idleMetric('dens', 'DENS', densityTargetLabel, activeTarget));
   } else if (density === 'forced') {
     metrics.push(metric(
       'dens',
       'DENS',
-      `${liveSpectralDensity.toFixed(0)}/${targetSpectralDensity}`,
+      `${liveSpectralDensity.toFixed(0)}/${cleanTargetSpectralDensity}`,
       'bad',
-      `target ${targetSpectralDensity} without forced compression`,
+      `${densityTargetLabel} without forced compression`,
       'Density is being forced by clipping, limiting, or heavy compression.',
     ));
   } else if (density === 'matched' && densityFit >= 80) {
     metrics.push(metric(
       'dens',
       'DENS',
-      `${liveSpectralDensity.toFixed(0)}/${targetSpectralDensity}`,
+      `${liveSpectralDensity.toFixed(0)}/${cleanTargetSpectralDensity}`,
       'met',
-      `target ${targetSpectralDensity}`,
-      'Live density is matched to the station target without over-compression.',
+      densityTargetLabel,
+      'Live density is matched to the clean station target without over-compression.',
     ));
   } else {
     metrics.push(metric(
       'dens',
       'DENS',
-      `${liveSpectralDensity.toFixed(0)}/${targetSpectralDensity}`,
+      `${liveSpectralDensity.toFixed(0)}/${cleanTargetSpectralDensity}`,
       'warn',
-      `target ${targetSpectralDensity}`,
+      densityTargetLabel,
       density === 'thin'
-        ? 'Live density is below the station target.'
-        : 'Live density is near target but not centered yet.',
+        ? 'Live density is below the clean station target.'
+        : 'Live density is near the clean target but not centered yet.',
     ));
   }
 
@@ -558,6 +579,7 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
       ? s.targetSpectralDensity ?? DEFAULT_SPECTRAL_DENSITY_TARGET
       : DEFAULT_SPECTRAL_DENSITY_TARGET,
   );
+  const cleanTargetSpectralDensity = cleanSpectralDensityTarget(targetSpectralDensity);
   const activeVoiceChain = !s.tunOn && (keyed || previewing);
   const audioSuiteMetered =
     activeVoiceChain &&
@@ -579,10 +601,10 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
   const densityFit =
     liveSpectralDensity === null
       ? null
-      : clampScore(100 - Math.abs(liveSpectralDensity - targetSpectralDensity) * 1.6);
+      : clampScore(100 - Math.abs(liveSpectralDensity - cleanTargetSpectralDensity) * 1.6);
   const density = densityStatus(
     liveSpectralDensity,
-    targetSpectralDensity,
+    cleanTargetSpectralDensity,
     micDbfs,
     outDbfs,
     compCrestDb,
@@ -610,6 +632,7 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
     psFeedbackLevel,
     psEnabled: s.psEnabled,
     targetSpectralDensity,
+    cleanSpectralDensityTarget: cleanTargetSpectralDensity,
     liveSpectralDensity,
     densityFit,
     density,
@@ -635,6 +658,7 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
     swr,
     psFeedbackLevel,
     targetSpectralDensity,
+    cleanSpectralDensityTarget: cleanTargetSpectralDensity,
     liveSpectralDensity,
     densityFit,
     densityStatus: density,
@@ -765,15 +789,20 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
 
   if (liveSpectralDensity !== null && densityFit !== null) {
     if (density === 'thin') {
-      const shortfall = targetSpectralDensity - liveSpectralDensity;
-      score -= Math.min(24, Math.max(8, shortfall * 0.6));
-      reasons.push('TX density is below profile target');
+      const cleanShortfall = cleanTargetSpectralDensity - liveSpectralDensity;
+      score -= Math.min(24, Math.max(8, cleanShortfall * 0.6));
+      reasons.push('TX density is below clean profile target');
     } else if (density === 'forced') {
-      const overshoot = Math.max(0, liveSpectralDensity - targetSpectralDensity);
+      const overshoot = Math.max(0, liveSpectralDensity - cleanTargetSpectralDensity);
       score -= Math.min(24, Math.max(10, overshoot * 0.4));
       reasons.push('Density is forced by compression');
-    } else if (densityFit < 70) {
+    } else if (densityFit < 80) {
       score -= 8;
+      reasons.push(
+        liveSpectralDensity < cleanTargetSpectralDensity
+          ? 'TX density is near but below clean profile target'
+          : 'TX density is near but above clean profile target',
+      );
     }
   }
 
@@ -868,7 +897,11 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
     r.includes('uplink')
   );
   const hasUnderReason = reasons.some(
-    (r) => r.includes('low') || r.includes('below profile target') || r.includes('too open'),
+    (r) =>
+      r.includes('low') ||
+      r.includes('below clean profile target') ||
+      r.includes('near but below clean profile target') ||
+      r.includes('too open'),
   );
   if (hasHotReason || (finalScore < 45 && !hasUnderReason)) {
     const recommendation = recommendHotAction(

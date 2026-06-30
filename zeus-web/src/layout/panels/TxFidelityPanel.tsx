@@ -40,8 +40,10 @@ import { useAudioSuiteStore } from '../../state/audio-suite-store';
 import { useConnectionStore } from '../../state/connection-store';
 import { useTxStore } from '../../state/tx-store';
 
-const AUTO_TUNE_SAMPLE_MS = 15_000;
+const AUTO_TUNE_PASS_SAMPLE_MS = 4_000;
+const AUTO_TUNE_MAX_PASSES = 4;
 const AUTO_TUNE_POLL_MS = 250;
+const AUTO_TUNE_SETTLE_MS = 300;
 const AUTO_TUNE_CHAIN_DBFS_FLOOR = -119.5;
 const AUTO_TUNE_PHASE_SWEEP_MS = 2_250;
 const AUTO_TUNE_PHASE_SETTLE_MS = 180;
@@ -174,7 +176,7 @@ function autoTuneSampleFromDiagnostics(
 async function collectTxAutoTuneSamples(
   signal: AbortSignal,
   onProgress: (progress: number) => void,
-  durationMs = AUTO_TUNE_SAMPLE_MS,
+  durationMs = AUTO_TUNE_PASS_SAMPLE_MS,
 ): Promise<TxAutoTuneSample[]> {
   const samples: TxAutoTuneSample[] = [];
   const started = Date.now();
@@ -434,6 +436,17 @@ function autoTuneMessage(plan: TxAutoTunePlan): string {
   return `${plan.summary}: ${plan.actions.join(', ')}`;
 }
 
+function autoTuneRunMessage(
+  plan: TxAutoTunePlan,
+  passCount: number,
+  appliedActions: ReadonlyArray<string>,
+): string {
+  if (appliedActions.length === 0 || plan.blockers.length > 0 || plan.changed) {
+    return passCount > 1 ? `${autoTuneMessage(plan)} / ${passCount} passes` : autoTuneMessage(plan);
+  }
+  return `Auto tune locked after ${passCount} pass${passCount === 1 ? '' : 'es'}: ${appliedActions.length} bounded change${appliedActions.length === 1 ? '' : 's'}`;
+}
+
 function controlLabelStyle(): CSSProperties {
   return {
     display: 'grid',
@@ -555,9 +568,10 @@ function TxFidelityAutoTune({ targetSpectralDensity }: { targetSpectralDensity: 
   const loadPreviewState = useAudioSuiteStore((s) => s.loadPreviewState);
   const setPreviewEnabled = useAudioSuiteStore((s) => s.setPreviewEnabled);
   const [phase, setPhase] = useState<AutoTunePhase>('idle');
-  const [message, setMessage] = useState('Ready / 15s sample');
+  const [message, setMessage] = useState('Ready / live tune');
   const [progress, setProgress] = useState(0);
   const [lastPlan, setLastPlan] = useState<TxAutoTunePlan | null>(null);
+  const [lastRunActions, setLastRunActions] = useState<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -622,11 +636,13 @@ function TxFidelityAutoTune({ targetSpectralDensity }: { targetSpectralDensity: 
     const controller = new AbortController();
     abortRef.current = controller;
     setLastPlan(null);
+    setLastRunActions([]);
     setProgress(0);
     // True only when Auto Tune itself armed the monitor for this run, so the
-    // finally block restores the off-air state and never disturbs a Preview the
-    // operator turned on themselves.
+    // finally block can restore blocked/error runs without disturbing a
+    // Preview the operator turned on themselves.
     let startedSilentPreview = false;
+    let leaveStartedPreviewOn = false;
 
     try {
       if (status !== 'Connected') {
@@ -666,78 +682,120 @@ function TxFidelityAutoTune({ targetSpectralDensity }: { targetSpectralDensity: 
         }
       }
 
-      setPhase('sampling');
-      setMessage('Talk now / 15s');
-      const samples = await collectTxAutoTuneSamples(controller.signal, (p) => {
-        setProgress(p);
-        const remaining = Math.max(0, Math.ceil((1 - p) * (AUTO_TUNE_SAMPLE_MS / 1000)));
-        setMessage(remaining > 0 ? `Talk now / ${remaining}s` : 'Analyzing...');
-      });
+      const appliedActions: string[] = [];
+      let finalPlan: TxAutoTunePlan | null = null;
+      let passCount = 0;
+      let phaseSweepCompleted = false;
 
-      const connBeforeSweep = useConnectionStore.getState();
-      const phaseSweep = await sweepTxPhaseRotator({
-        signal: controller.signal,
-        current: connBeforeSweep.txPhaseRotator,
-        baseSamples: samples,
-        mode: connBeforeSweep.mode,
-        txFilterLowHz: connBeforeSweep.txFilterLowHz,
-        txFilterHighHz: connBeforeSweep.txFilterHighHz,
-        targetSpectralDensity,
-        applyState,
-        setLocal: setTxPhaseRotatorLocal,
-        onMessage: setMessage,
-      });
+      for (let pass = 1; pass <= AUTO_TUNE_MAX_PASSES; pass++) {
+        passCount = pass;
+        setPhase('sampling');
+        setMessage(`Tuning ${pass}/${AUTO_TUNE_MAX_PASSES} / talk`);
+        const samples = await collectTxAutoTuneSamples(
+          controller.signal,
+          (p) => {
+            const runProgress = (pass - 1 + p) / AUTO_TUNE_MAX_PASSES;
+            setProgress(Math.min(0.98, runProgress));
+            const remaining = Math.max(0, Math.ceil((1 - p) * (AUTO_TUNE_PASS_SAMPLE_MS / 1000)));
+            setMessage(
+              remaining > 0
+                ? `Tuning ${pass}/${AUTO_TUNE_MAX_PASSES} / ${remaining}s`
+                : `Analyzing ${pass}/${AUTO_TUNE_MAX_PASSES}`,
+            );
+          },
+          AUTO_TUNE_PASS_SAMPLE_MS,
+        );
 
-      setMessage('Analyzing...');
-      tx = useTxStore.getState();
-      const conn = useConnectionStore.getState();
-      const audio = useAudioSuiteStore.getState();
-      const recommendationSamples = phaseSweep?.action ? phaseSweep.samples : samples;
-      let plan = recommendTxAutoTune(
-        {
-          micGainDb: tx.micGainDb,
-          levelerMaxGainDb: tx.levelerMaxGainDb,
-          drivePercent: tx.drivePercent,
-          cfcConfig: tx.cfcConfig,
-          txLeveling: conn.txLeveling,
-          txPhaseRotator: conn.txPhaseRotator,
-          targetSpectralDensity,
-          keyed: tx.moxOn,
-          audioSuiteActive: !audio.masterBypassed && (tx.moxOn || tx.txMonitorEnabled),
-          vstActive: audio.processingMode === 'vst' || audio.vstEngineActive,
-        },
-        recommendationSamples,
-      );
-      if (phaseSweep?.action) {
-        const actions = [phaseSweep.action, ...plan.actions];
-        plan = {
-          ...plan,
-          settings: { ...plan.settings, txPhaseRotator: phaseSweep.config },
-          actions,
-          changed: true,
-          summary: `Auto tune applied ${actions.length} bounded change${actions.length === 1 ? '' : 's'}`,
-        };
+        let recommendationSamples = samples;
+        let phaseAction: string | null = null;
+        if (!phaseSweepCompleted) {
+          phaseSweepCompleted = true;
+          const connBeforeSweep = useConnectionStore.getState();
+          const phaseSweep = await sweepTxPhaseRotator({
+            signal: controller.signal,
+            current: connBeforeSweep.txPhaseRotator,
+            baseSamples: samples,
+            mode: connBeforeSweep.mode,
+            txFilterLowHz: connBeforeSweep.txFilterLowHz,
+            txFilterHighHz: connBeforeSweep.txFilterHighHz,
+            targetSpectralDensity,
+            applyState,
+            setLocal: setTxPhaseRotatorLocal,
+            onMessage: setMessage,
+          });
+          if (phaseSweep?.action) {
+            recommendationSamples = phaseSweep.samples;
+            phaseAction = phaseSweep.action;
+          }
+        }
+
+        setMessage(`Analyzing ${pass}/${AUTO_TUNE_MAX_PASSES}`);
+        tx = useTxStore.getState();
+        const conn = useConnectionStore.getState();
+        const audio = useAudioSuiteStore.getState();
+        let plan = recommendTxAutoTune(
+          {
+            micGainDb: tx.micGainDb,
+            levelerMaxGainDb: tx.levelerMaxGainDb,
+            drivePercent: tx.drivePercent,
+            cfcConfig: tx.cfcConfig,
+            txLeveling: conn.txLeveling,
+            txPhaseRotator: conn.txPhaseRotator,
+            targetSpectralDensity,
+            keyed: tx.moxOn,
+            audioSuiteActive: !audio.masterBypassed && (tx.moxOn || tx.txMonitorEnabled),
+            vstActive: audio.processingMode === 'vst' || audio.vstEngineActive,
+          },
+          recommendationSamples,
+        );
+        if (phaseAction) {
+          const actions = [phaseAction, ...plan.actions];
+          plan = {
+            ...plan,
+            settings: { ...plan.settings, txPhaseRotator: conn.txPhaseRotator },
+            actions,
+            changed: true,
+            summary: `Auto tune applied ${actions.length} bounded change${actions.length === 1 ? '' : 's'}`,
+          };
+        }
+        finalPlan = plan;
+        setLastPlan(plan);
+
+        if (plan.changed) {
+          setPhase('applying');
+          setMessage(`Applying ${pass}/${AUTO_TUNE_MAX_PASSES}`);
+          await applyPlan(plan, controller.signal);
+          appliedActions.push(...plan.actions);
+        }
+
+        if (!plan.changed || plan.blockers.length > 0 || pass >= AUTO_TUNE_MAX_PASSES) break;
+
+        setMessage(`Settling ${pass}/${AUTO_TUNE_MAX_PASSES}`);
+        await sleep(AUTO_TUNE_SETTLE_MS, controller.signal);
       }
-      setLastPlan(plan);
 
-      if (plan.changed) {
-        setPhase('applying');
-        setMessage('Applying...');
-        await applyPlan(plan, controller.signal);
+      if (!finalPlan) {
+        throw new Error('Auto tune did not collect samples');
       }
+      setLastRunActions(appliedActions);
+      leaveStartedPreviewOn = startedSilentPreview && finalPlan.blockers.length === 0;
 
       setProgress(1);
       setPhase('applied');
-      setMessage(autoTuneMessage(plan));
+      setMessage(
+        leaveStartedPreviewOn
+          ? `${autoTuneRunMessage(finalPlan, passCount, appliedActions)} / Preview metering stays on`
+          : autoTuneRunMessage(finalPlan, passCount, appliedActions),
+      );
     } catch (err) {
       if (controller.signal.aborted) return;
       setPhase('error');
       setMessage(err instanceof Error ? err.message : 'Auto tune failed');
     } finally {
-      // Tear down the silent monitor we armed for this run so the radio returns
-      // to its off-air state — leaving it on would keep the chain metering (and
-      // hold the mic uplink) after Auto Tune is done.
-      if (startedSilentPreview) {
+      // Keep a successful Auto Tune's meter-only Preview alive so the fidelity
+      // gauges can prove the post-tune state. Blocked/error runs restore the
+      // prior off-air state.
+      if (startedSilentPreview && !leaveStartedPreviewOn) {
         void setPreviewEnabled(false);
       }
       if (abortRef.current === controller) {
@@ -767,7 +825,8 @@ function TxFidelityAutoTune({ targetSpectralDensity }: { targetSpectralDensity: 
   const detailTitle = lastPlan
     ? [
         lastPlan.summary,
-        lastPlan.actions.length ? `Actions: ${lastPlan.actions.join(', ')}` : '',
+        lastRunActions.length ? `Run actions: ${lastRunActions.join(', ')}` : '',
+        lastPlan.actions.length ? `Last pass actions: ${lastPlan.actions.join(', ')}` : '',
         lastPlan.blockers.length ? `Blocked: ${lastPlan.blockers.join(', ')}` : '',
       ]
         .filter(Boolean)
