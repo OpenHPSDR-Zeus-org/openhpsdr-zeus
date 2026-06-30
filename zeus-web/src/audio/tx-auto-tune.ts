@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-import type { CfcConfigDto, TxLevelingConfigDto } from '../api/client';
+import type { CfcConfigDto, TxLevelingConfigDto, TxPhaseRotatorConfigDto } from '../api/client';
 
 const DBFS_FLOOR = -200;
 const MIN_VOICED_SAMPLES = 8;
@@ -29,6 +29,10 @@ const LEVELER_DECAY_PUMP_CEIL = 400; // slow the leveler to stop pumping
 const COMP_GAIN_HARD_MIN = 0;
 const COMP_GAIN_HARD_MAX = 20;
 const COMP_GAIN_RAISE_CEIL = 10; // operational density ceiling
+const PHROT_CORNER_MIN = 20;
+const PHROT_CORNER_MAX = 2000;
+const PHROT_STAGES_MIN = 1;
+const PHROT_STAGES_MAX = 16;
 
 export type TxAutoTuneSample = {
   micPkDbfs: number | null;
@@ -56,6 +60,7 @@ export type TxAutoTuneSettings = {
   drivePercent: number;
   cfcConfig: CfcConfigDto;
   txLeveling: TxLevelingConfigDto;
+  txPhaseRotator: TxPhaseRotatorConfigDto;
   targetSpectralDensity: number;
   keyed: boolean;
   audioSuiteActive: boolean;
@@ -94,6 +99,12 @@ export type TxAutoTunePlan = {
   blockers: string[];
   changed: boolean;
   summary: string;
+};
+
+export type TxPhaseRotatorCandidateScore = {
+  score: number;
+  usable: boolean;
+  reason: string;
 };
 
 function finite(v: number | null | undefined): v is number {
@@ -222,6 +233,15 @@ function clampLeveling(c: TxLevelingConfigDto): TxLevelingConfigDto {
   };
 }
 
+function clampPhaseRotator(c: TxPhaseRotatorConfigDto): TxPhaseRotatorConfigDto {
+  return {
+    enabled: c.enabled,
+    cornerHz: roundInt(clamp(c.cornerHz, PHROT_CORNER_MIN, PHROT_CORNER_MAX)),
+    stages: roundInt(clamp(c.stages, PHROT_STAGES_MIN, PHROT_STAGES_MAX)),
+    reverse: c.reverse,
+  };
+}
+
 export function levelingChanged(a: TxLevelingConfigDto, b: TxLevelingConfigDto): boolean {
   return (
     a.alcMaxGainDb !== b.alcMaxGainDb ||
@@ -230,6 +250,15 @@ export function levelingChanged(a: TxLevelingConfigDto, b: TxLevelingConfigDto):
     a.levelerDecayMs !== b.levelerDecayMs ||
     a.compressorEnabled !== b.compressorEnabled ||
     a.compressorGainDb !== b.compressorGainDb
+  );
+}
+
+export function phaseRotatorChanged(a: TxPhaseRotatorConfigDto, b: TxPhaseRotatorConfigDto): boolean {
+  return (
+    a.enabled !== b.enabled ||
+    a.cornerHz !== b.cornerHz ||
+    a.stages !== b.stages ||
+    a.reverse !== b.reverse
   );
 }
 
@@ -249,7 +278,8 @@ function settingChanged(a: TxAutoTuneSettings, b: TxAutoTuneSettings): boolean {
         band.compLevelDb !== other.compLevelDb ||
         band.postGainDb !== other.postGainDb;
     }) ||
-    levelingChanged(a.txLeveling, b.txLeveling)
+    levelingChanged(a.txLeveling, b.txLeveling) ||
+    phaseRotatorChanged(a.txPhaseRotator, b.txPhaseRotator)
   );
 }
 
@@ -285,11 +315,60 @@ function resultClause(current: TxAutoTuneSettings, next: TxAutoTuneSettings): st
   if (next.txLeveling.levelerDecayMs !== current.txLeveling.levelerDecayMs) {
     parts.push(`leveler decay ${next.txLeveling.levelerDecayMs} ms`);
   }
+  if (phaseRotatorChanged(next.txPhaseRotator, current.txPhaseRotator)) {
+    parts.push(
+      next.txPhaseRotator.enabled
+        ? `phase rotator ${next.txPhaseRotator.cornerHz} Hz / ${next.txPhaseRotator.stages} stages`
+        : 'phase rotator off',
+    );
+  }
   return parts.join(', ');
 }
 
 function fmtDbfs(v: number | null): string {
   return v === null ? '--' : `${v.toFixed(1)} dBFS`;
+}
+
+export function scoreTxPhaseRotatorCandidate(
+  stats: TxAutoTuneStats,
+  targetSpectralDensity: number,
+): TxPhaseRotatorCandidateScore {
+  if (stats.voicedSampleCount < 4) {
+    return { score: Number.NEGATIVE_INFINITY, usable: false, reason: 'not enough voiced samples' };
+  }
+  if (stats.txBlocksProcessed <= 0) {
+    return { score: Number.NEGATIVE_INFINITY, usable: false, reason: 'no fresh TXA blocks' };
+  }
+  if (stats.swrP95 >= 2.5) {
+    return { score: Number.NEGATIVE_INFINITY, usable: false, reason: 'SWR too high' };
+  }
+  if (
+    stats.vstDegradedBlocks > 0 ||
+    stats.ingestDroppedFrames > 0 ||
+    stats.p2QueuedPacketsMax > 0 ||
+    stats.p2TransportFailures > 0 ||
+    stats.p2QueueFailures > 0
+  ) {
+    return { score: Number.NEGATIVE_INFINITY, usable: false, reason: 'transport counters moved' };
+  }
+
+  const target = clamp(targetSpectralDensity, 0, 100);
+  const crest = stats.crestMedianDb ?? 12;
+  const desiredCrest = target >= 95 ? 7.2 : target >= 80 ? 8.2 : 9.4;
+  let score = 100;
+  score -= Math.abs(crest - desiredCrest) * 7.0;
+  if (crest < 5.5) score -= (5.5 - crest) * 14.0;
+
+  if (stats.outMaxDbfs !== null && stats.outMaxDbfs > -0.5) score -= 70;
+  if (stats.outP95Dbfs !== null && stats.outP95Dbfs > -3) score -= 22;
+  if (stats.micMaxDbfs !== null && stats.micMaxDbfs > -1) score -= 18;
+  score -= stats.alcP95Db * 2.2;
+  score -= stats.lvlrP95Db * 0.7;
+  score -= stats.lvlrGrSpreadDb * 0.9;
+  score -= stats.cfcP95Db * 1.2;
+
+  const reason = `crest ${fmtDb(crest)}, ALC ${stats.alcP95Db.toFixed(1)} dB, spread ${stats.lvlrGrSpreadDb.toFixed(1)} dB`;
+  return { score, usable: Number.isFinite(score), reason };
 }
 
 export function summarizeTxAutoTuneSamples(samples: ReadonlyArray<TxAutoTuneSample>): TxAutoTuneStats {
@@ -353,6 +432,7 @@ export function recommendTxAutoTune(
     drivePercent: roundInt(clamp(current.drivePercent, 0, 100)),
     cfcConfig: cloneCfc(current.cfcConfig),
     txLeveling: clampLeveling(current.txLeveling),
+    txPhaseRotator: clampPhaseRotator(current.txPhaseRotator),
   };
   const actions: string[] = [];
   const blockers: string[] = [];
@@ -625,6 +705,7 @@ export function recommendTxAutoTune(
   next.levelerMaxGainDb = roundHalf(clamp(next.levelerMaxGainDb, 0, 20));
   next.drivePercent = roundInt(clamp(next.drivePercent, 0, 100));
   next.txLeveling = clampLeveling(next.txLeveling);
+  next.txPhaseRotator = clampPhaseRotator(next.txPhaseRotator);
   const changed = settingChanged(current, next);
   let summary = 'Auto tune held current settings';
   if (stats.voicedSampleCount < MIN_VOICED_SAMPLES) {

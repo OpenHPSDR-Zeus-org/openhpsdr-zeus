@@ -1870,6 +1870,20 @@ public static class ZeusEndpoints
             return Results.Ok(r.SetTxLeveling(cfg));
         });
 
+        app.MapPost("/api/tx/phase-rotator", (TxPhaseRotatorSetRequest req, RadioService r) =>
+        {
+            if (req.TxPhaseRotator is not { } cfg)
+                return Results.BadRequest(new { error = "txPhaseRotator required" });
+            log.LogInformation(
+                "api.tx.phaseRotator enabled={Enabled} cornerHz={Corner} stages={Stages} reverse={Reverse}",
+                cfg.Enabled, cfg.CornerHz, cfg.Stages, cfg.Reverse);
+            if (cfg.CornerHz < TxPhaseRotatorConfig.MinCornerHz || cfg.CornerHz > TxPhaseRotatorConfig.MaxCornerHz)
+                return Results.BadRequest(new { error = $"cornerHz must be {TxPhaseRotatorConfig.MinCornerHz}..{TxPhaseRotatorConfig.MaxCornerHz} Hz" });
+            if (cfg.Stages < TxPhaseRotatorConfig.MinStages || cfg.Stages > TxPhaseRotatorConfig.MaxStages)
+                return Results.BadRequest(new { error = $"stages must be {TxPhaseRotatorConfig.MinStages}..{TxPhaseRotatorConfig.MaxStages}" });
+            return Results.Ok(r.SetTxPhaseRotator(cfg));
+        });
+
         // TX fidelity policy and station-profile overrides. Built-in Studio/eSSB/DX
         // defaults live in the frontend; these routes persist only active target
         // selection and operator edits so diagnostics never duplicate profile data.

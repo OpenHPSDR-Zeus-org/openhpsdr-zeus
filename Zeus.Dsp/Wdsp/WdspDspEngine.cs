@@ -1844,7 +1844,7 @@ public sealed class WdspDspEngine : IDspEngine
             // persisted config on top via SetTxLeveling at channel open.
             ApplyTxLevelingLocked(id, new TxLevelingConfig());
             NativeMethods.SetTXACFCOMPRun(id, 0);
-            NativeMethods.SetTXAPHROTRun(id, 0);
+            ApplyTxPhaseRotatorLocked(id, new TxPhaseRotatorConfig());
             // CESSB / osctrl — ON at TXA open (Brian's default, ~1-1.5 dB
             // average voice-SSB power; bd zeus-5cg). PS isn't armed at open, so
             // this is the correct non-PS state. It is then toggled OFF while PS
@@ -2171,6 +2171,34 @@ public sealed class WdspDspEngine : IDspEngine
         NativeMethods.SetTXACompressorRun(txa, cfg.CompressorEnabled ? 1 : 0);
         NativeMethods.SetTXACompressorGain(txa, cfg.CompressorGainDb);
         _txLevelerEnabled = cfg.LevelerEnabled;
+    }
+
+    // TX phase rotator (Thetis DSP->CFC->PhaseRot parity): all-pass speech
+    // phase redistribution plus an explicit mic-polarity reverse flag. Reverse
+    // is applied by WDSP before the `run` branch, so it remains meaningful even
+    // when the all-pass rotation itself is disabled.
+    public void SetTxPhaseRotator(int channelId, TxPhaseRotatorConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        if (_disposed != 0) return;
+        lock (_txaLock)
+        {
+            if (_txaChannelId is not int txa) return;
+            ApplyTxPhaseRotatorLocked(txa, cfg);
+        }
+        _log.LogInformation(
+            "wdsp.setTxPhaseRotator enabled={Enabled} cornerHz={Corner} stages={Stages} reverse={Reverse}",
+            cfg.Enabled, cfg.CornerHz, cfg.Stages, cfg.Reverse);
+    }
+
+    // Caller holds _txaLock. Set shape before Run so enabling from OFF never
+    // exposes a partial phase-rotator profile to a live TXA block.
+    private static void ApplyTxPhaseRotatorLocked(int txa, TxPhaseRotatorConfig cfg)
+    {
+        NativeMethods.SetTXAPHROTReverse(txa, cfg.Reverse ? 1 : 0);
+        NativeMethods.SetTXAPHROTCorner(txa, cfg.CornerHz);
+        NativeMethods.SetTXAPHROTNstages(txa, cfg.Stages);
+        NativeMethods.SetTXAPHROTRun(txa, cfg.Enabled ? 1 : 0);
     }
 
     public void SetTxTune(bool on)

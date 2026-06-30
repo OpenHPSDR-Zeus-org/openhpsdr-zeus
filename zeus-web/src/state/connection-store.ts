@@ -50,6 +50,7 @@ import {
   NR_CONFIG_DEFAULT,
   SQUELCH_CONFIG_DEFAULT,
   TX_LEVELING_CONFIG_DEFAULT,
+  TX_PHASE_ROTATOR_CONFIG_DEFAULT,
   type AgcConfigDto,
   type BandpassWindow,
   type ConnectionStatus,
@@ -59,6 +60,7 @@ import {
   type SquelchConfigDto,
   type TxVfo,
   type TxLevelingConfigDto,
+  type TxPhaseRotatorConfigDto,
   type ZoomLevel,
   type ReceiverDto,
 } from '../api/client';
@@ -106,6 +108,7 @@ export type ConnectionState = {
   agc: AgcConfigDto;
   squelch: SquelchConfigDto;
   txLeveling: TxLevelingConfigDto;
+  txPhaseRotator: TxPhaseRotatorConfigDto;
   autoAgcEnabled: boolean;
   agcOffsetDb: number;
   rxAfGainDb: number;
@@ -178,6 +181,7 @@ export type ConnectionState = {
   setAgc: (agc: AgcConfigDto) => void;
   setSquelch: (squelch: SquelchConfigDto) => void;
   setTxLeveling: (txLeveling: TxLevelingConfigDto) => void;
+  setTxPhaseRotator: (txPhaseRotator: TxPhaseRotatorConfigDto) => void;
   setRxFocus: (rxFocus: TxVfo) => void;
   setFocusedRxIndex: (index: number) => void;
   setSelectedRxIndices: (indices: number[]) => void;
@@ -235,6 +239,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   agc: { ...AGC_CONFIG_DEFAULT },
   squelch: { ...SQUELCH_CONFIG_DEFAULT },
   txLeveling: { ...TX_LEVELING_CONFIG_DEFAULT },
+  txPhaseRotator: { ...TX_PHASE_ROTATOR_CONFIG_DEFAULT },
   autoAgcEnabled: false,
   agcOffsetDb: 0,
   rxAfGainDb: 0,
@@ -298,6 +303,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
         agc: s.agc,
         squelch: s.squelch,
         txLeveling: s.txLeveling,
+        txPhaseRotator: s.txPhaseRotator,
         autoAgcEnabled: s.autoAgcEnabled,
         agcOffsetDb: s.agcOffsetDb,
         rxAfGainDb: s.rxAfGainDb,
@@ -325,6 +331,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   setAgc: (agc) => set({ agc }),
   setSquelch: (squelch) => set({ squelch }),
   setTxLeveling: (txLeveling) => set({ txLeveling }),
+  setTxPhaseRotator: (txPhaseRotator) => set({ txPhaseRotator }),
   setRxFocus: (rxFocus) => set({ rxFocus }),
   // Focus a receiver in the multi-DDC panels. Plain focus collapses the
   // selection to just this receiver. Mirror into rxFocus for the RX1/RX2
