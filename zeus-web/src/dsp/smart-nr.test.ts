@@ -25,6 +25,10 @@ function confidence(value = 0): Float32Array {
   return new Float32Array(WIDTH).fill(value);
 }
 
+function stationarity(value = 0): Float32Array {
+  return new Float32Array(WIDTH).fill(value);
+}
+
 function speechLikeSsbCopy(): { spec: Float32Array; conf: Float32Array } {
   const spec = noise();
   const conf = confidence();
@@ -442,16 +446,40 @@ describe('smart NR supervisor', () => {
 
   it('uses notch helpers for strong sparse tonal interference', () => {
     const spec = noise();
+    const steady = stationarity();
     spec[90] = NOISE_DB + 35;
+    steady[90] = 0.9;
     const rec = recommendSmartNr({
       spectrum: spec,
       floor: floor(),
+      stationarity: steady,
       current: { ...NR_CONFIG_DEFAULT },
       mode: 'USB',
     })!;
     expect(rec.condition.tonalInterference).toBe(true);
+    expect(rec.condition.stationaryPeakCount).toBe(1);
     expect(rec.nr.anfEnabled).toBe(true);
     expect(rec.nr.nbpNotchesEnabled).toBe(true);
+  });
+
+  it('does not engage notch helpers for a bright peak without stationary tone evidence', () => {
+    const spec = noise();
+    const unsteady = stationarity();
+    spec[90] = NOISE_DB + 35;
+    unsteady[90] = 0.25;
+
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      stationarity: unsteady,
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'USB',
+    })!;
+
+    expect(rec.condition.hasSignal).toBe(true);
+    expect(rec.condition.tonalInterference).toBe(false);
+    expect(rec.nr.anfEnabled).toBe(false);
+    expect(rec.nr.nbpNotchesEnabled).toBe(false);
   });
 
   it('keeps clean carrier modes out of NR when the spectrum is quiet', () => {
