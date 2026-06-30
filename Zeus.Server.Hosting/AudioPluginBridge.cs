@@ -611,8 +611,23 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
                 RecordEngineMeters(input, output[..sampleCount]);
             return true;
         }
+        // Anti-denormal input conditioning (zeus-umt6): floor exact-silence and
+        // any denormal-range input to a sub-audible ±AntiDenormalMag alternating
+        // excitation before it reaches the out-of-process engine. Without it the
+        // engine's plugin IIR / gate states can decay into the float32 denormal
+        // range over a long over and rot to silence/NaN (which the sanitize pass
+        // below turns into dead air). The engine stays responsive, so neither the
+        // crash nor the hang watchdog fires and the operator transmits silence
+        // until a manual profile change forces a fresh load_chain. The floor is
+        // ~-300 dBFS and alternates sign (energy at Nyquist), so it is inaudible
+        // and rejected by the SSB TX bandpass — the on-air signal is unchanged,
+        // and real-level samples are returned bit-identical. Preventive; it
+        // complements the reactive liveness auto-recovery below. sampleCount is a
+        // fixed engine block size (<= 1024), so the stackalloc is bounded.
+        Span<float> conditioned = stackalloc float[sampleCount];
+        ApplyAntiDenormalFloor(input[..sampleCount], conditioned);
         bool processed;
-        try { processed = vst.TryProcess(input, output, ctx); }
+        try { processed = vst.TryProcess(conditioned, output, ctx); }
         finally { Volatile.Write(ref _engineGate, 0); }
         // Sample master IN/OUT peaks so the Audio Suite meters stay live in VST
         // mode (the native chain's own metering path didn't run). Tap the OUT
@@ -749,6 +764,29 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
             }
         }
         catch { /* diagnostics must never throw on the timer thread */ }
+    }
+
+    // Sub-audible anti-denormal floor (~-300 dBFS, well above the float32
+    // smallest-normal of ~1.2e-38 and ~200 dB below full scale). See zeus-umt6
+    // and ApplyAntiDenormalFloor.
+    private const float AntiDenormalMag = 1e-15f;
+
+    /// <summary>
+    /// Copy <paramref name="src"/> into <paramref name="dst"/>, adding a tiny
+    /// alternating ±<see cref="AntiDenormalMag"/> excitation so the downstream
+    /// out-of-process engine never sees an exact-zero or denormal-range input
+    /// block. This keeps its plugin IIR / gate state from decaying into the
+    /// float32 denormal range over a long over — the zeus-umt6 dead-output wedge.
+    /// Audible-level samples are returned bit-identical (the floor is far below
+    /// float32 epsilon relative to any real signal); the alternating sign puts
+    /// the injected energy at Nyquist, which the SSB TX bandpass rejects, so the
+    /// on-air signal is unchanged. Realtime-safe: no allocation, no branches on
+    /// data. Caller guarantees <c>dst.Length &gt;= src.Length</c>.
+    /// </summary>
+    internal static void ApplyAntiDenormalFloor(ReadOnlySpan<float> src, Span<float> dst)
+    {
+        for (int i = 0; i < src.Length; i++)
+            dst[i] = src[i] + ((i & 1) == 0 ? AntiDenormalMag : -AntiDenormalMag);
     }
 
     /// <summary>Instantaneous block abs-peak — mirrors AudioChain.BlockPeak so the
