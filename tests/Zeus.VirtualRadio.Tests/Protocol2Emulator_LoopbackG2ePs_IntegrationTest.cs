@@ -25,32 +25,25 @@ namespace Zeus.VirtualRadio.Tests;
 /// HermesII variant). The emulator runs in-process on 127.0.0.1 impersonating a
 /// HermesC10 (discovery board byte 0x14), a REAL <see cref="Protocol2Client"/>
 /// direct-connects over loopback, and the test arms PS + keys TX and asserts the
-/// FEEDBACK DATA PATH works end-to-end: the client puts byte 1363 = 0x02 on the
-/// wire during the burst, the emulator returns the coupler/reference interleave,
-/// and the client decodes <see cref="PsFeedbackFrame"/>s. Unkeying returns DDC0
-/// to the user RX.
+/// full feedback loop works CLEANLY: the client puts byte 1363 = 0x02 AND the
+/// protective byte 59 (Angelia_atten_Tx0 = 31 dB) on the wire, the emulator
+/// returns the coupler/reference interleave WITHOUT raising ADC overload, and the
+/// client decodes <see cref="PsFeedbackFrame"/>s. Unkeying + disarm returns DDC0
+/// to the user RX and restores byte 59.
 ///
-/// THE G2E DELTA vs the 10E (the open, KB2UKA-gated item this test documents):
-/// the 10E host path seeds byte 59 (Angelia_atten_Tx0) to the protective floor
-/// (31 dB) on arm (<see cref="Protocol2Client.SeedsTxAdcProtection"/> is true for
-/// HermesII), so its loopback test asserts byte 59 >= 1. The G2E host path does
-/// NOT seed byte 59 — <c>SeedsTxAdcProtection(HermesC10)</c> is deliberately
-/// false (the G2E byte-59 seed is a separate, independently-gated pre-condition
-/// per the <see cref="Protocol2Client.G2ePsTimeMuxOnAir"/> doc, pre-condition A,
-/// and touching it is a PureSignal-hard-rule change requiring KB2UKA sign-off).
-/// So on the G2E byte 59 stays at the operator default (0) through the keyed
-/// burst, and the emulator — modelling the single-ADC hazard — raises
-/// first-key-down ADC overload in its hi-priority status. This test asserts BOTH:
-/// the feedback frames flow (the path is functionally complete) AND the overload
-/// latches (the byte-59 protective seed is still missing). That is exactly the
-/// "does the dark G2E PS path work, and what needs sign-off before real RF"
-/// answer, captured as a deterministic, hardware-free bench.
+/// This is byte-for-byte the 10E loopback assertions: with the byte-59 seed now
+/// wired for the G2E (<c>SeedsTxAdcProtection(HermesC10)</c> tracks
+/// <see cref="Protocol2Client.G2ePsTimeMuxOnAir"/>, gated dark), the G2E behaves
+/// identically to the 10E — the protective seed clears the single-ADC
+/// first-key-down overload the emulator models. The seed VALUE and the on-air
+/// flag flip still require a real-G2E bench (#289); this test runs the path with
+/// no hardware.
 ///
 /// Gated behind <c>ZEUS_VRADIO_LOOPBACK</c> (it binds the well-known radio ports
 /// and uses real loopback sockets), so it never runs in the default socketless
 /// CI unit pass. Flipping <see cref="Protocol2Client.G2ePsTimeMuxOnAir"/> is a
 /// TEST-ONLY, try/finally-restored, process-global mutation; the burn-zone
-/// production flag stays false. NOTHING here flips the seed itself.
+/// production flag stays false.
 /// </summary>
 public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
 {
@@ -79,7 +72,7 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
     }
 
     [SkippableFact]
-    public async Task ArmPs_KeyTx_DeliversFeedback_ButByte59Unseeded_RaisesAdcOverload()
+    public async Task ArmPs_SeedsByte59_KeyTx_DeliversFeedback_NoAdcOverload_ThenRestores()
     {
         Skip.IfNot(
             !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ZEUS_VRADIO_LOOPBACK")),
@@ -120,9 +113,19 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
             Assert.True(await WaitUntil(() => sink.IqCount > 5, TimeSpan.FromSeconds(5)),
                 "no user-RX IQ frames at rest");
 
-            // 2) Arm PS and key TX. Note: on the G2E this does NOT seed byte 59
-            //    (SeedsTxAdcProtection(HermesC10) == false), unlike the 10E.
+            // 2) Arm PS. On the G2E this NOW seeds byte 59 to the protective floor
+            //    (SeedsTxAdcProtection(HermesC10) tracks G2ePsTimeMuxOnAir). Wait
+            //    for the seed to reach the emulator BEFORE keying, so the
+            //    protective attenuation is in place before the feedback burst arms
+            //    — deterministically no first-key-down overload window.
             client.SetPsFeedbackEnabled(true);
+            Assert.True(
+                await WaitUntil(
+                    () => engine.DecodedTxStepAttnDb >= Protocol2Engine.TxAdcProtectFloorDb,
+                    TimeSpan.FromSeconds(3)),
+                $"byte-59 protective seed never reached the emulator (was {engine.DecodedTxStepAttnDb})");
+
+            // 3) Key TX.
             client.SetDriveByte(200);
             client.SetMox(true);
 
@@ -145,29 +148,24 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
                 await Task.Delay(20);
             }
 
-            // 3) The client put the G2E PS time-mux on the wire and the emulator saw it.
+            // 4) The client put the G2E PS time-mux on the wire and the emulator saw it.
             Assert.True(engine.PsBurstArmed, "emulator never saw CmdRx byte 1363 = 0x02 while keyed");
 
-            // 4) The FEEDBACK DATA PATH is functionally complete: frames delivered,
-            //    all finite. The dark G2E path genuinely works end-to-end.
+            // 5) Byte-59 safety seed is protective on the wire (>= the floor).
+            Assert.True(engine.DecodedTxStepAttnDb >= Protocol2Engine.TxAdcProtectFloorDb,
+                $"byte 59 not protective while keyed (was {engine.DecodedTxStepAttnDb})");
+
+            // 6) Feedback frames delivered, all finite — PS works end-to-end.
             Assert.True(gotFrames, "no PS feedback frames delivered while keyed");
             Assert.True(sink.AllSamplesFinite, "PS feedback carried a non-finite sample");
 
-            // 5) THE OPEN GAP (KB2UKA sign-off + G2E bench, #289): byte 59 was NOT
-            //    seeded to the protective floor on the G2E (it stays at the operator
-            //    default 0 < floor), so the emulator's single-ADC model raises
-            //    first-key-down ADC overload. A real G2E would slam the PA coupler
-            //    into its one RX ADC at 0 dB here. This is the byte-59
-            //    (Angelia_atten_Tx0) protective-seed item that must land — as a
-            //    PureSignal-hard-rule change — before the flag could ever go on-air.
-            Assert.True(engine.DecodedTxStepAttnDb < Protocol2Engine.TxAdcProtectFloorDb,
-                $"byte 59 was unexpectedly protective on the G2E (was {engine.DecodedTxStepAttnDb}); " +
-                "the G2E byte-59 seed is supposed to be unimplemented/KB2UKA-gated");
-            Assert.True(await WaitUntil(() => engine.PsAdcOverloadLatched, TimeSpan.FromSeconds(2)),
-                "emulator did not raise the expected first-key-down ADC overload for the unseeded G2E byte 59");
+            // 7) The protective seed cleared the single-ADC hazard: the emulator
+            //    never raised first-key-down ADC overload. (Without the byte-59
+            //    seed this would latch — that is the safety property the seed buys.)
+            Assert.False(engine.PsAdcOverloadLatched,
+                "emulator raised ADC overload despite the protective byte-59 seed");
 
-            // 6) Unkey + disarm → DDC0 returns to user RX. Byte 59 was never seeded,
-            //    so there is nothing to restore (stays 0).
+            // 8) Unkey + disarm → DDC0 returns to user RX and byte 59 restores.
             client.SetMox(false);
             client.SetPsFeedbackEnabled(false);
 
@@ -175,7 +173,8 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
             Assert.True(await WaitUntil(() => sink.IqCount > iqAtUnkey + 5, TimeSpan.FromSeconds(5)),
                 "user-RX did not resume after unkey");
             Assert.False(engine.PsBurstArmed, "PS burst still armed after unkey");
-            Assert.Equal((byte)0, engine.DecodedTxStepAttnDb); // never seeded on the G2E
+            Assert.True(await WaitUntil(() => engine.DecodedTxStepAttnDb == 0, TimeSpan.FromSeconds(2)),
+                $"byte 59 not restored after disarm (was {engine.DecodedTxStepAttnDb})");
         }
         finally
         {

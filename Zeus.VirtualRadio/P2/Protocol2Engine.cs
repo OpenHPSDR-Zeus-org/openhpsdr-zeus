@@ -74,13 +74,14 @@ public sealed class Protocol2Engine : IVirtualRadio
 
     // Latches true the first time the hi-priority status raises ADC overload
     // while the PS time-mux burst is armed — i.e. a keyed, PS-armed burst whose
-    // byte-59 (Angelia_atten_Tx0) protective seed was NOT pushed by the host, so
-    // the TX-DAC reference + PA coupler hit the single RX ADC at < the protective
-    // floor. This is the exact first-key-down ADC-overload condition a real
-    // G2E/10E would raise and that bench verification (#289) must confirm. The
-    // 10E host path seeds byte 59 to 31 dB (clears it); the G2E host path does
-    // NOT yet seed it (SeedsTxAdcProtection excludes HermesC10), so this latches
-    // on a G2E PS burst — the observable signature of the open byte-59 gap.
+    // byte-59 (Angelia_atten_Tx0) protective seed is below the protective floor,
+    // so the TX-DAC reference + PA coupler hit the single RX ADC at < the floor.
+    // This is the exact first-key-down ADC-overload condition a real G2E/10E
+    // would raise and that bench verification (#289) must confirm. Both
+    // single-ADC time-mux host paths now seed byte 59 to 31 dB when their
+    // interlock is lifted (10E → Hermes10ePsTimeMuxOnAir, G2E → G2ePsTimeMuxOnAir),
+    // which clears it — so this latch stays FALSE for a correctly-seeded arm and
+    // is a defensive net: it fires only if a host arms + keys without the seed.
     private volatile bool _psAdcOverloadLatched;
 
     // De-dup edge-trigger for CommandDecoded (steady re-sends of the same
@@ -450,10 +451,10 @@ public sealed class Protocol2Engine : IVirtualRadio
     /// True once the emulator has raised ADC overload in the hi-priority status
     /// during a PS-armed keyed burst whose byte-59 protective seed was below the
     /// floor — the first-key-down ADC-overload signature of a single-ADC time-mux
-    /// board without the byte-59 (Angelia_atten_Tx0) seed (test hook). A
-    /// correctly-seeded host (the 10E path, byte 59 = 31) never trips this; the
-    /// G2E host path does NOT seed byte 59, so it trips — surfacing the open,
-    /// KB2UKA-gated safety gap for an emulator-only bench.
+    /// board armed without the byte-59 (Angelia_atten_Tx0) seed (test hook). A
+    /// correctly-seeded host (10E or G2E with its interlock lifted, byte 59 = 31)
+    /// never trips this; it trips only if a host arms + keys without seeding —
+    /// the emulator-only bench for the single-ADC protective-seed requirement.
     /// </summary>
     internal bool PsAdcOverloadLatched => _psAdcOverloadLatched;
 }

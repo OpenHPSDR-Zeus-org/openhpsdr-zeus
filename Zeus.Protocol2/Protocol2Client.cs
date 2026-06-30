@@ -1289,11 +1289,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // protective floor while armed pushes byte 59 protective, and restoring
         // the operator's prior value on disarm returns the wire to normal. The
         // seed/restore is the ONLY non-byte-identical effect, and it is reached
-        // only when SeedsTxAdcProtection is true (HermesII + flag): every other
-        // board, and HermesII with the flag false, take the historical path
-        // untouched. Gated on SeedsTxAdcProtection (NOT TimeMuxesPsFeedbackOnDdc0)
-        // so the G2E byte-59 seed stays its own separate, KB2UKA-gated
-        // pre-condition and the HermesC10 path is provably unchanged here.
+        // only when SeedsTxAdcProtection is true — i.e. a single-ADC time-mux
+        // board (HermesII or HermesC10) with ITS interlock lifted. Every other
+        // board, and either board with its flag false, takes the historical path
+        // untouched. Each board is gated by its own flag (HermesII →
+        // Hermes10ePsTimeMuxOnAir, HermesC10 → G2ePsTimeMuxOnAir), both default
+        // false, so production is byte-identical for every board.
         bool seededTxAttn = false;
         if (SeedsTxAdcProtection(_boardKind))
         {
@@ -1840,23 +1841,24 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// <summary>
     /// Burn-zone interlock (PureSignal hard rule, issue #960). The G2E
     /// single-ADC time-multiplexed PS feedback path (compose + de-interleave,
-    /// below) is fully wired but held DARK in production until BOTH coupled
-    /// pre-conditions land with KB2UKA sign-off:
-    ///   (A) the byte-59 (Angelia_atten_Tx0) protective seed is pushed to the
-    ///       wire on connect/arm in
-    ///       <c>RadioService.ApplyPsHwPeakForConnection</c>. The single shared
-    ///       LTC2208's TX-time input attenuator is muxed by transmit state in
-    ///       gateware — Hermes.v:1710
+    /// below) is fully wired but held DARK in production by this interlock:
+    ///   (A) the byte-59 (Angelia_atten_Tx0) protective seed IS now wired —
+    ///       <c>SeedsTxAdcProtection(HermesC10)</c> tracks this flag, so lifting
+    ///       it both arms the time-mux AND seeds byte 59 to the protective floor
+    ///       (<see cref="PsTxAdcProtectFloorDb"/>) on arm via
+    ///       <c>SetPsFeedbackEnabled</c>, restoring on disarm — the same
+    ///       mechanism the 10E uses. The single shared LTC2208's TX-time input
+    ///       attenuator is muxed by transmit state in gateware — Hermes.v:1710
     ///       <c>assign atten0 = FPGA_PTT ? atten0_on_Tx : Attenuator0</c>, where
     ///       <c>atten0_on_Tx = Angelia_atten_Tx0 =</c> TxSpecific byte 59
-    ///       (Tx_specific_C&amp;C.v:182-185). Zeus emits byte 59 on every
-    ///       TxSpecific packet but only ever as <c>_txStepAttnDb</c>, which
-    ///       defaults to 0 — it never seeds a PS-protective value there, so a
-    ///       fresh G2E first key-down with PS armed would slam the PA coupler
-    ///       into the one ADC at 0 dB. Seeding it touches a PS
-    ///       calibration default — a PS-hard-rule change, NOT done autonomously.
-    ///   (B) OK1BR bench-verifies first-key-down ADC-overload on a real G2E
-    ///       (#289) — Zeus has no G2E bench.
+    ///       (Tx_specific_C&amp;C.v:182-185). With this flag false (production)
+    ///       byte 59 stays the operator's <c>_txStepAttnDb</c>, so the wire is
+    ///       byte-identical to today. The seed (gated dark) was approved by
+    ///       KB2UKA; it is exercised only by the gated loopback emulator.
+    ///   (B) STILL PENDING — the floor VALUE (31 dB) and lifting this flag for
+    ///       real RF require OK1BR bench-verification of first-key-down
+    ///       ADC-overload on a real G2E (#289); Zeus has no G2E bench. Wiring the
+    ///       seed dark does NOT authorise the on-air flip.
     /// With this <c>false</c> the G2E path is byte-identical to the
     /// PS-disabled-on-single-ADC behaviour shipped in commit a7fc99b: RX audio
     /// survives, <c>ps.correcting</c> stays false. Flipping it true autonomously
@@ -1918,16 +1920,30 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// while PS feedback is armed on this board — the single-ADC time-mux case
     /// where the TX-DAC reference + PA coupler hit the one RX ADC on a TX burst.
     ///
-    /// Scoped to the ANAN-10E (<see cref="HpsdrBoardKind.HermesII"/>) under the
-    /// <see cref="Hermes10ePsTimeMuxOnAir"/> interlock. The G2E (HermesC10)
-    /// byte-59 seed is a SEPARATE, independently-gated pre-condition (see the
-    /// <see cref="G2ePsTimeMuxOnAir"/> doc, pre-condition A) and is deliberately
-    /// NOT armed here — so the HermesC10 path stays byte-identical regardless of
-    /// this predicate. With the flag false this returns false for every board, so
-    /// no board is touched in production.
+    /// Scoped to the two single-ADC time-mux boards, each under its OWN burn-zone
+    /// interlock (symmetric with <see cref="TimeMuxesPsFeedbackOnDdc0"/>):
+    ///   - <see cref="HpsdrBoardKind.HermesII"/> (ANAN-10E) →
+    ///     <see cref="Hermes10ePsTimeMuxOnAir"/>.
+    ///   - <see cref="HpsdrBoardKind.HermesC10"/> (ANAN-G2E) →
+    ///     <see cref="G2ePsTimeMuxOnAir"/>.
+    /// Both flags default false, so this returns false for every board in
+    /// production — the CmdTx wire (byte 59) is byte-identical to today. The seed
+    /// only arms when a board's interlock is lifted (tests / the gated loopback
+    /// emulator). The dual-ADC OrionMkII/Saturn/G2 family never matches, so the
+    /// bench radio is unaffected in either flag state.
+    ///
+    /// NOTE — the byte-59 FLOOR VALUE (<see cref="PsTxAdcProtectFloorDb"/> = 31 dB,
+    /// max attenuation) and lifting either interlock for real RF still require
+    /// per-board bench verification of first-key-down ADC overload (#289 for the
+    /// G2E). Wiring the seed (gated dark) does not authorise the on-air flip.
     /// </summary>
     internal static bool SeedsTxAdcProtection(HpsdrBoardKind board)
-        => board == HpsdrBoardKind.HermesII && Hermes10ePsTimeMuxOnAir;
+        => board switch
+        {
+            HpsdrBoardKind.HermesII  => Hermes10ePsTimeMuxOnAir,
+            HpsdrBoardKind.HermesC10 => G2ePsTimeMuxOnAir,
+            _                        => false,
+        };
 
     /// <summary>
     /// True iff this board does Orion-style PureSignal on a SINGLE ADC by
