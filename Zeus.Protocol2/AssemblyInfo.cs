@@ -46,6 +46,17 @@
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("Zeus.Protocol2.Tests")]
+// The virtual-radio emulator (Zeus.VirtualRadio) mirrors the Protocol-2 wire
+// format from the radio's side. It consumes Protocol2Client internals — the
+// canonical paired-feedback de-interleave (DecodePsPairForTest), the CmdRx
+// composer (ComposeCmdRxBuffer), and the single-ADC time-mux flag
+// (Hermes10ePsTimeMuxOnAir / G2ePsTimeMuxOnAir) — so the emulator and the
+// client share ONE definition of every byte offset and a wire-format change
+// breaks the build or a round-trip test rather than drifting silently. The
+// Tests assembly gets the same access so the socketless round-trip tests can
+// feed the emulator's frames through the real client decode path.
+[assembly: InternalsVisibleTo("Zeus.VirtualRadio")]
+[assembly: InternalsVisibleTo("Zeus.VirtualRadio.Tests")]
 // The external-port encoder seam (Zeus.Server.Hosting.IExternalPortEncoder)
 // delegates to Protocol2Client's pure antenna-bit helpers so the firewall and
 // the wire path share one copy of the math — byte-identical by construction.

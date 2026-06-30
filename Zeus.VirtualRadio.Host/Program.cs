@@ -18,6 +18,7 @@ using Zeus.Contracts;
 using Zeus.VirtualRadio;
 using Zeus.VirtualRadio.Observation;
 using Zeus.VirtualRadio.P1;
+using Zeus.VirtualRadio.P2;
 
 [assembly: InternalsVisibleTo("Zeus.VirtualRadio.Tests")]
 
@@ -48,8 +49,9 @@ internal static class Program
         {
             Console.Error.WriteLine($"zeus-vradio: {ex.Message}");
             Console.Error.WriteLine(
-                "usage: zeus-vradio [--board HermesII] [--protocol P1] [--variant G2] " +
-                "[--bind 127.0.0.1] [--rate 48] [--tone 14074000:-73] [--noise -110] [--status-port 8073]");
+                "usage: zeus-vradio [--board HermesII] [--protocol P1|P2] [--variant G2] " +
+                "[--bind 127.0.0.1] [--rate 48] [--tone 14074000:-73] [--noise -110] " +
+                "[--status-port 8073] [--ps-distortion]");
             return 2;
         }
 
@@ -57,9 +59,12 @@ internal static class Program
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton(config.Profile);
         builder.Services.AddSingleton<IVirtualRadio>(sp =>
-            // P1-only for Phase 1. When the P2 engine exists, branch on
-            // config.Profile.Protocol in this lambda.
-            new Protocol1Engine(config.Profile, sp.GetService<ILogger<Protocol1Engine>>()));
+            // Branch on the configured wire stack: the P2 engine for Protocol 2
+            // (multi-port + PureSignal single-ADC time-mux feedback), the P1
+            // engine otherwise.
+            config.Profile.Protocol == ProtocolVersion.P2
+                ? (IVirtualRadio)new Protocol2Engine(config.Profile, sp.GetService<ILogger<Protocol2Engine>>(), config.PsDistortion)
+                : new Protocol1Engine(config.Profile, sp.GetService<ILogger<Protocol1Engine>>()));
         builder.Services.AddHostedService<VirtualRadioHostedService>();
 
         using var host = builder.Build();
@@ -82,6 +87,7 @@ internal static class Program
         int rateKhz = 48;
         double noise = -110.0;
         int statusPort = StatusJsonServer.DefaultPort;
+        bool psDistortion = false;
         var tones = new List<ToneSpec>();
 
         for (int i = 0; i < args.Length; i++)
@@ -118,6 +124,11 @@ internal static class Program
                     if (statusPort is < 1 or > 65535)
                         throw new ArgumentException($"--status-port out of range: {statusPort}");
                     break;
+                case "--ps-distortion":
+                    // Shape the PS coupler through a mild PA model so WDSP calcc
+                    // has a non-trivial curve to converge against (P2 only).
+                    psDistortion = true;
+                    break;
                 default:
                     throw new ArgumentException($"unknown argument '{arg}'");
             }
@@ -130,7 +141,7 @@ internal static class Program
             NoiseFloorDbc = noise,
             Tones = tones,
         };
-        return new HostConfig(profile, statusPort);
+        return new HostConfig(profile, statusPort, psDistortion);
     }
 
     /// <summary>Parse a "freqHz:dBc" tone spec, e.g. "14074000:-73".</summary>
@@ -146,7 +157,7 @@ internal static class Program
 }
 
 /// <summary>Parsed CLI: the validated radio profile plus host-only options.</summary>
-internal sealed record HostConfig(VirtualRadioProfile Profile, int StatusPort);
+internal sealed record HostConfig(VirtualRadioProfile Profile, int StatusPort, bool PsDistortion = false);
 
 /// <summary>
 /// Drives the engine's <see cref="IVirtualRadio.RunAsync"/> for the process
