@@ -316,17 +316,29 @@ public class PsFeedbackDdcRoutingTests
     // -----------------------------------------------------------------------
 
     [Theory]
-    [InlineData(HpsdrBoardKind.HermesC10)]
-    [InlineData(HpsdrBoardKind.OrionMkII)]
-    [InlineData(HpsdrBoardKind.Hermes)]
-    [InlineData(HpsdrBoardKind.HermesII)]
-    public void TimeMuxesPsFeedbackOnDdc0_DarkInProduction_ForEveryBoard(HpsdrBoardKind board)
+    [InlineData(HpsdrBoardKind.HermesC10, true)]   // ANAN-G2E — on by default (#960)
+    [InlineData(HpsdrBoardKind.HermesII, true)]    // ANAN-10E — on by default (#1209)
+    [InlineData(HpsdrBoardKind.OrionMkII, false)]  // dual-ADC G2 — never reads the flag
+    [InlineData(HpsdrBoardKind.Hermes, false)]     // plain Hermes — not gateware-verified
+    public void TimeMuxesPsFeedbackOnDdc0_OnByDefault_ForSingleAdcG2eAnd10e(
+        HpsdrBoardKind board, bool expected)
     {
-        // Burn-zone interlock: until KB2UKA signs off the byte-59 safety seed and
-        // the G2E is bench-verified, the on-air time-mux capability stays false
-        // for EVERY board — so production G2E is byte-identical to PS-disabled.
-        Assert.False(Protocol2Client.G2ePsTimeMuxOnAir);
-        Assert.False(Protocol2Client.TimeMuxesPsFeedbackOnDdc0(board));
+        // v0.10.8 (#960 / #1209), KB2UKA sign-off: single-ADC time-mux PS is now
+        // ENABLED by default for the ANAN-G2E and ANAN-10E, so PS engages on the
+        // normal arm with no operator switch. The dual-ADC G2/OrionMkII never
+        // reads these flags (falls through to false), so its PS path is provably
+        // byte-identical regardless.
+        Assert.Equal(expected, Protocol2Client.TimeMuxesPsFeedbackOnDdc0(board));
+    }
+
+    [Fact]
+    public void SingleAdcPsTimeMux_KillSwitches_DefaultOn_BothBoards()
+    {
+        // The two interlocks are retained ONLY as internal kill-switches (set
+        // false to disable); there is no operator-facing toggle and they default
+        // ON per KB2UKA sign-off.
+        Assert.True(Protocol2Client.G2ePsTimeMuxOnAir);
+        Assert.True(Protocol2Client.Hermes10ePsTimeMuxOnAir);
     }
 
     [Fact]
@@ -381,15 +393,20 @@ public class PsFeedbackDdcRoutingTests
     }
 
     [Fact]
-    public void Routes_G2E_Production_DarkEvenInBurst()
+    public void Routes_G2E_Production_FeedbackInBurst_RxAtRest()
     {
-        // End-to-end production wiring: feeding the GATED capability
-        // (TimeMuxesPsFeedbackOnDdc0, dark) into the routing predicate keeps the
-        // G2E on the user RX even mid-burst with PS armed — byte-identical to the
-        // PS-disabled fix until the interlock lifts.
-        Assert.False(Protocol2Client.RoutesDdc0ToPsFeedback(
+        // End-to-end production wiring (v0.10.8, on by default): feeding the now-
+        // ENABLED capability (TimeMuxesPsFeedbackOnDdc0) into the routing predicate
+        // routes the G2E DDC0 to PS feedback during a TX burst with PS armed...
+        Assert.True(Protocol2Client.RoutesDdc0ToPsFeedback(
             psFeedbackEnabled: true, ddcIndex: 0, HpsdrBoardKind.HermesC10,
             txKeyed: true,
+            timeMuxOnDdc0: Protocol2Client.TimeMuxesPsFeedbackOnDdc0(HpsdrBoardKind.HermesC10)));
+        // ...and STILL reverts to the operator's RX at rest — the core
+        // "feedback only during the burst, never at rest" safety property holds.
+        Assert.False(Protocol2Client.RoutesDdc0ToPsFeedback(
+            psFeedbackEnabled: true, ddcIndex: 0, HpsdrBoardKind.HermesC10,
+            txKeyed: false,
             timeMuxOnDdc0: Protocol2Client.TimeMuxesPsFeedbackOnDdc0(HpsdrBoardKind.HermesC10)));
     }
 
@@ -495,24 +512,22 @@ public class PsFeedbackDdcRoutingTests
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void TimeMuxesPsFeedbackOnDdc0_HermesII_TracksHermes10eFlag_AndIsDarkByDefault()
+    public void TimeMuxesPsFeedbackOnDdc0_HermesII_TracksHermes10eFlag_KillSwitch()
     {
-        // Default (production): the 10E interlock is down, so the time-mux
-        // capability is false — byte-identical to PS-disabled.
-        Assert.False(Protocol2Client.Hermes10ePsTimeMuxOnAir);
-        Assert.False(Protocol2Client.TimeMuxesPsFeedbackOnDdc0(HpsdrBoardKind.HermesII));
+        // Default (production, v0.10.8): the 10E time-mux is ON.
+        Assert.True(Protocol2Client.Hermes10ePsTimeMuxOnAir);
+        Assert.True(Protocol2Client.TimeMuxesPsFeedbackOnDdc0(HpsdrBoardKind.HermesII));
 
         bool savedG2e = Protocol2Client.G2ePsTimeMuxOnAir;
         bool saved10e = Protocol2Client.Hermes10ePsTimeMuxOnAir;
         try
         {
-            // Lifting ONLY the 10E interlock turns the 10E capability on and
-            // leaves every other board exactly where it was: the G2E still
-            // tracks its OWN (still-down) flag, and Hermes / the dual-ADC
-            // family stay false.
-            Protocol2Client.Hermes10ePsTimeMuxOnAir = true;
-            Assert.True(Protocol2Client.TimeMuxesPsFeedbackOnDdc0(HpsdrBoardKind.HermesII));
-            Assert.False(Protocol2Client.TimeMuxesPsFeedbackOnDdc0(HpsdrBoardKind.HermesC10));
+            // Forcing ONLY the 10E kill-switch false disables the 10E and leaves
+            // every other board exactly where it was: the G2E still tracks its
+            // OWN (still-on) flag, and Hermes / the dual-ADC family stay false.
+            Protocol2Client.Hermes10ePsTimeMuxOnAir = false;
+            Assert.False(Protocol2Client.TimeMuxesPsFeedbackOnDdc0(HpsdrBoardKind.HermesII));
+            Assert.True(Protocol2Client.TimeMuxesPsFeedbackOnDdc0(HpsdrBoardKind.HermesC10));
             Assert.False(Protocol2Client.TimeMuxesPsFeedbackOnDdc0(HpsdrBoardKind.Hermes));
             Assert.False(Protocol2Client.TimeMuxesPsFeedbackOnDdc0(HpsdrBoardKind.OrionMkII));
         }
@@ -522,7 +537,7 @@ public class PsFeedbackDdcRoutingTests
             Protocol2Client.Hermes10ePsTimeMuxOnAir = saved10e;
         }
 
-        Assert.False(Protocol2Client.Hermes10ePsTimeMuxOnAir); // restored
+        Assert.True(Protocol2Client.Hermes10ePsTimeMuxOnAir); // restored to default-on
     }
 
     [Fact]
@@ -574,15 +589,19 @@ public class PsFeedbackDdcRoutingTests
     }
 
     [Fact]
-    public void Routes_Hermes10e_Production_DarkEvenInBurst()
+    public void Routes_Hermes10e_Production_FeedbackInBurst_RxAtRest()
     {
-        // End-to-end production wiring: feeding the GATED capability
-        // (TimeMuxesPsFeedbackOnDdc0, dark) keeps the 10E on the user RX even
-        // mid-burst with PS armed — byte-identical to PS-disabled until the
-        // interlock lifts.
-        Assert.False(Protocol2Client.RoutesDdc0ToPsFeedback(
+        // End-to-end production wiring (v0.10.8, on by default): feeding the now-
+        // ENABLED capability routes the 10E DDC0 to PS feedback during a TX burst
+        // with PS armed...
+        Assert.True(Protocol2Client.RoutesDdc0ToPsFeedback(
             psFeedbackEnabled: true, ddcIndex: 0, HpsdrBoardKind.HermesII,
             txKeyed: true,
+            timeMuxOnDdc0: Protocol2Client.TimeMuxesPsFeedbackOnDdc0(HpsdrBoardKind.HermesII)));
+        // ...and STILL reverts to the operator's RX at rest.
+        Assert.False(Protocol2Client.RoutesDdc0ToPsFeedback(
+            psFeedbackEnabled: true, ddcIndex: 0, HpsdrBoardKind.HermesII,
+            txKeyed: false,
             timeMuxOnDdc0: Protocol2Client.TimeMuxesPsFeedbackOnDdc0(HpsdrBoardKind.HermesII)));
     }
 
@@ -644,32 +663,34 @@ public class PsFeedbackDdcRoutingTests
     // ---- byte-59 (Angelia_atten_Tx0) TX-time ADC-overload protection seed ----
 
     [Theory]
-    [InlineData(HpsdrBoardKind.HermesII)]
-    [InlineData(HpsdrBoardKind.HermesC10)]
-    [InlineData(HpsdrBoardKind.Hermes)]
-    [InlineData(HpsdrBoardKind.OrionMkII)]
-    public void SeedsTxAdcProtection_DarkInProduction_ForEveryBoard(HpsdrBoardKind board)
+    [InlineData(HpsdrBoardKind.HermesII, true)]    // ANAN-10E — seeds byte 59 (#1209)
+    [InlineData(HpsdrBoardKind.HermesC10, true)]   // ANAN-G2E — now seeds byte 59 too (#960)
+    [InlineData(HpsdrBoardKind.Hermes, false)]     // not gateware-verified
+    [InlineData(HpsdrBoardKind.OrionMkII, false)]  // dual-ADC G2 — never reads the flag
+    public void SeedsTxAdcProtection_OnByDefault_ForBothSingleAdcBoards(
+        HpsdrBoardKind board, bool expected)
     {
-        // With both interlocks down (production) NO board seeds byte 59 — so the
-        // CmdTx wire is byte-identical to today for every board.
-        Assert.False(Protocol2Client.SeedsTxAdcProtection(board));
+        // v0.10.8 (#960 / #1209): with single-ADC PS on by default, BOTH the 10E
+        // and the G2E seed the byte-59 (Angelia_atten_Tx0) protective floor on a
+        // keyed PS burst so a first key-down can't slam the PA coupler into the
+        // one RX ADC at 0 dB. Every other board (and either with its kill-switch
+        // forced false) stays byte-identical.
+        Assert.Equal(expected, Protocol2Client.SeedsTxAdcProtection(board));
     }
 
     [Fact]
-    public void SeedsTxAdcProtection_True_OnlyForHermesII_WhenFlagOn()
+    public void SeedsTxAdcProtection_KillSwitchFalse_DisablesSeed_PerBoard()
     {
-        // With the 10E interlock lifted, ONLY the 10E seeds byte 59. The G2E
-        // byte-59 seed is a SEPARATE, independently-gated pre-condition and is
-        // deliberately NOT armed here, so the HermesC10 path is unchanged.
+        // Forcing a board's kill-switch false removes its byte-59 seed (and only
+        // its own) — the G2 / OrionMkII never seeds regardless.
         bool saved10e = Protocol2Client.Hermes10ePsTimeMuxOnAir;
         bool savedG2e = Protocol2Client.G2ePsTimeMuxOnAir;
         try
         {
-            Protocol2Client.Hermes10ePsTimeMuxOnAir = true;
-            Protocol2Client.G2ePsTimeMuxOnAir = true; // even with G2E lifted too
-            Assert.True(Protocol2Client.SeedsTxAdcProtection(HpsdrBoardKind.HermesII));
-            Assert.False(Protocol2Client.SeedsTxAdcProtection(HpsdrBoardKind.HermesC10));
-            Assert.False(Protocol2Client.SeedsTxAdcProtection(HpsdrBoardKind.Hermes));
+            Protocol2Client.Hermes10ePsTimeMuxOnAir = false;
+            Protocol2Client.G2ePsTimeMuxOnAir = true;
+            Assert.False(Protocol2Client.SeedsTxAdcProtection(HpsdrBoardKind.HermesII));
+            Assert.True(Protocol2Client.SeedsTxAdcProtection(HpsdrBoardKind.HermesC10));
             Assert.False(Protocol2Client.SeedsTxAdcProtection(HpsdrBoardKind.OrionMkII));
         }
         finally
@@ -701,19 +722,46 @@ public class PsFeedbackDdcRoutingTests
     }
 
     [Fact]
-    public void SetPsFeedbackEnabled_HermesII_FlagOff_DoesNotSeedByte59()
+    public void SetPsFeedbackEnabled_HermesII_KillSwitchOff_DoesNotSeedByte59()
     {
-        // Production (interlock down): arming PS on a 10E leaves the operator's
-        // TX step-att untouched — byte-identical to today, no seed.
+        // Kill-switch forced false: arming PS on a 10E leaves the operator's TX
+        // step-att untouched — byte-identical to the pre-#1209 path.
+        bool saved10e = Protocol2Client.Hermes10ePsTimeMuxOnAir;
+        try
+        {
+            Protocol2Client.Hermes10ePsTimeMuxOnAir = false;
+            using var p2 = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
+            p2.SetBoardKind(HpsdrBoardKind.HermesII);
+            p2.SetTxAttenuationDb(3);
+            Assert.Equal((byte)3, p2.TxStepAttnDb);
+
+            p2.SetPsFeedbackEnabled(true);
+            Assert.Equal((byte)3, p2.TxStepAttnDb); // unchanged — no seed
+            p2.SetPsFeedbackEnabled(false);
+            Assert.Equal((byte)3, p2.TxStepAttnDb);
+        }
+        finally
+        {
+            Protocol2Client.Hermes10ePsTimeMuxOnAir = saved10e;
+        }
+    }
+
+    [Fact]
+    public void SetPsFeedbackEnabled_G2E_SeedsByte59_RestoresOnDisarm()
+    {
+        // v0.10.8 (#960): arming PS on a G2E now seeds the byte-59 protective
+        // floor (31) — same single-shared-ADC protection the 10E gets — so the
+        // PA coupler can't slam the one RX ADC at 0 dB on first key-down; disarm
+        // restores the operator's prior value verbatim. Default-on, no force.
         using var p2 = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
-        p2.SetBoardKind(HpsdrBoardKind.HermesII);
+        p2.SetBoardKind(HpsdrBoardKind.HermesC10);
         p2.SetTxAttenuationDb(3);
-        Assert.Equal((byte)3, p2.TxStepAttnDb);
 
         p2.SetPsFeedbackEnabled(true);
-        Assert.Equal((byte)3, p2.TxStepAttnDb); // unchanged — no seed
+        Assert.Equal(Protocol2Client.PsTxAdcProtectFloorDb, p2.TxStepAttnDb); // 31
+
         p2.SetPsFeedbackEnabled(false);
-        Assert.Equal((byte)3, p2.TxStepAttnDb);
+        Assert.Equal((byte)3, p2.TxStepAttnDb); // restored
     }
 
     [Fact]
@@ -743,34 +791,21 @@ public class PsFeedbackDdcRoutingTests
     }
 
     [Theory]
-    [InlineData(HpsdrBoardKind.HermesC10)]
     [InlineData(HpsdrBoardKind.OrionMkII)]
     [InlineData(HpsdrBoardKind.Hermes)]
-    public void SetPsFeedbackEnabled_NonHermesII_FlagOn_DoesNotSeedByte59(HpsdrBoardKind board)
+    public void SetPsFeedbackEnabled_NonSingleAdc_DoesNotSeedByte59(HpsdrBoardKind board)
     {
-        // Zero-regression: with the 10E interlock lifted (AND the G2E one too),
-        // arming PS on any OTHER board never touches the TX step-att — the seed
-        // is HermesII-scoped. The G2E keeps its own separate, unimplemented
-        // byte-59 pre-condition; the dual-ADC family is unaffected.
-        bool saved10e = Protocol2Client.Hermes10ePsTimeMuxOnAir;
-        bool savedG2e = Protocol2Client.G2ePsTimeMuxOnAir;
-        try
-        {
-            Protocol2Client.Hermes10ePsTimeMuxOnAir = true;
-            Protocol2Client.G2ePsTimeMuxOnAir = true;
-            using var p2 = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
-            p2.SetBoardKind(board);
-            p2.SetTxAttenuationDb(3);
+        // Zero-regression: even with BOTH single-ADC kill-switches on (the
+        // default), arming PS on any board that is NOT a 10E/G2E never touches the
+        // TX step-att — the byte-59 seed is scoped to the two single-shared-ADC
+        // boards. The dual-ADC G2/OrionMkII family is provably unaffected.
+        using var p2 = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
+        p2.SetBoardKind(board);
+        p2.SetTxAttenuationDb(3);
 
-            p2.SetPsFeedbackEnabled(true);
-            Assert.Equal((byte)3, p2.TxStepAttnDb); // unchanged
-            p2.SetPsFeedbackEnabled(false);
-            Assert.Equal((byte)3, p2.TxStepAttnDb);
-        }
-        finally
-        {
-            Protocol2Client.Hermes10ePsTimeMuxOnAir = saved10e;
-            Protocol2Client.G2ePsTimeMuxOnAir = savedG2e;
-        }
+        p2.SetPsFeedbackEnabled(true);
+        Assert.Equal((byte)3, p2.TxStepAttnDb); // unchanged
+        p2.SetPsFeedbackEnabled(false);
+        Assert.Equal((byte)3, p2.TxStepAttnDb);
     }
 }
