@@ -5571,6 +5571,22 @@ export function connectP2(
   );
 }
 
+export function connectP3(
+  req: ConnectRequest,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  return jsonFetch(
+    '/api/connect/p3',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+      signal,
+    },
+    (raw) => raw,
+  );
+}
+
 // Take over a Busy radio: ask the server to send a protocol stop so the radio
 // drops its current owner, freeing it for an immediate connect. `endpoint` is
 // the discovered "ip:port"; `protocol` is 'P1' or 'P2'. Resolves once the
@@ -5603,6 +5619,14 @@ export function disconnect(signal?: AbortSignal): Promise<RadioStateDto> {
 export function disconnectP2(signal?: AbortSignal): Promise<unknown> {
   return jsonFetch(
     '/api/disconnect/p2',
+    { method: 'POST', signal },
+    (raw) => raw,
+  );
+}
+
+export function disconnectP3(signal?: AbortSignal): Promise<unknown> {
+  return jsonFetch(
+    '/api/disconnect/p3',
     { method: 'POST', signal },
     (raw) => raw,
   );
