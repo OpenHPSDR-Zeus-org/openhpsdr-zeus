@@ -455,7 +455,7 @@ const MANUAL_BOARD_OPTIONS: ReadonlyArray<BoardKind> = [
 
 const PROTOCOL3_UNAVAILABLE_TITLE = 'Protocol 3 requires p3app running on the selected radio.';
 const PROTOCOL3_PREVIEW_TITLE =
-  'Protocol 3 p3app was detected, but the Zeus P3 connect path is not wired yet.';
+  'Protocol 3 p3app detected on this G2.';
 
 function hasProtocol3App(r: RadioInfoDto): boolean {
   return r.details?.protocol3Available === 'true';
@@ -475,9 +475,13 @@ function discoveredP3AvailableForIp(radios: RadioInfoDto[] | null, ip: string): 
 
 function endpointFor(r: RadioInfoDto): string {
   if (!r.ipAddress) return '';
+  const protocol = r.details?.protocol ?? 'P1';
+  const port = protocol === 'P3'
+    ? (r.details?.protocol3Port ?? `${DEFAULT_DATA_PORT}`)
+    : `${DEFAULT_DATA_PORT}`;
   return r.ipAddress.includes(':')
     ? r.ipAddress
-    : `${r.ipAddress}:${DEFAULT_DATA_PORT}`;
+    : `${r.ipAddress}:${port}`;
 }
 
 function errorMessage(err: unknown): string {
@@ -1208,7 +1212,9 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                   const isLast = !!ep && ep === lastConnectedEndpoint;
                   const protocol = r.details?.protocol ?? 'P1';
                   const isP2 = protocol === 'P2';
-                  const p3Available = hasProtocol3App(r);
+                  const isP3 = protocol === 'P3';
+                  const showP3Preview = hasProtocol3App(r);
+                  const showP3Chip = showP3Preview && !isP3;
                   return (
                     <li
                       key={r.macAddress || r.ipAddress}
@@ -1236,13 +1242,13 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                           >
                             <span className="v">{protocol}</span>
                           </span>
-                          {p3Available && (
+                          {showP3Chip && (
                             <span
                               className="chip"
-                              style={{ marginLeft: 6, opacity: 0.75 }}
+                              style={{ marginLeft: 6, opacity: 0.58 }}
                               title={PROTOCOL3_PREVIEW_TITLE}
                             >
-                              <span className="v">P3 APP</span>
+                              <span className="v">P3</span>
                             </span>
                           )}
                           {isLast && (
@@ -1255,7 +1261,16 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                           {ep || '—'} · {r.macAddress || '—'}
                         </span>
                       </div>
-                      {r.busy ? (
+                      {isP3 ? (
+                        <button
+                          type="button"
+                          disabled
+                          title={PROTOCOL3_PREVIEW_TITLE}
+                          className="btn sm ghost"
+                        >
+                          P3
+                        </button>
+                      ) : r.busy ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span
                             className="label-xs"
@@ -1273,7 +1288,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                           >
                             Take over
                           </button>
-                          {p3Available && (
+                          {showP3Preview && (
                             <button
                               type="button"
                               disabled
@@ -1286,7 +1301,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                         </div>
                       ) : (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          {p3Available && (
+                          {showP3Preview && (
                             <button
                               type="button"
                               disabled
@@ -1300,10 +1315,10 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                             type="button"
                             onClick={() => handleConnect(r)}
                             disabled={inflight}
-                            title={isP2 ? 'Protocol 2 path - experimental, RX only' : undefined}
+                            title={isP2 ? 'Protocol 2 path — experimental, RX only' : undefined}
                             className="btn sm active"
                           >
-                            {inflight ? 'Connecting...' : 'Connect'}
+                            {inflight ? 'Connecting…' : 'Connect'}
                           </button>
                         </div>
                       )}

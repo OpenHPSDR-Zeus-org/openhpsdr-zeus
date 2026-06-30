@@ -1161,16 +1161,27 @@ public static class ZeusEndpoints
             var timeout = TimeSpan.FromMilliseconds(1500);
             var p1Task = p1Discovery.DiscoverAsync(timeout, ctx.RequestAborted);
             var p2Task = p2Discovery.DiscoverAsync(timeout, ctx.RequestAborted);
-            await Task.WhenAll(p1Task, p2Task);
+            var p3Task = p3Presence.DiscoverAsync(TimeSpan.FromMilliseconds(700), ctx.RequestAborted);
+            await Task.WhenAll(p1Task, p2Task, p3Task);
 
-            var p1Infos = p1Task.Result.Select(MapP1);
-            var p3ByIp = await ProbeProtocol3PresenceAsync(
+            var p3ByIp = p3Task.Result.ToDictionary(r => r.Ip, r => r.Presence);
+            foreach (var entry in await ProbeProtocol3PresenceAsync(
                 p2Task.Result,
                 p3Presence,
-                ctx.RequestAborted).ConfigureAwait(false);
+                ctx.RequestAborted).ConfigureAwait(false))
+            {
+                p3ByIp[entry.Key] = entry.Value;
+            }
+
+            var p1Infos = p1Task.Result.Select(MapP1);
             var p2Infos = p2Task.Result.Select(r =>
                 MapP2(r, p3ByIp.TryGetValue(r.Ip, out var p3) ? p3 : null));
-            return p1Infos.Concat(p2Infos).ToArray();
+            var knownIps = new HashSet<IPAddress>(
+                p1Task.Result.Select(r => r.Ip).Concat(p2Task.Result.Select(r => r.Ip)));
+            var p3Infos = p3Task.Result
+                .Where(r => !knownIps.Contains(r.Ip))
+                .Select(MapP3);
+            return p1Infos.Concat(p2Infos).Concat(p3Infos).ToArray();
 
             static RadioInfo MapP1(DiscoveredRadio r) => new(
                 MacAddress: r.Mac.ToString(),
@@ -1187,6 +1198,14 @@ public static class ZeusEndpoints
                 FirmwareVersion: r.FirmwareString,
                 Busy: r.Details.Busy,
                 Details: BuildP2Details(r, p3));
+
+            static RadioInfo MapP3(Protocol3DiscoveredRadio r) => new(
+                MacAddress: string.Empty,
+                IpAddress: r.Ip.ToString(),
+                BoardId: "G2",
+                FirmwareVersion: $"0x{r.Presence.FirmwareVersion:X8}",
+                Busy: false,
+                Details: BuildP3Details(r.Presence));
 
             static IReadOnlyDictionary<string, string> BuildP1Details(DiscoveredRadio r)
             {
@@ -1236,6 +1255,22 @@ public static class ZeusEndpoints
                     d["protocol3FirmwareVersion"] = p3.FirmwareVersion.ToString();
                     d["protocol3GatewareVersion"] = p3.GatewareVersion.ToString();
                 }
+                return d;
+            }
+
+            static IReadOnlyDictionary<string, string> BuildP3Details(Protocol3PresenceResult p3)
+            {
+                var d = new Dictionary<string, string>
+                {
+                    ["protocol"] = "P3",
+                    ["protocol3Available"] = "true",
+                    ["protocol3Port"] = p3.Port.ToString(),
+                    ["protocol3MaxRxStreams"] = p3.MaxRxStreams.ToString(),
+                    ["protocol3MaxTxStreams"] = p3.MaxTxStreams.ToString(),
+                    ["protocol3CapabilityFlags"] = $"0x{p3.CapabilityFlags:X8}",
+                    ["protocol3FirmwareVersion"] = p3.FirmwareVersion.ToString(),
+                    ["protocol3GatewareVersion"] = p3.GatewareVersion.ToString(),
+                };
                 return d;
             }
 

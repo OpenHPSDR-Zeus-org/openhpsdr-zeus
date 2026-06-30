@@ -50,6 +50,35 @@ public sealed class Protocol3PresenceProbeTests
         Assert.Null(result);
     }
 
+    [Fact]
+    public async Task DiscoverAsync_ReturnsCapabilitiesWhenP3AppAnswers()
+    {
+        using var server = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        var port = ((IPEndPoint)server.Client.LocalEndPoint!).Port;
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+
+        var responder = Task.Run(async () =>
+        {
+            var request = await server.ReceiveAsync(cts.Token);
+            Assert.True(IsDiscoveryRequest(request.Buffer));
+            await server.SendAsync(BuildCapabilitiesPacket(), request.RemoteEndPoint, cts.Token);
+        }, cts.Token);
+
+        var probe = new Protocol3PresenceProbe(NullLogger<Protocol3PresenceProbe>.Instance);
+        var radios = await probe.DiscoverAsync(
+            new[] { IPAddress.Loopback },
+            port,
+            TimeSpan.FromSeconds(1),
+            cts.Token);
+
+        await responder;
+        var radio = Assert.Single(radios);
+        Assert.Equal(IPAddress.Loopback, radio.Ip);
+        Assert.Equal(port, radio.Presence.Port);
+        Assert.Equal(10u, radio.Presence.MaxRxStreams);
+        Assert.Equal(1u, radio.Presence.MaxTxStreams);
+    }
+
     private static bool IsDiscoveryRequest(byte[] packet) =>
         packet.Length == 32 &&
         BinaryPrimitives.ReadUInt32BigEndian(packet.AsSpan(0, 4)) == 0x4E395033u &&
