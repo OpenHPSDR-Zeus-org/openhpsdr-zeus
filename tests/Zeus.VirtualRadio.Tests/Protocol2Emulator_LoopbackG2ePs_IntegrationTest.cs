@@ -120,8 +120,9 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
             Assert.True(await WaitUntil(() => sink.IqCount > 5, TimeSpan.FromSeconds(5)),
                 "no user-RX IQ frames at rest");
 
-            // 2) Arm PS and key TX. Note: on the G2E this does NOT seed byte 59
-            //    (SeedsTxAdcProtection(HermesC10) == false), unlike the 10E.
+            // 2) Arm PS and key TX. v0.10.8 (#960): the G2E now seeds byte 59 to
+            //    the protective floor on arm (SeedsTxAdcProtection(HermesC10) ==
+            //    true), exactly like the 10E.
             client.SetPsFeedbackEnabled(true);
             client.SetDriveByte(200);
             client.SetMox(true);
@@ -153,21 +154,21 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
             Assert.True(gotFrames, "no PS feedback frames delivered while keyed");
             Assert.True(sink.AllSamplesFinite, "PS feedback carried a non-finite sample");
 
-            // 5) THE OPEN GAP (KB2UKA sign-off + G2E bench, #289): byte 59 was NOT
-            //    seeded to the protective floor on the G2E (it stays at the operator
-            //    default 0 < floor), so the emulator's single-ADC model raises
-            //    first-key-down ADC overload. A real G2E would slam the PA coupler
-            //    into its one RX ADC at 0 dB here. This is the byte-59
-            //    (Angelia_atten_Tx0) protective-seed item that must land — as a
-            //    PureSignal-hard-rule change — before the flag could ever go on-air.
-            Assert.True(engine.DecodedTxStepAttnDb < Protocol2Engine.TxAdcProtectFloorDb,
-                $"byte 59 was unexpectedly protective on the G2E (was {engine.DecodedTxStepAttnDb}); " +
-                "the G2E byte-59 seed is supposed to be unimplemented/KB2UKA-gated");
-            Assert.True(await WaitUntil(() => engine.PsAdcOverloadLatched, TimeSpan.FromSeconds(2)),
-                "emulator did not raise the expected first-key-down ADC overload for the unseeded G2E byte 59");
+            // 5) SAFETY (v0.10.8, #960): byte 59 (Angelia_atten_Tx0) IS now seeded
+            //    to the protective floor on the G2E during the keyed PS burst, so
+            //    the single shared RX ADC is attenuated on first key-down instead
+            //    of being slammed by the PA coupler at 0 dB. The emulator's
+            //    single-ADC model therefore raises NO ADC overload.
+            Assert.True(
+                await WaitUntil(
+                    () => engine.DecodedTxStepAttnDb >= Protocol2Engine.TxAdcProtectFloorDb,
+                    TimeSpan.FromSeconds(2)),
+                $"G2E byte 59 was not seeded to the protective floor (was {engine.DecodedTxStepAttnDb})");
+            Assert.False(engine.PsAdcOverloadLatched,
+                "emulator latched a first-key-down ADC overload despite the G2E byte-59 protective seed");
 
-            // 6) Unkey + disarm → DDC0 returns to user RX. Byte 59 was never seeded,
-            //    so there is nothing to restore (stays 0).
+            // 6) Unkey + disarm → DDC0 returns to user RX and byte 59 RESTORES to
+            //    the operator's pre-arm value (0 here).
             client.SetMox(false);
             client.SetPsFeedbackEnabled(false);
 
@@ -175,7 +176,9 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
             Assert.True(await WaitUntil(() => sink.IqCount > iqAtUnkey + 5, TimeSpan.FromSeconds(5)),
                 "user-RX did not resume after unkey");
             Assert.False(engine.PsBurstArmed, "PS burst still armed after unkey");
-            Assert.Equal((byte)0, engine.DecodedTxStepAttnDb); // never seeded on the G2E
+            Assert.True(
+                await WaitUntil(() => engine.DecodedTxStepAttnDb == 0, TimeSpan.FromSeconds(2)),
+                "byte 59 did not restore to the operator default after disarm");
         }
         finally
         {
