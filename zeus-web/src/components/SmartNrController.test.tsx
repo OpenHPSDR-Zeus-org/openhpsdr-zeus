@@ -22,6 +22,7 @@ import {
   NR_CONFIG_DEFAULT,
   SQUELCH_CONFIG_DEFAULT,
   TX_LEVELING_CONFIG_DEFAULT,
+  TX_PHASE_ROTATOR_CONFIG_DEFAULT,
   type NrConfigDto,
   type RadioStateDto,
 } from '../api/client';
@@ -97,6 +98,7 @@ function mockState(nr: NrConfigDto): RadioStateDto {
     agc: { ...AGC_CONFIG_DEFAULT },
     squelch: { ...SQUELCH_CONFIG_DEFAULT },
     txLeveling: { ...TX_LEVELING_CONFIG_DEFAULT },
+    txPhaseRotator: { ...TX_PHASE_ROTATOR_CONFIG_DEFAULT },
     autoAgcEnabled: false,
     agcOffsetDb: 0,
     rxAfGainDb: 0,

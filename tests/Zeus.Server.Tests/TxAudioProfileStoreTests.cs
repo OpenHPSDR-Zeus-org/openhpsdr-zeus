@@ -34,6 +34,7 @@ public class TxAudioProfileStoreTests : IDisposable
         LevelerMaxGainDb: 8,
         TxLeveling: new TxLevelingConfig(),
         CfcConfig: CfcConfig.Default,
+        TxPhaseRotator: new TxPhaseRotatorConfig(),
         LowCutHz: 150, HighCutHz: 2900,
         ProcessingMode: "native",
         MasterBypass: false,

@@ -861,6 +861,30 @@ public sealed record TxLevelingConfig(
     bool CompressorEnabled = false,
     double CompressorGainDb = 0.0);
 
+// Operator-facing TX phase rotator. WDSP implements this as a cascade of
+// first-order all-pass stages in the TXA audio path (Thetis DSP->CFC->PhaseRot).
+// It redistributes speech waveform phase before the downstream dynamics stages,
+// improving talk-power headroom without changing spectral balance. Defaults
+// mirror Thetis' shipped voice settings but stay disabled for a fresh install so
+// legacy audio is unchanged until an operator or Auto Tune enables it. Reverse is
+// the explicit microphone-polarity switch; Auto Tune must not guess it.
+public sealed record TxPhaseRotatorConfig(
+    bool Enabled = false,
+    int CornerHz = TxPhaseRotatorConfig.DefaultCornerHz,
+    int Stages = TxPhaseRotatorConfig.DefaultStages,
+    bool Reverse = false)
+{
+    public const int MinCornerHz = 20;
+    public const int MaxCornerHz = 2000;
+    public const int DefaultCornerHz = 338;
+    public const int MinStages = 1;
+    public const int MaxStages = 16;
+    public const int DefaultStages = 8;
+
+    public static TxPhaseRotatorConfig ThetisVoiceDefault(bool reverse = false) =>
+        new(Enabled: true, CornerHz: DefaultCornerHz, Stages: DefaultStages, Reverse: reverse);
+}
+
 // A notch filter (MNF) — a band the operator paints, or Signal Intelligence
 // auto-detects, to remove EMF/birdies from the RX audio via WDSP's notch
 // database (nbp.c). CenterHz/WidthHz are ABSOLUTE RF in Hz (WDSP repositions
@@ -1294,7 +1318,12 @@ public sealed record StateDto(
     // gate the "Remove" action (remove reverts to the default, not to inert).
     bool WdspNr3RnnrAvailable = false,
     string? Nr3ModelName = null,
-    bool Nr3UsingBundledDefault = false);
+    bool Nr3UsingBundledDefault = false,
+
+    // TX phase rotator. Appended to the positional record to avoid shifting
+    // older constructor call sites; null means "use disabled defaults" at the
+    // engine seam and "missing from older server" for clients.
+    TxPhaseRotatorConfig? TxPhaseRotator = null);
 
 /// <summary>Canonical CW constants shared between backend and wire DTOs.
 /// Single source of truth — CwOffset (server-side) and StateDto both
@@ -1613,6 +1642,8 @@ public sealed record BandwidthSetRequest(int Low, int High);
 /// TxFilterLowHz/TxFilterHighHz convention (LSB-style passbands are negative,
 /// DSB/AM/FM symmetric around 0).</summary>
 public sealed record TxFilterSetRequest(int LowHz, int HighHz);
+
+public sealed record TxPhaseRotatorSetRequest(TxPhaseRotatorConfig TxPhaseRotator);
 
 public sealed record SampleRateSetRequest(int Rate);
 
@@ -2393,6 +2424,7 @@ public sealed record TxAudioProfileDto(
     // ---- whole-config reuse ----
     TxLevelingConfig TxLeveling,     // leveler on/decay, ALC max-gain/decay, CPDR on/gain
     CfcConfig CfcConfig,             // enabled/postEq/preComp/prePeq + 10 bands x2
+    TxPhaseRotatorConfig TxPhaseRotator, // all-pass phase rotator + explicit mic polarity
     // ---- TX bandpass + per-mode-family memory ----
     int LowCutHz, int HighCutHz,     // operator-typed positive magnitudes; server re-signs per mode-family
     // ---- audio processing mode + suite chain state ----

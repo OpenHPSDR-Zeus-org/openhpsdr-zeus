@@ -148,6 +148,31 @@ export const TX_LEVELING_CONFIG_DEFAULT: TxLevelingConfigDto = {
   compressorGainDb: 0,
 };
 
+// TX phase rotator — WDSP all-pass speech phase redistribution plus explicit
+// microphone polarity reverse. Mirrors Zeus.Contracts.TxPhaseRotatorConfig.
+// Thetis voice defaults are 338 Hz / 8 stages; fresh global state stays disabled
+// until an operator profile or Auto Tune enables it. Reverse is never guessed.
+export type TxPhaseRotatorConfigDto = {
+  enabled: boolean;
+  cornerHz: number;
+  stages: number;
+  reverse: boolean;
+};
+
+export const TX_PHASE_ROTATOR_CONFIG_DEFAULT: TxPhaseRotatorConfigDto = {
+  enabled: false,
+  cornerHz: 338,
+  stages: 8,
+  reverse: false,
+};
+
+export const TX_PHASE_ROTATOR_VOICE_DEFAULT: TxPhaseRotatorConfigDto = {
+  enabled: true,
+  cornerHz: 338,
+  stages: 8,
+  reverse: false,
+};
+
 export type NrConfigDto = {
   nrMode: NrMode;
   anfEnabled: boolean;
@@ -323,6 +348,8 @@ export type RadioStateDto = {
   squelch: SquelchConfigDto;
   // TX leveling (ALC + Leveler + Compressor). Leveler max-gain stays separate.
   txLeveling: TxLevelingConfigDto;
+  // TX phase rotator (Thetis DSP->CFC->PhaseRot parity).
+  txPhaseRotator: TxPhaseRotatorConfigDto;
   autoAgcEnabled: boolean;
   agcOffsetDb: number;
   rxAfGainDb: number;
@@ -533,6 +560,7 @@ export type TxAudioProfileDto = {
   levelerMaxGainDb: number;
   txLeveling: TxLevelingConfigDto;
   cfcConfig: CfcConfigDto;
+  txPhaseRotator: TxPhaseRotatorConfigDto;
   lowCutHz: number;
   highCutHz: number;
   processingMode: 'native' | 'vst';
@@ -2245,6 +2273,22 @@ export function normalizeTxLeveling(raw: unknown): TxLevelingConfigDto {
   };
 }
 
+export function normalizeTxPhaseRotator(raw: unknown): TxPhaseRotatorConfigDto {
+  if (!raw || typeof raw !== 'object')
+    return { ...TX_PHASE_ROTATOR_CONFIG_DEFAULT };
+  const r = raw as Record<string, unknown>;
+  const int = (v: unknown, fallback: number, min: number, max: number) =>
+    typeof v === 'number' && Number.isFinite(v)
+      ? Math.max(min, Math.min(max, Math.round(v)))
+      : fallback;
+  return {
+    enabled: typeof r.enabled === 'boolean' ? r.enabled : TX_PHASE_ROTATOR_CONFIG_DEFAULT.enabled,
+    cornerHz: int(r.cornerHz, TX_PHASE_ROTATOR_CONFIG_DEFAULT.cornerHz, 20, 2000),
+    stages: int(r.stages, TX_PHASE_ROTATOR_CONFIG_DEFAULT.stages, 1, 16),
+    reverse: typeof r.reverse === 'boolean' ? r.reverse : TX_PHASE_ROTATOR_CONFIG_DEFAULT.reverse,
+  };
+}
+
 // `null` means "no operator override yet — use engine default" and round-
 // trips that signal back to the server. Anything else (number/bool) is
 // preserved; missing keys collapse to null so an older server payload
@@ -2419,6 +2463,7 @@ export function normalizeState(raw: unknown): RadioStateDto {
     agc: normalizeAgc(r.agc),
     squelch: normalizeSquelch(r.squelch),
     txLeveling: normalizeTxLeveling(r.txLeveling),
+    txPhaseRotator: normalizeTxPhaseRotator(r.txPhaseRotator),
     autoAgcEnabled: typeof r.autoAgcEnabled === 'boolean' ? r.autoAgcEnabled : false,
     agcOffsetDb: typeof r.agcOffsetDb === 'number' ? r.agcOffsetDb : 0,
     rxAfGainDb: typeof r.rxAfGainDb === 'number' ? r.rxAfGainDb : 0,
@@ -2593,6 +2638,7 @@ function normalizeTxAudioProfile(raw: unknown): TxAudioProfileDto | null {
     levelerMaxGainDb: typeof r.levelerMaxGainDb === 'number' ? r.levelerMaxGainDb : 8,
     txLeveling: normalizeTxLeveling(r.txLeveling),
     cfcConfig: normalizeCfc(r.cfcConfig),
+    txPhaseRotator: normalizeTxPhaseRotator(r.txPhaseRotator),
     lowCutHz: clampInt(r.lowCutHz, 0, 10000, 150),
     highCutHz: clampInt(r.highCutHz, 0, 10000, 2900),
     processingMode: r.processingMode === 'vst' ? 'vst' : 'native',
@@ -6250,6 +6296,22 @@ export function setTxLeveling(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ txLeveling }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+export function setTxPhaseRotator(
+  txPhaseRotator: TxPhaseRotatorConfigDto,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/phase-rotator',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ txPhaseRotator }),
       signal,
     },
     normalizeState,

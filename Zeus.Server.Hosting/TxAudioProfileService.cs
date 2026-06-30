@@ -185,6 +185,7 @@ public sealed class TxAudioProfileService : IHostedService
             LevelerMaxGainDb: snap.LevelerMaxGainDb,
             TxLeveling: snap.TxLeveling ?? new TxLevelingConfig(),
             CfcConfig: snap.Cfc ?? CfcConfig.Default,
+            TxPhaseRotator: snap.TxPhaseRotator ?? new TxPhaseRotatorConfig(),
             LowCutHz: lowCut,
             HighCutHz: highCut,
             ProcessingMode: _mode.Mode == AudioProcessingMode.Vst ? "vst" : "native",
@@ -256,6 +257,7 @@ public sealed class TxAudioProfileService : IHostedService
         _radio.SetTxMicGain(profile.MicGainDb);
         _radio.SetTxLevelerMaxGain(profile.LevelerMaxGainDb);
         _radio.SetTxLeveling(profile.TxLeveling);
+        _radio.SetTxPhaseRotator(profile.TxPhaseRotator);
         if (profile.CfcConfig is not null)
             _radio.SetCfc(new CfcSetRequest(profile.CfcConfig));
         // Operator-typed positive magnitudes; SetTxFilter re-signs per mode-family
