@@ -45,7 +45,7 @@
   /* Decode-row classes (color-coded message table). */
   --hud-cq:        var(--ok);            /* CQ calls — green */
   --hud-me:        var(--power);         /* directed at my call — amber */
-  --hud-worked:    var(--fg-2);          /* worked-before — muted */
+  --hud-worked:    var(--worked-b4);     /* worked-before (FT8/FT4) — magenta */
   --hud-new:       var(--accent-bright); /* new DXCC/grid — accent blue */
 
   color: var(--hud-text);
@@ -70,7 +70,9 @@
      fg-2 grey. */
   --hud-text:      var(--btn-active-text);
   --hud-text-dim:  color-mix(in srgb, var(--btn-active-text) 58%, transparent);
-  --hud-worked:    color-mix(in srgb, var(--btn-active-text) 42%, transparent);
+  /* worked-before keeps its magenta on the dark digital screen (the light-theme
+     --worked-b4 override in tokens.css runs a touch deeper for legibility);
+     it no longer collapses to a grey mix. */
 }
 /* Keep the drag-bar dark too so the title/gear read as part of the screen, not
    the silver chassis (the base header uses the global silver panel gradient in
@@ -279,10 +281,23 @@
   white-space: nowrap;
 }
 .ft8-decode-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* Country column — abbreviated DXCC entity, sits to the RIGHT of Message
+   (symmetric to Freq on the LEFT). Always rendered dim + compact (its own
+   --hud-text-dim colour wins over the row class) so it never competes with the
+   message text. */
+.ft8-decode-table td.ft8-country {
+  color: var(--hud-text-dim);
+  text-align: left;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
 
 .ft8-row--cq     { color: var(--hud-cq); }
 .ft8-row--me     { color: var(--hud-me); background: var(--hud-cyan-soft); }
-.ft8-row--worked { color: var(--hud-worked); }
+.ft8-row--worked {
+  color: var(--hud-worked);
+  background: color-mix(in srgb, var(--hud-worked) 14%, transparent);
+}
 .ft8-row--new    { color: var(--hud-new); }
 
 /* Our own transmissions, echoed into the decode flow (WSJT-X yellow Tx line).

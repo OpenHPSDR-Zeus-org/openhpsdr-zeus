@@ -56,6 +56,12 @@
   --chat-group-soft: rgba(176,124,255,0.16);
   --ok:            #2dd566;
   --ok-soft:       rgba(45,213,102,0.18);
+  /* Worked-before highlight for the FT8/FT4 decode table — a magenta-violet that
+     reads as "already in the log", distinct from CQ green / calling-me amber /
+     new-grid blue / TX red / dim grey. NOT --orange (reserved for the QRZ
+     button) and NOT a chat hue (--chat-group is a bluer violet). */
+  --worked-b4:     #d65ccf;
+  --worked-b4-soft: rgba(214,92,207,0.18);
   --green-soft:    #1aa84e;
   --amber:         #ffb13c;
   --amber-soft:    rgba(255,177,60,0.18);
@@ -319,6 +325,12 @@ html[data-fonts="geist"] { --font-sans: 'Inter', sans-serif; --font-mono: 'JetBr
    needles are unchanged (semantic). Warm lamp blooms become near-transparent
    in light mode because they were tuned for a black stage. */
 :root[data-theme="light"] {
+  /* Worked-before highlight: the FT8 decode table renders on the dark "lit
+     instrument" digital-window surface even in light theme, so keep a vivid
+     magenta-violet legible on dark. A touch deeper than the dark-theme value. */
+  --worked-b4:      #c845c0;
+  --worked-b4-soft: rgba(200,69,192,0.20);
+
   --immersive-bg:           var(--bg-0);
   --immersive-panel:        var(--bg-1);
   --immersive-panel-2:      var(--bg-1);

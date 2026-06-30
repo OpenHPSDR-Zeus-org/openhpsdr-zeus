@@ -27,6 +27,12 @@ export interface Ft8DecodeDto {
   freqHz: number;
   score: number;
   text: string;
+  /** Server-side enrichment: the sender callsign has a prior FT8/FT4 QSO in the
+   *  logbook (digital worked-before — NOT SSB/CW). Absent on older servers. */
+  workedBefore?: boolean;
+  /** Server-side enrichment: abbreviated DXCC entity derived from the sender's
+   *  callsign prefix (FT8 never transmits country). null/absent when unknown. */
+  country?: string | null;
 }
 
 /** A completed slot's decodes for one receiver (the 0x38 payload). */

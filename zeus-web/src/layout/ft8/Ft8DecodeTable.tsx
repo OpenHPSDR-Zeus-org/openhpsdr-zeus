@@ -13,27 +13,31 @@ export type Ft8RowClass = 'cq' | 'me' | 'worked' | 'new' | 'normal';
 
 /**
  * Classify a decode for color-coding. `myCall` enables the directed-at-me
- * highlight; `workedCalls` (optional) dims stations already worked; `workedGrids`
- * (optional, 4-char upper-case) lights an otherwise-plain decode whose grid we
- * have NOT worked yet ('new'). CQ keeps its own green class even when its grid is
- * new — CQ is the louder signal in the table and the existing precedence is
- * relied on elsewhere.
+ * highlight; the worked-before highlight now comes from the AUTHORITATIVE
+ * server flag `row.workedBefore` (a prior FT8/FT4 QSO with the sender — full
+ * logbook history, digital modes only), replacing the old client-side
+ * all-modes/100-cap `workedCalls` heuristic. `workedGrids` (optional, 4-char
+ * upper-case) lights an otherwise-plain decode whose grid we have NOT worked
+ * yet ('new'). CQ keeps its own green class even when its grid is new — CQ is
+ * the louder signal in the table and the existing precedence is relied on
+ * elsewhere.
+ *
+ * Precedence: cq > me > worked > new > normal. 'me' (someone calling YOU)
+ * outranks worked-before; CQ outranks everything.
  */
 export function classifyDecode(
   row: Ft8Row,
   myCall?: string,
-  workedCalls?: ReadonlySet<string>,
   workedGrids?: ReadonlySet<string>,
 ): Ft8RowClass {
   const tokens = row.text.trim().split(/\s+/);
   const first = tokens[0]?.toUpperCase() ?? '';
-  const second = tokens[1]?.toUpperCase() ?? '';
   const me = myCall?.toUpperCase();
 
   // FT8 standard message: "<call-to> <call-from> <grid/report>".
   if (first === 'CQ') return 'cq';                  // a CQ row (even my own)
   if (me && first === me) return 'me';              // someone is calling ME
-  if (workedCalls && second && workedCalls.has(second)) return 'worked';
+  if (row.workedBefore === true) return 'worked';   // prior FT8/FT4 QSO (server)
   if (workedGrids) {
     const grid = parseFt8Message(row.text).grid;
     if (grid && !workedGrids.has(grid.toUpperCase())) return 'new';
@@ -57,7 +61,6 @@ const CLASS_CSS: Record<Ft8RowClass, string> = {
 
 export interface Ft8DecodeTableProps {
   myCall?: string;
-  workedCalls?: ReadonlySet<string>;
   workedGrids?: ReadonlySet<string>;
   onRowClick?: (row: Ft8Row) => void;
   /** FT8 Settings → Decode filters (client-side predicates over the live rows).
@@ -78,7 +81,6 @@ type FlowItem =
 
 export function Ft8DecodeTable({
   myCall,
-  workedCalls,
   workedGrids,
   onRowClick,
   showOnlyCq,
@@ -90,7 +92,7 @@ export function Ft8DecodeTable({
   const rows =
     showOnlyCq || hideWorkedBefore
       ? allRows.filter((r) => {
-          const cls = classifyDecode(r, myCall, workedCalls, workedGrids);
+          const cls = classifyDecode(r, myCall, workedGrids);
           if (showOnlyCq && cls !== 'cq' && cls !== 'me') return false;
           if (hideWorkedBefore && cls === 'worked') return false;
           return true;
@@ -104,7 +106,7 @@ export function Ft8DecodeTable({
       kind: 'rx',
       t: r.slotStartUnixMs,
       row: r,
-      cls: classifyDecode(r, myCall, workedCalls, workedGrids),
+      cls: classifyDecode(r, myCall, workedGrids),
     })),
     ...(txEchoes ?? []).map<FlowItem>((e) => ({ kind: 'tx', t: e.timeUtcMs, echo: e })),
   ].sort((a, b) => b.t - a.t);
@@ -126,6 +128,7 @@ export function Ft8DecodeTable({
           <th>DT</th>
           <th>Freq</th>
           <th>Message</th>
+          <th>Country</th>
         </tr>
       </thead>
       <tbody>
@@ -141,6 +144,7 @@ export function Ft8DecodeTable({
                 <td>
                   <span className="ft8-row__tx-badge">TX</span> {e.message}
                 </td>
+                <td className="ft8-country" />
               </tr>
             );
           }
@@ -157,6 +161,7 @@ export function Ft8DecodeTable({
               <td className="num">{r.dtSec.toFixed(1)}</td>
               <td className="num">{r.freqHz.toFixed(0)}</td>
               <td>{r.text}</td>
+              <td className="ft8-country">{r.country ?? ''}</td>
             </tr>
           );
         })}

@@ -17,12 +17,21 @@ using System.Text.Json.Serialization;
 namespace Zeus.Contracts;
 
 /// <summary>One decoded FT8/FT4 message line for the wire/UI.</summary>
+/// <remarks>
+/// <paramref name="WorkedBefore"/> and <paramref name="Country"/> are ADDITIVE
+/// enrichment attached server-side (see Ft8BroadcastService): the sender callsign
+/// has a prior FT8/FT4 QSO in the logbook, and its DXCC entity resolved from the
+/// callsign prefix (FT8 never transmits country). Both are optional with safe
+/// defaults so older clients and pre-enrichment JSON still deserialise.
+/// </remarks>
 public sealed record Ft8DecodeDto(
     float SnrDb,
     float DtSec,
     float FreqHz,
     int Score,
-    string Text);
+    string Text,
+    bool WorkedBefore = false,
+    string? Country = null);
 
 /// <summary>All decodes from one completed slot on one receiver.</summary>
 public sealed record Ft8DecodeBatchDto(

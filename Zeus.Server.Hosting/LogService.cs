@@ -152,6 +152,34 @@ public sealed class LogService : IDisposable
         }, ct);
     }
 
+    /// <summary>
+    /// The set of callsigns ever worked on a DIGITAL voice-of-data mode (FT8 or
+    /// FT4 only), upper-cased. This is the authoritative "worked before" source
+    /// for the FT8 workspace highlight: a station counts as worked-before only if
+    /// a prior QSO was FT8/FT4 — NOT SSB/CW/AM/etc. Distinct from
+    /// <see cref="GetWorkedCallsignSummaryAsync"/>, which is all-modes. The
+    /// returned set uses case-insensitive comparison so callers can probe a raw
+    /// decoded sender directly. Reads through the shared LiteDB lease.
+    /// </summary>
+    public async Task<IReadOnlySet<string>> GetDigitalWorkedCallsignsAsync(CancellationToken ct = default)
+    {
+        return await Task.Run<IReadOnlySet<string>>(() =>
+        {
+            var docs = _logs.Query()
+                .Where(x => x.Mode == "FT8" || x.Mode == "FT4")
+                .ToList();
+
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var doc in docs)
+            {
+                var call = NormalizeCallsign(doc.Callsign);
+                if (call.Length > 0)
+                    set.Add(call);
+            }
+            return set;
+        }, ct);
+    }
+
     public async Task<LogEntry?> GetLogEntryAsync(string id, CancellationToken ct = default)
     {
         return await Task.Run(() =>
