@@ -70,6 +70,13 @@ public static class CallsignCountryResolver
     /// bare region digits, then — for a true PREFIX/CALL or CALL/PREFIX compound —
     /// picks the shorter remaining token as the location indicator (DL in
     /// DL/K1ABC, VE3 in K1ABC/VE3). Returns "" when nothing plausible remains.
+    ///
+    /// Suffix stripping is POSITION-AWARE: a status token (P/M/MM/AM/R/…) is only
+    /// dropped when it is a TRAILING segment. The first (leading) segment is always
+    /// kept as a candidate location prefix, because several status tokens double as
+    /// real CEPT prefixes (MM = Scotland, AM = Spain, R = Russia). This keeps the
+    /// standard visitor form MM/DL1ABC → Scotland while still stripping DL1ABC/MM
+    /// (maritime-mobile) → Germany.
     /// </summary>
     private static string LocationPrefixToken(string call)
     {
@@ -77,9 +84,13 @@ public static class CallsignCountryResolver
             return IsCallChars(call) ? call : string.Empty;
 
         var core = new List<string>();
-        foreach (var seg in call.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        var segments = call.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (int i = 0; i < segments.Length; i++)
         {
-            if (Suffixes.Contains(seg)) continue;         // /P, /MM, /QRP, …
+            var seg = segments[i];
+            // Only a TRAILING segment may be a status suffix (/P, /MM, /QRP). The
+            // leading segment is never stripped, so MM/DL1ABC keeps MM (Scotland).
+            if (i > 0 && Suffixes.Contains(seg)) continue;
             if (IsAllDigits(seg)) continue;               // /7 region change
             if (!IsCallChars(seg)) continue;              // junk
             core.Add(seg);

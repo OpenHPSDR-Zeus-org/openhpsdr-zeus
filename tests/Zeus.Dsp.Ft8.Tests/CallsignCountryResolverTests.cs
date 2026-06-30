@@ -75,6 +75,27 @@ public sealed class CallsignCountryResolverTests
     }
 
     [Theory]
+    // A LEADING short segment that also doubles as a status suffix must be read as
+    // the location prefix, not stripped. MM = Scotland (CEPT visitor form), R =
+    // Russia. Regression guard: MM/DL1ABC used to resolve to GER (MM dropped).
+    [InlineData("MM/DL1ABC", "SCO")]    // Scotland visitor — NOT Germany
+    [InlineData("R/DL1ABC", "RUS")]     // leading R = Russia prefix, not stripped
+    public void Resolve_LeadingStatusLikePrefix_IsLocation(string call, string expected)
+    {
+        Assert.Equal(expected, CallsignCountryResolver.Resolve(call));
+    }
+
+    [Theory]
+    // The SAME tokens, when TRAILING, are still stripped as status suffixes so the
+    // home call resolves. This is the position-aware counterpart of the cases above.
+    [InlineData("DL1ABC/MM", "GER")]    // trailing MM (maritime mobile) → Germany
+    [InlineData("K1ABC/R", "USA")]      // trailing R stripped → USA
+    public void Resolve_TrailingStatusSuffix_IsStripped(string call, string expected)
+    {
+        Assert.Equal(expected, CallsignCountryResolver.Resolve(call));
+    }
+
+    [Theory]
     // Portable / status suffixes are stripped; the home call resolves.
     [InlineData("G0XYZ/P", "ENG")]
     [InlineData("DL1ABC/M", "GER")]
