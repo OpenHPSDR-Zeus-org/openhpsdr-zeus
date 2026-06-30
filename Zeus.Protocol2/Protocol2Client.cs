@@ -248,6 +248,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // Default 0 matches the radio's power-on state and pihpsdr's untouched
     // baseline.
     private byte _txStepAttnDb;
+    // Operator's TX step-att value captured at the instant the single-ADC PS
+    // time-mux byte-59 protective seed (SeedsTxAdcProtection) overrode it, so the
+    // value is restored verbatim on PS disarm. null = no seed is currently
+    // active (the only state on every board except the 10E with its interlock
+    // lifted). See SetPsFeedbackEnabled / PsTxAdcProtectFloorDb.
+    private byte? _txAttnBeforePsSeed;
     // PA settings — pushed from RadioService when PaSettingsStore changes or
     // the VFO crosses a band edge. _paEnabled is the global toggle that lands
     // in CmdGeneral[58]; _driveByte is the pre-calibrated drive level for
@@ -1270,12 +1276,57 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _psFeedbackEnabled = on;
         // Reset accumulator so we don't mix old samples with new on a re-arm.
         _psBlockFill = 0;
+
+        // Byte-59 TX-time ADC-overload protection seed (PureSignal hard rule).
+        // On a single-ADC time-mux board (ANAN-10E / HermesII, gated dark by
+        // Hermes10ePsTimeMuxOnAir) the TX-DAC reference + PA coupler land on the
+        // one RX ADC during a key-down; byte 59 (Angelia_atten_Tx0) is the
+        // gateware's TX-time attenuator for that ADC (Hermes.v:1483
+        // `atten0 = FPGA_PTT ? atten0_on_Tx : Attenuator0`,
+        // Tx_specific_C&C.v:182-183). Because ComposesPsFeedbackWire(HermesII) is
+        // deliberately false, ComposeCmdTxBuffer takes the non-PS branch and
+        // emits p[57]=p[58]=p[59]=_txStepAttnDb — so seeding _txStepAttnDb to the
+        // protective floor while armed pushes byte 59 protective, and restoring
+        // the operator's prior value on disarm returns the wire to normal. The
+        // seed/restore is the ONLY non-byte-identical effect, and it is reached
+        // only when SeedsTxAdcProtection is true (HermesII + flag): every other
+        // board, and HermesII with the flag false, take the historical path
+        // untouched. Gated on SeedsTxAdcProtection (NOT TimeMuxesPsFeedbackOnDdc0)
+        // so the G2E byte-59 seed stays its own separate, KB2UKA-gated
+        // pre-condition and the HermesC10 path is provably unchanged here.
+        bool seededTxAttn = false;
+        if (SeedsTxAdcProtection(_boardKind))
+        {
+            if (on)
+            {
+                _txAttnBeforePsSeed = _txStepAttnDb;
+                if (_txStepAttnDb != PsTxAdcProtectFloorDb)
+                {
+                    _txStepAttnDb = PsTxAdcProtectFloorDb;
+                    seededTxAttn = true;
+                }
+            }
+            else if (_txAttnBeforePsSeed is byte restore)
+            {
+                if (_txStepAttnDb != restore)
+                {
+                    _txStepAttnDb = restore;
+                    seededTxAttn = true;
+                }
+                _txAttnBeforePsSeed = null;
+            }
+        }
+
         if (_rxTask is not null)
         {
             // Re-emit RX-spec (DDC enables / sync bit) and HighPriority (PS
             // bit / DDC0/1 phase) so the radio honours the new state on the
             // very next sample window.
             SendCmdRx();
+            // Push the seeded/restored byte 59 — only when the seed actually
+            // moved the value, so non-10E (and flag-false) arms emit no extra
+            // CmdTx and stay byte-identical to today.
+            if (seededTxAttn) SendCmdTx();
             SendCmdHighPriority(run: true);
         }
     }
@@ -1814,6 +1865,71 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     internal static bool G2ePsTimeMuxOnAir;
 
     /// <summary>
+    /// Burn-zone interlock (PureSignal hard rule) for the ANAN-10E
+    /// (<see cref="HpsdrBoardKind.HermesII"/>) single-ADC time-multiplexed PS
+    /// feedback path — the sibling of <see cref="G2ePsTimeMuxOnAir"/>, scoped to
+    /// the 10E ONLY. It is held DARK (false) in production: while false the
+    /// HermesII wire/behaviour is byte-identical to the PS-disabled-on-single-ADC
+    /// path shipped today (RX audio survives, no feedback descriptor, no byte-59
+    /// seed). Flipped true ONLY by tests / the gated loopback emulator.
+    ///
+    /// Firmware ground truth (the 10E is byte-for-byte the same wire as the G2E,
+    /// differing only in the register name and the reference source):
+    ///   - <c>anan-10e_100b/P2-gateware/Hermes_v10.3/Rx_specific_C&amp;C.v:181</c>
+    ///     — command byte 1363 is the <c>Mux</c> register on the 10E
+    ///     (<c>1363: Mux &lt;= udp_rx_data;</c>); the old SyncRx read is commented
+    ///     out at :175-178. <c>Mux[1]</c> = the Rx1 PS select.
+    ///   - <c>Hermes.v:1080-1093</c> — <c>receiver2 receiver_inst1</c> (Rx1→DDC1)
+    ///     takes <c>in_data(Mux[1] ? temp_DACD : temp_ADC)</c>, slaving Rx1's
+    ///     input to the TX-DAC reference when <c>Mux[1]</c> is set; rate/freq
+    ///     slaved to Rx0.
+    ///   - <c>Hermes.v:684-687</c> — Rx0's single FIFO controller interleaves
+    ///     Sync-first (<c>rx_I[0]</c> = ADC coupler) then main
+    ///     (<c>rx_I[1]</c> = DAC reference) under <c>.Sync(Mux)</c> — the exact
+    ///     coupler-first / reference-second order the existing paired decoder
+    ///     (<see cref="DecodePsPairForTest"/>) consumes. Host enables DDC0 ONLY.
+    ///   - <c>Hermes.v:1483</c> <c>atten0 = FPGA_PTT ? atten0_on_Tx : Attenuator0</c>
+    ///     with <c>Tx_specific_C&amp;C.v:182-183</c> mapping byte 59 to
+    ///     <c>Angelia_atten_Tx0</c> — the TX-time ADC attenuator that protects the
+    ///     one RX ADC from the DAC feedback during a key-down (the byte-59 seed).
+    ///
+    /// Flipping this true autonomously is forbidden — see CLAUDE.md
+    /// "Hard Rules — PureSignal". The production flag flip and the final byte-59
+    /// seed value (<see cref="PsTxAdcProtectFloorDb"/>) require KB2UKA sign-off
+    /// plus 10E bench verification of first-key-down ADC overload.
+    /// </summary>
+    internal static bool Hermes10ePsTimeMuxOnAir;
+
+    /// <summary>
+    /// TX-time ADC-overload protection floor for the single-ADC time-mux PS
+    /// path (the byte-59 / <c>Angelia_atten_Tx0</c> seed). On a single-ADC board
+    /// the TX-DAC reference and PA coupler land on the one RX ADC during a TX
+    /// burst; byte 59 attenuates that ADC's TX-time input (gateware muxes it in
+    /// on <c>FPGA_PTT</c> — <c>Hermes.v:1483</c>, <c>Tx_specific_C&amp;C.v:182-183</c>).
+    /// 31 dB = the maximum (safest) attenuation, seeded so a fresh first key-down
+    /// with PS armed cannot slam the coupler into the ADC at 0 dB. The final
+    /// production value is bench-cal pending and KB2UKA-gated.
+    /// </summary>
+    internal const byte PsTxAdcProtectFloorDb = 31;
+
+    /// <summary>
+    /// True iff Zeus must seed the byte-59 (<c>Angelia_atten_Tx0</c>) TX-time ADC
+    /// attenuator to its protective floor (<see cref="PsTxAdcProtectFloorDb"/>)
+    /// while PS feedback is armed on this board — the single-ADC time-mux case
+    /// where the TX-DAC reference + PA coupler hit the one RX ADC on a TX burst.
+    ///
+    /// Scoped to the ANAN-10E (<see cref="HpsdrBoardKind.HermesII"/>) under the
+    /// <see cref="Hermes10ePsTimeMuxOnAir"/> interlock. The G2E (HermesC10)
+    /// byte-59 seed is a SEPARATE, independently-gated pre-condition (see the
+    /// <see cref="G2ePsTimeMuxOnAir"/> doc, pre-condition A) and is deliberately
+    /// NOT armed here — so the HermesC10 path stays byte-identical regardless of
+    /// this predicate. With the flag false this returns false for every board, so
+    /// no board is touched in production.
+    /// </summary>
+    internal static bool SeedsTxAdcProtection(HpsdrBoardKind board)
+        => board == HpsdrBoardKind.HermesII && Hermes10ePsTimeMuxOnAir;
+
+    /// <summary>
     /// True iff this board does Orion-style PureSignal on a SINGLE ADC by
     /// time-multiplexing DDC0 (issue #960) — the N1GP ANAN-G2E / HermesC10
     /// gateware. With command byte 1363 (SyncRx[0]) bit 1 (0x02) the Rx0 FIFO
@@ -1826,14 +1942,29 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// first slot -> rx, second slot -> tx), so the de-interleave is reused
     /// unchanged. Unlike the dual-ADC family (<see cref="ReservesPsFeedbackDdcs"/>)
     /// DDC0 is also the operator's only RX, so the feedback descriptor may be
-    /// armed ONLY during a TX burst and DDC0 reverts to user RX at rest. Gated by
-    /// <see cref="G2ePsTimeMuxOnAir"/> so the on-air path stays dark until the
-    /// byte-59 safety seed lands and the G2E is bench-verified. Hermes/HermesII
-    /// are deliberately excluded — their single-ADC mux is not gateware-verified
-    /// here and has no bench.
+    /// armed ONLY during a TX burst and DDC0 reverts to user RX at rest. Gated
+    /// per board by its own burn-zone interlock so the on-air path stays dark
+    /// until that board's byte-59 safety seed lands and it is bench-verified:
+    ///   - <see cref="HpsdrBoardKind.HermesC10"/> (ANAN-G2E) →
+    ///     <see cref="G2ePsTimeMuxOnAir"/>.
+    ///   - <see cref="HpsdrBoardKind.HermesII"/> (ANAN-10E) →
+    ///     <see cref="Hermes10ePsTimeMuxOnAir"/>. The 10E presents the identical
+    ///     coupler-first/reference-second interleave on DDC0 via command byte
+    ///     1363 — the <c>Mux</c> register on the 10E, where <c>Mux[1]</c> swings
+    ///     Rx1's input to <c>temp_DACD</c> (the TX-DAC reference) — so the same
+    ///     compose/decode machinery applies (anan-10e_100b/P2-gateware/
+    ///     Hermes_v10.3/Hermes.v:684-687, :1080-1093, Rx_specific_C&amp;C.v:181).
+    /// Plain <see cref="HpsdrBoardKind.Hermes"/> is deliberately excluded — its
+    /// single-ADC mux is not gateware-verified here and has no bench. Both flags
+    /// default false, so this is dark for every board in production.
     /// </summary>
     public static bool TimeMuxesPsFeedbackOnDdc0(HpsdrBoardKind board)
-        => G2ePsTimeMuxOnAir && board == HpsdrBoardKind.HermesC10;
+        => board switch
+        {
+            HpsdrBoardKind.HermesC10 => G2ePsTimeMuxOnAir,
+            HpsdrBoardKind.HermesII  => Hermes10ePsTimeMuxOnAir,
+            _                        => false,
+        };
 
     /// <summary>
     /// RX-thread dispatch decision (issue #960) — should an inbound DDC0 packet
