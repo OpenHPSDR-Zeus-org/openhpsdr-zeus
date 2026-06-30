@@ -101,6 +101,14 @@ describe('connection-store multi-select', () => {
 
     useConnectionStore.getState().applyState({
       ...base,
+      status: 'Connected',
+      connectedProtocol: 'P3',
+    });
+
+    expect(useConnectionStore.getState().connectedProtocol).toBe('P3');
+
+    useConnectionStore.getState().applyState({
+      ...base,
       status: 'Disconnected',
       connectedProtocol: null,
     });
