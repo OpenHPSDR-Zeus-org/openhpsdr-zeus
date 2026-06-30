@@ -2936,6 +2936,25 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         var portPkts = new long[MaxRxDdc];
         long lastPortRollMs = Environment.TickCount64;
 
+        // #1148 RX-IQ delivery telemetry. DDC0 datagram inter-arrival gap
+        // distribution + per-window sequence-gap count, emitted at ~1 Hz
+        // alongside the port-rate roll. The crux of the radio-speaker crackle
+        // investigation: an OFF-vs-ON capture shows whether inbound IQ arrives
+        // irregularly / under-rate (radio or physical clock coupling) versus
+        // with host socket loss (NIC / scheduling). All locals — RxLoop is a
+        // single dedicated thread. Allocation-light: one fixed gap ring + a
+        // reusable sort scratch, plus running min/max/sum; the only per-second
+        // work is a bounded Array.Sort in the emit branch.
+        const int GapRingSize = 512; // power of two for the cheap index wrap
+        var gapRingUs = new long[GapRingSize];
+        var gapSortScratch = new long[GapRingSize];
+        int gapRingPos = 0, gapRingFill = 0;
+        long gapCount = 0, gapSumUs = 0, gapMinUs = long.MaxValue, gapMaxUs = 0;
+        long lastDdc0ArrivalTicks = 0;
+        bool haveDdc0Arrival = false;
+        long lastDroppedSnapshot = Interlocked.Read(ref _droppedFrames);
+        double usPerTick = 1_000_000.0 / Stopwatch.Frequency;
+
         try
         {
             while (!ct.IsCancellationRequested)
@@ -2967,10 +2986,35 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 var srcPort = ((IPEndPoint)from).Port;
                 if (srcPort >= RxDataPortBase && srcPort < RxDataPortBase + MaxRxDdc)
                 {
-                    portPkts[srcPort - RxDataPortBase]++;
+                    int ddc = srcPort - RxDataPortBase;
+                    portPkts[ddc]++;
+
+                    // Measure inter-arrival on DDC0 only — the primary RX stream
+                    // that feeds the DSP tick (and the radio-speaker sink). Its
+                    // sequence-gap counter (_droppedFrames) is DDC0-specific too,
+                    // so the two correlate in one log line.
+                    if (ddc == 0)
+                    {
+                        long arr = Stopwatch.GetTimestamp();
+                        if (haveDdc0Arrival)
+                        {
+                            long gapUs = (long)((arr - lastDdc0ArrivalTicks) * usPerTick);
+                            gapCount++;
+                            gapSumUs += gapUs;
+                            if (gapUs < gapMinUs) gapMinUs = gapUs;
+                            if (gapUs > gapMaxUs) gapMaxUs = gapUs;
+                            gapRingUs[gapRingPos] = gapUs;
+                            gapRingPos = (gapRingPos + 1) & (GapRingSize - 1);
+                            if (gapRingFill < GapRingSize) gapRingFill++;
+                        }
+                        lastDdc0ArrivalTicks = arr;
+                        haveDdc0Arrival = true;
+                    }
+
                     long nowMs = Environment.TickCount64;
                     if (nowMs - lastPortRollMs >= 1000)
                     {
+                        long ddc0Pkts = portPkts[0];
                         lock (_rxPortRateLock)
                         {
                             Array.Copy(portPkts, _rxPortRateSnapshot, MaxRxDdc);
@@ -2978,6 +3022,30 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                         }
                         Array.Clear(portPkts);
                         lastPortRollMs = nowMs;
+
+                        long droppedNow = Interlocked.Read(ref _droppedFrames);
+                        long seqGaps = droppedNow - lastDroppedSnapshot;
+                        lastDroppedSnapshot = droppedNow;
+
+                        long meanUs = gapCount > 0 ? gapSumUs / gapCount : 0;
+                        long minUs = gapCount > 0 ? gapMinUs : 0;
+                        long p99Us = DiagStats.Percentile(gapRingUs, gapSortScratch, gapRingFill, 0.99);
+
+                        // sockDrops=na: .NET's Socket exposes no portable
+                        // per-socket dropped-datagram counter, so OS recv-buffer
+                        // overflow is invisible from here. The discriminator the
+                        // reporter needs: seqGaps WITHOUT a matching host drop ⇒
+                        // the radio under-sent / streamed irregularly (radio or
+                        // physical clock coupling); seqGaps WITH host drops ⇒
+                        // NIC / scheduling. Reconcile seqGaps against the OS
+                        // (`ss -u` / `netstat -su` RcvbufErrors) when an
+                        // ON-vs-OFF radio-speaker capture diverges.
+                        _log.LogInformation(
+                            "p2.rxdiag ddc0pkts/s={Pps} seqGaps={SeqGaps} gapUs(min/mean/max/p99)={Min}/{Mean}/{Max}/{P99} sockDrops=na",
+                            ddc0Pkts, seqGaps, minUs, meanUs, gapMaxUs, p99Us);
+
+                        gapCount = 0; gapSumUs = 0; gapMinUs = long.MaxValue; gapMaxUs = 0;
+                        gapRingPos = 0; gapRingFill = 0;
                     }
                 }
                 if (srcPort >= RxDataPortBase && srcPort < RxDataPortBase + MaxRxDdc && n == BufLen)
