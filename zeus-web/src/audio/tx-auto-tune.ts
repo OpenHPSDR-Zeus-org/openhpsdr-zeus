@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 import type { CfcConfigDto, TxLevelingConfigDto, TxPhaseRotatorConfigDto } from '../api/client';
+import { cleanSpectralDensityTarget } from './tx-fidelity';
 
 const DBFS_FLOOR = -200;
 const MIN_VOICED_SAMPLES = 8;
@@ -122,6 +123,14 @@ function nonNegative(v: number | null | undefined): number {
 function clamp(v: number, min: number, max: number): number {
   if (!Number.isFinite(v)) return min;
   return Math.max(min, Math.min(max, v));
+}
+
+function pctBetween(v: number, low: number, high: number): number {
+  return clamp(((v - low) / (high - low)) * 100, 0, 100);
+}
+
+function clampScore(v: number): number {
+  return Math.max(0, Math.min(100, Math.round(v)));
 }
 
 function roundHalf(v: number): number {
@@ -371,6 +380,30 @@ export function scoreTxPhaseRotatorCandidate(
   return { score, usable: Number.isFinite(score), reason };
 }
 
+function estimateCleanDensity(stats: TxAutoTuneStats): number | null {
+  if (stats.micP95Dbfs === null) return null;
+  const micDensity = pctBetween(stats.micP95Dbfs, -36, -6);
+  const outDensity =
+    stats.outP95Dbfs === null
+      ? micDensity
+      : pctBetween(stats.outP95Dbfs, -24, -4);
+  const dynamicsDensity = clamp(
+    stats.alcP95Db * 5 + stats.lvlrP95Db * 3 + stats.cfcP95Db * 2.5,
+    0,
+    100,
+  );
+  if (stats.crestMedianDb === null) {
+    return clampScore(micDensity * 0.3 + outDensity * 0.25 + dynamicsDensity * 0.45);
+  }
+  const crestDensity = clamp(((24 - stats.crestMedianDb) / 18) * 100, 0, 100);
+  return clampScore(
+    micDensity * 0.22 +
+      outDensity * 0.2 +
+      dynamicsDensity * 0.38 +
+      crestDensity * 0.2,
+  );
+}
+
 export function summarizeTxAutoTuneSamples(samples: ReadonlyArray<TxAutoTuneSample>): TxAutoTuneStats {
   const mic = values(samples, (s) => s.micPkDbfs);
   const out = values(samples, (s) => s.outPkDbfs);
@@ -574,6 +607,9 @@ export function recommendTxAutoTune(
   const protecting = suiteHot || outputHot || micHot || dynamicsHot;
   const mayRaise = blockers.length === 0 && !protecting;
   const target = clamp(current.targetSpectralDensity, 0, 100);
+  const cleanTarget = cleanSpectralDensityTarget(target);
+  const liveDensity = estimateCleanDensity(stats);
+  const densityShortfall = liveDensity === null ? null : Math.max(0, cleanTarget - liveDensity);
   if (mayRaise) {
     if (stats.micP95Dbfs !== null && stats.micP95Dbfs < -18) {
       const gain = clamp((-12 - stats.micP95Dbfs) * 0.4, 1, 3);
@@ -591,12 +627,24 @@ export function recommendTxAutoTune(
       actions.push('mic +1 dB for clean output density');
     }
 
-    if (target >= 70 && stats.lvlrP95Db < 2) {
-      next.levelerMaxGainDb = roundHalf(clamp(next.levelerMaxGainDb + 1, 0, 20));
-      actions.push('leveler max +1 dB');
+    if (
+      stats.audioSuiteOutP95Dbfs !== null &&
+      stats.audioSuiteOutP95Dbfs < -12 &&
+      stats.micP95Dbfs !== null &&
+      stats.micP95Dbfs >= -18 &&
+      stats.micP95Dbfs < -7
+    ) {
+      next.micGainDb = roundInt(clamp(next.micGainDb + 1, -40, 10));
+      actions.push('mic +1 dB for Audio Suite output target');
+    }
+
+    if (stats.lvlrP95Db < 2) {
+      const step = target >= 70 || (densityShortfall ?? 0) > 8 ? 1 : 0.5;
+      next.levelerMaxGainDb = roundHalf(clamp(next.levelerMaxGainDb + step, 0, 20));
+      actions.push(`leveler max +${step} dB`);
     }
     if (
-      target >= 80 &&
+      (target >= 80 || (densityShortfall ?? 0) > 8) &&
       stats.cfcP95Db < 3 &&
       stats.crestMedianDb !== null &&
       stats.crestMedianDb > (target >= 95 ? 8 : 10)
@@ -646,8 +694,9 @@ export function recommendTxAutoTune(
     // a little more make-up gain lifts the average without touching the
     // limiter. Bounded +1 dB, only below the raise guard/ceiling.
     if (
-      target >= 80 &&
-      stats.alcP95Db < 5 &&
+      ((target >= 80 && stats.alcP95Db < 5) ||
+        stats.alcP95Db < 1 ||
+        (stats.outP95Dbfs !== null && stats.outP95Dbfs < -10 && (densityShortfall ?? 0) > 6)) &&
       next.txLeveling.alcMaxGainDb < ALC_MAX_RAISE_GUARD
     ) {
       next.txLeveling = {
@@ -698,6 +747,17 @@ export function recommendTxAutoTune(
         ),
       };
       actions.push(enabling ? `compressor on +${step} dB` : `compressor +${step} dB`);
+    }
+
+    if (
+      target < 90 &&
+      stats.crestMedianDb !== null &&
+      stats.crestMedianDb > 14 &&
+      stats.cfcP95Db < 4 &&
+      (stats.outP95Dbfs === null || stats.outP95Dbfs <= -5)
+    ) {
+      next.cfcConfig = withPreComp(next.cfcConfig, 0.3, true);
+      actions.push('CFC pre-comp +0.3 dB for crest target');
     }
   }
 

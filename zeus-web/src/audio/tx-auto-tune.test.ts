@@ -229,6 +229,48 @@ describe('recommendTxAutoTune', () => {
     expect(plan.actions.join(' ')).toContain('compressor on');
   });
 
+  it('raises quiet dynamics into the green gauge windows even at baseline density', () => {
+    const plan = recommendTxAutoTune(
+      settings({
+        targetSpectralDensity: 55,
+        levelerMaxGainDb: 6,
+        txLeveling: leveling({ alcMaxGainDb: 3 }),
+      }),
+      samples({
+        micPkDbfs: -10,
+        outPkDbfs: -8,
+        outAvDbfs: -18,
+        alcGrDb: 0.2,
+        lvlrGrDb: 0.5,
+        cfcGrDb: 0,
+      }),
+    );
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.settings.levelerMaxGainDb).toBe(6.5);
+    expect(plan.settings.txLeveling.alcMaxGainDb).toBe(4);
+    expect(plan.actions).toContain('leveler max +0.5 dB');
+    expect(plan.actions).toContain('ALC max gain +1 dB');
+  });
+
+  it('adds controlled CFC density when crest is open but the chain has headroom', () => {
+    const plan = recommendTxAutoTune(
+      settings({ targetSpectralDensity: 80, cfcConfig: cfc(1) }),
+      samples({
+        micPkDbfs: -10,
+        outPkDbfs: -7,
+        outAvDbfs: -24,
+        alcGrDb: 2,
+        lvlrGrDb: 3,
+        cfcGrDb: 1,
+      }),
+    );
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.settings.cfcConfig.preCompDb).toBeGreaterThan(1);
+    expect(plan.actions.join(' ')).toContain('CFC pre-comp');
+  });
+
   it('reports the resulting values so consecutive runs are distinguishable', () => {
     const hot = samples({ micPkDbfs: -8, audioSuiteOutputDbfs: -0.4, outPkDbfs: -6 });
     const first = recommendTxAutoTune(settings({ micGainDb: -4 }), hot);
