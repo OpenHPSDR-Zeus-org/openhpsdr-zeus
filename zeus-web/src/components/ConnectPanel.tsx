@@ -1245,7 +1245,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                           {showP3Chip && (
                             <span
                               className="chip"
-                              style={{ marginLeft: 6, opacity: 0.58 }}
+                              style={{ marginLeft: 6 }}
                               title={PROTOCOL3_PREVIEW_TITLE}
                             >
                               <span className="v">P3</span>
@@ -1261,16 +1261,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                           {ep || '—'} · {r.macAddress || '—'}
                         </span>
                       </div>
-                      {isP3 ? (
-                        <button
-                          type="button"
-                          disabled
-                          title={PROTOCOL3_PREVIEW_TITLE}
-                          className="btn sm ghost"
-                        >
-                          P3
-                        </button>
-                      ) : r.busy ? (
+                      {!isP3 && (r.busy ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span
                             className="label-xs"
@@ -1288,29 +1279,9 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                           >
                             Take over
                           </button>
-                          {showP3Preview && (
-                            <button
-                              type="button"
-                              disabled
-                              title={PROTOCOL3_PREVIEW_TITLE}
-                              className="btn sm ghost"
-                            >
-                              P3
-                            </button>
-                          )}
                         </div>
                       ) : (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          {showP3Preview && (
-                            <button
-                              type="button"
-                              disabled
-                              title={PROTOCOL3_PREVIEW_TITLE}
-                              className="btn sm ghost"
-                            >
-                              P3
-                            </button>
-                          )}
                           <button
                             type="button"
                             onClick={() => handleConnect(r)}
@@ -1321,7 +1292,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                             {inflight ? 'Connecting…' : 'Connect'}
                           </button>
                         </div>
-                      )}
+                      ))}
                     </li>
                   );
                 })}
