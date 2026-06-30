@@ -10,7 +10,7 @@ const LEGEND: ReadonlyArray<{ cls: string; label: string }> = [
   { cls: 'dw-legend__sw--cq', label: 'CQ' },
   { cls: 'dw-legend__sw--me', label: 'Calling you' },
   { cls: 'dw-legend__sw--new', label: 'New grid' },
-  { cls: 'dw-legend__sw--worked', label: 'Worked' },
+  { cls: 'dw-legend__sw--worked', label: 'Worked B4' },
   { cls: 'dw-legend__sw--tx', label: 'Your TX' },
 ];
 

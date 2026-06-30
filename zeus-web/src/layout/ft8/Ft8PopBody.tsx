@@ -93,12 +93,12 @@ export function Ft8PopBody() {
   const loadPushConfig = useHamClockStore((s) => s.loadPushConfig);
   const pushDx = useHamClockStore((s) => s.pushDx);
 
-  // Worked-before / new-grid sets for decode-table highlighting, memoized from
-  // the logbook. NOTE: useLoggerStore.loadEntries caps at 100 entries (#1015).
-  const workedCalls = useMemo(
-    () => new Set(entries.map((e) => e.callsign.toUpperCase())),
-    [entries],
-  );
+  // New-grid set for decode-table highlighting, memoized from the logbook.
+  // Worked-before is no longer derived here — it is the authoritative server
+  // flag on each decode row (a prior FT8/FT4 QSO over the FULL logbook history),
+  // which replaces the old all-modes/100-cap client heuristic. NOTE:
+  // useLoggerStore.loadEntries caps at 100 entries (#1015), so the grid set is
+  // still a best-effort recent-history hint.
   const workedGrids = useMemo(
     () =>
       new Set(
@@ -343,7 +343,6 @@ export function Ft8PopBody() {
         <div className="dw-section__body dw-section__body--flush">
           <Ft8DecodeTable
             myCall={myCall || undefined}
-            workedCalls={workedCalls}
             workedGrids={workedGrids}
             onRowClick={onRowClick}
             showOnlyCq={settings.showOnlyCq}

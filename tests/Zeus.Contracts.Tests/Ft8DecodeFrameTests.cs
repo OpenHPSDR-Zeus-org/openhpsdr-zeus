@@ -3,6 +3,7 @@
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF), Christian Suarez (N9WAR), and contributors.
 
+using System.Text;
 using Zeus.Contracts;
 using Xunit;
 
@@ -47,5 +48,59 @@ public class Ft8DecodeFrameTests
     {
         var bad = new byte[] { 0x01, 0x02, 0x03 };
         Assert.Throws<InvalidDataException>(() => Ft8DecodeFrame.Decode(bad));
+    }
+
+    [Fact]
+    public void RoundTrip_PreservesWorkedBeforeAndCountry()
+    {
+        var batch = new Ft8DecodeBatchDto(0, 1_700_000_000_000, "FT8",
+            new[]
+            {
+                new Ft8DecodeDto(-12f, 0.2f, 1234f, 18, "CQ DL1ABC JO31",
+                    WorkedBefore: true, Country: "GER"),
+                new Ft8DecodeDto(-5f, 0.0f, 900f, 22, "CQ N0XYZ"), // defaults
+            });
+
+        var back = Ft8DecodeFrame.Decode(Ft8DecodeFrame.Encode(batch));
+
+        Assert.True(back.Decodes[0].WorkedBefore);
+        Assert.Equal("GER", back.Decodes[0].Country);
+        Assert.False(back.Decodes[1].WorkedBefore);
+        Assert.Null(back.Decodes[1].Country);
+    }
+
+    [Fact]
+    public void Encode_EmitsCamelCaseEnrichmentFields()
+    {
+        var batch = new Ft8DecodeBatchDto(0, 1_700_000_000_000, "FT8",
+            new[] { new Ft8DecodeDto(-12f, 0.2f, 1234f, 18, "CQ DL1ABC JO31",
+                WorkedBefore: true, Country: "GER") });
+
+        var frame = Ft8DecodeFrame.Encode(batch);
+        var json = Encoding.UTF8.GetString(frame, 1, frame.Length - 1);
+
+        Assert.Contains("\"workedBefore\":true", json);
+        Assert.Contains("\"country\":\"GER\"", json);
+    }
+
+    [Fact]
+    public void Decode_OldShapeJsonWithoutEnrichment_DeserializesWithDefaults()
+    {
+        // A pre-feature server emits decodes with no workedBefore/country keys.
+        const string legacyJson =
+            "{\"receiver\":0,\"slotStartUnixMs\":1700000000000,\"protocol\":\"FT8\"," +
+            "\"decodes\":[{\"snrDb\":-12,\"dtSec\":0.2,\"freqHz\":1234,\"score\":18," +
+            "\"text\":\"CQ K1ABC FN42\"}]}";
+        var payload = Encoding.UTF8.GetBytes(legacyJson);
+        var frame = new byte[1 + payload.Length];
+        frame[0] = (byte)MsgType.Ft8Decode;
+        payload.CopyTo(frame, 1);
+
+        var back = Ft8DecodeFrame.Decode(frame);
+
+        Assert.Single(back.Decodes);
+        Assert.Equal("CQ K1ABC FN42", back.Decodes[0].Text);
+        Assert.False(back.Decodes[0].WorkedBefore);
+        Assert.Null(back.Decodes[0].Country);
     }
 }
