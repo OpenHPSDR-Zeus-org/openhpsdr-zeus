@@ -909,26 +909,37 @@ public static class WireContract
     /// <see cref="StateDto.WireVersion"/>.</summary>
     public const int Version = 2;
 
-    /// <summary>Maximum concurrent DDC receivers. Protocol 2's DDC-enable
-    /// command is a single byte (8 bits ⇒ DDC0..DDC7), so the ceiling is 8.
-    /// <see cref="Zeus.Contracts"/> owns the canonical value;
-    /// <c>Zeus.Protocol2.Protocol2Client.MaxRxDdc</c> references it so the wire
-    /// foundation and the contract can never drift apart.</summary>
-    public const int MaxReceivers = 8;
+    /// <summary>Maximum hardware receiver/DDC count the state contract can
+    /// represent. Protocol 2 is lower on some boards because its DDC-enable byte
+    /// addresses only DDC0..DDC7; <see cref="StateDto.MaxReceivers"/> carries the
+    /// active protocol/board ceiling to the frontend. The shared contract keeps
+    /// ten hardware slots so Protocol 3-capable G2/Saturn firmware can expose
+    /// RX1..RX10 without colliding with software receiver slots.</summary>
+    public const int MaxReceivers = 10;
+
+    /// <summary>Protocol 2 DDC-enable wire ceiling. The P2 command is still a
+    /// single byte, so DDC0..DDC7 is the hard P2 limit even though the shared
+    /// receiver state contract can represent more for Protocol 3.</summary>
+    public const int Protocol2MaxDdc = 8;
 
     /// <summary>Reserved receiver index for the non-hardware KiwiSDR slice. It
-    /// sits at the very top of the DDC range so it never collides with the
-    /// contiguous hardware run (RX1..RX6, practical max 6 on a G2/Saturn).
-    /// Frames for the Kiwi receiver are broadcast with this value as their
-    /// <c>RxId</c>; the frontend routes them through the same per-RX render path
-    /// as a hardware DDC and labels the entry from <see cref="ReceiverDto.Name"/>
-    /// ("Kiwi") instead of "RX{Index+1}".</summary>
-    public const int KiwiReceiverIndex = MaxReceivers - 1;
+    /// sits just above the hardware receiver range so RX10 remains available to
+    /// Protocol 3-capable radios. Frames for the Kiwi receiver are broadcast with
+    /// this value as their <c>RxId</c>; the frontend routes them through the same
+    /// per-RX render path as a hardware DDC and labels the entry from
+    /// <see cref="ReceiverDto.Name"/> ("Kiwi") instead of "RX{Index+1}".</summary>
+    public const int KiwiReceiverIndex = MaxReceivers;
+
+    /// <summary>Total receiver-index slots on the wire, including the optional
+    /// Kiwi software receiver at <see cref="KiwiReceiverIndex"/>.</summary>
+    public const int MaxReceiverSlots = KiwiReceiverIndex + 1;
 }
 
 /// <summary>Per-receiver (per-DDC) state for the multi-DDC model. Index 0 is
 /// RX1, index 1 is RX2, and indices ≥ 2 are additional DDCs (up to
-/// <see cref="WireContract.MaxReceivers"/> − 1).
+/// <see cref="WireContract.MaxReceivers"/> − 1). The optional Kiwi software
+/// receiver uses <see cref="WireContract.KiwiReceiverIndex"/> outside that
+/// hardware range.
 /// <para>The first usable dual-receive path mirrors the <see cref="StateDto"/>
 /// flat RX1 fields (<see cref="StateDto.VfoHz"/> etc.) into index 0 and the
 /// RX2 / VFO-B fields (<see cref="StateDto.VfoBHz"/> etc.) into index 1;
@@ -1256,9 +1267,14 @@ public sealed record StateDto(
     // pre-multi-DDC baseline; v2 = Receivers[] present.
     int WireVersion = WireContract.Version,
 
-    // DDC / receiver ceiling for this build (WireContract.MaxReceivers). The
-    // multi-DDC UI gates the "exposed receivers" control against this.
+    // Active hardware DDC / receiver ceiling for this connection. Protocol 2 G2
+    // reports 6; Protocol 3-capable G2 firmware can report the full 10.
     int MaxReceivers = WireContract.MaxReceivers,
+
+    // Active wire protocol for the current radio session. This is duplicated
+    // from RadioService runtime state so /api/state is self-contained after a
+    // browser reload; null when disconnected.
+    string? ConnectedProtocol = null,
 
     // ---- VFO lock (Thetis chkVFOLock) ----
     // Pure software guard: when true, operator dial tuning (panadapter click,

@@ -64,7 +64,7 @@ public interface IKiwiAudioBus
 /// waterfall into the same <see cref="DisplayFrame"/> / <see cref="AudioFrame"/>
 /// wire frames a hardware DDC produces (tagged with
 /// <see cref="WireContract.KiwiReceiverIndex"/> so the frontend renders it as
-/// "Kiwi" beside RX1..RX6), and pushes Zeus tuning down to the Kiwi as SET
+/// "Kiwi" beside the hardware receivers), and pushes Zeus tuning down to the Kiwi as SET
 /// commands. The Kiwi demodulates server-side, so this is a remote front-end —
 /// no WDSP channel is involved.
 /// </summary>

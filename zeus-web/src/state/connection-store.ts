@@ -65,6 +65,8 @@ import {
   type ReceiverDto,
 } from '../api/client';
 
+export type ConnectedProtocol = 'P1' | 'P2' | 'P3' | null;
+
 // WDSP wisdom bootstrap phase, mirroring the server's WisdomPhase enum.
 // 'idle' = initializer hasn't started yet (first ms after boot),
 // 'building' = WDSPwisdom is running (up to ~2 min on a fresh machine),
@@ -120,19 +122,19 @@ export type ConnectionState = {
   // 0 = RX1, 1 = RX2, >= 2 = extra hardware DDCs. Empty until the first state
   // frame. The RECEIVERS settings panel reads this to render per-DDC controls.
   receivers: ReceiverDto[];
-  // DDC / receiver ceiling for this build (WireContract.MaxReceivers); the
-  // RECEIVERS panel caps the exposed-count control against it.
+  // Active hardware DDC / receiver ceiling for this connection. P2 G2 reports
+  // 6; P3-capable G2 firmware can report all 10.
   maxReceivers: number;
   // Board kind only known from the discovery list at connect time — StateDto
   // doesn't echo it. Null after a page reload while already connected; the
   // preamp guard treats null as "show", which is the safe default (an HL2
   // preamp toggle does nothing harmful, just nothing useful).
   boardId: string | null;
-  // Connected protocol — 'P1' or 'P2', or null when disconnected. Set by
-  // ConnectPanel on a successful /api/connect or /api/connect/p2 call so
+  // Connected protocol — 'P1', 'P2', or 'P3', or null when disconnected. Set by
+  // ConnectPanel on a successful connect call so
   // protocol-gated features can disable their controls cleanly without
   // round-tripping the discovery list.
-  connectedProtocol: 'P1' | 'P2' | null;
+  connectedProtocol: ConnectedProtocol;
   preampOn: boolean;
   // CTUN (click-tune / centred tuning). When true, a panadapter click tunes
   // the dial off-centre with the hardware NCO frozen; the pan-tune gesture
@@ -175,7 +177,7 @@ export type ConnectionState = {
   applyState: (s: RadioStateDto, opts?: { trustVfo?: boolean }) => void;
   setInflight: (v: boolean) => void;
   setBoardId: (id: string | null) => void;
-  setConnectedProtocol: (p: 'P1' | 'P2' | null) => void;
+  setConnectedProtocol: (p: ConnectedProtocol) => void;
   setPreampOn: (on: boolean) => void;
   setNr: (nr: NrConfigDto) => void;
   setAgc: (agc: AgcConfigDto) => void;
@@ -219,7 +221,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   vfoHz: 14_200_000,
   rx2Enabled: false,
   receivers: [],
-  maxReceivers: 8,
+  maxReceivers: 10,
   txVfo: 'A',
   txReceiverIndex: 0,
   rxFocus: 'A',
@@ -283,6 +285,12 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
         // adopts all other server fields) until the optimistic window expires.
         receivers: mergeReceivers(prev.receivers, s.receivers, trustVfo),
         maxReceivers: s.maxReceivers ?? prev.maxReceivers,
+        connectedProtocol:
+          s.connectedProtocol !== undefined
+            ? s.connectedProtocol
+            : s.status === 'Disconnected'
+            ? null
+            : prev.connectedProtocol,
         txVfo: s.txVfo,
         txReceiverIndex: s.txReceiverIndex ?? prev.txReceiverIndex,
         rxFocus: s.rx2Enabled ? prev.rxFocus : 'A',

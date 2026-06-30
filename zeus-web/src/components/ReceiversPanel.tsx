@@ -8,8 +8,8 @@
 // RECEIVERS (multi-DDC) settings tab. Lets the operator choose how many
 // hardware DDC receivers to expose and which phase-synchronous ADC each one
 // reads — the front end for the B4-server N-receiver path (POST
-// /api/receivers/{index}, StateDto.Receivers[]). Multi-DDC is a Protocol-2
-// feature (ANAN G2 / Saturn class); the panel gates on a live P2 connection.
+// /api/receivers/{index}, StateDto.Receivers[]). Multi-DDC is a Protocol-2/3
+// feature (ANAN G2 / Saturn class); the panel gates on a live P2/P3 connection.
 //
 // Receivers are contiguous (the radio's DDC run has no gaps): exposing N means
 // RX1..RXN are active. The "exposed" button row composes the per-index calls;
@@ -21,7 +21,7 @@ import { setReceiver } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import {
   KIWI_RECEIVER_INDEX,
-  PRACTICAL_MAX_RECEIVERS,
+  MAX_HARDWARE_RECEIVERS,
   receiverLabel,
   setExposedReceiverCount,
 } from '../state/receiver-state';
@@ -46,11 +46,11 @@ export function ReceiversPanel() {
   const applyState = useConnectionStore((s) => s.applyState);
 
   const connected = status === 'Connected';
-  const isP2 = connectedProtocol === 'P2';
+  const supportsMultiDdc = connectedProtocol === 'P2' || connectedProtocol === 'P3';
 
-  // Effective ceiling = whatever the build/wire allows, clamped to the count
-  // that actually streams on hardware (see PRACTICAL_MAX_RECEIVERS).
-  const effectiveMax = Math.min(maxReceivers, PRACTICAL_MAX_RECEIVERS);
+  // Effective ceiling = the active protocol/board count from the server,
+  // bounded by the client contract's hardware receiver capacity.
+  const effectiveMax = Math.min(maxReceivers, MAX_HARDWARE_RECEIVERS);
 
   // Number of contiguous active receivers (RX1 always counts).
   const exposedCount = Math.max(1, receivers.filter((r) => r.enabled).length);
@@ -87,13 +87,14 @@ export function ReceiversPanel() {
               <em>Connect a radio to configure its DDC receivers.</em>
             </div>
           </div>
-        ) : !isP2 ? (
+        ) : !supportsMultiDdc ? (
           <div className="ps-field">
             <div className="ps-name">
-              Protocol 2 only
+              Protocol 2 / 3 only
               <em>
-                Multiple independent DDC receivers require a Protocol-2 radio
-                (ANAN G2 / Saturn class). RX1/RX2 remain available on this radio.
+                Multiple independent DDC receivers require a Protocol-2 or
+                Protocol-3 radio (ANAN G2 / Saturn class). RX1/RX2 remain
+                available on this radio.
               </em>
             </div>
           </div>

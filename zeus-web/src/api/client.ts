@@ -449,8 +449,11 @@ export type RadioStateDto = {
   receivers?: ReceiverDto[];
   // Wire contract version (WireContract.Version). v2 = receivers[] present.
   wireVersion?: number;
-  // DDC / receiver ceiling for this build (WireContract.MaxReceivers).
+  // Active hardware DDC / receiver ceiling for this connection.
   maxReceivers?: number;
+  // Active backend wire protocol for the current connection. Present on v2+
+  // servers so reloads can recover protocol-gated Settings panels.
+  connectedProtocol?: 'P1' | 'P2' | null;
 };
 
 // Mirrors Zeus.Contracts.ReceiverDto — per-receiver (per-DDC) state. Index 0 is
@@ -461,8 +464,8 @@ export type ReceiverDto = {
   index: number;
   enabled: boolean;
   // Operator-facing display name. Hardware DDCs leave this null and fall back to
-  // an "RX{n}" label; the reserved KiwiSDR slice receiver (index
-  // WireContract.KiwiReceiverIndex) carries "Kiwi". See receiverLabel().
+  // an "RX{n}" label; the reserved KiwiSDR slice receiver carries "Kiwi". See
+  // receiverLabel().
   name?: string | null;
   // Which phase-synchronous 16-bit ADC feeds this DDC (0 or 1).
   adcSource: number;
@@ -644,6 +647,16 @@ export type RadioInfoDto = {
   firmwareVersion: string;
   busy: boolean;
   details: Record<string, string> | null;
+};
+
+export type Protocol3PresenceDto = {
+  available: boolean;
+  port: number | null;
+  maxRxStreams: number | null;
+  maxTxStreams: number | null;
+  capabilityFlags: string | null;
+  firmwareVersion: number | null;
+  gatewareVersion: number | null;
 };
 
 export type HardwareDiagnosticItemDto = {
@@ -2428,6 +2441,12 @@ function normalizeReceiver(raw: unknown, fallbackIndex: number): ReceiverDto {
   };
 }
 
+function normalizeConnectedProtocol(raw: unknown): 'P1' | 'P2' | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null) return null;
+  return raw === 'P1' || raw === 'P2' ? raw : null;
+}
+
 export function normalizeState(raw: unknown): RadioStateDto {
   const r = (raw ?? {}) as Record<string, unknown>;
   return {
@@ -2553,6 +2572,7 @@ export function normalizeState(raw: unknown): RadioStateDto {
       : undefined,
     wireVersion: typeof r.wireVersion === 'number' ? r.wireVersion : undefined,
     maxReceivers: typeof r.maxReceivers === 'number' ? r.maxReceivers : undefined,
+    connectedProtocol: normalizeConnectedProtocol(r.connectedProtocol),
   };
 }
 
@@ -2734,6 +2754,19 @@ function normalizeRadios(raw: unknown): RadioInfoDto[] {
           : null,
     };
   });
+}
+
+function normalizeProtocol3Presence(raw: unknown): Protocol3PresenceDto {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    available: Boolean(r.available),
+    port: typeof r.port === 'number' ? r.port : null,
+    maxRxStreams: typeof r.maxRxStreams === 'number' ? r.maxRxStreams : null,
+    maxTxStreams: typeof r.maxTxStreams === 'number' ? r.maxTxStreams : null,
+    capabilityFlags: typeof r.capabilityFlags === 'string' ? r.capabilityFlags : null,
+    firmwareVersion: typeof r.firmwareVersion === 'number' ? r.firmwareVersion : null,
+    gatewareVersion: typeof r.gatewareVersion === 'number' ? r.gatewareVersion : null,
+  };
 }
 
 function asDiagRecord(raw: unknown): Record<string, unknown> {
@@ -4845,6 +4878,17 @@ export function fetchRadios(signal?: AbortSignal): Promise<RadioInfoDto[]> {
   return jsonFetch('/api/radios', { signal }, normalizeRadios);
 }
 
+export function fetchProtocol3Presence(
+  ip: string,
+  signal?: AbortSignal,
+): Promise<Protocol3PresenceDto> {
+  return jsonFetch(
+    `/api/protocol3/presence?ip=${encodeURIComponent(ip)}`,
+    { signal },
+    normalizeProtocol3Presence,
+  );
+}
+
 /** A POTA / SOTA / DX activation spot from GET /api/spots/activations. `freqHz`
  *  is absolute Hz (server normalizes POTA kHz / SOTA MHz / DX kHz). `mode` is
  *  the raw upstream string (SSB/CW/FT8/…) — map it to an RxMode at tune time. */
@@ -5527,6 +5571,22 @@ export function connectP2(
   );
 }
 
+export function connectP3(
+  req: ConnectRequest,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  return jsonFetch(
+    '/api/connect/p3',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+      signal,
+    },
+    (raw) => raw,
+  );
+}
+
 // Take over a Busy radio: ask the server to send a protocol stop so the radio
 // drops its current owner, freeing it for an immediate connect. `endpoint` is
 // the discovered "ip:port"; `protocol` is 'P1' or 'P2'. Resolves once the
@@ -5559,6 +5619,14 @@ export function disconnect(signal?: AbortSignal): Promise<RadioStateDto> {
 export function disconnectP2(signal?: AbortSignal): Promise<unknown> {
   return jsonFetch(
     '/api/disconnect/p2',
+    { method: 'POST', signal },
+    (raw) => raw,
+  );
+}
+
+export function disconnectP3(signal?: AbortSignal): Promise<unknown> {
+  return jsonFetch(
+    '/api/disconnect/p3',
     { method: 'POST', signal },
     (raw) => raw,
   );
@@ -6050,7 +6118,7 @@ export function setFavoriteFilterSlots(
   );
 }
 
-// 768/1536 kHz are Protocol-2 only (ANAN G2); Protocol 1 caps at 384 kHz.
+// 768/1536 kHz need a wide DDC transport (P2/P3); Protocol 1 caps at 384 kHz.
 // ConnectPanel gates the higher rungs to P2, and the backend rejects them on
 // a P1 connect.
 export type SampleRate = 48_000 | 96_000 | 192_000 | 384_000 | 768_000 | 1_536_000;

@@ -8,6 +8,7 @@
     <Project Path="tests/Zeus.Plugins.Host.Tests/Zeus.Plugins.Host.Tests.csproj" />
     <Project Path="tests/Zeus.Protocol1.Tests/Zeus.Protocol1.Tests.csproj" />
     <Project Path="tests/Zeus.Protocol2.Tests/Zeus.Protocol2.Tests.csproj" />
+    <Project Path="tests/Zeus.VirtualRadio.Tests/Zeus.VirtualRadio.Tests.csproj" />
     <Project Path="tests/Zeus.Server.Tests/Zeus.Server.Tests.csproj" />
   </Folder>
   <Project Path="Zeus.Contracts/Zeus.Contracts.csproj" />
@@ -22,6 +23,8 @@
   <Project Path="Zeus.Protocol1/Zeus.Protocol1.csproj" />
   <Project Path="Zeus.Protocol2/Zeus.Protocol2.csproj" />
   <Project Path="Zeus.Midi/Zeus.Midi.csproj" />
+  <Project Path="Zeus.VirtualRadio/Zeus.VirtualRadio.csproj" />
+  <Project Path="Zeus.VirtualRadio.Host/Zeus.VirtualRadio.Host.csproj" />
   <Project Path="OpenhpsdrZeus/OpenhpsdrZeus.csproj" />
   <Project Path="Zeus.Server.Hosting/Zeus.Server.Hosting.csproj" />
   <Project Path="Zeus.Diagnostics.TestGen/Zeus.Diagnostics.TestGen.csproj" />

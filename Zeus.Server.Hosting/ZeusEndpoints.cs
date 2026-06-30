@@ -1155,16 +1155,33 @@ public static class ZeusEndpoints
         app.MapGet("/api/radios", async (
             IRadioDiscovery p1Discovery,
             Zeus.Protocol2.Discovery.IRadioDiscovery p2Discovery,
+            Protocol3PresenceProbe p3Presence,
             HttpContext ctx) =>
         {
             var timeout = TimeSpan.FromMilliseconds(1500);
             var p1Task = p1Discovery.DiscoverAsync(timeout, ctx.RequestAborted);
             var p2Task = p2Discovery.DiscoverAsync(timeout, ctx.RequestAborted);
-            await Task.WhenAll(p1Task, p2Task);
+            var p3Task = p3Presence.DiscoverAsync(TimeSpan.FromMilliseconds(700), ctx.RequestAborted);
+            await Task.WhenAll(p1Task, p2Task, p3Task);
+
+            var p3ByIp = p3Task.Result.ToDictionary(r => r.Ip, r => r.Presence);
+            foreach (var entry in await ProbeProtocol3PresenceAsync(
+                p2Task.Result,
+                p3Presence,
+                ctx.RequestAborted).ConfigureAwait(false))
+            {
+                p3ByIp[entry.Key] = entry.Value;
+            }
 
             var p1Infos = p1Task.Result.Select(MapP1);
-            var p2Infos = p2Task.Result.Select(MapP2);
-            return p1Infos.Concat(p2Infos).ToArray();
+            var p2Infos = p2Task.Result.Select(r =>
+                MapP2(r, p3ByIp.TryGetValue(r.Ip, out var p3) ? p3 : null));
+            var knownIps = new HashSet<IPAddress>(
+                p1Task.Result.Select(r => r.Ip).Concat(p2Task.Result.Select(r => r.Ip)));
+            var p3Infos = p3Task.Result
+                .Where(r => !knownIps.Contains(r.Ip))
+                .Select(MapP3);
+            return p1Infos.Concat(p2Infos).Concat(p3Infos).ToArray();
 
             static RadioInfo MapP1(DiscoveredRadio r) => new(
                 MacAddress: r.Mac.ToString(),
@@ -1174,13 +1191,21 @@ public static class ZeusEndpoints
                 Busy: r.Details.Busy,
                 Details: BuildP1Details(r));
 
-            static RadioInfo MapP2(Zeus.Protocol2.Discovery.DiscoveredRadio r) => new(
+            static RadioInfo MapP2(Zeus.Protocol2.Discovery.DiscoveredRadio r, Protocol3PresenceResult? p3) => new(
                 MacAddress: r.Mac.ToString(),
                 IpAddress: r.Ip.ToString(),
                 BoardId: r.Board.ToString(),
                 FirmwareVersion: r.FirmwareString,
                 Busy: r.Details.Busy,
-                Details: BuildP2Details(r));
+                Details: BuildP2Details(r, p3));
+
+            static RadioInfo MapP3(Protocol3DiscoveredRadio r) => new(
+                MacAddress: string.Empty,
+                IpAddress: r.Ip.ToString(),
+                BoardId: "G2",
+                FirmwareVersion: $"0x{r.Presence.FirmwareVersion:X8}",
+                Busy: false,
+                Details: BuildP3Details(r.Presence));
 
             static IReadOnlyDictionary<string, string> BuildP1Details(DiscoveredRadio r)
             {
@@ -1200,7 +1225,9 @@ public static class ZeusEndpoints
                 return d;
             }
 
-            static IReadOnlyDictionary<string, string> BuildP2Details(Zeus.Protocol2.Discovery.DiscoveredRadio r)
+            static IReadOnlyDictionary<string, string> BuildP2Details(
+                Zeus.Protocol2.Discovery.DiscoveredRadio r,
+                Protocol3PresenceResult? p3)
             {
                 var d = new Dictionary<string, string>
                 {
@@ -1218,8 +1245,83 @@ public static class ZeusEndpoints
                     ["rawReplyHex"] = Convert.ToHexString(r.Details.RawReply),
                 };
                 if (r.Details.BetaVersion != 0) d["betaVersion"] = r.Details.BetaVersion.ToString();
+                if (p3 is not null)
+                {
+                    d["protocol3Available"] = "true";
+                    d["protocol3Port"] = p3.Port.ToString();
+                    d["protocol3MaxRxStreams"] = p3.MaxRxStreams.ToString();
+                    d["protocol3MaxTxStreams"] = p3.MaxTxStreams.ToString();
+                    d["protocol3CapabilityFlags"] = $"0x{p3.CapabilityFlags:X8}";
+                    d["protocol3FirmwareVersion"] = p3.FirmwareVersion.ToString();
+                    d["protocol3GatewareVersion"] = p3.GatewareVersion.ToString();
+                }
                 return d;
             }
+
+            static IReadOnlyDictionary<string, string> BuildP3Details(Protocol3PresenceResult p3)
+            {
+                var d = new Dictionary<string, string>
+                {
+                    ["protocol"] = "P3",
+                    ["protocol3Available"] = "true",
+                    ["protocol3Port"] = p3.Port.ToString(),
+                    ["protocol3MaxRxStreams"] = p3.MaxRxStreams.ToString(),
+                    ["protocol3MaxTxStreams"] = p3.MaxTxStreams.ToString(),
+                    ["protocol3CapabilityFlags"] = $"0x{p3.CapabilityFlags:X8}",
+                    ["protocol3FirmwareVersion"] = p3.FirmwareVersion.ToString(),
+                    ["protocol3GatewareVersion"] = p3.GatewareVersion.ToString(),
+                };
+                return d;
+            }
+
+            static async Task<Dictionary<IPAddress, Protocol3PresenceResult>> ProbeProtocol3PresenceAsync(
+                IReadOnlyList<Zeus.Protocol2.Discovery.DiscoveredRadio> radios,
+                Protocol3PresenceProbe p3Presence,
+                CancellationToken ct)
+            {
+                var candidates = radios.Where(IsProtocol3Candidate).ToArray();
+                if (candidates.Length == 0) return new Dictionary<IPAddress, Protocol3PresenceResult>();
+
+                var timeout = TimeSpan.FromMilliseconds(300);
+                var tasks = candidates.Select(async r =>
+                    (r.Ip, Result: await p3Presence.ProbeAsync(r.Ip, timeout, ct).ConfigureAwait(false))).ToArray();
+                await Task.WhenAll(tasks).ConfigureAwait(false);
+
+                var byIp = new Dictionary<IPAddress, Protocol3PresenceResult>();
+                foreach (var task in tasks)
+                {
+                    var (ip, result) = task.Result;
+                    if (result is not null) byIp[ip] = result;
+                }
+                return byIp;
+            }
+
+            static bool IsProtocol3Candidate(Zeus.Protocol2.Discovery.DiscoveredRadio r) =>
+                r.Details.RawBoardId is 0x0A or 0x14;
+        });
+
+        app.MapGet("/api/protocol3/presence", async (
+            string? ip,
+            Protocol3PresenceProbe p3Presence,
+            HttpContext ctx) =>
+        {
+            if (!IPAddress.TryParse(ip ?? string.Empty, out var radioIp) ||
+                radioIp.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+                return Results.BadRequest(new { error = $"Invalid IPv4 address '{ip}'." });
+
+            var p3 = await p3Presence
+                .ProbeAsync(radioIp, TimeSpan.FromMilliseconds(500), ctx.RequestAborted)
+                .ConfigureAwait(false);
+            return Results.Ok(new
+            {
+                available = p3 is not null,
+                port = p3?.Port,
+                maxRxStreams = p3?.MaxRxStreams,
+                maxTxStreams = p3?.MaxTxStreams,
+                capabilityFlags = p3 is null ? null : $"0x{p3.CapabilityFlags:X8}",
+                firmwareVersion = p3?.FirmwareVersion,
+                gatewareVersion = p3?.GatewareVersion,
+            });
         });
 
         // Take over a Busy radio. Discovery reports status 0x03 when another
@@ -1410,6 +1512,75 @@ public static class ZeusEndpoints
             }
         });
 
+        app.MapPost("/api/connect/p3", async (
+            ConnectRequest req,
+            Protocol3PresenceProbe p3Presence,
+            Protocol3SidecarBridge sidecar,
+            RadioService radio,
+            HttpContext ctx) =>
+        {
+            const int p3RxStreams = Zeus.Contracts.WireContract.MaxReceivers;
+            const int p3RxRateHz = 1_536_000;
+
+            log.LogInformation("api.connect.p3 endpoint={Ep}", req.Endpoint);
+
+            if (!TryParseIpEndpoint(req.Endpoint, out var ipEndpoint))
+                return Results.BadRequest(new { error = $"Invalid endpoint '{req.Endpoint}'." });
+            if (radio.IsConnected)
+                return Results.Conflict(new { error = "Already connected. Disconnect first." });
+
+            var p3 = await p3Presence
+                .ProbeAsync(ipEndpoint.Address, TimeSpan.FromMilliseconds(700), ctx.RequestAborted)
+                .ConfigureAwait(false);
+            if (p3 is null)
+            {
+                return Results.Json(
+                    new { error = "Protocol 3 p3app was not detected on this radio.", protocol3Available = false },
+                    statusCode: StatusCodes.Status409Conflict);
+            }
+            if (p3.MaxRxStreams < p3RxStreams)
+            {
+                return Results.Json(
+                    new
+                    {
+                        error = $"Protocol 3 p3app reports only {p3.MaxRxStreams} RX streams; Zeus requires {p3RxStreams}.",
+                        maxRxStreams = p3.MaxRxStreams,
+                    },
+                    statusCode: StatusCodes.Status409Conflict);
+            }
+
+            try
+            {
+                var snapshot = await sidecar
+                    .ConnectAsync(ipEndpoint, p3.Port, p3RxRateHz, p3RxStreams, ctx.RequestAborted)
+                    .ConfigureAwait(false);
+                radio.MarkProtocol3Connected(
+                    req.Endpoint,
+                    p3RxRateHz,
+                    Math.Min(snapshot.RxActiveStreams, Zeus.Contracts.WireContract.MaxReceivers),
+                    p3.FirmwareVersion.ToString());
+                return Results.Ok(new
+                {
+                    protocol = "P3",
+                    endpoint = req.Endpoint,
+                    sampleRateHz = p3RxRateHz,
+                    maxReceivers = snapshot.RxActiveStreams,
+                    diagnosticsUrl = snapshot.DiagnosticsUrl.ToString(),
+                    dspEngine = snapshot.DspEngine,
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                log.LogWarning(ex, "api.connect.p3 refused");
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "api.connect.p3 failed");
+                return Results.Problem(ex.Message, statusCode: 500);
+            }
+        });
+
         app.MapPost("/api/disconnect/p2", async (DspPipelineService dsp, HttpContext ctx) =>
         {
             log.LogInformation("api.disconnect.p2");
@@ -1417,10 +1588,34 @@ public static class ZeusEndpoints
             return Results.Ok(new { status = "disconnected" });
         });
 
-        app.MapPost("/api/disconnect", async (RadioService r, HttpContext ctx) =>
+        app.MapPost("/api/disconnect/p3", async (
+            Protocol3SidecarBridge sidecar,
+            RadioService radio,
+            HttpContext ctx) =>
+        {
+            log.LogInformation("api.disconnect.p3");
+            await sidecar.DisconnectAsync(ctx.RequestAborted);
+            if (radio.IsProtocol3Active)
+                radio.MarkProtocol3Disconnected();
+            return Results.Ok(new { status = "disconnected" });
+        });
+
+        app.MapGet("/api/protocol3/sidecar", (Protocol3SidecarBridge sidecar) =>
+            Results.Ok(sidecar.Status));
+
+        app.MapPost("/api/disconnect", async (
+            RadioService r,
+            Protocol3SidecarBridge sidecar,
+            HttpContext ctx) =>
         {
             log.LogInformation("api.disconnect");
-            return await r.DisconnectAsync(ctx.RequestAborted);
+            if (r.IsProtocol3Active)
+            {
+                await sidecar.DisconnectAsync(ctx.RequestAborted);
+                r.MarkProtocol3Disconnected();
+                return Results.Ok(r.Snapshot());
+            }
+            return Results.Ok(await r.DisconnectAsync(ctx.RequestAborted));
         });
 
         app.MapPost("/api/vfo", (VfoSetRequest req, RadioService r) =>
@@ -1448,8 +1643,8 @@ public static class ZeusEndpoints
         // an extra hardware DDC. Only supplied fields change.
         app.MapPost("/api/receivers/{index:int}", (int index, ReceiverSetRequest req, RadioService r, KiwiSdrService kiwi) =>
         {
-            if (index < 0 || index >= Zeus.Contracts.WireContract.MaxReceivers)
-                return Results.BadRequest(new { error = $"receiver index out of range (0..{Zeus.Contracts.WireContract.MaxReceivers - 1})" });
+            if (index < 0 || index > Zeus.Contracts.WireContract.KiwiReceiverIndex)
+                return Results.BadRequest(new { error = $"receiver index out of range (0..{Zeus.Contracts.WireContract.KiwiReceiverIndex})" });
             // The reserved Kiwi slot is a remote receiver, not a hardware DDC:
             // route tuning/mode/filter to the Kiwi service (enable/disable + URL
             // live on /api/kiwi). Returns the same StateDto so the projected Kiwi
@@ -1482,8 +1677,8 @@ public static class ZeusEndpoints
         // chkRX2Mute — silences only this receiver's contribution to the mix.
         app.MapPost("/api/receivers/{index:int}/mute", (int index, MuteSetRequest req, RadioService r, KiwiSdrService kiwi) =>
         {
-            if (index < 0 || index >= Zeus.Contracts.WireContract.MaxReceivers)
-                return Results.BadRequest(new { error = $"receiver index out of range (0..{Zeus.Contracts.WireContract.MaxReceivers - 1})" });
+            if (index < 0 || index > Zeus.Contracts.WireContract.KiwiReceiverIndex)
+                return Results.BadRequest(new { error = $"receiver index out of range (0..{Zeus.Contracts.WireContract.KiwiReceiverIndex})" });
             log.LogInformation("api.receivers.mute index={Index} muted={Muted}", index, req.Muted);
             if (index == Zeus.Contracts.WireContract.KiwiReceiverIndex)
             {
@@ -1594,6 +1789,8 @@ public static class ZeusEndpoints
         // secondaries (shared NCO) / CTUN-off / disabled — see RequestSecondaryLo.
         app.MapPost("/api/receivers/{index:int}/lo", (int index, RadioLoSetRequest req, RadioService r, DspPipelineService pipe, KiwiSdrService kiwi) =>
         {
+            if (index < 0 || index > Zeus.Contracts.WireContract.KiwiReceiverIndex)
+                return Results.BadRequest(new { error = $"receiver index out of range (0..{Zeus.Contracts.WireContract.KiwiReceiverIndex})" });
             if (req.Hz < 0 || req.Hz > 60_000_000)
             {
                 log.LogInformation("api.receivers.lo rejected index={Index} hz={Hz}", index, req.Hz);

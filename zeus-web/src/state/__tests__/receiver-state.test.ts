@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 import { describe, expect, it } from 'vitest';
-import { KIWI_RECEIVER_INDEX, receiverLabel } from '../receiver-state';
+import { KIWI_RECEIVER_INDEX, MAX_HARDWARE_RECEIVERS, receiverLabel } from '../receiver-state';
+
+describe('receiver constants', () => {
+  it('keeps Kiwi outside the ten hardware receiver slots', () => {
+    expect(MAX_HARDWARE_RECEIVERS).toBe(10);
+    expect(KIWI_RECEIVER_INDEX).toBe(MAX_HARDWARE_RECEIVERS);
+  });
+});
 
 describe('receiverLabel', () => {
   it('falls back to a 1-based RX{n} label when name is null', () => {

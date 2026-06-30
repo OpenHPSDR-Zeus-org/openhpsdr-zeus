@@ -704,8 +704,10 @@ public class DspPipelineService : BackgroundService,
     // every DDC once B3/B4 wire the per-receiver state + UI. Today only slot 1 is
     // ever activated (Rx2Enabled), so behaviour is identical to the previous
     // hardcoded RX1/RX2 pair. ChannelId is read/written via Volatile on the hot
-    // path exactly as the old _rx2ChannelId was.
-    internal const int MaxReceivers = Zeus.Protocol2.Protocol2Client.MaxRxDdc;
+    // path exactly as the old _rx2ChannelId was. Size to the shared hardware
+    // receiver contract (10) rather than the P2 wire ceiling (8) so Protocol 3
+    // can expose every G2 receiver without another DSP array refactor.
+    internal const int MaxReceivers = Zeus.Contracts.WireContract.MaxReceivers;
     private sealed class SecondaryRx
     {
         public int ChannelId = -1; // -1 = inactive; Volatile.Read/Write(ref ChannelId)
@@ -5824,7 +5826,7 @@ public class DspPipelineService : BackgroundService,
             _mixSlices[mixSliceCount++] = new RxAudioSlice(sec.AudioBuf, n);
         }
 
-        // Kiwi slice (RxId 7): an INDEPENDENT remote receiver that rides the same
+        // Kiwi slice: an INDEPENDENT remote receiver that rides the same
         // RX1-clocked mix bus as the hardware secondaries. Drain at most
         // audioSampleCount samples so it's fed at exactly the RX rate (its own
         // clock differs from the radio ADC; IKiwiAudioBus.ReadAudio caps buffered
