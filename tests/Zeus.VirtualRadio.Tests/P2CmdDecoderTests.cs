@@ -50,6 +50,32 @@ public class P2CmdDecoderTests
     }
 
     [Fact]
+    public void DecodeCmdRx_G2eBurst_HermesC10Decoder_DetectsByte1363Mux()
+    {
+        // The G2E (HermesC10) burst is byte-for-byte the 10E burst (RxBaseDdc is
+        // DDC0 for both single-ADC Hermes-class boards), so a decoder constructed
+        // for HermesC10 must detect the same byte-1363 Mux arm from the real
+        // HermesC10 composer. This pins the emulator's G2E board parameterization
+        // against the client's actual G2E wire.
+        byte[] p = Protocol2Client.ComposeCmdRxBuffer(
+            seq: 1, numAdc: 1, sampleRateKhz: 192, psEnabled: true,
+            boardKind: HpsdrBoardKind.HermesC10,
+            adcDitherEnabled: false, adcRandomEnabled: false,
+            rx2Enabled: false, g2eFeedbackBurst: true);
+
+        Assert.Equal((byte)0x02, p[1363]);
+
+        var state = new HostCommandState();
+        var events = new P2CmdDecoder(HpsdrBoardKind.HermesC10)
+            .Decode(P2Wire.CmdRxPort, p, state);
+
+        Assert.NotEmpty(events);
+        Assert.True(state.PsArmedBurst);
+        Assert.Equal((byte)1, state.NumAdc);
+        Assert.Equal(192, state.SampleRateKhz);
+    }
+
+    [Fact]
     public void DecodeCmdRx_Rest_NoMux_ReadsNegotiatedRate()
     {
         byte[] p = Protocol2Client.ComposeCmdRxBuffer(

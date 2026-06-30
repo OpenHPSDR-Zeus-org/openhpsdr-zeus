@@ -72,6 +72,17 @@ public sealed class Protocol2Engine : IVirtualRadio
     private long _cmdPacketsReceived;
     private long _psFeedbackPacketsSent;
 
+    // Latches true the first time the hi-priority status raises ADC overload
+    // while the PS time-mux burst is armed — i.e. a keyed, PS-armed burst whose
+    // byte-59 (Angelia_atten_Tx0) protective seed was NOT pushed by the host, so
+    // the TX-DAC reference + PA coupler hit the single RX ADC at < the protective
+    // floor. This is the exact first-key-down ADC-overload condition a real
+    // G2E/10E would raise and that bench verification (#289) must confirm. The
+    // 10E host path seeds byte 59 to 31 dB (clears it); the G2E host path does
+    // NOT yet seed it (SeedsTxAdcProtection excludes HermesC10), so this latches
+    // on a G2E PS burst — the observable signature of the open byte-59 gap.
+    private volatile bool _psAdcOverloadLatched;
+
     // De-dup edge-trigger for CommandDecoded (steady re-sends of the same
     // command should not flood observers).
     private readonly Dictionary<string, string> _lastSummaryByKind = new();
@@ -376,6 +387,7 @@ public sealed class Protocol2Engine : IVirtualRadio
             // the DAC feedback into the only RX ADC at 0 dB → ADC overload. A
             // correctly-seeded host clears it.
             byte overload = (feedback && txAttn < TxAdcProtectFloorDb) ? (byte)0x01 : (byte)0x00;
+            if (overload != 0) _psAdcOverloadLatched = true;
 
             byte[] packet = _hiPriEncoder.Build(seq++, tel, ptt: mox, pllLocked: true, overload);
             try
@@ -433,4 +445,15 @@ public sealed class Protocol2Engine : IVirtualRadio
 
     /// <summary>Count of PS feedback packets streamed on DDC0.</summary>
     internal long PsFeedbackPacketsSent => Interlocked.Read(ref _psFeedbackPacketsSent);
+
+    /// <summary>
+    /// True once the emulator has raised ADC overload in the hi-priority status
+    /// during a PS-armed keyed burst whose byte-59 protective seed was below the
+    /// floor — the first-key-down ADC-overload signature of a single-ADC time-mux
+    /// board without the byte-59 (Angelia_atten_Tx0) seed (test hook). A
+    /// correctly-seeded host (the 10E path, byte 59 = 31) never trips this; the
+    /// G2E host path does NOT seed byte 59, so it trips — surfacing the open,
+    /// KB2UKA-gated safety gap for an emulator-only bench.
+    /// </summary>
+    internal bool PsAdcOverloadLatched => _psAdcOverloadLatched;
 }
