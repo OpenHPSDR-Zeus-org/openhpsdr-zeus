@@ -998,6 +998,28 @@ public sealed class Protocol1Client : IProtocol1Client
                 {
                     return;
                 }
+                catch (SocketException ex)
+                {
+                    // Issue #1204: any other SocketException (NetworkReset,
+                    // ConnectionReset, NetworkDown, HostUnreachable, etc.) used
+                    // to fall through the inner try with no catch, killing the
+                    // RX thread silently via the outer finally and leaving
+                    // RadioService in a phantom-Connected state. Windows
+                    // surfaces NetworkReset on link-local APIPA adapters when
+                    // NIC power-management resets the adapter after a long
+                    // session — the operator-visible symptom is the whole
+                    // backend going quiet (no audio, no waterfall, buttons
+                    // still draw but nothing happens). Log the error and fire
+                    // Disconnected so RadioService tears down cleanly and the
+                    // operator can reconnect.
+                    _log.LogWarning(
+                        ex,
+                        "p1.rx.error code={Code} — RX socket failed; firing Disconnected",
+                        ex.SocketErrorCode);
+                    try { Disconnected?.Invoke(); }
+                    catch (Exception handlerEx) { _log.LogWarning(handlerEx, "p1.rx Disconnected handler threw"); }
+                    return;
+                }
                 consecutiveTimeouts = 0;
 
                 if (n != PacketParser.PacketLength) continue;
