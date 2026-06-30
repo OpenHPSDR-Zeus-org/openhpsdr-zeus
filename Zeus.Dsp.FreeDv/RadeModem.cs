@@ -67,6 +67,11 @@ public sealed class RadeModem : IDisposable
     private short[] _rxPcm = new short[256];           // int16 PCM @16k from the decoder
     private float[] _rxSpeechFloat = new float[256];   // PCM as float
     private float[] _rxInterp = new float[256];        // 48k after wideband interpolation
+    // Sync-driven output squelch. RADE has NO codec2-style SNR squelch, so this
+    // is the ONLY thing that mutes the FARGAN decoder's noise-driven output when
+    // the far station unkeys — without it you hear an R2D2 tail every un-key.
+    // Owned by the RX hot path; reset in RetireRx.
+    private readonly RxSquelchGate _rxGate = RxSquelchGate.Default(RadeResampler.FsHigh);
     private int _ninMax;                               // cached at open
     private readonly byte[] _eooScratch = new byte[CallsignMax + 1]; // hot-path EOO fetch buffer
 
@@ -82,6 +87,9 @@ public sealed class RadeModem : IDisposable
     private float[] _txIqOut = new float[2 * 1024];     // interleaved complex modem IQ from the encoder
     private float[] _txModemReal = new float[1024];     // the real lane (transmitted SSB audio @8k)
     private float[] _txInterp = new float[2048];        // 48k after interpolation
+    // Pre-vocoder mic noise gate: drives the mic to silence during pauses so
+    // rade_tx emits clean silence frames, not vocoded hiss. Reset in RetireTx/FlushTx.
+    private readonly MicNoiseGate _micGate = MicNoiseGate.Default(RadeResampler.FsHigh);
     private int _txNSpeech;                             // cached at open: int16 @16k per tx call
     private int _txNTxOut;                              // cached at open: modem samples per tx call
     private int _txNEooOut;                             // cached at open: modem samples in the EOO frame
@@ -277,6 +285,12 @@ public sealed class RadeModem : IDisposable
             // (decoded speech replaces the demod audio, exactly like FreeDvModem).
             int filled = _rxOut48.Read(block48k);
             if (filled < block48k.Length) block48k.Slice(filled).Clear();
+
+            // Sync-gate the decoded speech (RADE's only squelch): smooth fade-out
+            // on loss of sync kills the end-of-over tail; flush the FIFO when fully
+            // closed so no stale-noise backlog plays at the head of the next over.
+            if (_rxGate.Process(block48k, _synced))
+                _rxOut48.Clear();
         }
         finally
         {
@@ -301,6 +315,10 @@ public sealed class RadeModem : IDisposable
 
             int nspeech = _txNSpeech, ntx = _txNTxOut;
             if (nspeech <= 0 || ntx <= 0) { block48k.Clear(); return; }
+
+            // Gate the mic to silence during pauses so rade_tx encodes clean
+            // silence frames instead of vocoding background hiss into garble.
+            _micGate.Process(block48k);
 
             // 1. decimate mic 48k -> 16k speech into the speech ring.
             int n16 = _txDown.Process(block48k, _txDecScratch);
@@ -367,6 +385,7 @@ public sealed class RadeModem : IDisposable
             SpinUntilIdle(ref _txBusy);
             _tx16In.Clear(); _txOut48.Clear();
             _txDown.Reset(); _txUp.Reset();
+            _micGate.Reset();
             Volatile.Write(ref _txRade, tx);
         }
     }
@@ -528,6 +547,7 @@ public sealed class RadeModem : IDisposable
         if (old != IntPtr.Zero) RadeNativeMethods.zeus_rade_close(old);
         _rx8In.Clear(); _rxOut48.Clear();
         _rxDown.Reset(); _rxUp.Reset();
+        _rxGate.Reset();
         Volatile.Write(ref _rade, replacement);
     }
 
@@ -540,6 +560,7 @@ public sealed class RadeModem : IDisposable
         if (old != IntPtr.Zero) RadeNativeMethods.zeus_rade_close(old);
         _tx16In.Clear(); _txOut48.Clear();
         _txDown.Reset(); _txUp.Reset();
+        _micGate.Reset();
         Volatile.Write(ref _txRade, replacement);
     }
 

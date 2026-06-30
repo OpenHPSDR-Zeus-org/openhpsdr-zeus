@@ -30,7 +30,14 @@ internal static class RadeResampler
     internal const int Factor = 3;            // 48000 / 16000
     internal const int FsHigh = 48000;
     internal const int FsLow = 16000;
-    private const int TapsPerPhase = 20;      // -> 60-tap prototype (divisible by 3)
+    // 32 taps/phase -> 96-tap prototype (divisible by 3). The 60-tap version had a
+    // ~2.6 kHz Hamming transition band: it was only flat to ~5.5 kHz (rolling off
+    // FARGAN's brilliance band → dull/"nasal" decoded speech on RX) AND its skirt
+    // spilled past the 8 kHz Nyquist, aliasing on the 48→16 kHz mic decimation.
+    // 96 taps tightens the transition to ~1.6 kHz: passband flat to ~6.5 kHz with
+    // the stopband reached below 8 kHz, so more presence survives and the mic
+    // anti-alias is clean. Cost is ~36 extra MACs per output sample — trivial.
+    private const int TapsPerPhase = 32;      // -> 96-tap prototype (divisible by 3)
     private const double CutoffHz = 7200.0;   // wideband: below 8 kHz output Nyquist, keep FARGAN HF
 
     // Prototype low-pass, normalized so DC gain == 1.
