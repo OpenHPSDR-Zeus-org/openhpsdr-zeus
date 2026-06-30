@@ -50,3 +50,17 @@ using System.Runtime.CompilerServices;
 // delegates to ControlFrame's pure antenna-bit helpers so the firewall and the
 // wire path share one copy of the math — byte-identical by construction.
 [assembly: InternalsVisibleTo("Zeus.Server.Hosting")]
+// The virtual-radio emulator is the MIRROR side of these wire codecs: it
+// decodes EP2 (ControlFrame) and encodes EP6 (PacketParser). It consumes the
+// framing CONSTANTS / byte offsets / CcRegister + CcState shapes directly so
+// the emulator and the real parsers can never drift — any wire-format change
+// breaks the emulator's compile or its round-trip tests. See the Virtual HPSDR
+// Radio plan (Phase 0/1).
+[assembly: InternalsVisibleTo("Zeus.VirtualRadio")]
+// The emulator's anti-drift round-trip tests live in Zeus.VirtualRadio.Tests and
+// must call the REAL parsers (PacketParser.TryParsePacket) and encoders
+// (ControlFrame.BuildDataPacket / WriteCcBytes) directly to prove the emulator's
+// EP6 encode / EP2 decode invert them byte-for-byte. Without this the round-trip
+// guarantee can only be self-consistent, not validated against Zeus's own wire
+// code. INTEGRATOR: added by the wire-codec implementer; confirm placement.
+[assembly: InternalsVisibleTo("Zeus.VirtualRadio.Tests")]

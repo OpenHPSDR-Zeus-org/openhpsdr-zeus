@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The wire-codec round-trip / calibration-inversion unit tests construct
+         the emulator's internal types (Ep6Encoder, Ep2Decoder, RfTelemetryModel).
+         INTEGRATOR: if another implementer also added this line, dedupe. -->
+    <InternalsVisibleTo Include="Zeus.VirtualRadio.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Zeus.Contracts\Zeus.Contracts.csproj" />
+    <ProjectReference Include="..\Zeus.Protocol1\Zeus.Protocol1.csproj" />
+    <ProjectReference Include="..\Zeus.Server.Hosting\Zeus.Server.Hosting.csproj" />
+    <ProjectReference Include="..\Zeus.Dsp\Zeus.Dsp.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 10.0.7 floor: this project references Zeus.Server.Hosting → SIPSorcery, which
+         requires Logging.Abstractions >= 10.0.7; pinning 10.0.0 here trips NU1605. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.7" />
+  </ItemGroup>
+
+</Project>
