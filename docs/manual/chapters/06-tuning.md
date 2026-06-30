@@ -53,7 +53,7 @@ A practical habit: leave it on **100 Hz or 10 Hz** for casual SSB tuning, drop t
 
 ### Band selection
 
-The **Band** picker is a row of buttons for the HF bands: **160 · 80 · 60 · 40 · 30 · 20 · 17 · 15 · 12 · 10** meters. The button for the band you're currently on is highlighted. (On a narrow window or phone the buttons collapse into a dropdown.)
+The **Band** picker is a row of buttons for the HF bands: **160 · 80 · 60 · 40 · 30 · 20 · 17 · 15 · 12 · 11 · 10 · 6** meters. (**11 m** is the CB / 27 MHz segment, provided for export/freeband operation where you're licensed for it, and **6 m** reaches up to 54 MHz — both new in this release.) The button for the band you're currently on is highlighted. (On a narrow window or phone the buttons collapse into a dropdown.)
 
 Click a band button and Zeus jumps you to that band. Where it lands is the clever part — it uses your **band memory** (next section). The first time you visit a band it drops you on a sensible default near the popular activity in that band's segment.
 
@@ -65,7 +65,7 @@ You don't have to manually save band memories in Zeus — it does it for you. As
 
 How it behaves:
 
-- Memory is stored **per band** — one remembered spot for each of 160 through 10 m.
+- Memory is stored **per band** — one remembered spot for each band from 160 m through 6 m (including 11 m).
 - It captures both **frequency and mode** (e.g. 14.074 MHz in DIGU on 20 m, 7.180 MHz in LSB on 40 m).
 - The save is debounced, so spinning the dial doesn't constantly hammer the radio; it settles a moment after you stop.
 - Memories are kept on the server and **persist across restarts**, so your favorite spots are still there next session.

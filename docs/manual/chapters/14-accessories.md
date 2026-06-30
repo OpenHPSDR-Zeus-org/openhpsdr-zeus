@@ -300,6 +300,32 @@ need a virtual serial bridge to the CAT socket: on Windows pair `com0com` with
 virtual COM port as if it were a real TS-2000. Two CAT clients at once means
 two listeners on two ports — the network equivalent of two COM ports.
 
+### MIDI & Stream Deck Control
+
+Zeus can be driven from a **MIDI control surface** — a deck of physical knobs,
+faders, and buttons — or from an **Elgato Stream Deck**, so the controls you
+reach for most live under your fingers instead of the mouse. You set it all up
+under **Settings → MIDI**.
+
+The heart of the panel is **Learn** mode: pick the Zeus action you want
+(tuning the VFO, switching band or mode, AF/RF gain, drive, filter width, MOX,
+and many more), click **Learn**, and then move the physical control you want to
+bind — Zeus captures it and the mapping is made. Knobs and faders map to
+continuous controls (gain, frequency); buttons map to toggles and momentary
+actions. A separate **Stream Deck** grid lets you assign Zeus commands to the
+deck's LCD keys the same way.
+
+A few practical notes:
+
+- **MIDI input** (reading a controller) is supported on **Windows and macOS**.
+  The **Stream Deck** path uses the device's HID interface and works on
+  **Windows, macOS, and Linux**.
+- If no device is plugged in, the panel simply shows nothing to bind — it never
+  blocks startup.
+- **Arming PureSignal is deliberately left off the mappable-action list.**
+  PureSignal is a transmit-safety system that you arm by hand on purpose, so it
+  is never bound to a knob or key that could trigger it by accident.
+
 ### Voyeur — Unattended Net Monitor (plugin)
 
 **Voyeur** is your automatic net secretary. Point it at a net and walk away:
@@ -316,6 +342,16 @@ design point: transcription and summarization run offline, and the only thing
 that leaves your computer is the QRZ lookups you already make. If you used an
 earlier in-core build of Voyeur, the plugin adopts your existing logs and
 models automatically.
+
+> **Update Voyeur to v1.1.1.** If you already run Voyeur, open **Settings →
+> Plugins**, find **Voyeur Mode · Net Monitor**, and **Update** — this release's
+> Voyeur adds a **selectable speech engine** (the proven **Whisper**, plus an
+> opt-in **NVIDIA Parakeet** engine with optional GPU acceleration) and
+> **watchword alerts** that e-mail or push you — with a clip, the time, and the
+> frequency — the moment your callsign or a keyword you set is heard on the net.
+> Whisper stays the default; switch to Parakeet in Voyeur's own settings if you
+> want to try it. Restart Zeus when prompted, and the updated engines download
+> in-app on first enable; your existing archive and settings carry over.
 
 ### RF2K-S Amplifier (plugin)
 
