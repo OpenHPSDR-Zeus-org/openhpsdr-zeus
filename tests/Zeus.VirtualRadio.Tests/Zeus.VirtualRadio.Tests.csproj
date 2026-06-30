@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Zeus.VirtualRadio\Zeus.VirtualRadio.csproj" />
+    <ProjectReference Include="..\..\Zeus.VirtualRadio.Host\Zeus.VirtualRadio.Host.csproj" />
+    <ProjectReference Include="..\..\Zeus.Protocol1\Zeus.Protocol1.csproj" />
+    <ProjectReference Include="..\..\Zeus.Server.Hosting\Zeus.Server.Hosting.csproj" />
+    <ProjectReference Include="..\..\Zeus.Contracts\Zeus.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>
