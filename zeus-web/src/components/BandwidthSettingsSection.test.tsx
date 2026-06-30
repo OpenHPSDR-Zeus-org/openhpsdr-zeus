@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// The live bandwidth control must not offer wide P2 DDC rates unless both the
+// The live bandwidth control must not offer wide DDC rates unless both the
 // protocol and board capability fingerprint allow them.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -81,6 +81,19 @@ describe('BandwidthSettingsSection', () => {
     expect(container.textContent).toContain('max 1536 kHz');
   });
 
+  it('unlocks the full P3 ladder for a G2-class 1536 kHz board', () => {
+    seedRadioCaps({ maxRxSampleRateHz: 1_536_000 });
+    useConnectionStore.setState({ connectedProtocol: 'P3' });
+    act(() => {
+      root.render(<BandwidthSettingsSection />);
+    });
+
+    const wide = rateButton(container, '1536');
+    expect(wide.disabled).toBe(false);
+    expect(wide.title).toBe('Set DDC bandwidth to 1536 kHz');
+    expect(container.textContent).toContain('max 1536 kHz');
+  });
+
   it('keeps 768/1536 locked on Protocol 1 even when the board is wideband-capable', () => {
     seedRadioCaps({ maxRxSampleRateHz: 1_536_000 });
     useConnectionStore.setState({ connectedProtocol: 'P1' });
@@ -90,7 +103,7 @@ describe('BandwidthSettingsSection', () => {
 
     const wide = rateButton(container, '1536');
     expect(wide.disabled).toBe(true);
-    expect(wide.title).toBe('1536 kHz needs a Protocol-2 connection');
+    expect(wide.title).toBe('1536 kHz needs a Protocol-2 or Protocol-3 connection');
     expect(container.textContent).toContain('max 384 kHz');
   });
 });

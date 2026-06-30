@@ -64,6 +64,33 @@ public sealed class RadioServiceUnifiedReceiverWriteTests : IDisposable
     }
 
     [Fact]
+    public void Snapshot_DisconnectedState_CanRepresentTenHardwareReceivers()
+    {
+        using var radio = BuildRadio();
+
+        var s = radio.SetReceiver(9, enabled: true, vfoHz: 28_074_000);
+
+        Assert.Equal(WireContract.MaxReceivers, s.MaxReceivers);
+        Assert.Equal(10, s.Receivers!.Where(r => r.Index < WireContract.MaxReceivers).Count());
+        Assert.Contains(s.Receivers!, r => r.Index == 9 && r.Enabled && r.VfoHz == 28_074_000);
+        Assert.Equal(WireContract.MaxReceivers, WireContract.KiwiReceiverIndex);
+    }
+
+    [Fact]
+    public void Snapshot_Protocol2G2_AdvertisesSixReceivers()
+    {
+        using var radio = BuildRadio();
+
+        radio.MarkProtocol2Connected(
+            "127.0.0.1:1024",
+            192_000,
+            client: null,
+            boardKind: HpsdrBoardKind.OrionMkII);
+
+        Assert.Equal(6, radio.Snapshot().MaxReceivers);
+    }
+
+    [Fact]
     public void SetReceiver_Rx2_RoutesEnableVfoModeFilterAndAf()
     {
         using var radio = BuildRadio();

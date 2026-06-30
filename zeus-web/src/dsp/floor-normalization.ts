@@ -43,9 +43,9 @@ const floorByRx = new Map<number, number>();
 // must NOT help DEFINE it — co-anchoring drags the hardware panes toward the
 // Kiwi's (often very different) floor and, with just RX1 + Kiwi, leaves BOTH only
 // half-aligned, so the Kiwi pane washes out bright instead of matching RX1's dark
-// floor (operator report). Held as a local literal to avoid a dsp→state import
+// floor (operator report). Held as a local literal to avoid a dsp->state import
 // cycle.
-const KIWI_RX_INDEX = 7;
+const KIWI_RX_INDEX = 10;
 
 // EMA smoothing for the per-receiver floor — fast enough to settle on a band
 // change within a couple of seconds, slow enough that the colours don't jitter

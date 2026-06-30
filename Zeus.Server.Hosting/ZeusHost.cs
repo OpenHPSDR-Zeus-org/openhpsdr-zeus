@@ -323,6 +323,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<
             Zeus.Protocol2.Discovery.IRadioDiscovery,
             Zeus.Protocol2.Discovery.RadioDiscoveryService>();
+        builder.Services.AddSingleton<Protocol3PresenceProbe>();
         // TxIqRing is shared: TxAudioIngest writes modulated IQ into it, Protocol1Client
         // (constructed inside RadioService) reads from it for the EP2 payload.
         builder.Services.AddSingleton<Zeus.Protocol1.TxIqRing>();

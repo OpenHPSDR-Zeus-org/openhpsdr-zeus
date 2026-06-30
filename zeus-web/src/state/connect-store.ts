@@ -18,7 +18,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { BoardKind } from '../api/radio';
 
-export type ProtocolChoice = 'P1' | 'P2';
+export type ProtocolChoice = 'P1' | 'P2' | 'P3';
 export type SampleRate = 48_000 | 96_000 | 192_000 | 384_000 | 768_000 | 1_536_000;
 export type ConnectMode = 'discover' | 'manual';
 

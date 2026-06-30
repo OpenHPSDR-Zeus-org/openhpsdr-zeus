@@ -37,14 +37,15 @@ function rx(index: number, enabled: boolean, adcSource = 0): ReceiverDto {
 }
 
 function setup(opts: {
-  protocol?: 'P1' | 'P2' | null;
+  protocol?: 'P1' | 'P2' | 'P3' | null;
   receivers?: ReceiverDto[];
+  maxReceivers?: number;
 }) {
   useConnectionStore.setState({
     status: 'Connected',
     connectedProtocol: opts.protocol ?? 'P2',
     receivers: opts.receivers ?? [rx(0, true)],
-    maxReceivers: 8,
+    maxReceivers: opts.maxReceivers ?? 6,
   });
 }
 
@@ -53,11 +54,11 @@ describe('ReceiversPanel', () => {
     vi.clearAllMocks();
   });
 
-  it('gates multi-DDC on a Protocol-2 connection', () => {
+  it('gates multi-DDC on a wide-DDC protocol connection', () => {
     setup({ protocol: 'P1' });
     const { container, unmount } = render(createElement(ReceiversPanel));
-    expect(container.textContent).toContain('Protocol 2 only');
-    // No exposed-count buttons on a non-P2 radio.
+    expect(container.textContent).toContain('Protocol 2 / 3 only');
+    // No exposed-count buttons on a non-P2/P3 radio.
     expect(container.querySelector('[aria-label="Exposed receiver count"]')).toBeNull();
     unmount();
   });
@@ -77,6 +78,18 @@ describe('ReceiversPanel', () => {
 
     // Exposing 3 enables index 2 (server contiguity turns on RX2..RX3).
     expect(setReceiver).toHaveBeenCalledWith(2, { enabled: true });
+    unmount();
+  });
+
+  it('exposes all ten receiver choices on Protocol 3', () => {
+    setup({ protocol: 'P3', receivers: [rx(0, true)], maxReceivers: 10 });
+    const { container, unmount } = render(createElement(ReceiversPanel));
+
+    const buttons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[aria-label="Exposed receiver count"] button'),
+    ).map((b) => b.textContent);
+
+    expect(buttons).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']);
     unmount();
   });
 
