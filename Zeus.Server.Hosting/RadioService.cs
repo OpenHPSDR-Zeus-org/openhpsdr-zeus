@@ -4478,6 +4478,7 @@ public sealed class RadioService : IDisposable
     private string? ConnectedProtocolLocked()
     {
         if (_p2Active) return "P2";
+        if (_p3Active) return "P3";
         if (_activeClient is not null) return "P1";
         return null;
     }

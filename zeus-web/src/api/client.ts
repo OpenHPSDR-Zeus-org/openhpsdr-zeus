@@ -453,7 +453,7 @@ export type RadioStateDto = {
   maxReceivers?: number;
   // Active backend wire protocol for the current connection. Present on v2+
   // servers so reloads can recover protocol-gated Settings panels.
-  connectedProtocol?: 'P1' | 'P2' | null;
+  connectedProtocol?: 'P1' | 'P2' | 'P3' | null;
 };
 
 // Mirrors Zeus.Contracts.ReceiverDto — per-receiver (per-DDC) state. Index 0 is
@@ -2441,10 +2441,10 @@ function normalizeReceiver(raw: unknown, fallbackIndex: number): ReceiverDto {
   };
 }
 
-function normalizeConnectedProtocol(raw: unknown): 'P1' | 'P2' | null | undefined {
+function normalizeConnectedProtocol(raw: unknown): 'P1' | 'P2' | 'P3' | null | undefined {
   if (raw === undefined) return undefined;
   if (raw === null) return null;
-  return raw === 'P1' || raw === 'P2' ? raw : null;
+  return raw === 'P1' || raw === 'P2' || raw === 'P3' ? raw : null;
 }
 
 export function normalizeState(raw: unknown): RadioStateDto {
