@@ -1281,31 +1281,9 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                           >
                             Take over
                           </button>
-                          {showP3Preview && (
-                            <button
-                              type="button"
-                              onClick={() => handleConnect(r, 'P3')}
-                              disabled={inflight}
-                              title={PROTOCOL3_CONNECT_TITLE}
-                              className="btn sm active"
-                            >
-                              P3
-                            </button>
-                          )}
                         </div>
                       ) : (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          {showP3Preview && (
-                            <button
-                              type="button"
-                              onClick={() => handleConnect(r, 'P3')}
-                              disabled={inflight}
-                              title={PROTOCOL3_CONNECT_TITLE}
-                              className="btn sm active"
-                            >
-                              P3
-                            </button>
-                          )}
                           <button
                             type="button"
                             onClick={() => handleConnect(r)}
