@@ -1,0 +1,200 @@
+name: Build Voyeur Sherpa/Parakeet Engines
+
+# Repacks the sherpa-onnx CPU CLI + the NVIDIA Parakeet-TDT-0.6B model into the
+# per-RID .zip assets the Voyeur plugin's in-app installer fetches, and (optionally)
+# publishes them under the engine release tag.
+#
+# WHY A REPACK (not a from-source build like build-voyeur-engines.yml): sherpa-onnx
+# ships prebuilt, permissively-licensed CPU binaries per platform, but as `.tar.bz2`.
+# The .NET BCL has NO bzip2 decoder, and the plugin's installer extracts with
+# System.IO.Compression.ZipFile — so we download the upstream .tar.bz2 here, FLATTEN
+# the executable + its shared libraries into one directory, patch the run-path so the
+# binary finds its sibling libs after a flat extract, and re-emit a per-RID `.zip`.
+# The plugin's VoyeurInstallService then reuses its existing extract path unchanged.
+#
+# DRAFT — NEEDS BENCH VERIFICATION before the engines are tagged live. In particular:
+#   * confirm SHERPA_VER below is the intended pinned release (verify the asset names);
+#   * exec-test sherpa-onnx-offline + sherpa-onnx-vad from a FLAT extract on EACH rid,
+#     especially linux-arm64 (Raspberry Pi) — the CPU floor;
+#   * decide the engine-host repo (see PUBLISH_REPO) so the URLs match the plugin's
+#     VoyeurInstallService.EngineBase (currently Kb2uka/openhpsdr-zeus).
+# This is CPU-only (the Pi floor). Optional GPU (CUDA/CoreML/DirectML) bundles are a
+# deliberate follow-up, not in this workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Attach the repacked bundles to the engine release tag"
+        type: boolean
+        default: false
+      publish_repo:
+        description: "owner/repo that hosts the voyeur-engines release (must match the plugin's EngineBase)"
+        type: string
+        default: "Kb2uka/openhpsdr-zeus"
+
+env:
+  ENGINE_TAG: voyeur-engines-v1
+  # Pinned upstream sherpa-onnx release (Apache-2.0). VERIFY this is current and the
+  # asset names below resolve before publishing.
+  SHERPA_VER: v1.13.3
+  # Parakeet-TDT-0.6B-v2, int8 ONNX conversion by the sherpa-onnx project (model is
+  # CC-BY-4.0 — see monitors/Voyeur/ATTRIBUTIONS.md in the plugins repo).
+  PARAKEET_ASSET: sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2
+  PARAKEET_TAG: asr-models
+
+jobs:
+  # --------------------- sherpa-onnx CLI, per RID --------------------------
+  # The repack is pure file manipulation, so Linux + Windows bundles are all
+  # produced on Linux runners (patchelf can edit an arm64 ELF's RPATH from x64;
+  # Windows DLLs load from the executable's own directory, no run-path needed).
+  # Only the macOS bundles need a macOS runner for install_name_tool.
+  sherpa-linux-win:
+    name: sherpa ${{ matrix.rid }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            asset: linux-x64-shared
+            kind: elf
+          - rid: linux-arm64
+            asset: linux-aarch64-shared-cpu
+            kind: elf
+          - rid: win-x64
+            asset: win-x64-shared-MT-Release
+            kind: win
+          - rid: win-arm64
+            asset: win-arm64-shared-MT-Release
+            kind: win
+    steps:
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y curl tar bzip2 patchelf zip
+
+      - name: Download + flatten + repack
+        run: |
+          set -eux
+          url="https://github.com/k2-fsa/sherpa-onnx/releases/download/${SHERPA_VER}/sherpa-onnx-${SHERPA_VER}-${{ matrix.asset }}.tar.bz2"
+          curl -fL "$url" -o sherpa.tar.bz2
+          mkdir -p ex flat
+          tar -xjf sherpa.tar.bz2 -C ex
+          top="$(find ex -maxdepth 1 -mindepth 1 -type d | head -1)"
+
+          # We only ship the two CLIs Voyeur invokes (offline ASR + VAD) plus every
+          # shared library in the bundle — flattened into one directory so the
+          # installer's flat extract + flat probe finds them together.
+          if [ "${{ matrix.kind }}" = "win" ]; then
+            find "$top" \( -name 'sherpa-onnx-offline.exe' -o -name 'sherpa-onnx-vad.exe' \) -exec cp {} flat/ \;
+            find "$top" -name '*.dll' -exec cp {} flat/ \;
+          else
+            find "$top" \( -name 'sherpa-onnx-offline' -o -name 'sherpa-onnx-vad' \) -type f -exec cp {} flat/ \;
+            find "$top" \( -name '*.so' -o -name '*.so.*' \) -exec cp {} flat/ \;
+            # Robust RPATH: resolve sibling libs whether the consumer keeps a flat
+            # layout or re-nests. $ORIGIN covers the flat extract the plugin produces.
+            for b in flat/sherpa-onnx-offline flat/sherpa-onnx-vad flat/*.so flat/*.so.*; do
+              [ -f "$b" ] || continue
+              patchelf --set-rpath '$ORIGIN:$ORIGIN/lib:$ORIGIN/../lib' "$b" || true
+            done
+          fi
+
+          ls -lh flat
+          ( cd flat && zip -X "../sherpa-${{ matrix.rid }}.zip" . -r )
+          unzip -l "sherpa-${{ matrix.rid }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sherpa-${{ matrix.rid }}
+          path: sherpa-${{ matrix.rid }}.zip
+
+  # --------------------- sherpa-onnx CLI, macOS ----------------------------
+  sherpa-macos:
+    name: sherpa ${{ matrix.rid }}
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: osx-arm64
+            asset: osx-arm64-shared
+          - rid: osx-x64
+            asset: osx-x64-shared
+    steps:
+      - name: Download + flatten + repack
+        run: |
+          set -eux
+          url="https://github.com/k2-fsa/sherpa-onnx/releases/download/${SHERPA_VER}/sherpa-onnx-${SHERPA_VER}-${{ matrix.asset }}.tar.bz2"
+          curl -fL "$url" -o sherpa.tar.bz2
+          mkdir -p ex flat
+          tar -xjf sherpa.tar.bz2 -C ex
+          top="$(find ex -maxdepth 1 -mindepth 1 -type d | head -1)"
+          find "$top" \( -name 'sherpa-onnx-offline' -o -name 'sherpa-onnx-vad' \) -type f -exec cp {} flat/ \;
+          find "$top" -name '*.dylib' -exec cp {} flat/ \;
+          # Add @loader_path run-paths so each Mach-O finds its now-flat siblings.
+          for b in flat/*; do
+            [ -f "$b" ] || continue
+            install_name_tool -add_rpath @loader_path "$b" 2>/dev/null || true
+            install_name_tool -add_rpath @loader_path/lib "$b" 2>/dev/null || true
+          done
+          # Re-sign ad-hoc (rpath edits invalidate the linker's ad-hoc signature;
+          # Apple Silicon refuses to exec an invalid signature).
+          for b in flat/*; do codesign -f -s - "$b" 2>/dev/null || true; done
+          ls -lh flat
+          ( cd flat && zip -X "../sherpa-${{ matrix.rid }}.zip" . -r )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sherpa-${{ matrix.rid }}
+          path: sherpa-${{ matrix.rid }}.zip
+
+  # --------------------- Parakeet model (rid-agnostic) ---------------------
+  parakeet-model:
+    name: Parakeet model
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download + repack model
+        run: |
+          set -eux
+          url="https://github.com/k2-fsa/sherpa-onnx/releases/download/${PARAKEET_TAG}/${PARAKEET_ASSET}"
+          curl -fL "$url" -o parakeet.tar.bz2
+          mkdir -p ex flat
+          tar -xjf parakeet.tar.bz2 -C ex
+          top="$(find ex -maxdepth 1 -mindepth 1 -type d | head -1)"
+          # Ship the int8 graph + tokens, flat (drop test_wavs/ to save ~tens of MB).
+          find "$top" \( -name '*.onnx' -o -name 'tokens.txt' \) -exec cp {} flat/ \;
+          ls -lh flat
+          ( cd flat && zip -X "../parakeet-tdt-06b-int8.zip" . -r )
+          unzip -l parakeet-tdt-06b-int8.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parakeet-tdt-06b-int8
+          path: parakeet-tdt-06b-int8.zip
+
+  # --------------------------- Publish -------------------------------------
+  publish:
+    name: Publish engine bundles
+    if: ${{ inputs.publish }}
+    needs: [sherpa-linux-win, sherpa-macos, parakeet-model]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Upload to the engine release (matches the plugin's EngineBase)
+        env:
+          # A token with contents:write on inputs.publish_repo. github.token only
+          # works when publish_repo == this repo; otherwise set a PAT secret and
+          # reference it here. Flagged for the maintainer.
+          GH_TOKEN: ${{ secrets.ENGINE_RELEASE_TOKEN || github.token }}
+        run: |
+          set -eux
+          ls -lh dist
+          repo="${{ inputs.publish_repo }}"
+          gh release view "$ENGINE_TAG" --repo "$repo" >/dev/null 2>&1 || \
+            gh release create "$ENGINE_TAG" --repo "$repo" \
+              --title "Voyeur Mode engines ($ENGINE_TAG)" \
+              --notes "sherpa-onnx CPU CLI + Parakeet-TDT model bundles for Voyeur Mode, repacked from upstream by build-voyeur-sherpa-engines.yml." \
+              --prerelease
+          gh release upload "$ENGINE_TAG" dist/*.zip --repo "$repo" --clobber
