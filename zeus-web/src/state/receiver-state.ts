@@ -58,11 +58,16 @@ import {
  *  RX3+); `'A'`/`'B'` are legacy aliases for 0/1. */
 export type ReceiverKey = 'A' | 'B' | number;
 
+/** Maximum hardware receiver count the frontend contract can represent. The
+ *  server's state.maxReceivers carries the active protocol/board ceiling: P2 G2
+ *  reports 6, while P3-capable G2 firmware can report all 10. */
+export const MAX_HARDWARE_RECEIVERS = 10;
+
 /** Reserved high index for the KiwiSDR slice receiver (mirrors
- *  WireContract.KiwiReceiverIndex = MaxReceivers-1 = 7). It is a software
- *  receiver, not a hardware DDC — it never counts toward the multi-RX count
- *  stepper or the ADC-source list. */
-export const KIWI_RECEIVER_INDEX = 7;
+ *  WireContract.KiwiReceiverIndex = 10). It is a software receiver, not a
+ *  hardware DDC — it never counts toward the multi-RX count stepper or the
+ *  ADC-source list. */
+export const KIWI_RECEIVER_INDEX = 10;
 
 /** Operator-facing label for a receiver. Hardware DDCs carry no name and fall
  *  back to "RX{n}" (1-based); the Kiwi slice receiver carries "Kiwi". */
@@ -352,16 +357,10 @@ export function gangedReceiverAction(opts: {
 // the MULTI-RX toolbar toggle so both compose the same per-index endpoint calls
 // and honour the same practical ceiling.
 
-// Protocol ceiling is WireContract.MaxReceivers (8 DDCs), but the count that
-// actually streams on a G2/Saturn at the wide multi-DDC sample rates
-// (768/1536 kHz) is 6 — beyond that the radio's DDC throughput budget is
-// exceeded and the extra DDCs come up dead. Cap the operator-facing count here.
-export const PRACTICAL_MAX_RECEIVERS = 6;
-
 const DESIRED_COUNT_KEY = 'zeus.multiRx.desiredCount';
 
 function clampDesired(n: number): number {
-  return Math.min(Math.max(Math.round(n), 2), PRACTICAL_MAX_RECEIVERS);
+  return Math.min(Math.max(Math.round(n), 2), MAX_HARDWARE_RECEIVERS);
 }
 
 /** The operator's chosen multi-RX count, remembered across an off toggle and
@@ -395,7 +394,7 @@ export function setDesiredReceiverCount(n: number): void {
  */
 export async function setExposedReceiverCount(target: number): Promise<void> {
   const st = useConnectionStore.getState();
-  const effectiveMax = Math.min(st.maxReceivers, PRACTICAL_MAX_RECEIVERS);
+  const effectiveMax = Math.min(st.maxReceivers, MAX_HARDWARE_RECEIVERS);
   const n = Math.min(Math.max(Math.round(target), 1), effectiveMax);
   const applyState = st.applyState;
   if (n >= 2) setDesiredReceiverCount(n);

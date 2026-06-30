@@ -110,12 +110,10 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // both already use only byte[7]). There is no second enable byte — "10
     // DDCs" is not representable in standard P2. On Orion-family boards DDC0/1
     // are reserved for the PureSignal feedback pair when PS is armed, leaving 6
-    // user receivers; with PS off, all 8. The N-receiver pipeline keys off this
-    // constant so the ceiling is a single-line change if firmware ever extends
-    // the enable field. Sourced from Zeus.Contracts.WireContract.MaxReceivers
-    // so the wire foundation and the StateDto Receivers[] contract can never
-    // drift apart.
-    public const int MaxRxDdc = Zeus.Contracts.WireContract.MaxReceivers;
+    // user receivers; with PS off, all 8. Keep this P2 wire ceiling separate
+    // from WireContract.MaxReceivers, which is the shared state capacity for
+    // newer protocols such as P3.
+    public const int MaxRxDdc = Zeus.Contracts.WireContract.Protocol2MaxDdc;
 
     // RX IQ data arrives on UDP source ports RxDataPortBase + ddcIndex, i.e.
     // 1035 (DDC0) .. 1035 + MaxRxDdc - 1 (DDC7).
