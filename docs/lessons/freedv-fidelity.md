@@ -140,6 +140,36 @@ Validate: key RADE/700D into a dummy load with a second station decoding; confir
 no R2D2 tail when you unkey, and no garble when you pause mid-over. Confirm soft
 speech and word onsets are not clipped.
 
+## Objective fidelity testing (RADE methodology)
+
+RADE's upstream (drowe67/radae, "Testing RADE") insists results be **reproducible
+via CLI/objective metrics, not GUI/on-air listening** — calibrated stored-file
+channel sims scored by feature distortion (`loss.py`) and Whisper ASR WER, with
+documented SNR thresholds (V1 ≈ −2 dB AWGN, ~0 dB MPP). We adopt that discipline
+at the managed boundary so "nasal/artifacts" become measurable, not subjective:
+
+- **`RadeResamplerFidelityTests`** (deterministic, no native lib): single-bin DFT
+  magnitude response of the RADE 16↔48 kHz resampler. Asserts the passband is flat
+  through the **6 kHz presence band** (guards the 96-tap widening), images are
+  rejected (anti-imaging on RX), and out-of-band mic content doesn't alias
+  (anti-aliasing on the TX decimation). A hard regression guard on the filter.
+- **`RadeFidelityTests`** (native, skippable): end-to-end through the real
+  zeus_rade + FARGAN decoder. (1) decoded output carries energy and **does not
+  clip** — the objective answer to the "is the ×32768 shim scaling clipping?"
+  question (it is not, in practice; matches lpcnet_demo). (2) **the stop-talk gate
+  validated through the real decoder**: after a synced decode, pure band-noise
+  drives the decoded output to silence instead of an R2D2 tail.
+
+Gotcha encountered: `rade_sync()` is a debounced acquisition STATE, not a per-
+frame flag (RADE re-primes FARGAN on each loss — `zeus_rade.c`), and it
+deliberately drops sync on an **out-of-distribution** signal. A synthetic
+harmonic excitation triggers that mid-stream, and the gate (correctly) mutes
+there — so score "voice present" only over blocks where sync is actually held,
+never a fixed time window. For fully deterministic clean-channel scoring,
+`rade_api.h` exposes `rade_set_disable_unsync(seconds)` (radae's own test hook) —
+not yet surfaced through the shim; wire it through if a no-unsync fidelity sweep
+is wanted.
+
 ## Not yet changed (deliberately)
 
 - **Fixed RX AGC headroom** — instrumented, not auto-adjusted. Needs the clipping
