@@ -242,6 +242,7 @@ describe('normalizeState', () => {
     const s = normalizeState({
       wireVersion: 2,
       maxReceivers: 8,
+      connectedProtocol: 'P2',
       receivers: [
         { index: 0, enabled: true, adcSource: 0, vfoHz: 7_100_000, mode: 'LSB' },
         { index: 1, enabled: true, adcSource: 0, vfoHz: 7_150_000, mode: 'USB' },
@@ -250,6 +251,7 @@ describe('normalizeState', () => {
     });
     expect(s.wireVersion).toBe(2);
     expect(s.maxReceivers).toBe(8);
+    expect(s.connectedProtocol).toBe('P2');
     expect(s.receivers).toHaveLength(3);
     expect(s.receivers?.[2]).toMatchObject({ index: 2, enabled: true, adcSource: 1, mode: 'USB' });
   });
@@ -259,6 +261,7 @@ describe('normalizeState', () => {
     const s = normalizeState({});
     expect(s.receivers).toBeUndefined();
     expect(s.maxReceivers).toBeUndefined();
+    expect(s.connectedProtocol).toBeUndefined();
     expect(s.wireVersion).toBeUndefined();
   });
   it('reads zoomLevel from the server', () => {

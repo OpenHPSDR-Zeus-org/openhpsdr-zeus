@@ -5,10 +5,17 @@
 // primary (always a member) whose values the controls display.
 
 import { beforeEach, describe, expect, it } from 'vitest';
+import type { RadioStateDto } from '../api/client';
 import { useConnectionStore } from './connection-store';
 
 function reset() {
-  useConnectionStore.setState({ focusedRxIndex: 0, selectedRxIndices: [0], rxFocus: 'A' });
+  useConnectionStore.setState({
+    status: 'Disconnected',
+    connectedProtocol: null,
+    focusedRxIndex: 0,
+    selectedRxIndices: [0],
+    rxFocus: 'A',
+  });
 }
 
 describe('connection-store multi-select', () => {
@@ -79,5 +86,25 @@ describe('connection-store multi-select', () => {
     expect(useConnectionStore.getState().rxFocus).toBe('B');
     useConnectionStore.getState().setFocusedRxIndex(0);
     expect(useConnectionStore.getState().rxFocus).toBe('A');
+  });
+
+  it('hydrates connectedProtocol from StateDto', () => {
+    const base = useConnectionStore.getState() as unknown as RadioStateDto;
+
+    useConnectionStore.getState().applyState({
+      ...base,
+      status: 'Connected',
+      connectedProtocol: 'P2',
+    });
+
+    expect(useConnectionStore.getState().connectedProtocol).toBe('P2');
+
+    useConnectionStore.getState().applyState({
+      ...base,
+      status: 'Disconnected',
+      connectedProtocol: null,
+    });
+
+    expect(useConnectionStore.getState().connectedProtocol).toBeNull();
   });
 });

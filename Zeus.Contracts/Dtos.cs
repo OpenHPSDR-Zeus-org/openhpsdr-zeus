@@ -1271,6 +1271,11 @@ public sealed record StateDto(
     // reports 6; Protocol 3-capable G2 firmware can report the full 10.
     int MaxReceivers = WireContract.MaxReceivers,
 
+    // Active wire protocol for the current radio session. This is duplicated
+    // from RadioService runtime state so /api/state is self-contained after a
+    // browser reload; null when disconnected.
+    string? ConnectedProtocol = null,
+
     // ---- VFO lock (Thetis chkVFOLock) ----
     // Pure software guard: when true, operator dial tuning (panadapter click,
     // wheel, typed entry) is rejected so an accidental knob bump can't move the
