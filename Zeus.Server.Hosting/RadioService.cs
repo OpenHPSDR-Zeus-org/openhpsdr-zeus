@@ -209,6 +209,11 @@ public sealed class RadioService : IDisposable
     // supply a byte, in which case ConnectedBoardKind falls back to OrionMkII
     // for backward compat.
     private HpsdrBoardKind _p2BoardKind = HpsdrBoardKind.Unknown;
+    // True while Zeus is connected through the private N9DSP Protocol 3
+    // sidecar. The public host deliberately keeps only connection metadata;
+    // the sidecar owns all P3/N9DSP runtime code and binaries.
+    private bool _p3Active;
+    private int _p3MaxReceivers = Zeus.Contracts.WireContract.MaxReceivers;
     // Firmware / gateware version string for the live connection, captured at
     // connect time from the discovery reply (P1: code-version byte raw[9];
     // P2: raw[13] + beta). Diagnostics-only — surfaced by ConnectionProbe so a
@@ -846,7 +851,7 @@ public sealed class RadioService : IDisposable
     /// </summary>
     public bool IsConnected
     {
-        get { lock (_sync) return _activeClient is not null || _p2Active; }
+        get { lock (_sync) return _activeClient is not null || _p2Active || _p3Active; }
     }
 
     /// <summary>True while a Protocol-1 client owns the connection — i.e. the
@@ -866,6 +871,11 @@ public sealed class RadioService : IDisposable
     internal bool IsProtocol2Active
     {
         get { lock (_sync) return _p2Active; }
+    }
+
+    internal bool IsProtocol3Active
+    {
+        get { lock (_sync) return _p3Active; }
     }
 
     /// <summary>Cheap MOX accessor (no Receivers projection, unlike Snapshot).
@@ -4254,6 +4264,8 @@ public sealed class RadioService : IDisposable
             _p2Client = client;
             _p2Active = true;
             _p2BoardKind = boardKind;
+            _p3Active = false;
+            _p3MaxReceivers = Zeus.Contracts.WireContract.MaxReceivers;
             // Record the discovered firmware for the diagnostics snapshot.
             _connectedFirmware = firmware;
             _attOffsetDb = 0;
@@ -4334,6 +4346,72 @@ public sealed class RadioService : IDisposable
         P2Disconnected?.Invoke();
     }
 
+    public void MarkProtocol3Connected(
+        string endpoint,
+        int sampleRateHz,
+        int maxReceivers,
+        string? firmware = null)
+    {
+        Protocol2Client? previous;
+        lock (_sync)
+        {
+            previous = _p2Client;
+            _p2Client = null;
+            _p2Active = false;
+            _p2BoardKind = HpsdrBoardKind.Unknown;
+            _p3Active = true;
+            _p3MaxReceivers = Math.Clamp(maxReceivers, 1, Zeus.Contracts.WireContract.MaxReceivers);
+            _connectedFirmware = firmware;
+            _attOffsetDb = 0;
+            _adcOverloadLevel = 0;
+            _overloadSeenInWindow = false;
+            _lastTickMs = long.MinValue;
+            _lastOverloadMs = long.MinValue;
+            _lastAppliedEffectiveDb = -1;
+            _lastAdcOverloadBits = 0;
+            _lastAdc0MaxMagnitude = null;
+            _lastAdc1MaxMagnitude = null;
+            _adc0MaxMagnitudeAtOverload = 0;
+            _adc1MaxMagnitudeAtOverload = 0;
+            _lastAdcTelemetryUtc = null;
+        }
+        if (previous is not null) previous.TelemetryReceived -= OnP2Telemetry;
+        Mutate(s => s with
+        {
+            Status = ConnectionStatus.Connected,
+            Endpoint = endpoint,
+            SampleRate = sampleRateHz,
+            AttOffsetDb = 0,
+            AdcOverloadWarning = false,
+        });
+        RecomputePaAndPush();
+    }
+
+    public void MarkProtocol3Disconnected()
+    {
+        lock (_sync)
+        {
+            _p3Active = false;
+            _p3MaxReceivers = Zeus.Contracts.WireContract.MaxReceivers;
+            _connectedFirmware = null;
+            _attOffsetDb = 0;
+            _adcOverloadLevel = 0;
+            _overloadSeenInWindow = false;
+            _lastTickMs = long.MinValue;
+            _lastOverloadMs = long.MinValue;
+            _lastAppliedEffectiveDb = -1;
+        }
+        Mutate(s => s with
+        {
+            Status = ConnectionStatus.Disconnected,
+            Endpoint = null,
+            AttOffsetDb = 0,
+            AdcOverloadWarning = false,
+        });
+        _currentPsBoardKey = string.Empty;
+        _currentPsTxAttnDb = -1;
+    }
+
     // Resolves the board class for ALL board-specific behavior: PA settings,
     // drive-byte encoding, ATT behavior, filter switching. Normally returns
     // the board ID from discovery (P1) or infers OrionMkII for P2. When the
@@ -4372,6 +4450,10 @@ public sealed class RadioService : IDisposable
                     return _p2BoardKind != HpsdrBoardKind.Unknown
                         ? _p2BoardKind
                         : HpsdrBoardKind.OrionMkII;
+                }
+                if (_p3Active)
+                {
+                    return HpsdrBoardKind.OrionMkII;
                 }
                 return HpsdrBoardKind.Unknown;
             }
@@ -4418,6 +4500,8 @@ public sealed class RadioService : IDisposable
                 if (_p2Active)
                     return Zeus.Protocol2.Protocol2Client.MaxRxDdc
                          - Zeus.Protocol2.Protocol2Client.RxBaseDdc(ConnectedBoardKind);
+                if (_p3Active)
+                    return _p3MaxReceivers;
                 return Zeus.Contracts.WireContract.MaxReceivers;
             }
         }

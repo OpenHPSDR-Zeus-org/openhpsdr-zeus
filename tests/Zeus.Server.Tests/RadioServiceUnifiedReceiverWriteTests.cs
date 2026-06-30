@@ -91,6 +91,22 @@ public sealed class RadioServiceUnifiedReceiverWriteTests : IDisposable
     }
 
     [Fact]
+    public void Snapshot_Protocol3G2_AdvertisesTenReceivers()
+    {
+        using var radio = BuildRadio();
+
+        radio.MarkProtocol3Connected("127.0.0.1:1024", 1_536_000, WireContract.MaxReceivers);
+        radio.SetReceiver(9, enabled: true, vfoHz: 28_074_000);
+
+        var s = radio.Snapshot();
+        Assert.True(radio.IsConnected);
+        Assert.True(radio.IsProtocol3Active);
+        Assert.Equal(ConnectionStatus.Connected, s.Status);
+        Assert.Equal(WireContract.MaxReceivers, s.MaxReceivers);
+        Assert.Equal(WireContract.MaxReceivers, s.Receivers!.Where(r => r.Index < WireContract.MaxReceivers).Count());
+    }
+
+    [Fact]
     public void SetReceiver_Rx2_RoutesEnableVfoModeFilterAndAf()
     {
         using var radio = BuildRadio();

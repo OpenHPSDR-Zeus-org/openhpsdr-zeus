@@ -47,8 +47,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   connect as apiConnect,
   connectP2 as apiConnectP2,
+  connectP3 as apiConnectP3,
   disconnect as apiDisconnect,
   disconnectP2 as apiDisconnectP2,
+  disconnectP3 as apiDisconnectP3,
   reclaimRadio,
   fetchRadios,
   fetchProtocol3Presence,
@@ -454,8 +456,7 @@ const MANUAL_BOARD_OPTIONS: ReadonlyArray<BoardKind> = [
 ];
 
 const PROTOCOL3_UNAVAILABLE_TITLE = 'Protocol 3 requires p3app running on the selected radio.';
-const PROTOCOL3_PREVIEW_TITLE =
-  'Protocol 3 p3app detected on this G2.';
+const PROTOCOL3_CONNECT_TITLE = 'Connect through Protocol 3 using the local N9DSP sidecar.';
 
 function hasProtocol3App(r: RadioInfoDto): boolean {
   return r.details?.protocol3Available === 'true';
@@ -688,14 +689,20 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
   // Busy-radio takeover flow. Caller owns the inflight/error state so both
   // entry points can wrap it (the takeover sends a reclaim first).
   const performConnect = useCallback(
-    async (r: RadioInfoDto, force = false) => {
+    async (r: RadioInfoDto, force = false, protocolOverride?: ProtocolChoice) => {
       const ep = endpointFor(r);
-      const protocol = r.details?.protocol ?? 'P1';
-      if (protocol === 'P3') {
-        throw new Error(PROTOCOL3_PREVIEW_TITLE);
-      }
+      const protocol = protocolOverride ?? (r.details?.protocol as ProtocolChoice | undefined) ?? 'P1';
+      const isP3 = protocol === 'P3';
       const isP2 = protocol === 'P2';
-      if (isP2) {
+      if (isP3) {
+        await apiConnectP3({
+          endpoint: ep,
+          sampleRate: 1_536_000,
+        });
+        const fresh = await fetchState();
+        applyState(fresh);
+        hydrateTxFromState(fresh);
+      } else if (isP2) {
         // Pass the discovered board byte (e.g. 0x01 = Hermes for Brick2).
         // Without this the server falls back to OrionMkII for every P2
         // connection — issue #171.
@@ -727,7 +734,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
         hydrateTxFromState(next);
       }
       setBoardId(r.boardId || null);
-      setConnectedProtocol(isP2 ? 'P2' : 'P1');
+      setConnectedProtocol(protocol);
       setLastConnectedEndpoint(ep || null);
       applyPostConnectEffects();
     },
@@ -735,12 +742,12 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
   );
 
   const handleConnect = useCallback(
-    async (r: RadioInfoDto) => {
+    async (r: RadioInfoDto, protocolOverride?: ProtocolChoice) => {
       if (inflightRef.current) return;
       setInflight(true);
       setError(null);
       try {
-        await performConnect(r);
+        await performConnect(r, false, protocolOverride);
       } catch (err) {
         setError(errorMessage(err));
       } finally {
@@ -758,10 +765,6 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
       if (inflightRef.current) return;
       const ep = endpointFor(r);
       const protocol = r.details?.protocol ?? 'P1';
-      if (protocol === 'P3') {
-        setError(PROTOCOL3_PREVIEW_TITLE);
-        return;
-      }
       const isP2 = protocol === 'P2';
       setInflight(true);
       setError(null);
@@ -796,12 +799,9 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
         setManualError('Port must be between 1 and 65535');
         return;
       }
-      if (protocol === 'P3') {
-        setManualError(PROTOCOL3_PREVIEW_TITLE);
-        return;
-      }
 
       const ep = `${ip}:${port}`;
+      const effectiveSampleRate: SampleRate = protocol === 'P3' ? 1_536_000 : sampleRate;
       setInflight(true);
       setManualError(null);
       try {
@@ -820,7 +820,12 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
           setManualError(`Board override: ${errorMessage(selErr)}`);
         }
 
-        if (protocol === 'P2') {
+        if (protocol === 'P3') {
+          await apiConnectP3({ endpoint: ep, sampleRate: effectiveSampleRate, force });
+          const fresh = await fetchState();
+          applyState(fresh);
+          hydrateTxFromState(fresh);
+        } else if (protocol === 'P2') {
           await apiConnectP2({ endpoint: ep, sampleRate, force });
           const fresh = await fetchState();
           applyState(fresh);
@@ -835,9 +840,9 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
         setLastConnectedEndpoint(ep);
         applyPostConnectEffects();
         if (manualSave || override) {
-          saveEndpoint({ label, ip, port, protocol, sampleRate, board });
+          saveEndpoint({ label, ip, port, protocol, sampleRate: effectiveSampleRate, board });
         }
-        setManualFormDefaults({ ip, port, protocol, sampleRate, board, label: '' });
+        setManualFormDefaults({ ip, port, protocol, sampleRate: effectiveSampleRate, board, label: '' });
       } catch (err) {
         // Busy radio (relay-chatter guard, P2 path): the server refuses a
         // second-master connect with a 409 { reclaimable: true }. Offer the
@@ -868,10 +873,6 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
   const handleManualForceConnect = useCallback(
     async (snap: NonNullable<typeof pendingManualTakeover>) => {
       if (inflightRef.current) return;
-      if (snap.protocol === 'P3') {
-        setManualError(PROTOCOL3_PREVIEW_TITLE);
-        return;
-      }
       const ep = `${snap.ip}:${snap.port}`;
       // Latch the ref directly (the effect that mirrors `inflight` only runs on
       // the next render) so the reclaim shows as inflight and a stray click
@@ -900,6 +901,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
     setInflight(true);
     setError(null);
     try {
+      try { await apiDisconnectP3(); } catch { /* may be P1/P2 */ }
       try { await apiDisconnect(); } catch { /* may be P2 */ }
       try { await apiDisconnectP2(); } catch { /* may have been P1 */ }
       const fresh = await fetchState();
@@ -1245,8 +1247,8 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                           {showP3Chip && (
                             <span
                               className="chip"
-                              style={{ marginLeft: 6 }}
-                              title={PROTOCOL3_PREVIEW_TITLE}
+                              style={{ marginLeft: 6, opacity: 0.75 }}
+                              title={PROTOCOL3_CONNECT_TITLE}
                             >
                               <span className="v">P3</span>
                             </span>
@@ -1279,9 +1281,31 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                           >
                             Take over
                           </button>
+                          {showP3Preview && (
+                            <button
+                              type="button"
+                              onClick={() => handleConnect(r, 'P3')}
+                              disabled={inflight}
+                              title={PROTOCOL3_CONNECT_TITLE}
+                              className="btn sm active"
+                            >
+                              P3
+                            </button>
+                          )}
                         </div>
                       ) : (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          {showP3Preview && (
+                            <button
+                              type="button"
+                              onClick={() => handleConnect(r, 'P3')}
+                              disabled={inflight}
+                              title={PROTOCOL3_CONNECT_TITLE}
+                              className="btn sm active"
+                            >
+                              P3
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => handleConnect(r)}
@@ -1521,7 +1545,7 @@ const fieldLabelStyle: React.CSSProperties = {
 
 function ManualMode(p: ManualModeProps) {
   const p3Disabled = !p.p3Available || p.p3Checking || p.inflight;
-  const canConnect = !p.inflight && p.protocol !== 'P3';
+  const canConnect = !p.inflight && (p.protocol !== 'P3' || (!p3Disabled && p.p3Available));
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div
@@ -1599,7 +1623,7 @@ function ManualMode(p: ManualModeProps) {
                 p.p3Checking
                   ? 'Checking for p3app on this radio...'
                   : p.p3Available
-                    ? PROTOCOL3_PREVIEW_TITLE
+                    ? PROTOCOL3_CONNECT_TITLE
                     : PROTOCOL3_UNAVAILABLE_TITLE
               }
             >
@@ -1688,7 +1712,7 @@ function ManualMode(p: ManualModeProps) {
         type="button"
         onClick={p.onConnect}
         disabled={!canConnect}
-        title={p.protocol === 'P3' ? PROTOCOL3_PREVIEW_TITLE : undefined}
+        title={p.protocol === 'P3' ? PROTOCOL3_CONNECT_TITLE : undefined}
         className={`btn lg ${canConnect ? 'active' : ''}`}
         style={{ alignSelf: 'stretch' }}
       >
@@ -1718,7 +1742,6 @@ function ManualMode(p: ManualModeProps) {
           <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
             {p.savedEndpoints.map((e) => {
               const isLast = e.id === p.lastConnectedId;
-              const p3Saved = e.protocol === 'P3';
               return (
                 <li
                   key={e.id}
@@ -1766,9 +1789,9 @@ function ManualMode(p: ManualModeProps) {
                     <button
                       type="button"
                       onClick={() => p.onReconnect(e)}
-                      disabled={p.inflight || p3Saved}
-                      className={`btn sm ${p.inflight || p3Saved ? '' : 'active'}`}
-                      title={p3Saved ? PROTOCOL3_PREVIEW_TITLE : undefined}
+                      disabled={p.inflight}
+                      className={`btn sm ${p.inflight ? '' : 'active'}`}
+                      title={e.protocol === 'P3' ? PROTOCOL3_CONNECT_TITLE : undefined}
                     >
                       Connect
                     </button>

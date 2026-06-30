@@ -1512,6 +1512,75 @@ public static class ZeusEndpoints
             }
         });
 
+        app.MapPost("/api/connect/p3", async (
+            ConnectRequest req,
+            Protocol3PresenceProbe p3Presence,
+            Protocol3SidecarBridge sidecar,
+            RadioService radio,
+            HttpContext ctx) =>
+        {
+            const int p3RxStreams = Zeus.Contracts.WireContract.MaxReceivers;
+            const int p3RxRateHz = 1_536_000;
+
+            log.LogInformation("api.connect.p3 endpoint={Ep}", req.Endpoint);
+
+            if (!TryParseIpEndpoint(req.Endpoint, out var ipEndpoint))
+                return Results.BadRequest(new { error = $"Invalid endpoint '{req.Endpoint}'." });
+            if (radio.IsConnected)
+                return Results.Conflict(new { error = "Already connected. Disconnect first." });
+
+            var p3 = await p3Presence
+                .ProbeAsync(ipEndpoint.Address, TimeSpan.FromMilliseconds(700), ctx.RequestAborted)
+                .ConfigureAwait(false);
+            if (p3 is null)
+            {
+                return Results.Json(
+                    new { error = "Protocol 3 p3app was not detected on this radio.", protocol3Available = false },
+                    statusCode: StatusCodes.Status409Conflict);
+            }
+            if (p3.MaxRxStreams < p3RxStreams)
+            {
+                return Results.Json(
+                    new
+                    {
+                        error = $"Protocol 3 p3app reports only {p3.MaxRxStreams} RX streams; Zeus requires {p3RxStreams}.",
+                        maxRxStreams = p3.MaxRxStreams,
+                    },
+                    statusCode: StatusCodes.Status409Conflict);
+            }
+
+            try
+            {
+                var snapshot = await sidecar
+                    .ConnectAsync(ipEndpoint, p3.Port, p3RxRateHz, p3RxStreams, ctx.RequestAborted)
+                    .ConfigureAwait(false);
+                radio.MarkProtocol3Connected(
+                    req.Endpoint,
+                    p3RxRateHz,
+                    Math.Min(snapshot.RxActiveStreams, Zeus.Contracts.WireContract.MaxReceivers),
+                    p3.FirmwareVersion.ToString());
+                return Results.Ok(new
+                {
+                    protocol = "P3",
+                    endpoint = req.Endpoint,
+                    sampleRateHz = p3RxRateHz,
+                    maxReceivers = snapshot.RxActiveStreams,
+                    diagnosticsUrl = snapshot.DiagnosticsUrl.ToString(),
+                    dspEngine = snapshot.DspEngine,
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                log.LogWarning(ex, "api.connect.p3 refused");
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "api.connect.p3 failed");
+                return Results.Problem(ex.Message, statusCode: 500);
+            }
+        });
+
         app.MapPost("/api/disconnect/p2", async (DspPipelineService dsp, HttpContext ctx) =>
         {
             log.LogInformation("api.disconnect.p2");
@@ -1519,10 +1588,34 @@ public static class ZeusEndpoints
             return Results.Ok(new { status = "disconnected" });
         });
 
-        app.MapPost("/api/disconnect", async (RadioService r, HttpContext ctx) =>
+        app.MapPost("/api/disconnect/p3", async (
+            Protocol3SidecarBridge sidecar,
+            RadioService radio,
+            HttpContext ctx) =>
+        {
+            log.LogInformation("api.disconnect.p3");
+            await sidecar.DisconnectAsync(ctx.RequestAborted);
+            if (radio.IsProtocol3Active)
+                radio.MarkProtocol3Disconnected();
+            return Results.Ok(new { status = "disconnected" });
+        });
+
+        app.MapGet("/api/protocol3/sidecar", (Protocol3SidecarBridge sidecar) =>
+            Results.Ok(sidecar.Status));
+
+        app.MapPost("/api/disconnect", async (
+            RadioService r,
+            Protocol3SidecarBridge sidecar,
+            HttpContext ctx) =>
         {
             log.LogInformation("api.disconnect");
-            return await r.DisconnectAsync(ctx.RequestAborted);
+            if (r.IsProtocol3Active)
+            {
+                await sidecar.DisconnectAsync(ctx.RequestAborted);
+                r.MarkProtocol3Disconnected();
+                return Results.Ok(r.Snapshot());
+            }
+            return Results.Ok(await r.DisconnectAsync(ctx.RequestAborted));
         });
 
         app.MapPost("/api/vfo", (VfoSetRequest req, RadioService r) =>
