@@ -245,6 +245,105 @@ public sealed class SaturnSpeakerAudioSinkTests : IDisposable
         Assert.Null(ex);
     }
 
+    // Issue #1148 pacing (Deliverable 2) — egress must be SPREAD at the codec's
+    // 750 pkt/s cadence, not fired in one burst per DSP tick. These drive a
+    // virtual clock + feed the ring directly: no worker thread, no sockets, no
+    // real time, fully deterministic.
+
+    [Fact]
+    public void Pacing_ReleasesOnePacketPerInterval_NeverBursts()
+    {
+        using var radio = NewRadio();
+        using var settings = new RadioSpeakerSettingsStore(
+            NullLogger<RadioSpeakerSettingsStore>.Instance, _dbPath + ".spk");
+        var sink = new SaturnSpeakerAudioSink(radio, settings, NullLogger<SaturnSpeakerAudioSink>.Instance);
+
+        long t = 1_000_000_000;
+        sink.ClockForTest = () => t;
+        int sent = 0;
+        sink.SentObserverForTest = _ => sent++;
+        long interval = SaturnSpeakerAudioSink.PacketIntervalTicksForTest;
+
+        // 100 packets of audio buffered up front (ring caps at 128 packets).
+        sink.WriteRingForTest(new float[64 * 100]);
+
+        // First drain anchors the schedule to "now": exactly one packet is due,
+        // even though 100 are buffered. A regression to the old behaviour would
+        // emit all 100 here.
+        sink.DrainForTest();
+        Assert.Equal(1, sent);
+
+        // Each interval that elapses yields exactly one more packet.
+        for (int i = 0; i < 50; i++)
+        {
+            t += interval;
+            sink.DrainForTest();
+        }
+
+        Assert.Equal(51, sent);
+        Assert.Equal(1, sink.MaxBurstForTest);
+    }
+
+    [Fact]
+    public void Pacing_CatchUpIsBounded_DoesNotDumpWholeRing()
+    {
+        using var radio = NewRadio();
+        using var settings = new RadioSpeakerSettingsStore(
+            NullLogger<RadioSpeakerSettingsStore>.Instance, _dbPath + ".spk");
+        var sink = new SaturnSpeakerAudioSink(radio, settings, NullLogger<SaturnSpeakerAudioSink>.Instance);
+
+        long t = 1_000_000_000;
+        sink.ClockForTest = () => t;
+        int sent = 0;
+        sink.SentObserverForTest = _ => sent++;
+        long interval = SaturnSpeakerAudioSink.PacketIntervalTicksForTest;
+        long maxBehind = SaturnSpeakerAudioSink.MaxCatchupBehindTicksForTest;
+
+        // Fill the ring to capacity (requesting far more than it holds).
+        sink.WriteRingForTest(new float[64 * 400]);
+
+        sink.DrainForTest();           // prime: schedule anchored, 1 packet out
+        int afterPrime = sent;
+        Assert.Equal(1, afterPrime);
+
+        // Simulate a long scheduler stall, then a single drain. The catch-up
+        // burst MUST be clamped to ~MaxCatchupBehindTicks / interval packets —
+        // it must not dump the whole 128-packet ring at once.
+        t += interval * 1000;
+        sink.DrainForTest();
+
+        int burst = sent - afterPrime;
+        long cap = maxBehind / interval;
+        Assert.InRange(burst, 1, (int)cap + 1);
+        Assert.True(afterPrime + burst < 128,
+            $"catch-up emitted {afterPrime + burst} packets — it dumped the whole ring");
+    }
+
+    [Fact]
+    public void Pacing_RealignsAfterIdle_NoStoredBacklog()
+    {
+        using var radio = NewRadio();
+        using var settings = new RadioSpeakerSettingsStore(
+            NullLogger<RadioSpeakerSettingsStore>.Instance, _dbPath + ".spk");
+        var sink = new SaturnSpeakerAudioSink(radio, settings, NullLogger<SaturnSpeakerAudioSink>.Instance);
+
+        long t = 1_000_000_000;
+        sink.ClockForTest = () => t;
+        int sent = 0;
+        sink.SentObserverForTest = _ => sent++;
+
+        // Drain with an empty ring (idle), then let a long gap pass.
+        sink.DrainForTest();
+        Assert.Equal(0, sent);
+        t += SaturnSpeakerAudioSink.PacketIntervalTicksForTest * 5000;
+
+        // One packet of fresh audio must ship on the very next drain — the idle
+        // gap must not have accrued a backlog of "due" slots (which would burst).
+        sink.WriteRingForTest(new float[64]);
+        sink.DrainForTest();
+        Assert.Equal(1, sent);
+    }
+
     private static uint SequenceOf(SaturnSpeakerAudioSink sink)
     {
         var f = typeof(SaturnSpeakerAudioSink)

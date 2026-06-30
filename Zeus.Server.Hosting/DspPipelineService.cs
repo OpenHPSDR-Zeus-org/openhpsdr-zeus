@@ -1114,6 +1114,26 @@ public class DspPipelineService : BackgroundService,
     private long _lastTickStopwatchTicks;
     private static readonly long TickPeriodStopwatchTicks =
         (long)(Stopwatch.Frequency / 30.0);
+
+    // #1148 inline-tick cadence telemetry. The active RX packet thread drives
+    // Tick inline (one audio block per tick, nominally 30 Hz / 33.33 ms). If the
+    // radio-speaker UDP burst perturbs RX-IQ delivery, ticks slip from ~33 ms
+    // toward longer intervals and the host soundcard ring underruns (the #1148
+    // symptom). Emit mean / p99 / max interval + a count of intervals > 1.5×
+    // nominal (> 50 ms) at ~1 Hz. Single-threaded — only the active RX thread
+    // calls MaybeTickInline — so plain fields + a fixed ring suffice.
+    private long _tickDiagLastEmitTicks;
+    private long _tickDiagCount;
+    private long _tickDiagSumTicks;
+    private long _tickDiagMaxTicks;
+    private long _tickDiagSlowCount;
+    private readonly long[] _tickDiagRing = new long[256]; // power of two for the index wrap
+    private readonly long[] _tickDiagSortScratch = new long[256];
+    private int _tickDiagRingPos;
+    private int _tickDiagRingFill;
+    private static readonly long TickSlowThresholdTicks =
+        (long)(TickPeriodStopwatchTicks * 1.5);
+
     private readonly ConcurrentQueue<Action> _dspCommands = new();
 
     // DSP-thread-owned scratch buffers. Allocated once at construction so
@@ -5230,9 +5250,41 @@ public class DspPipelineService : BackgroundService,
         long last = _lastTickStopwatchTicks;
         if (last == 0 || (now - last) >= TickPeriodStopwatchTicks)
         {
+            if (last != 0) RecordTickInterval(now - last, now);
             _lastTickStopwatchTicks = now;
             Tick(_panBuf, _wfBuf, _audioBuf);
         }
+    }
+
+    // #1148: accumulate inline-tick interval stats and emit at ~1 Hz. Called
+    // only from MaybeTickInline (single active RX thread), so no synchronisation
+    // is needed and the buffers are plain instance fields.
+    private void RecordTickInterval(long intervalTicks, long now)
+    {
+        _tickDiagCount++;
+        _tickDiagSumTicks += intervalTicks;
+        if (intervalTicks > _tickDiagMaxTicks) _tickDiagMaxTicks = intervalTicks;
+        if (intervalTicks > TickSlowThresholdTicks) _tickDiagSlowCount++;
+        _tickDiagRing[_tickDiagRingPos] = intervalTicks;
+        _tickDiagRingPos = (_tickDiagRingPos + 1) & (_tickDiagRing.Length - 1);
+        if (_tickDiagRingFill < _tickDiagRing.Length) _tickDiagRingFill++;
+
+        if (_tickDiagLastEmitTicks == 0) { _tickDiagLastEmitTicks = now; return; }
+        if (now - _tickDiagLastEmitTicks < Stopwatch.Frequency) return;
+        _tickDiagLastEmitTicks = now;
+
+        double msPerTick = 1000.0 / Stopwatch.Frequency;
+        double mean = _tickDiagCount > 0 ? _tickDiagSumTicks * msPerTick / _tickDiagCount : 0;
+        double max = _tickDiagMaxTicks * msPerTick;
+        double p99 = Zeus.Protocol2.DiagStats.Percentile(
+            _tickDiagRing, _tickDiagSortScratch, _tickDiagRingFill, 0.99) * msPerTick;
+
+        _log.LogInformation(
+            "dsp.tickdiag mean={Mean:F1}ms p99={P99:F1}ms max={Max:F1}ms slow(>50ms)={Slow} n={N}",
+            mean, p99, max, _tickDiagSlowCount, _tickDiagCount);
+
+        _tickDiagCount = 0; _tickDiagSumTicks = 0; _tickDiagMaxTicks = 0;
+        _tickDiagSlowCount = 0; _tickDiagRingPos = 0; _tickDiagRingFill = 0;
     }
 
     /// <summary>
