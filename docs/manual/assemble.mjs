@@ -11,8 +11,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = join(HERE, 'chapters');
 const BUILD = join(HERE, 'build');
 const OUT = join(BUILD, 'Zeus-Operator-Manual.html');
-const EDITION = process.env.MANUAL_EDITION || 'v0.10.7 — June 2026';
-const COVERS = process.env.MANUAL_COVERS || 'Covers the Zeus 0.10.7 release';
+const EDITION = process.env.MANUAL_EDITION || 'v0.10.8 — June 2026';
+const COVERS = process.env.MANUAL_COVERS || 'Covers the Zeus 0.10.8 release';
 
 // Cover logo, inlined as a data URI so the print engine never depends on a
 // relative file path (headless Chrome prints from build/, the asset lives in

@@ -10,6 +10,20 @@ see the corresponding GitHub Release page.
 
 ---
 
+## [0.10.8] — 2026-06-30
+
+> **🔧 Hotfix for ANAN-10E and ANAN-G2E PureSignal.** The 0.10.7 release added single-ADC PureSignal for the **ANAN-10E (HermesII)** and **ANAN-G2E (HermesC10)** — but it shipped with the path switched **off**, so owners had no way to actually try it. This release flips that switch: **PureSignal now engages on the normal PS button on the 10E and G2E, exactly like every other board** — no special steps. It stays **experimental** and **we still want your on-air reports** if you run one of these radios.
+
+### 🛰️ PureSignal — single-ADC (10E / G2E) now live on the PS button
+
+- **The 10E and G2E now run PureSignal from the PS arm like any other board.** In 0.10.7 the single-ADC time-multiplexed feedback path was present but disabled behind an internal interlock, so pressing PS did nothing extra on these radios. That interlock is now on by default (no operator toggle — it just works), so arming PureSignal engages the correction. PureSignal still always starts **off** every session and you arm it by hand, exactly as on every other board. *(#960, #1209)*
+- **ADC-overload protection now covers the G2E too.** Both single-ADC boards seed the byte-59 (`Angelia_atten_Tx0`) protective attenuation on a keyed PureSignal burst, so a first key-down can't drive the shared receive ADC into overload. Previously this protection was wired only for the 10E; the G2E now gets the same safeguard. *(#960)*
+- **Still experimental — please report.** These single-ADC paths are validated in Zeus's virtual-radio loopback but have limited real-hardware time. If you own an ANAN-10E or ANAN-G2E, try PureSignal and tell us how it behaves on the air via the [Zeus Discord / GitHub](https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus). The dual-ADC G2 / OrionMkII PureSignal path is **completely unaffected** by this change.
+
+**Credits.** Single-ADC PureSignal activation and the G2E ADC-overload protection by **Douglas Cerrato (KB2UKA)**.
+
+---
+
 ## [0.10.7] — 2026-06-30
 
 > **🎛️ Hardware control + experimental PureSignal for single-ADC radios.** The headline is **MIDI controller and Stream Deck support** — drive Zeus from physical knobs, faders, and buttons. This release also brings **experimental single-ADC PureSignal for the ANAN-10E and ANAN-G2E**, validated end-to-end in Zeus's new virtual-radio test harness and now **looking for on-air feedback from operators with that hardware** (see the note below — it stays disabled by default). Rounding it out: the **Voyeur** net-monitor plugin is now at **v1.1.1** with a selectable NVIDIA Parakeet speech engine and watchword alerts, **6 m and 11 m** band support, and a deep round of transmit-fidelity, FreeDV/RADE, and web-UI improvements.

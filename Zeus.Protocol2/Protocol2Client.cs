@@ -1287,11 +1287,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // protective floor while armed pushes byte 59 protective, and restoring
         // the operator's prior value on disarm returns the wire to normal. The
         // seed/restore is the ONLY non-byte-identical effect, and it is reached
-        // only when SeedsTxAdcProtection is true (HermesII + flag): every other
-        // board, and HermesII with the flag false, take the historical path
-        // untouched. Gated on SeedsTxAdcProtection (NOT TimeMuxesPsFeedbackOnDdc0)
-        // so the G2E byte-59 seed stays its own separate, KB2UKA-gated
-        // pre-condition and the HermesC10 path is provably unchanged here.
+        // only when SeedsTxAdcProtection is true. As of v0.10.8 (#960) that
+        // covers BOTH single-shared-ADC boards — the 10E (HermesII) and the G2E
+        // (HermesC10) — so each seeds the protective floor on a keyed PS burst.
+        // Every other board, and either board with its kill-switch forced false,
+        // takes the historical path untouched (the dual-ADC G2/OrionMkII never
+        // qualifies, so its wire is provably unchanged).
         bool seededTxAttn = false;
         if (SeedsTxAdcProtection(_boardKind))
         {
@@ -1860,7 +1861,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// survives, <c>ps.correcting</c> stays false. Flipping it true autonomously
     /// is forbidden — see CLAUDE.md "Hard Rules — PureSignal".
     /// </summary>
-    internal static bool G2ePsTimeMuxOnAir;
+    /// <remarks>
+    /// v0.10.8 (#960): ENABLED by default with KB2UKA sign-off, so single-ADC
+    /// PureSignal engages on the normal PS arm for the ANAN-G2E — no separate
+    /// operator switch, identical UX to any other PS board. The byte-59
+    /// ADC-overload protection (<see cref="SeedsTxAdcProtection"/>) now covers
+    /// HermesC10 too, so a first key-down with PS armed seeds the protective
+    /// floor instead of slamming the coupler into the one ADC at 0 dB. Retained
+    /// as an internal kill-switch (set false to disable) — there is NO
+    /// operator-facing toggle. Experimental: validated in the virtual-radio
+    /// loopback; real-G2E field validation in progress (#289).
+    /// </remarks>
+    internal static bool G2ePsTimeMuxOnAir = true;
 
     /// <summary>
     /// Burn-zone interlock (PureSignal hard rule) for the ANAN-10E
@@ -1896,7 +1908,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// seed value (<see cref="PsTxAdcProtectFloorDb"/>) require KB2UKA sign-off
     /// plus 10E bench verification of first-key-down ADC overload.
     /// </summary>
-    internal static bool Hermes10ePsTimeMuxOnAir;
+    /// <remarks>
+    /// v0.10.8 (#1209): ENABLED by default with KB2UKA sign-off, so single-ADC
+    /// PureSignal engages on the normal PS arm for the ANAN-10E — no separate
+    /// operator switch. The byte-59 ADC-overload protection
+    /// (<see cref="SeedsTxAdcProtection"/>) seeds the protective floor on key-down.
+    /// Retained as an internal kill-switch (set false to disable); NO
+    /// operator-facing toggle. Experimental: validated in the virtual-radio
+    /// loopback; real-10E field validation in progress.
+    /// </remarks>
+    internal static bool Hermes10ePsTimeMuxOnAir = true;
 
     /// <summary>
     /// TX-time ADC-overload protection floor for the single-ADC time-mux PS
@@ -1916,16 +1937,20 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// while PS feedback is armed on this board — the single-ADC time-mux case
     /// where the TX-DAC reference + PA coupler hit the one RX ADC on a TX burst.
     ///
-    /// Scoped to the ANAN-10E (<see cref="HpsdrBoardKind.HermesII"/>) under the
-    /// <see cref="Hermes10ePsTimeMuxOnAir"/> interlock. The G2E (HermesC10)
-    /// byte-59 seed is a SEPARATE, independently-gated pre-condition (see the
-    /// <see cref="G2ePsTimeMuxOnAir"/> doc, pre-condition A) and is deliberately
-    /// NOT armed here — so the HermesC10 path stays byte-identical regardless of
-    /// this predicate. With the flag false this returns false for every board, so
-    /// no board is touched in production.
+    /// Covers BOTH single-ADC time-mux boards — the ANAN-10E
+    /// (<see cref="HpsdrBoardKind.HermesII"/>) under
+    /// <see cref="Hermes10ePsTimeMuxOnAir"/> and, as of v0.10.8 (#960) with
+    /// KB2UKA sign-off, the ANAN-G2E (<see cref="HpsdrBoardKind.HermesC10"/>)
+    /// under <see cref="G2ePsTimeMuxOnAir"/>. The G2E presents the identical
+    /// single-shared-ADC hazard (Hermes.v:1483 `atten0 = FPGA_PTT ? atten0_on_Tx
+    /// : Attenuator0`, Tx_specific_C&amp;C.v:182-183), so it seeds byte 59 to the
+    /// same protective floor on key-down. Any other board — and either board with
+    /// its kill-switch forced false — returns false and is byte-identical to the
+    /// historical path.
     /// </summary>
     internal static bool SeedsTxAdcProtection(HpsdrBoardKind board)
-        => board == HpsdrBoardKind.HermesII && Hermes10ePsTimeMuxOnAir;
+        => (board == HpsdrBoardKind.HermesII && Hermes10ePsTimeMuxOnAir)
+            || (board == HpsdrBoardKind.HermesC10 && G2ePsTimeMuxOnAir);
 
     /// <summary>
     /// True iff this board does Orion-style PureSignal on a SINGLE ADC by
