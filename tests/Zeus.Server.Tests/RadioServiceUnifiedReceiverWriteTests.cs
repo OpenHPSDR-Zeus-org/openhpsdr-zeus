@@ -102,6 +102,7 @@ public sealed class RadioServiceUnifiedReceiverWriteTests : IDisposable
         Assert.True(radio.IsConnected);
         Assert.True(radio.IsProtocol3Active);
         Assert.Equal(ConnectionStatus.Connected, s.Status);
+        Assert.Equal("P3", s.ConnectedProtocol);
         Assert.Equal(WireContract.MaxReceivers, s.MaxReceivers);
         Assert.Equal(WireContract.MaxReceivers, s.Receivers!.Where(r => r.Index < WireContract.MaxReceivers).Count());
     }

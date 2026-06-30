@@ -255,6 +255,19 @@ describe('normalizeState', () => {
     expect(s.receivers).toHaveLength(3);
     expect(s.receivers?.[2]).toMatchObject({ index: 2, enabled: true, adcSource: 1, mode: 'USB' });
   });
+  it('preserves Protocol 3 in normalized state', () => {
+    const s = normalizeState({
+      wireVersion: 2,
+      maxReceivers: 10,
+      connectedProtocol: 'P3',
+      receivers: [
+        { index: 0, enabled: true, adcSource: 0, vfoHz: 7_100_000, mode: 'LSB' },
+      ],
+    });
+
+    expect(s.connectedProtocol).toBe('P3');
+    expect(s.maxReceivers).toBe(10);
+  });
   it('leaves receivers/maxReceivers undefined when a v1 server omits them', () => {
     // Undefined (not []/0) lets applyState keep the store's prior values rather
     // than collapsing the exposed-receiver control.
