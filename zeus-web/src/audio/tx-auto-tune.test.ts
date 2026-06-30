@@ -5,11 +5,14 @@ import { describe, expect, it } from 'vitest';
 import {
   CFC_CONFIG_DEFAULT,
   TX_LEVELING_CONFIG_DEFAULT,
+  TX_PHASE_ROTATOR_CONFIG_DEFAULT,
   type CfcConfigDto,
   type TxLevelingConfigDto,
 } from '../api/client';
 import {
   recommendTxAutoTune,
+  scoreTxPhaseRotatorCandidate,
+  summarizeTxAutoTuneSamples,
   type TxAutoTuneSample,
   type TxAutoTuneSettings,
 } from './tx-auto-tune';
@@ -35,6 +38,7 @@ function settings(overrides: Partial<TxAutoTuneSettings> = {}): TxAutoTuneSettin
     drivePercent: 80,
     cfcConfig: cfc(),
     txLeveling: leveling(),
+    txPhaseRotator: { ...TX_PHASE_ROTATOR_CONFIG_DEFAULT },
     targetSpectralDensity: 95,
     keyed: false,
     audioSuiteActive: true,
@@ -266,5 +270,43 @@ describe('recommendTxAutoTune', () => {
 
     expect(plan.settings.txLeveling.levelerDecayMs).toBe(90);
     expect(plan.actions.join(' ')).toContain('leveler decay slower');
+  });
+
+  it('does not hardcode phase rotator to the Thetis default in the static plan', () => {
+    const currentPhase = { enabled: true, cornerHz: 512, stages: 6, reverse: true };
+    const plan = recommendTxAutoTune(
+      settings({ txPhaseRotator: currentPhase }),
+      samples({
+        micPkDbfs: -14,
+        outPkDbfs: -7,
+        outAvDbfs: -18,
+        alcGrDb: 1,
+        lvlrGrDb: 1,
+        cfcGrDb: 1,
+      }),
+    );
+
+    expect(plan.settings.txPhaseRotator).toEqual(currentPhase);
+    expect(plan.actions.join(' ')).not.toContain('338');
+  });
+
+  it('scores phase rotator candidates from measured TX meter quality', () => {
+    const good = summarizeTxAutoTuneSamples(samples({
+      outPkDbfs: -7,
+      outAvDbfs: -15,
+      alcGrDb: 1,
+      lvlrGrDb: 1,
+      cfcGrDb: 1,
+    }));
+    const hot = summarizeTxAutoTuneSamples(samples({
+      outPkDbfs: -0.2,
+      outAvDbfs: -6,
+      alcGrDb: 9,
+      lvlrGrDb: 8,
+      cfcGrDb: 6,
+    }));
+
+    expect(scoreTxPhaseRotatorCandidate(good, 95).score)
+      .toBeGreaterThan(scoreTxPhaseRotatorCandidate(hot, 95).score);
   });
 });

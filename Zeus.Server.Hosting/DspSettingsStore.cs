@@ -371,6 +371,59 @@ public sealed class DspSettingsStore : IDisposable
         e.TxCompressorGainDb = c.CompressorGainDb;
     }
 
+    // TX phase rotator (Thetis DSP->CFC->PhaseRot parity). Persisted as
+    // nullable scalars with an explicit set marker so legacy rows fall back to
+    // disabled defaults instead of accidentally enabling a partially-read stage.
+    public TxPhaseRotatorConfig? GetTxPhaseRotator(string profileId = "default")
+    {
+        var e = _entries.FindOne(x => x.ProfileId == profileId);
+        if (e is null || e.TxPhaseRotatorSet is not true) return null;
+        var def = new TxPhaseRotatorConfig();
+        return new TxPhaseRotatorConfig(
+            Enabled: e.TxPhaseRotatorEnabled ?? def.Enabled,
+            CornerHz: e.TxPhaseRotatorCornerHz ?? def.CornerHz,
+            Stages: e.TxPhaseRotatorStages ?? def.Stages,
+            Reverse: e.TxPhaseRotatorReverse ?? def.Reverse);
+    }
+
+    public void SetTxPhaseRotator(TxPhaseRotatorConfig config, string profileId = "default")
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        var existing = _entries.FindOne(x => x.ProfileId == profileId);
+        if (existing is null)
+        {
+            var nrSeed = new NrConfig();
+            existing = new DspSettingsEntry
+            {
+                ProfileId = profileId,
+                NrMode = nrSeed.NrMode,
+                AnfEnabled = nrSeed.AnfEnabled,
+                SnbEnabled = nrSeed.SnbEnabled,
+                NbpNotchesEnabled = nrSeed.NbpNotchesEnabled,
+                NbMode = nrSeed.NbMode,
+                NbThreshold = nrSeed.NbThreshold,
+            };
+            ApplyTxPhaseRotatorToEntry(existing, config);
+            existing.UpdatedUtc = DateTime.UtcNow;
+            _entries.Insert(existing);
+        }
+        else
+        {
+            ApplyTxPhaseRotatorToEntry(existing, config);
+            existing.UpdatedUtc = DateTime.UtcNow;
+            _entries.Update(existing);
+        }
+    }
+
+    private static void ApplyTxPhaseRotatorToEntry(DspSettingsEntry e, TxPhaseRotatorConfig c)
+    {
+        e.TxPhaseRotatorSet = true;
+        e.TxPhaseRotatorEnabled = c.Enabled;
+        e.TxPhaseRotatorCornerHz = c.CornerHz;
+        e.TxPhaseRotatorStages = c.Stages;
+        e.TxPhaseRotatorReverse = c.Reverse;
+    }
+
     // SSB bandpass "rectangularity" — operator-selectable WDSP FIR window (issue
     // #871). Null on legacy rows / never-written → caller falls back to
     // BandpassWindow.Sharp, the current hardcoded WDSP default at
@@ -675,6 +728,14 @@ public sealed class DspSettingsEntry
     public int? TxLevelerDecayMs { get; set; }
     public bool? TxCompressorEnabled { get; set; }
     public double? TxCompressorGainDb { get; set; }
+    // TX phase rotator (Thetis DSP->CFC->PhaseRot). TxPhaseRotatorSet null on
+    // legacy rows → GetTxPhaseRotator() returns null → RadioService uses the
+    // disabled defaults. Reverse is stored independently from Enabled.
+    public bool? TxPhaseRotatorSet { get; set; }
+    public bool? TxPhaseRotatorEnabled { get; set; }
+    public int? TxPhaseRotatorCornerHz { get; set; }
+    public int? TxPhaseRotatorStages { get; set; }
+    public bool? TxPhaseRotatorReverse { get; set; }
     // SSB bandpass "rectangularity" — operator-selectable WDSP FIR window
     // (issue #871). Null on legacy rows → RadioService falls back to
     // BandpassWindow.Sharp on hydration, matching the current hardcoded WDSP

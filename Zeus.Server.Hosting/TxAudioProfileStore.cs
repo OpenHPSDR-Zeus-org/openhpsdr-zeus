@@ -128,6 +128,7 @@ public sealed class TxAudioProfileStore : IDisposable
             LevelerMaxGainDb = ClampFinite(profile.LevelerMaxGainDb, 0.0, 20.0, 8.0),
             TxLeveling = SanitizeTxLeveling(profile.TxLeveling),
             CfcConfig = SanitizeCfc(profile.CfcConfig),
+            TxPhaseRotator = SanitizeTxPhaseRotator(profile.TxPhaseRotator),
             LowCutHz = low,
             HighCutHz = high,
             ProcessingMode = string.Equals(profile.ProcessingMode, "vst", StringComparison.OrdinalIgnoreCase)
@@ -331,6 +332,22 @@ public sealed class TxAudioProfileStore : IDisposable
             AlcDecayMs = Math.Clamp(cfg.AlcDecayMs, 1, 50),
             LevelerDecayMs = Math.Clamp(cfg.LevelerDecayMs, 1, 5000),
             CompressorGainDb = ClampFinite(cfg.CompressorGainDb, 0.0, 20.0, 0.0),
+        };
+    }
+
+    private static TxPhaseRotatorConfig SanitizeTxPhaseRotator(TxPhaseRotatorConfig? cfg)
+    {
+        if (cfg is null) return new TxPhaseRotatorConfig();
+        return cfg with
+        {
+            CornerHz = Math.Clamp(
+                cfg.CornerHz,
+                TxPhaseRotatorConfig.MinCornerHz,
+                TxPhaseRotatorConfig.MaxCornerHz),
+            Stages = Math.Clamp(
+                cfg.Stages,
+                TxPhaseRotatorConfig.MinStages,
+                TxPhaseRotatorConfig.MaxStages),
         };
     }
 

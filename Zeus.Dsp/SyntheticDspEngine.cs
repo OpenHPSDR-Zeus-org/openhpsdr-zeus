@@ -129,6 +129,12 @@ public sealed class SyntheticDspEngine : IDspEngine
         ArgumentNullException.ThrowIfNull(cfg);
     }
 
+    public void SetTxPhaseRotator(int channelId, TxPhaseRotatorConfig cfg)
+    {
+        // synthetic has no TX phase stage — validate the shape so callers fail fast.
+        ArgumentNullException.ThrowIfNull(cfg);
+    }
+
     public void SetRxDisplayFastAttack(int channelId, bool fast) { /* synthetic has no display averaging */ }
 
     public void SetRxAfGainDb(int channelId, double db) { /* synthetic has no audio path */ }

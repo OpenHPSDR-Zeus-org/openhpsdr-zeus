@@ -16,13 +16,19 @@ import {
   setMicGain,
   setTxFilter,
   setTxLeveling,
+  setTxPhaseRotator,
+  type RadioStateDto,
   type RxMode,
   type TxDiagnosticsDto,
   type TxLevelingConfigDto,
+  type TxPhaseRotatorConfigDto,
 } from '../../api/client';
 import {
   levelingChanged,
+  phaseRotatorChanged,
   recommendTxAutoTune,
+  scoreTxPhaseRotatorCandidate,
+  summarizeTxAutoTuneSamples,
   type TxAutoTunePlan,
   type TxAutoTuneSample,
   type TxAutoTuneSettings,
@@ -37,6 +43,8 @@ import { useTxStore } from '../../state/tx-store';
 const AUTO_TUNE_SAMPLE_MS = 15_000;
 const AUTO_TUNE_POLL_MS = 250;
 const AUTO_TUNE_CHAIN_DBFS_FLOOR = -119.5;
+const AUTO_TUNE_PHASE_SWEEP_MS = 2_250;
+const AUTO_TUNE_PHASE_SETTLE_MS = 180;
 
 type AutoTunePhase = 'idle' | 'sampling' | 'applying' | 'applied' | 'error';
 
@@ -166,6 +174,7 @@ function autoTuneSampleFromDiagnostics(
 async function collectTxAutoTuneSamples(
   signal: AbortSignal,
   onProgress: (progress: number) => void,
+  durationMs = AUTO_TUNE_SAMPLE_MS,
 ): Promise<TxAutoTuneSample[]> {
   const samples: TxAutoTuneSample[] = [];
   const started = Date.now();
@@ -186,9 +195,9 @@ async function collectTxAutoTuneSamples(
     counters = next.counters;
     samples.push(next.sample);
     const elapsed = Date.now() - started;
-    onProgress(Math.min(1, elapsed / AUTO_TUNE_SAMPLE_MS));
-    if (elapsed >= AUTO_TUNE_SAMPLE_MS) break;
-    await sleep(Math.min(AUTO_TUNE_POLL_MS, AUTO_TUNE_SAMPLE_MS - elapsed), signal);
+    onProgress(Math.min(1, elapsed / durationMs));
+    if (elapsed >= durationMs) break;
+    await sleep(Math.min(AUTO_TUNE_POLL_MS, durationMs - elapsed), signal);
   }
 
   return samples;
@@ -211,6 +220,213 @@ function cfcConfigChanged(a: TxAutoTuneSettings['cfcConfig'], b: TxAutoTuneSetti
       band.compLevelDb !== other.compLevelDb ||
       band.postGainDb !== other.postGainDb;
   });
+}
+
+type PhaseSweepResult = {
+  config: TxPhaseRotatorConfigDto;
+  action: string | null;
+  samples: TxAutoTuneSample[];
+};
+
+function clampPhaseCorner(v: number): number {
+  return Math.max(20, Math.min(2000, Math.round(v)));
+}
+
+function clampPhaseStages(v: number): number {
+  return Math.max(1, Math.min(16, Math.round(v)));
+}
+
+function normalizedPhaseRotator(cfg: TxPhaseRotatorConfigDto): TxPhaseRotatorConfigDto {
+  return {
+    enabled: cfg.enabled,
+    cornerHz: clampPhaseCorner(cfg.cornerHz),
+    stages: clampPhaseStages(cfg.stages),
+    reverse: cfg.reverse,
+  };
+}
+
+function phaseRotatorLabel(cfg: TxPhaseRotatorConfigDto): string {
+  return cfg.enabled ? `${cfg.cornerHz} Hz / ${cfg.stages} stages` : 'off';
+}
+
+function pushUniquePhaseCandidate(
+  list: TxPhaseRotatorConfigDto[],
+  cfg: TxPhaseRotatorConfigDto,
+): void {
+  const next = normalizedPhaseRotator(cfg);
+  if (!list.some((x) => !phaseRotatorChanged(x, next))) list.push(next);
+}
+
+function buildPhaseRotatorCandidates(
+  current: TxPhaseRotatorConfigDto,
+  mode: RxMode,
+  txFilterLowHz: number,
+  txFilterHighHz: number,
+  targetSpectralDensity: number,
+): TxPhaseRotatorConfigDto[] {
+  const candidates: TxPhaseRotatorConfigDto[] = [];
+  const cur = normalizedPhaseRotator(current);
+  const reverse = cur.reverse;
+  pushUniquePhaseCandidate(candidates, cur);
+  if (cur.enabled) {
+    pushUniquePhaseCandidate(candidates, { ...cur, enabled: false });
+  }
+
+  const abs = filterSignedToAbs(mode, txFilterLowHz, txFilterHighHz);
+  const passLow = Math.max(20, Math.min(abs.lowAbs || 80, abs.highAbs || 3000));
+  const passHigh = Math.max(passLow + 200, abs.highAbs || 3000);
+  const width = Math.max(240, passHigh - passLow);
+  const target = Math.max(0, Math.min(100, Math.round(targetSpectralDensity)));
+  const baseStages = target >= 95 ? 10 : target >= 80 ? 8 : target >= 60 ? 6 : 4;
+  const fractions = target >= 90
+    ? [0.04, 0.075, 0.12, 0.19, 0.3]
+    : [0.035, 0.07, 0.115, 0.18, 0.27];
+
+  for (const fraction of fractions) {
+    pushUniquePhaseCandidate(candidates, {
+      enabled: true,
+      cornerHz: clampPhaseCorner(passLow + width * fraction),
+      stages: baseStages,
+      reverse,
+    });
+  }
+
+  const centerCorner = clampPhaseCorner(passLow + width * 0.12);
+  pushUniquePhaseCandidate(candidates, {
+    enabled: true,
+    cornerHz: centerCorner,
+    stages: clampPhaseStages(baseStages - 2),
+    reverse,
+  });
+  pushUniquePhaseCandidate(candidates, {
+    enabled: true,
+    cornerHz: centerCorner,
+    stages: clampPhaseStages(baseStages + 2),
+    reverse,
+  });
+  if (cur.enabled) {
+    pushUniquePhaseCandidate(candidates, {
+      enabled: true,
+      cornerHz: clampPhaseCorner(cur.cornerHz * 0.78),
+      stages: cur.stages,
+      reverse,
+    });
+    pushUniquePhaseCandidate(candidates, {
+      enabled: true,
+      cornerHz: clampPhaseCorner(cur.cornerHz * 1.28),
+      stages: cur.stages,
+      reverse,
+    });
+  }
+
+  return candidates.slice(0, 9);
+}
+
+async function sweepTxPhaseRotator(params: {
+  signal: AbortSignal;
+  current: TxPhaseRotatorConfigDto;
+  baseSamples: TxAutoTuneSample[];
+  mode: RxMode;
+  txFilterLowHz: number;
+  txFilterHighHz: number;
+  targetSpectralDensity: number;
+  applyState: (state: RadioStateDto) => void;
+  setLocal: (cfg: TxPhaseRotatorConfigDto) => void;
+  onMessage: (message: string) => void;
+}): Promise<PhaseSweepResult | null> {
+  const original = normalizedPhaseRotator(params.current);
+  const candidates = buildPhaseRotatorCandidates(
+    original,
+    params.mode,
+    params.txFilterLowHz,
+    params.txFilterHighHz,
+    params.targetSpectralDensity,
+  );
+  if (candidates.length <= 1) return null;
+
+  const baseStats = summarizeTxAutoTuneSamples(params.baseSamples);
+  const baseScore = scoreTxPhaseRotatorCandidate(baseStats, params.targetSpectralDensity);
+  if (!baseScore.usable) return null;
+
+  const results: Array<{
+    config: TxPhaseRotatorConfigDto;
+    samples: TxAutoTuneSample[];
+    score: number;
+    usable: boolean;
+  }> = [
+    {
+      config: original,
+      samples: params.baseSamples,
+      score: baseScore.score + 0.25,
+      usable: baseScore.usable,
+    },
+  ];
+
+  let applied = original;
+  try {
+    for (let i = 0; i < candidates.length; i++) {
+      const candidate = candidates[i]!;
+      if (!phaseRotatorChanged(candidate, original)) continue;
+      params.onMessage(`Balancing phase ${i + 1}/${candidates.length}`);
+      params.setLocal(candidate);
+      const state = await setTxPhaseRotator(candidate, params.signal);
+      params.applyState(state);
+      applied = candidate;
+      await sleep(AUTO_TUNE_PHASE_SETTLE_MS, params.signal);
+      const samples = await collectTxAutoTuneSamples(
+        params.signal,
+        () => {},
+        AUTO_TUNE_PHASE_SWEEP_MS,
+      );
+      const stats = summarizeTxAutoTuneSamples(samples);
+      const scored = scoreTxPhaseRotatorCandidate(stats, params.targetSpectralDensity);
+      const simplicityPenalty = candidate.enabled ? candidate.stages * 0.04 : 0;
+      results.push({
+        config: candidate,
+        samples,
+        score: scored.score - simplicityPenalty,
+        usable: scored.usable,
+      });
+    }
+
+    const usable = results.filter((r) => r.usable && Number.isFinite(r.score));
+    if (usable.length === 0) return null;
+    usable.sort((a, b) => b.score - a.score);
+    const best = usable[0]!;
+    const originalResult = results[0]!;
+    const improvement = best.score - originalResult.score;
+    const selected =
+      phaseRotatorChanged(best.config, original) && improvement >= 1.0
+        ? best
+        : originalResult;
+
+    if (phaseRotatorChanged(applied, selected.config)) {
+      params.setLocal(selected.config);
+      const state = await setTxPhaseRotator(selected.config);
+      params.applyState(state);
+      applied = selected.config;
+    }
+
+    if (!phaseRotatorChanged(selected.config, original)) {
+      return { config: selected.config, action: null, samples: selected.samples };
+    }
+    return {
+      config: selected.config,
+      action: `phase rotator ${phaseRotatorLabel(selected.config)} measured best`,
+      samples: selected.samples,
+    };
+  } catch (err) {
+    if (phaseRotatorChanged(applied, original)) {
+      try {
+        params.setLocal(original);
+        const state = await setTxPhaseRotator(original);
+        params.applyState(state);
+      } catch {
+        /* Preserve the original error. */
+      }
+    }
+    throw err;
+  }
 }
 
 function autoTuneMessage(plan: TxAutoTunePlan): string {
@@ -329,6 +545,7 @@ function TxFidelityAutoTune({ targetSpectralDensity }: { targetSpectralDensity: 
   const status = useConnectionStore((s) => s.status);
   const applyState = useConnectionStore((s) => s.applyState);
   const setTxLevelingLocal = useConnectionStore((s) => s.setTxLeveling);
+  const setTxPhaseRotatorLocal = useConnectionStore((s) => s.setTxPhaseRotator);
   const hydrateTxFromState = useTxStore((s) => s.hydrateFromState);
   const tunOn = useTxStore((s) => s.tunOn);
   const setMicGainDb = useTxStore((s) => s.setMicGainDb);
@@ -377,6 +594,12 @@ function TxFidelityAutoTune({ targetSpectralDensity }: { targetSpectralDensity: 
         applyState(state);
         hydrateTxFromState(state);
       }
+      const beforePhaseRotator = useConnectionStore.getState().txPhaseRotator;
+      if (phaseRotatorChanged(beforePhaseRotator, plan.settings.txPhaseRotator)) {
+        setTxPhaseRotatorLocal(plan.settings.txPhaseRotator);
+        const state = await setTxPhaseRotator(plan.settings.txPhaseRotator, signal);
+        applyState(state);
+      }
       if (plan.settings.drivePercent !== before.drivePercent) {
         const drive = await setDrive(plan.settings.drivePercent, signal);
         setDrivePercent(drive.drivePercent);
@@ -390,6 +613,7 @@ function TxFidelityAutoTune({ targetSpectralDensity }: { targetSpectralDensity: 
       setLevelerMaxGainDb,
       setMicGainDb,
       setTxLevelingLocal,
+      setTxPhaseRotatorLocal,
     ],
   );
 
@@ -450,22 +674,50 @@ function TxFidelityAutoTune({ targetSpectralDensity }: { targetSpectralDensity: 
         setMessage(remaining > 0 ? `Talk now / ${remaining}s` : 'Analyzing...');
       });
 
+      const connBeforeSweep = useConnectionStore.getState();
+      const phaseSweep = await sweepTxPhaseRotator({
+        signal: controller.signal,
+        current: connBeforeSweep.txPhaseRotator,
+        baseSamples: samples,
+        mode: connBeforeSweep.mode,
+        txFilterLowHz: connBeforeSweep.txFilterLowHz,
+        txFilterHighHz: connBeforeSweep.txFilterHighHz,
+        targetSpectralDensity,
+        applyState,
+        setLocal: setTxPhaseRotatorLocal,
+        onMessage: setMessage,
+      });
+
+      setMessage('Analyzing...');
       tx = useTxStore.getState();
+      const conn = useConnectionStore.getState();
       const audio = useAudioSuiteStore.getState();
-      const plan = recommendTxAutoTune(
+      const recommendationSamples = phaseSweep?.action ? phaseSweep.samples : samples;
+      let plan = recommendTxAutoTune(
         {
           micGainDb: tx.micGainDb,
           levelerMaxGainDb: tx.levelerMaxGainDb,
           drivePercent: tx.drivePercent,
           cfcConfig: tx.cfcConfig,
-          txLeveling: useConnectionStore.getState().txLeveling,
+          txLeveling: conn.txLeveling,
+          txPhaseRotator: conn.txPhaseRotator,
           targetSpectralDensity,
           keyed: tx.moxOn,
           audioSuiteActive: !audio.masterBypassed && (tx.moxOn || tx.txMonitorEnabled),
           vstActive: audio.processingMode === 'vst' || audio.vstEngineActive,
         },
-        samples,
+        recommendationSamples,
       );
+      if (phaseSweep?.action) {
+        const actions = [phaseSweep.action, ...plan.actions];
+        plan = {
+          ...plan,
+          settings: { ...plan.settings, txPhaseRotator: phaseSweep.config },
+          actions,
+          changed: true,
+          summary: `Auto tune applied ${actions.length} bounded change${actions.length === 1 ? '' : 's'}`,
+        };
+      }
       setLastPlan(plan);
 
       if (plan.changed) {
@@ -492,7 +744,15 @@ function TxFidelityAutoTune({ targetSpectralDensity }: { targetSpectralDensity: 
         abortRef.current = null;
       }
     }
-  }, [applyPlan, loadPreviewState, setPreviewEnabled, status, targetSpectralDensity]);
+  }, [
+    applyPlan,
+    applyState,
+    loadPreviewState,
+    setPreviewEnabled,
+    setTxPhaseRotatorLocal,
+    status,
+    targetSpectralDensity,
+  ]);
 
   const busy = phase === 'sampling' || phase === 'applying';
   const color =
@@ -718,7 +978,9 @@ function TxLiveShapingControls() {
   const mode = useConnectionStore((s) => s.mode);
   const applyState = useConnectionStore((s) => s.applyState);
   const setTxLevelingLocal = useConnectionStore((s) => s.setTxLeveling);
+  const setTxPhaseRotatorLocal = useConnectionStore((s) => s.setTxPhaseRotator);
   const txLeveling = useConnectionStore((s) => s.txLeveling);
+  const txPhaseRotator = useConnectionStore((s) => s.txPhaseRotator);
   const txFilterLowHz = useConnectionStore((s) => s.txFilterLowHz);
   const txFilterHighHz = useConnectionStore((s) => s.txFilterHighHz);
   const micGainDb = useTxStore((s) => s.micGainDb);
@@ -762,6 +1024,17 @@ function TxLiveShapingControls() {
         .catch((err) => setError(err instanceof Error ? err.message : 'Leveling set failed'));
     },
     [txLeveling, setTxLevelingLocal, applyState, hydrateTxFromState],
+  );
+
+  const commitPhaseRotator = useCallback(
+    (patch: Partial<TxPhaseRotatorConfigDto>) => {
+      const next = { ...txPhaseRotator, ...patch };
+      setTxPhaseRotatorLocal(next);
+      void setTxPhaseRotator(next)
+        .then(applyState)
+        .catch((err) => setError(err instanceof Error ? err.message : 'Phase rotator set failed'));
+    },
+    [txPhaseRotator, setTxPhaseRotatorLocal, applyState],
   );
 
   const commitFilter = useCallback(
@@ -867,6 +1140,50 @@ function TxLiveShapingControls() {
           parse="int"
           disabled={disabled}
           onCommit={(v) => commitFilter(filterAbs.lowAbs, v)}
+        />
+        <label style={{ ...controlLabelStyle(), minWidth: 0 }}>
+          Phase
+          <input
+            aria-label="TX phase rotator enabled"
+            type="checkbox"
+            checked={txPhaseRotator.enabled}
+            disabled={disabled}
+            onChange={(e) => commitPhaseRotator({ enabled: e.currentTarget.checked })}
+            style={{ width: 16, height: 16 }}
+          />
+        </label>
+        <label style={{ ...controlLabelStyle(), minWidth: 0 }}>
+          Reverse
+          <input
+            aria-label="TX phase reverse"
+            type="checkbox"
+            checked={txPhaseRotator.reverse}
+            disabled={disabled}
+            onChange={(e) => commitPhaseRotator({ reverse: e.currentTarget.checked })}
+            style={{ width: 16, height: 16 }}
+          />
+        </label>
+        <NumberBox
+          label="Corner"
+          ariaLabel="TX phase rotator corner"
+          value={txPhaseRotator.cornerHz}
+          min={20}
+          max={2000}
+          step={5}
+          parse="int"
+          disabled={disabled || !txPhaseRotator.enabled}
+          onCommit={(v) => commitPhaseRotator({ cornerHz: v })}
+        />
+        <NumberBox
+          label="Stages"
+          ariaLabel="TX phase rotator stages"
+          value={txPhaseRotator.stages}
+          min={1}
+          max={16}
+          step={1}
+          parse="int"
+          disabled={disabled || !txPhaseRotator.enabled}
+          onCommit={(v) => commitPhaseRotator({ stages: v })}
         />
       </div>
       {error && (

@@ -147,6 +147,13 @@ public interface IDspEngine : IDisposable
     /// Synthetic.</summary>
     void SetTxLeveling(int channelId, TxLevelingConfig cfg);
 
+    /// <summary>Apply the TX phase rotator (Thetis DSP→CFC→PhaseRot parity).
+    /// Drives WDSP's TXA PHROT all-pass stage: run flag, corner frequency,
+    /// stage count, and explicit microphone polarity reverse. Reverse is kept
+    /// independent from the run flag because Thetis allows phase reversal even
+    /// when phase rotation itself is disabled. No-op on Synthetic.</summary>
+    void SetTxPhaseRotator(int channelId, TxPhaseRotatorConfig cfg);
+
     /// <summary>
     /// Briefly tighten the RX display's averaging time-constant after a
     /// retune so the spectrum settles at the new frequency in ~100 ms

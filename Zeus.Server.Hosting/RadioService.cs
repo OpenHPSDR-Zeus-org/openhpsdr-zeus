@@ -458,6 +458,11 @@ public sealed class RadioService : IDisposable
         // TxLevelingConfig defaults so first-connect behaviour is unchanged
         // (Thetis §6.1-6.3). The Leveler max-gain stays on LevelerMaxGainDb.
         var persistedTxLeveling = _dspSettingsStore.GetTxLeveling() ?? new TxLevelingConfig();
+        // TX phase rotator. Null on a fresh install / legacy DB row falls back
+        // to disabled defaults; Auto Tune or the operator can enable and lock it
+        // in later. Reverse stays an explicit operator polarity choice.
+        var persistedTxPhaseRotator = NormalizeTxPhaseRotator(
+            _dspSettingsStore.GetTxPhaseRotator() ?? new TxPhaseRotatorConfig());
         // SSB bandpass "rectangularity" (issue #871). Null on a fresh install
         // falls back to BandpassWindow.Normal, which resolves to the WDSP
         // open-time tap count (nc = max(2048, dsp_size)), so first-connect audio
@@ -486,6 +491,8 @@ public sealed class RadioService : IDisposable
             {
                 persistedCfc = lastProfile.CfcConfig ?? persistedCfc;
                 persistedTxLeveling = lastProfile.TxLeveling ?? persistedTxLeveling;
+                persistedTxPhaseRotator = NormalizeTxPhaseRotator(
+                    lastProfile.TxPhaseRotator ?? persistedTxPhaseRotator);
                 overlayMicGain = Math.Clamp(lastProfile.MicGainDb, -40, 10);
                 overlayLevelerMaxGain = Math.Clamp(lastProfile.LevelerMaxGainDb, 0.0, 20.0);
                 // Re-sign the operator-typed positive magnitudes for the startup
@@ -665,6 +672,8 @@ public sealed class RadioService : IDisposable
             CwPitchHz: CwOffset.CwPitchHz,
             CtunEnabled: rsSnap?.CtunEnabled ?? false,
             PreampOn: rsSnap?.PreampOn ?? false);
+
+        _state = _state with { TxPhaseRotator = persistedTxPhaseRotator };
 
         // Seed the canonical Receivers[] so RX2's hydrated tuning is the live
         // source of truth from the very first snapshot. RX1 (index 0) is rebuilt
@@ -3572,6 +3581,35 @@ public sealed class RadioService : IDisposable
         Mutate(s => s with { TxLeveling = clamped });
         _dspSettingsStore.SetTxLeveling(clamped);
         return Snapshot();
+    }
+
+    // TX phase rotator — WDSP all-pass phase redistribution plus explicit
+    // microphone polarity reverse. Replace-style like SetTxLeveling; the DSP
+    // apply happens in DspPipelineService so rapid Auto Tune edits are live and
+    // the final state is persisted as the locked-in optimized value.
+    public StateDto SetTxPhaseRotator(TxPhaseRotatorConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        var clamped = NormalizeTxPhaseRotator(cfg);
+        Mutate(s => s with { TxPhaseRotator = clamped });
+        _dspSettingsStore.SetTxPhaseRotator(clamped);
+        return Snapshot();
+    }
+
+    private static TxPhaseRotatorConfig NormalizeTxPhaseRotator(TxPhaseRotatorConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        return cfg with
+        {
+            CornerHz = Math.Clamp(
+                cfg.CornerHz,
+                TxPhaseRotatorConfig.MinCornerHz,
+                TxPhaseRotatorConfig.MaxCornerHz),
+            Stages = Math.Clamp(
+                cfg.Stages,
+                TxPhaseRotatorConfig.MinStages,
+                TxPhaseRotatorConfig.MaxStages),
+        };
     }
 
     // SSB bandpass "rectangularity" — issue #871. Independent RX and TX

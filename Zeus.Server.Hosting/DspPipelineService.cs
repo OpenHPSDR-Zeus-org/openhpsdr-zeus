@@ -936,6 +936,10 @@ public class DspPipelineService : BackgroundService,
     // defaults so a connect landing on defaults still matches what
     // ApplyStateToNewChannel force-pushed.
     private TxLevelingConfig _appliedTxLeveling = new();
+    // TX phase rotator latch (Thetis DSP->CFC->PhaseRot parity). Default-OFF
+    // matches the TXA-open baseline; every operator/Auto Tune edit is pushed
+    // live and replayed on reconnect.
+    private TxPhaseRotatorConfig _appliedTxPhaseRotator = new();
     // RX/TX bandpass "rectangularity" latches — issue #871. Seeded to
     // BandpassWindow.Normal (= byte 1), which resolves to the WDSP open-time tap
     // count, so a connect landing on the default matches what
@@ -3674,6 +3678,14 @@ public class DspPipelineService : BackgroundService,
             engine.SetTxLeveling(channel, txLeveling);
             _appliedTxLeveling = txLeveling;
         }
+        var txPhaseRotator = freeDvMode
+            ? new TxPhaseRotatorConfig()
+            : (s.TxPhaseRotator ?? new TxPhaseRotatorConfig());
+        if (!txPhaseRotator.Equals(_appliedTxPhaseRotator))
+        {
+            engine.SetTxPhaseRotator(channel, txPhaseRotator);
+            _appliedTxPhaseRotator = txPhaseRotator;
+        }
         if (s.ZoomLevel != _appliedZoomLevel)
         {
             engine.SetZoom(channel, s.ZoomLevel);
@@ -3956,6 +3968,7 @@ public class DspPipelineService : BackgroundService,
         var agc = s.Agc ?? new AgcConfig(AgcMode.Med);
         var squelch = s.Squelch ?? new SquelchConfig();
         var txLeveling = s.TxLeveling ?? new TxLevelingConfig();
+        var txPhaseRotator = s.TxPhaseRotator ?? new TxPhaseRotatorConfig();
         // FreeDV resolves to the band-convention sideband (LSB < 10 MHz, USB ≥);
         // every other mode passes through as itself. See RadioService.EffectiveEngineMode.
         var openEngineMode = RadioService.EffectiveEngineMode(s.Mode, s.VfoHz);
@@ -4012,6 +4025,10 @@ public class DspPipelineService : BackgroundService,
         // TUN/two-tone Leveler restore honours the operator's on/off). The
         // Leveler max-gain is pushed separately above (SetTxLevelerMaxGain).
         engine.SetTxLeveling(channelId, txLeveling);
+        // Force-apply TX phase rotator on a fresh engine so a saved profile or
+        // Auto Tune-locked setting survives reconnect. Reverse is part of the
+        // same config but remains operator-controlled.
+        engine.SetTxPhaseRotator(channelId, txPhaseRotator);
         // Manual notches: feed the LO first (notch positioning reference), then
         // re-apply the operator's notch set onto the fresh engine. A reconnect
         // builds a brand-new engine whose notch DB is empty; RadioService holds
@@ -4042,6 +4059,7 @@ public class DspPipelineService : BackgroundService,
         _appliedAgc = agc;
         _appliedSquelch = squelch;
         _appliedTxLeveling = txLeveling;
+        _appliedTxPhaseRotator = txPhaseRotator;
         _appliedRxBandpassWindow = s.RxFilterWindow;
         _appliedTxBandpassWindow = s.TxFilterWindow;
         _appliedZoomLevel = s.ZoomLevel;

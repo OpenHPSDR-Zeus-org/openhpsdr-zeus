@@ -97,6 +97,7 @@ public class TxAudioIngestTests
         public void SetAgc(int channelId, AgcConfig cfg) { }
         public void SetSquelch(int channelId, SquelchConfig cfg) { }
         public void SetTxLeveling(int channelId, TxLevelingConfig cfg) { }
+        public void SetTxPhaseRotator(int channelId, TxPhaseRotatorConfig cfg) { }
     public void SetRxDisplayFastAttack(int channelId, bool fast) { }
         public void SetRxAfGainDb(int channelId, double db) { }
         public void SetNoiseReduction(int channelId, NrConfig cfg) { }

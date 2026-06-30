@@ -31,6 +31,7 @@ describe('TxAudioProfileBar', () => {
             compressorGainDb: 0,
           },
           cfcConfig: { enabled: false, postEqEnabled: false, preCompDb: 0, prePeqDb: 0, bands: [] },
+          txPhaseRotator: { enabled: false, cornerHz: 338, stages: 8, reverse: false },
           lowCutHz: 150,
           highCutHz: 2850,
           processingMode: 'native',

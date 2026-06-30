@@ -153,6 +153,7 @@ public class RadioMicReceiverTests
         public void SetAgc(int channelId, AgcConfig cfg) { }
         public void SetSquelch(int channelId, SquelchConfig cfg) { }
         public void SetTxLeveling(int channelId, TxLevelingConfig cfg) { }
+        public void SetTxPhaseRotator(int channelId, TxPhaseRotatorConfig cfg) { }
         public void SetNotches(IReadOnlyList<NotchDto> notches) { }
         public void SetNotchTuneFrequencyHz(double loHz) { }
         public void ConfigureTxDisplayAnalyzer(int fftSize, int windowType, double avgTauSec) { }
