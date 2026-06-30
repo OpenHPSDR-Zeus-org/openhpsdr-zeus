@@ -65,6 +65,30 @@ public sealed class HostCommandState
     /// <summary>Codec mic/line-in select (DriveFilter frame C2[1]).</summary>
     public bool MicLineIn;
 
+    // ---- Protocol-2 specific (populated by the P2 decoder) ----------------
+
+    /// <summary>
+    /// PureSignal single-ADC time-mux armed for the current TX burst — the
+    /// <c>Mux</c> register, P2 CmdRx byte 1363 bit 1 (0x02). On the ANAN-10E
+    /// (HermesII) and ANAN-G2E (HermesC10) this swings DDC0's input to the
+    /// interleaved coupler/TX-DAC-reference pair (firmware Hermes.v:684-687,
+    /// :1080-1093). The emulator keys its feedback layout off this bit exactly
+    /// as the gateware does. Zero on Protocol 1.
+    /// </summary>
+    public bool PsArmedBurst;
+
+    /// <summary>
+    /// TX-time ADC step-attenuator in dB — P2 CmdTx byte 59
+    /// (<c>Angelia_atten_Tx0</c>, Tx_specific_C&amp;C.v:182-183). On a single-ADC
+    /// PS time-mux board the DAC feedback hits the only RX ADC during TX, so
+    /// this must reach the protective floor whenever PS is armed (the byte-59
+    /// safety seed). Surfaced for the safety assertion. Zero on Protocol 1.
+    /// </summary>
+    public byte TxStepAttnDb;
+
+    /// <summary>Number of active ADCs the host commanded (P2 CmdRx byte 4).</summary>
+    public byte NumAdc = 1;
+
     /// <summary>Return a deep copy for publishing an immutable status snapshot.</summary>
     public HostCommandState Clone() => (HostCommandState)MemberwiseClone();
 }
