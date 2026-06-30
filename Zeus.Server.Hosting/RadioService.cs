@@ -876,7 +876,18 @@ public sealed class RadioService : IDisposable
         get { lock (_sync) return _mox; }
     }
 
-    public StateDto Snapshot() { lock (_sync) return _state with { Receivers = ProjectReceivers(_state), MaxReceivers = EffectiveMaxReceivers }; }
+    public StateDto Snapshot()
+    {
+        lock (_sync)
+        {
+            return _state with
+            {
+                Receivers = ProjectReceivers(_state),
+                MaxReceivers = EffectiveMaxReceivers,
+                ConnectedProtocol = ConnectedProtocolLocked(),
+            };
+        }
+    }
 
     /// <summary>Current operator preamp toggle. PreampOn isn't on the
     /// StateDto wire format, so DspPipelineService reads it directly when
@@ -4035,7 +4046,12 @@ public sealed class RadioService : IDisposable
             // fields on every mutation so StateChanged subscribers and the
             // SignalR broadcast always carry an up-to-date Receivers[] (wire
             // v2). Pure function of the flat fields — cheap (1–2 elements).
-            next = next with { Receivers = ProjectReceivers(next), MaxReceivers = EffectiveMaxReceivers };
+            next = next with
+            {
+                Receivers = ProjectReceivers(next),
+                MaxReceivers = EffectiveMaxReceivers,
+                ConnectedProtocol = ConnectedProtocolLocked(),
+            };
             _state = next;
         }
         _stateDirty = true;
@@ -4375,6 +4391,13 @@ public sealed class RadioService : IDisposable
             if (connected != HpsdrBoardKind.Unknown) return connected;
             return _preferredRadioStore?.Get() ?? HpsdrBoardKind.Unknown;
         }
+    }
+
+    private string? ConnectedProtocolLocked()
+    {
+        if (_p2Active) return "P2";
+        if (_activeClient is not null) return "P1";
+        return null;
     }
 
     // Board-aware count of user-visible receivers the connected radio can

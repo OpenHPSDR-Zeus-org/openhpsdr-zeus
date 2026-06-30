@@ -285,6 +285,12 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
         // adopts all other server fields) until the optimistic window expires.
         receivers: mergeReceivers(prev.receivers, s.receivers, trustVfo),
         maxReceivers: s.maxReceivers ?? prev.maxReceivers,
+        connectedProtocol:
+          s.connectedProtocol !== undefined
+            ? s.connectedProtocol
+            : s.status === 'Disconnected'
+            ? null
+            : prev.connectedProtocol,
         txVfo: s.txVfo,
         txReceiverIndex: s.txReceiverIndex ?? prev.txReceiverIndex,
         rxFocus: s.rx2Enabled ? prev.rxFocus : 'A',
