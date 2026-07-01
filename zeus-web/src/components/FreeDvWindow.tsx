@@ -16,6 +16,7 @@ import {
   FREEDV_WINDOW_MIN_HEIGHT,
   useFreeDvWindowStore,
 } from '../state/freedv-window-store';
+import { useLayoutStore } from '../state/layout-store';
 
 /** Edge codes for the resize handles — 4 edges + 4 corners. */
 type ResizeEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
@@ -146,6 +147,11 @@ function ResizeHandle({ edge }: { edge: ResizeEdge }) {
 export function FreeDvWindow() {
   const isOpen = useFreeDvWindowStore((s) => s.isOpen);
   const close = useFreeDvWindowStore((s) => s.close);
+  // Settings replaces the workspace inline (not a modal), with no z-index
+  // of its own — so this fixed-position, zIndex:420 popup would paint over
+  // it. Hide while Settings is showing; the store's isOpen stays true so
+  // the popup reappears in place the moment Settings closes.
+  const settingsViewOpen = useLayoutStore((s) => s.settingsViewOpen);
   const x = useFreeDvWindowStore((s) => s.x);
   const y = useFreeDvWindowStore((s) => s.y);
   const width = useFreeDvWindowStore((s) => s.width);
@@ -231,7 +237,7 @@ export function FreeDvWindow() {
     [],
   );
 
-  if (!isOpen) return null;
+  if (!isOpen || settingsViewOpen) return null;
 
   return (
     <div
