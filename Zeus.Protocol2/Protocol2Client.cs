@@ -2938,17 +2938,28 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     ///    same relay. Without the bit the external feedback never reaches the ADC
     ///    and calcc can never converge — the observed "PS doesn't work on the G2E".
     ///
-    /// Deliberately scoped to HermesC10: the 10E (HermesII) is the same class and
-    /// almost certainly needs the same routing, but is left byte-identical here
-    /// until a 10E owner can bench-confirm it. Every other board is unaffected.
-    /// The caller still ANDs the transmit-edge (xmit / MOX) condition.
+    /// IMPORTANT — the <paramref name="psExternal"/> toggle is honoured ONLY on the
+    /// dual-ADC family, where "Internal" selects the board's dedicated feedback ADC1.
+    /// The single-ADC HermesC10 has NO internal feedback coupler: its one ADC is the
+    /// raw LTC2208 (<c>temp_ADC = INA</c>, Hermes.v:1117-1130) with no internal mux,
+    /// so PureSignal feedback is physically reachable ONLY through this external
+    /// bypass relay (bit 11 "RX 1 Out", SPI.v:47). "Internal" is not a valid source
+    /// on this board — it silently leaves the ADC on the antenna and the PS meter
+    /// dead ("as if PS isn't on"). So on HermesC10 the relay is routed whenever PS is
+    /// armed, regardless of the operator's Internal/External pick. Every OTHER board
+    /// still requires <paramref name="psExternal"/> and stays byte-identical; the 10E
+    /// (HermesII) is deliberately left off until a 10E owner can bench-confirm the
+    /// same routing. The caller still ANDs the transmit-edge (xmit / MOX) condition.
     /// </summary>
     internal static bool RoutesExternalPsFeedbackBypass(
         HpsdrBoardKind board, bool psEnabled, bool psExternal)
     {
-        if (!psEnabled || !psExternal) return false;
-        if (ComposesPsFeedbackWire(psEnabled, board)) return true;
-        return board == HpsdrBoardKind.HermesC10 && G2ePsTimeMuxOnAir;
+        if (!psEnabled) return false;
+        // Single-ADC G2E: external tap is the ONLY feedback path — route it on any
+        // PS-armed burst, independent of the (physically meaningless) Internal pick.
+        if (board == HpsdrBoardKind.HermesC10) return G2ePsTimeMuxOnAir;
+        // Dual-ADC family: honour the operator's Internal(ADC1)/External(bypass) pick.
+        return psExternal && ComposesPsFeedbackWire(psEnabled, board);
     }
 
     /// <summary>
@@ -3493,6 +3504,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                     else
                     {
                         HandleDdcPacket(buf, ddcIndex);
+                        // Keyed heartbeat: on the G2E, if PS is armed + keyed but the
+                        // DDC0 packet did NOT route to the paired-feedback path (burst
+                        // not forming, wrong rate, or reverted to plain RX), still tick
+                        // the ~1 Hz diagnostic so the bench sees an explicit frames=0
+                        // line instead of silence. Inert on every other board.
+                        if (ddcIndex == 0 && ShouldLogG2ePsWireDiag(
+                                _boardKind, _psFeedbackEnabled, _moxOn || _tuneActive))
+                        {
+                            MaybeEmitG2ePsDiag();
+                        }
                     }
                 }
                 else if (srcPort == 1025 && n >= HiPriStatusMinBytes)
@@ -3831,26 +3852,52 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (g2eDiag)
         {
             _g2ePsDiagFramesInWindow++;
-            long nowMs = Environment.TickCount64;
-            if (_g2ePsDiagWindowStartMs == 0) _g2ePsDiagWindowStartMs = nowMs;
-            if (nowMs - _g2ePsDiagWindowStartMs >= 1000)
-            {
-                // Mirrors the existing p1.tx.rate / p2.rxdiag 1 Hz cadence.
-                // arm=1 because byte 1363 = 0x02 is on the wire whenever this
-                // path runs; atten is the byte-59 (Angelia_atten_Tx0) value the
-                // host is actually sending; frames = DDC0 feedback packets on
-                // port 1035 in the window; peakFb/peakRef are the de-interleaved
-                // coupler/reference magnitudes (0..1). Read-only diagnostic.
-                _log.LogInformation(
-                    "p2.ps.g2e arm={Arm} atten={Atten} frames={Frames} peakFb={PeakFb:F4} peakRef={PeakRef:F4}",
-                    1, _txStepAttnDb, _g2ePsDiagFramesInWindow,
-                    _g2ePsDiagPeakCoupler, _g2ePsDiagPeakReference);
-                _g2ePsDiagWindowStartMs = nowMs;
-                _g2ePsDiagFramesInWindow = 0;
-                _g2ePsDiagPeakCoupler = 0f;
-                _g2ePsDiagPeakReference = 0f;
-            }
+            MaybeEmitG2ePsDiag();
         }
+    }
+
+    /// <summary>
+    /// Emit the ~1 Hz HermesC10 (ANAN-G2E) PS wire diagnostic when the window has
+    /// elapsed, then reset the window. Called from two places, both on the RX
+    /// thread (no synchronisation needed): once per PS-paired packet in
+    /// <see cref="HandlePsPairedPacket"/> (with <c>frames</c> already incremented),
+    /// AND as a keyed heartbeat from the RX dispatch loop on every DDC0 packet
+    /// during a keyed PS burst. The heartbeat is load-bearing for the bench: without
+    /// it the line only prints when feedback pairs actually arrive, so a totally
+    /// dead feedback path emits NOTHING and the tester cannot tell "zero frames"
+    /// (routing/burst broken) from "frames but flat level" (byte-59 / pad too high).
+    /// With it the tester always gets a line, and <c>frames=0</c> vs <c>frames=N,
+    /// peakFb≈0</c> is the one-line discriminator (see the #1249 bench notes).
+    /// </summary>
+    private void MaybeEmitG2ePsDiag()
+    {
+        long nowMs = Environment.TickCount64;
+        if (_g2ePsDiagWindowStartMs == 0) _g2ePsDiagWindowStartMs = nowMs;
+        if (nowMs - _g2ePsDiagWindowStartMs < 1000) return;
+
+        // Mirrors the existing p1.tx.rate / p2.rxdiag 1 Hz cadence.
+        //   arm     = byte 1363 = 0x02 (SyncRx[0][1]) is on the wire whenever this
+        //             path runs;
+        //   external= the operator's Internal/External feedback pick;
+        //   bypass  = whether alex0 bit 11 (RX 1 Out) is actually routed on the wire
+        //             for this keyed PS burst — the single-ADC G2E's ONLY tap path,
+        //             now armed regardless of the Internal/External pick (#960);
+        //   atten   = the byte-59 (Angelia_atten_Tx0) TX-time ADC attenuation the
+        //             host is sending (stacks on the operator's external pad);
+        //   frames  = DDC0 feedback packets on port 1035 in the window;
+        //   peakFb / peakRef = de-interleaved coupler/reference magnitudes (0..1).
+        // Read-only diagnostic.
+        bool bypass = RoutesExternalPsFeedbackBypass(
+                          _boardKind, _psFeedbackEnabled, _psFeedbackExternal)
+                      && (_moxOn || _tuneActive);
+        _log.LogInformation(
+            "p2.ps.g2e arm={Arm} external={External} bypass={Bypass} atten={Atten} frames={Frames} peakFb={PeakFb:F4} peakRef={PeakRef:F4}",
+            1, _psFeedbackExternal, bypass, _txStepAttnDb, _g2ePsDiagFramesInWindow,
+            _g2ePsDiagPeakCoupler, _g2ePsDiagPeakReference);
+        _g2ePsDiagWindowStartMs = nowMs;
+        _g2ePsDiagFramesInWindow = 0;
+        _g2ePsDiagPeakCoupler = 0f;
+        _g2ePsDiagPeakReference = 0f;
     }
 
     /// <summary>

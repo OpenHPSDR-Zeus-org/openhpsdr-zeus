@@ -293,15 +293,20 @@ public sealed class Protocol2Engine : IVirtualRadio
         while (!ct.IsCancellationRequested)
         {
             IPEndPoint? host = _hostEndPoint;
-            bool running, feedback;
+            bool running, feedback, couplerRouted;
             int rateKhz;
             long tunedHz;
             lock (_stateGate)
             {
                 running = _state.Running;
-                // The host only sets byte 1363 during an armed keyed burst, so
-                // the Mux bit alone is the gateware-faithful discriminator.
+                // Byte 1363 (SyncRx[0][1]/Mux[1]) arms the interleaved DDC0 burst —
+                // feedback FRAMES flow whenever it is set during a keyed TX.
                 feedback = _state.PsArmedBurst;
+                // ...but on the single-ADC board the COUPLER only carries the PA
+                // sample when the external tap relay (alex0 bit 11) is also routed.
+                // Without it the frames still flow with a silent coupler — exactly
+                // the G2E-Internal dead-meter symptom this PR fixes.
+                couplerRouted = _state.PsCouplerRouted;
                 rateKhz = _state.SampleRateKhz > 0 ? _state.SampleRateKhz : _profile.SampleRateKhz;
                 tunedHz = _currentTunedHz;
             }
@@ -317,14 +322,25 @@ public sealed class Protocol2Engine : IVirtualRadio
             double intervalSec;
             if (feedback)
             {
-                // Clean reference → coupler-through-PA (identity if distortion
-                // off). Coupler is DDC0 (pscc "rx"), reference is DDC1 (pscc "tx").
+                // Reference (DDC1 / pscc "tx") is always the clean TX-DAC sample.
+                // Coupler (DDC0 / pscc "rx") = reference-through-PA distortion, but
+                // ONLY when the external tap relay is routed; otherwise the single
+                // ADC sees no PA sample and the coupler is silent (frames still
+                // flow — the dead-meter case the fix eliminates by routing bit 11).
                 _txRef.Fill(refBuf, P2RxDdcEncoder.PsPairsPerPacket);
                 for (int i = 0; i < P2RxDdcEncoder.PsPairsPerPacket; i++)
                 {
-                    var (ci, cq) = _distortion.Apply(refBuf[2 * i], refBuf[2 * i + 1]);
-                    coupBuf[2 * i] = ci;
-                    coupBuf[2 * i + 1] = cq;
+                    if (couplerRouted)
+                    {
+                        var (ci, cq) = _distortion.Apply(refBuf[2 * i], refBuf[2 * i + 1]);
+                        coupBuf[2 * i] = ci;
+                        coupBuf[2 * i + 1] = cq;
+                    }
+                    else
+                    {
+                        coupBuf[2 * i] = 0f;
+                        coupBuf[2 * i + 1] = 0f;
+                    }
                 }
                 _rxEncoder.EncodePsFeedback(packet, seq++, coupBuf, refBuf);
                 Interlocked.Increment(ref _psFeedbackPacketsSent);

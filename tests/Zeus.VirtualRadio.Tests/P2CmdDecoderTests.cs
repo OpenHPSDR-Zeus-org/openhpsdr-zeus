@@ -174,4 +174,56 @@ public class P2CmdDecoderTests
         Assert.False(state.PsArmedBurst);
         Assert.False(state.Mox);
     }
+
+    [Fact]
+    public void DecodeCmdHighPriority_G2eInternalPs_RoutesCouplerTap()
+    {
+        // End-to-end socketless guard for the #960 dead-meter fix. Zeus's alex0
+        // composer must route the external tap (bit 11) for a G2E even on the
+        // DEFAULT Internal source (the single ADC has no internal coupler, so the
+        // tap is the only path), and the emulator must decode that as the coupler
+        // being routed. Before the fix the composer left bit 11 clear on Internal,
+        // PsCouplerRouted stayed false, and the emulator's coupler was silent →
+        // flat PS meter ("as if PS isn't on"). This test would FAIL on the old
+        // composer and PASS on the fix — the exact regression that was missing.
+        uint alex0Internal = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: 14_074_000,
+            moxOn: true,
+            psEnabled: true,
+            psExternal: false,               // operator left it on the default Internal
+            board: HpsdrBoardKind.HermesC10);
+
+        var p = new byte[P2Wire.BufLen];
+        p[P2Wire.HpRunMoxByte] = 0x03;       // run | MOX
+        BinaryPrimitives.WriteUInt32BigEndian(p.AsSpan(P2Wire.HpAlex0Offset, 4), alex0Internal);
+
+        var state = new HostCommandState();
+        Decoder().Decode(P2Wire.CmdHighPriorityPort, p, state);
+
+        Assert.True(state.PsCouplerRouted,
+            "G2E PS-armed keyed burst must route the external tap (bit 11) even on Internal.");
+    }
+
+    [Fact]
+    public void DecodeCmdHighPriority_PsDisarmed_CouplerNotRouted()
+    {
+        // No PS arm ⇒ no tap routing, even with External selected — guards against
+        // an auto-arm / at-rest bypass on the single-ADC board.
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: 14_074_000,
+            moxOn: true,
+            psEnabled: false,
+            psExternal: true,
+            board: HpsdrBoardKind.HermesC10);
+
+        var p = new byte[P2Wire.BufLen];
+        p[P2Wire.HpRunMoxByte] = 0x03;
+        BinaryPrimitives.WriteUInt32BigEndian(p.AsSpan(P2Wire.HpAlex0Offset, 4), alex0);
+
+        var state = new HostCommandState();
+        Decoder().Decode(P2Wire.CmdHighPriorityPort, p, state);
+
+        Assert.False(state.PsCouplerRouted,
+            "No PS arm must leave the coupler tap unrouted (no at-rest/auto bypass).");
+    }
 }

@@ -273,8 +273,17 @@ public class PsWireFormatTests
     }
 
     [Fact]
-    public void Alex0_G2e_BypassBit_ClearWhenInternal()
+    public void Alex0_G2e_BypassBit_SetEvenWhenInternal_SingleAdcHasNoInternalCoupler()
     {
+        // Root-cause regression (#960): the single-ADC G2E has NO internal feedback
+        // coupler — its one ADC (raw LTC2208, temp_ADC = INA, Hermes.v:1117-1130) can
+        // only see the external sampler tap through the bit-11 BYPASS relay. So
+        // "Internal" is a physically-impossible selection on this board, and the tap
+        // MUST route regardless of the operator's Internal/External pick. Before the
+        // fix, a G2E left on the default Internal source left the relay clear -> ADC
+        // on the antenna -> calcc never converged -> dead PS meter ("as if PS isn't
+        // on"). This test would PASS on the old code only by asserting == 0; it now
+        // asserts the tap is routed even when Internal is selected.
         uint alex0 = Protocol2Client.ComposeAlex0ForTest(
             rxFreqHz: 14_200_000,
             moxOn: true,
@@ -282,8 +291,12 @@ public class PsWireFormatTests
             psExternal: false,
             board: HpsdrBoardKind.HermesC10);
 
-        Assert.True((alex0 & Protocol2Client.AlexRxAntennaBypass) == 0,
-            "G2E internal-coupler PS leaves the BYPASS relay clear.");
+        Assert.True((alex0 & Protocol2Client.AlexRxAntennaBypass) != 0,
+            "G2E must route the external tap even on the Internal pick — it has no " +
+            "internal coupler; Internal-default is the dead-meter bug this fixes.");
+        // Still never the dual-ADC Orion PS bit.
+        Assert.True((alex0 & Protocol2Client.AlexPsBit) == 0,
+            "G2E must never set ALEX_PS — it is not on the dual-ADC PS wire.");
     }
 
     [Fact]
