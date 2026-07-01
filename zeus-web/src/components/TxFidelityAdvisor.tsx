@@ -6,9 +6,11 @@ import { fetchTxDiagnostics, type TxDiagnosticsDto } from '../api/client';
 import { analyzeTxFidelity } from '../audio/tx-fidelity';
 import { useAudioSuiteStore } from '../state/audio-suite-store';
 import { useTxStore } from '../state/tx-store';
+import { startEfficientPolling } from '../util/efficient-polling';
 
 const CHAIN_METER_POLL_MS = 250;
 const TX_DIAG_POLL_MS = 500;
+const HIDDEN_POLL_MS = false;
 const CHAIN_DBFS_FLOOR = -119.5;
 
 type ChainMetersDto = {
@@ -188,27 +190,23 @@ export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
       return;
     }
 
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const tick = async () => {
-      try {
-        const res = await fetch('/api/tx-audio-suite/chain/meters');
-        if (alive && res.ok) {
+    return startEfficientPolling(
+      async (signal) => {
+        const res = await fetch('/api/tx-audio-suite/chain/meters', { signal });
+        if (res.ok) {
           const body = (await res.json()) as ChainMetersDto;
           const next = normalizeChainMeters(body);
           setChainMeters((prev) => (sameChainMeters(prev, next) ? prev : next));
         }
-      } catch {
-        /* transient meter read failure; keep the last chain reading */
-      }
-      if (alive) timer = setTimeout(tick, CHAIN_METER_POLL_MS);
-    };
-
-    void tick();
-    return () => {
-      alive = false;
-      if (timer) clearTimeout(timer);
-    };
+      },
+      {
+        intervalMs: CHAIN_METER_POLL_MS,
+        hiddenIntervalMs: HIDDEN_POLL_MS,
+        onError: () => {
+          /* transient meter read failure; keep the last chain reading */
+        },
+      },
+    );
   }, [shouldPollChainMeters]);
 
   useEffect(() => {
@@ -217,29 +215,22 @@ export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
       return;
     }
 
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const tick = async () => {
-      const controller = new AbortController();
-      try {
-        const diag = await fetchTxDiagnostics(controller.signal);
-        if (alive) {
-          setTxHealth((prev) => {
-            const next = normalizeTxHealth(diag, prev);
-            return sameTxHealth(prev, next) ? prev : next;
-          });
-        }
-      } catch {
-        /* transient diagnostic read failure; keep the previous health state */
-      }
-      if (alive) timer = setTimeout(tick, TX_DIAG_POLL_MS);
-    };
-
-    void tick();
-    return () => {
-      alive = false;
-      if (timer) clearTimeout(timer);
-    };
+    return startEfficientPolling(
+      async (signal) => {
+        const diag = await fetchTxDiagnostics(signal);
+        setTxHealth((prev) => {
+          const next = normalizeTxHealth(diag, prev);
+          return sameTxHealth(prev, next) ? prev : next;
+        });
+      },
+      {
+        intervalMs: TX_DIAG_POLL_MS,
+        hiddenIntervalMs: HIDDEN_POLL_MS,
+        onError: () => {
+          /* transient diagnostic read failure; keep the previous health state */
+        },
+      },
+    );
   }, [shouldPollTxHealth]);
 
   const snapshot = {

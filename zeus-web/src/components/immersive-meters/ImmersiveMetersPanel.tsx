@@ -24,7 +24,7 @@
 // the three section cards + the footer status strip. ~30 Hz refresh tick
 // keeps the peak-hold animation continuous between the 10 Hz wire frames.
 
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { BigArc } from './BigArc';
 import { VuColumn } from './VuColumn';
 import { PullDownArc } from './PullDownArc';
@@ -72,22 +72,67 @@ function useFwdWattsStats(transmitting: boolean): { pep: number; avg: number } {
   return { pep: peakRef.current, avg: avgRef.current };
 }
 
-function useRafTick(targetHz: number = 30) {
+function useRafTick(targetHz: number = 30, rootRef?: RefObject<Element | null>) {
   const [, setTick] = useState(0);
   useEffect(() => {
     let raf = 0;
     let last = 0;
+    let pageVisible = typeof document === 'undefined' || !document.hidden;
+    let inViewport = true;
     const minMs = 1000 / targetHz;
+
+    const active = () => pageVisible && inViewport;
+    const cancel = () => {
+      if (raf !== 0) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      }
+    };
+    const start = () => {
+      if (raf !== 0 || !active()) return;
+      last = 0;
+      raf = requestAnimationFrame(loop);
+    };
     const loop = (ts: number) => {
-      if (ts - last >= minMs) {
+      raf = 0;
+      if (!active()) return;
+      if (last === 0 || ts - last >= minMs) {
         last = ts;
         setTick((n) => (n + 1) & 0xff);
       }
       raf = requestAnimationFrame(loop);
     };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [targetHz]);
+
+    const onVisibilityChange = () => {
+      pageVisible = typeof document === 'undefined' || !document.hidden;
+      if (pageVisible) start();
+      else cancel();
+    };
+
+    let observer: IntersectionObserver | null = null;
+    const root = rootRef?.current;
+    if (root && typeof IntersectionObserver !== 'undefined') {
+      inViewport = false;
+      observer = new IntersectionObserver(([entry]) => {
+        inViewport = entry?.isIntersecting ?? true;
+        if (inViewport) start();
+        else cancel();
+      });
+      observer.observe(root);
+    }
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
+    }
+    start();
+    return () => {
+      cancel();
+      observer?.disconnect();
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      }
+    };
+  }, [rootRef, targetHz]);
 }
 
 interface SectionProps {
@@ -265,7 +310,8 @@ function StatusFooter({ pepWatts, ratedWatts }: { pepWatts: number; ratedWatts: 
 export function ImmersiveMetersPanel() {
   // ~30 Hz tick to drive peak-hold decay smoothly between the 10 Hz wire
   // frames. Same recipe the legacy TxStageMeters used.
-  useRafTick(30);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  useRafTick(30, bodyRef);
 
   const micPk = useTxStore((s) => s.wdspMicPk);
   const micAv = useTxStore((s) => s.micAv);
@@ -325,7 +371,11 @@ export function ImmersiveMetersPanel() {
   };
 
   return (
-    <div style={bodyStyle} aria-label="Immersive TX meters — final output, signal chain, gain reduction">
+    <div
+      ref={bodyRef}
+      style={bodyStyle}
+      aria-label="Immersive TX meters — final output, signal chain, gain reduction"
+    >
       <Section
         title="Final Output"
         led="on"
