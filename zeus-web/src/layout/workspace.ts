@@ -206,6 +206,50 @@ export function placeTileInPage(
   return null;
 }
 
+export function resolveWorkspaceColumnCount({
+  occupiedCols,
+  colsForWidth,
+  monitorCols,
+}: {
+  occupiedCols: number;
+  colsForWidth: number;
+  monitorCols: number;
+}): number {
+  const occupied = Math.max(WORKSPACE_GRID_COLS, Math.floor(occupiedCols));
+  const widthCols = Math.max(occupied, Math.floor(colsForWidth));
+  const monitor = Math.floor(monitorCols);
+  if (monitor <= 0) return widthCols;
+  // The monitor cap is only a drag/scroll bound. It must never compress an
+  // existing authored layout, because RGL satisfies too-few cols by shifting
+  // right-edge tiles left, which can hide them under wider panels.
+  return Math.max(occupied, Math.min(monitor, widthCols));
+}
+
+export function repairWorkspaceTileOverlaps(
+  tiles: WorkspaceTile[],
+): WorkspaceTile[] {
+  const placed: WorkspaceTile[] = [];
+  let changed = false;
+
+  for (const tile of tiles) {
+    let next = tile;
+    for (let guard = 0; guard <= placed.length; guard += 1) {
+      const colliders = placed.filter((other) => tilesOverlap(next, other));
+      if (colliders.length === 0) break;
+
+      const shiftedX = Math.max(
+        next.x,
+        ...colliders.map((other) => other.x + other.w),
+      );
+      next = { ...next, x: shiftedX };
+      changed = true;
+    }
+    placed.push(next);
+  }
+
+  return changed ? placed : tiles;
+}
+
 function tilesOverlap(
   a: { x: number; y: number; w: number; h: number },
   b: { x: number; y: number; w: number; h: number },
@@ -275,9 +319,10 @@ export function parseWorkspaceLayout(raw: unknown): WorkspaceLayout {
         : {}),
     });
   }
+  const normalized = normalizeOversizedRows(tiles);
   return {
     schemaVersion: 8,
-    tiles: normalizeOversizedRows(tiles),
+    tiles: repairWorkspaceTileOverlaps(normalized),
     ...(obj.locked === true ? { locked: true } : {}),
   };
 }
