@@ -52,7 +52,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import { fetchState } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import {
   getReceiverVfoHz,
@@ -63,7 +62,6 @@ import { useVfoLockStore } from '../state/vfo-lock-store';
 import { receiverColorByIndex, type SpectrumReceiverId } from './spectrumReceiverColor';
 
 const MAX_HZ = 60_000_000;
-const STATE_POLL_MS = 2000;
 
 type DigitPlace = {
   decade: number;
@@ -167,28 +165,6 @@ export function VfoDisplay({
     wheelInflight.current?.abort();
     if (wheelTimer.current != null) clearTimeout(wheelTimer.current);
   }, []);
-
-  useEffect(() => {
-    if (targetIndex !== 0) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const tick = async () => {
-      if (!cancelled && !editing) {
-        try {
-          const next = await fetchState();
-          if (!cancelled && !editing) applyState(next);
-        } catch {
-          /* swallow — retry next tick */
-        }
-      }
-      if (!cancelled) timer = setTimeout(tick, STATE_POLL_MS);
-    };
-    tick();
-    return () => {
-      cancelled = true;
-      if (timer != null) clearTimeout(timer);
-    };
-  }, [applyState, editing, targetIndex]);
 
   const beginEdit = useCallback(() => {
     if (locked) return;
