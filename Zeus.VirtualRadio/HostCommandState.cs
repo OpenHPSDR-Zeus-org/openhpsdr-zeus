@@ -78,6 +78,23 @@ public sealed class HostCommandState
     public bool PsArmedBurst;
 
     /// <summary>
+    /// Whether the host has routed the external PureSignal feedback tap into the
+    /// RX ADC for this TX burst — P2 CmdHighPriority alex0 bit 11
+    /// (<c>ALEX_RX_ANTENNA_BYPASS</c> / "RX 1 Out" relay, SPI.v:47). On the
+    /// single-ADC ANAN-G2E (HermesC10) the one ADC has NO internal coupler
+    /// (<c>temp_ADC = INA</c>, Hermes.v:1117-1130), so it can only see the
+    /// post-PA sampler tap through this relay. <see cref="PsArmedBurst"/> (byte
+    /// 1363) makes DDC0 stream the interleaved coupler/reference pair — frames
+    /// flow — but the coupler carries real signal ONLY when this bit is also set;
+    /// with it clear the ADC is on the antenna (disconnected during TX) and the
+    /// coupler is silent, so calcc never converges and the PS meter never moves
+    /// ("as if PS isn't on"). Modelling this is what lets the emulator reproduce
+    /// the G2E-Internal dead-meter bug instead of green-washing over it. Zero on
+    /// Protocol 1.
+    /// </summary>
+    public bool PsCouplerRouted;
+
+    /// <summary>
     /// TX-time ADC step-attenuator in dB — P2 CmdTx byte 59
     /// (<c>Angelia_atten_Tx0</c>, Tx_specific_C&amp;C.v:182-183). On a single-ADC
     /// PS time-mux board the DAC feedback hits the only RX ADC during TX, so

@@ -454,6 +454,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private int _psBlockFill;
     private ulong _psBlockStartSeq;
 
+    // ---- HermesC10 (ANAN-G2E) PS wire instrumentation (issue #960) ----
+    // Read-only ~1 Hz diagnostic of the single-ADC time-mux PS feedback burst,
+    // gated on _boardKind == HermesC10 (see ShouldLogG2ePsWireDiag) so it is
+    // inert for every other board. It logs the byte-59 attenuation actually on
+    // the wire, the DDC0 feedback frame count on port 1035, and the peak coupler
+    // (rx_I[0]) and reference (rx_I[NR]) sample magnitudes from the de-interleaved
+    // pair — the numbers that make the next real-G2E bench (lb5va, #960) decisive
+    // on whether feedback is flowing and at what level. Pure logging: no wire
+    // write, no socket I/O, no hot-path allocation. Touched only from the RX
+    // thread inside HandlePsPairedPacket, so no synchronisation is needed.
+    private long _g2ePsDiagWindowStartMs;
+    private long _g2ePsDiagFramesInWindow;
+    private float _g2ePsDiagPeakCoupler;
+    private float _g2ePsDiagPeakReference;
+
     public Protocol2Client(ILogger<Protocol2Client> log)
     {
         _log = log;
@@ -1296,17 +1311,40 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Arm or disarm PureSignal feedback streaming. When on:
-    ///   - <c>SendCmdRx</c> enables DDC0 alongside the user-visible DDC2 and
-    ///     synchronises DDC1→DDC0 (byte 1363 = 0x02) so the radio sends
-    ///     paired DDC0/DDC1 IQ on port 1035.
-    ///   - <c>SendCmdHighPriority</c> sets <c>ALEX_PS_BIT (0x00040000)</c>
-    ///     in alex0/alex1 and, during xmit, mirrors DDC0+DDC1 phase words
-    ///     to the TX DUC frequency.
-    ///   - The packet decoder switches to the paired format (6B DDC0 + 6B
-    ///     DDC1 per sample, repeating).
-    /// When off the radio reverts to the standard non-PS RX layout and any
-    /// in-flight paired packets are discarded by the decoder.
+    /// Arm or disarm PureSignal feedback streaming. The exact wire behaviour is
+    /// board-specific and routed through the per-board predicates — this summary
+    /// describes the two families the code actually composes.
+    ///
+    /// DUAL-ADC family (OrionMkII / Saturn / G2, <see cref="ReservesPsFeedbackDdcs"/>):
+    ///   - <c>SendCmdRx</c> enables the dedicated DDC0+DDC1 feedback pair
+    ///     alongside the user-visible RX on DDC2 and sets byte 1363 = 0x02 so the
+    ///     radio streams paired DDC0/DDC1 IQ on port 1035.
+    ///   - <c>SendCmdHighPriority</c> sets <c>ALEX_PS_BIT</c> and, during xmit,
+    ///     mirrors the DDC0/DDC1 phase words to the TX-DUC frequency
+    ///     (<see cref="ComposesPsFeedbackWire"/> is true).
+    ///
+    /// SINGLE-ADC time-mux family (ANAN-G2E / HermesC10 and ANAN-10E / HermesII,
+    /// <see cref="TimeMuxesPsFeedbackOnDdc0"/>): the HermesC10 gateware forms the
+    /// feedback pair INSIDE DDC0's packer, so the path is materially different
+    /// from Orion and this method does NOT compose the Orion layout for it:
+    ///   - <c>SendCmdRx</c> arms DDC0 ONLY — no DDC1 enable. The coupler
+    ///     (rx_I[0] = temp_ADC) is interleaved with the hardwired internal TX-DAC
+    ///     reference (rx_I[NR] = temp_DACD) coupler-first / reference-second by
+    ///     the Rx0 FIFO controller under byte 1363 = 0x02 (SyncRx[0][1];
+    ///     Hermes.v:717-720, Rx_specific_C&amp;C.v:181). The descriptor is armed
+    ///     only during a TX burst (via <c>PushTransmitEdge</c>) and DDC0 reverts
+    ///     to the operator's RX at rest.
+    ///   - There is explicitly NO <c>ALEX_PS_BIT</c> and NO DDC0/DDC1 phase
+    ///     mirror — that scheme is Orion-only and
+    ///     <see cref="ComposesPsFeedbackWire"/>(HermesC10) is false.
+    ///   - byte 59 (Angelia_atten_Tx0) is seeded to the protective floor while
+    ///     armed (<see cref="SeedsTxAdcProtection"/>) so the DAC reference + PA
+    ///     coupler cannot slam the single shared RX ADC at 0 dB on key-down.
+    ///
+    /// The packet decoder consumes the same coupler-first/reference-second paired
+    /// format (6B + 6B per sample) for both families. When off the radio reverts
+    /// to the standard non-PS RX layout, byte 59 is restored to the operator's
+    /// prior value, and any in-flight paired packets are discarded.
     /// </summary>
     public void SetPsFeedbackEnabled(bool on)
     {
@@ -1327,12 +1365,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // protective floor while armed pushes byte 59 protective, and restoring
         // the operator's prior value on disarm returns the wire to normal. The
         // seed/restore is the ONLY non-byte-identical effect, and it is reached
-        // only when SeedsTxAdcProtection is true. As of v0.10.8 (#960) that
-        // covers BOTH single-shared-ADC boards — the 10E (HermesII) and the G2E
-        // (HermesC10) — so each seeds the protective floor on a keyed PS burst.
-        // Every other board, and either board with its kill-switch forced false,
-        // takes the historical path untouched (the dual-ADC G2/OrionMkII never
-        // qualifies, so its wire is provably unchanged).
+        // only when SeedsTxAdcProtection is true — now the 10E (HermesII) ONLY.
+        // The G2E (HermesC10) is deliberately excluded (#960, KB2UKA 2026-07-01):
+        // its single ADC is protected by the operator's EXTERNAL sampler pad, not
+        // byte 59, so forcing 31 dB over-attenuated the padded tap and deadlocked
+        // PS (dead meter on External). Leaving byte 59 at the operator's value
+        // lets the external pad set the level (Thetis-parity). Every other board,
+        // and the 10E with its kill-switch forced false, takes the historical path
+        // untouched (the dual-ADC G2/OrionMkII never qualifies).
         bool seededTxAttn = false;
         if (SeedsTxAdcProtection(_boardKind))
         {
@@ -1977,20 +2017,26 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// while PS feedback is armed on this board — the single-ADC time-mux case
     /// where the TX-DAC reference + PA coupler hit the one RX ADC on a TX burst.
     ///
-    /// Covers BOTH single-ADC time-mux boards — the ANAN-10E
-    /// (<see cref="HpsdrBoardKind.HermesII"/>) under
-    /// <see cref="Hermes10ePsTimeMuxOnAir"/> and, as of v0.10.8 (#960) with
-    /// KB2UKA sign-off, the ANAN-G2E (<see cref="HpsdrBoardKind.HermesC10"/>)
-    /// under <see cref="G2ePsTimeMuxOnAir"/>. The G2E presents the identical
-    /// single-shared-ADC hazard (Hermes.v:1483 `atten0 = FPGA_PTT ? atten0_on_Tx
-    /// : Attenuator0`, Tx_specific_C&amp;C.v:182-183), so it seeds byte 59 to the
-    /// same protective floor on key-down. Any other board — and either board with
-    /// its kill-switch forced false — returns false and is byte-identical to the
-    /// historical path.
+    /// Scoped to the ANAN-10E (<see cref="HpsdrBoardKind.HermesII"/>) under
+    /// <see cref="Hermes10ePsTimeMuxOnAir"/> ONLY.
+    ///
+    /// The ANAN-G2E (<see cref="HpsdrBoardKind.HermesC10"/>) is DELIBERATELY
+    /// EXCLUDED (#960, KB2UKA sign-off 2026-07-01). The G2E has NO internal
+    /// feedback coupler — its single ADC only ever sees the operator's EXTERNAL
+    /// sampler tap through the RX-bypass relay (a properly-sized post-PA pad, e.g.
+    /// −55…−65 dB rated for 1500 W). That external pad IS the ADC-overload
+    /// protection, so forcing byte 59 to 31 dB was pure over-attenuation stacked
+    /// on the pad — it drove the coupler below <c>calcc</c>'s convergence floor
+    /// and, because <c>PsAutoAttenuateService</c> only walks byte 59 down once
+    /// feedback reads &gt; 0, it deadlocked there: the observed "PS meter never
+    /// moves on the G2E even on External." Leaving byte 59 at the operator's value
+    /// lets the external pad set the level, matching Thetis (which does not force a
+    /// TX-time attenuation for an external feedback tap). Every other board — and
+    /// the 10E with its kill-switch forced false — returns false and is
+    /// byte-identical to the historical path.
     /// </summary>
     internal static bool SeedsTxAdcProtection(HpsdrBoardKind board)
-        => (board == HpsdrBoardKind.HermesII && Hermes10ePsTimeMuxOnAir)
-            || (board == HpsdrBoardKind.HermesC10 && G2ePsTimeMuxOnAir);
+        => board == HpsdrBoardKind.HermesII && Hermes10ePsTimeMuxOnAir;
 
     /// <summary>
     /// True iff this board does Orion-style PureSignal on a SINGLE ADC by
@@ -2178,16 +2224,23 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
         if (psEnabled)
         {
-            // Zeus only composes the DDC0+DDC1 paired feedback layout (bit 1363
-            // sync) for boards where it reserves the front DDCs for feedback —
-            // the dual-ADC OrionMkII/Saturn/G2 family. On single-ADC Hermes-class
-            // radios (Hermes/0x01, HermesII/0x02, HermesC10/0x14) Zeus DISABLES
-            // PS (DDC0 is the operator's only RX), so leave the PS block alone.
-            // This is a Zeus software choice for the G2E, not a hardware limit —
-            // the G2E gateware can do Orion-style PS on DDC0 (byte 1363
-            // SyncRx[0]=0x02 interleave); see ReservesPsFeedbackDdcs. The same
-            // board set as the old `!= Hermes && != HermesII && != HermesC10`
-            // test (issue #960).
+            // This branch composes ONLY the dual-ADC Orion-style layout: the
+            // dedicated DDC0+DDC1 feedback pair (byte 1363 sync) alongside the
+            // user RX on DDC2, for boards where Zeus reserves the front DDCs for
+            // feedback — the OrionMkII/Saturn/G2 family (ReservesPsFeedbackDdcs).
+            //
+            // The single-ADC Hermes-class radios (Hermes/0x01, HermesII/0x02,
+            // HermesC10/0x14) do NOT take this branch — DDC0 is the operator's
+            // only RX, so the Orion pair layout does not apply. This is NOT "PS
+            // off" for the G2E/10E: as of v0.10.8 (#960) those boards perform
+            // Orion-style PS by TIME-MUXING the feedback pair onto DDC0 during a
+            // TX burst via the separate g2eFeedbackBurst descriptor above (byte
+            // 1363 = 0x02 coupler/reference interleave, DDC0-only), gated by
+            // TimeMuxesPsFeedbackOnDdc0 + txKeyed. Do NOT "restore" a disable
+            // here or add the reserve-DDC layout for the G2E — that would break
+            // the shipped single-ADC time-mux path and mis-route DDC0.
+            // ReservesPsFeedbackDdcs is the same board set as the old explicit
+            // `!= Hermes && != HermesII && != HermesC10` test (issue #960).
             if (ReservesPsFeedbackDdcs(boardKind))
             {
                 ddcEnable |= 0x01;
@@ -2785,7 +2838,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // 1296 ORs ALEX_RX_ANTENNA_BYPASS into alex0 only during xmit when
         // PS is armed and the operator selected the external path. Internal
         // coupler leaves this bit clear.
-        if (psWire && _psFeedbackExternal && xmit)
+        //
+        // G2E (#960 follow-up): on the full-Orion dual-ADC wire psWire owns this,
+        // but the single-ADC HermesC10 does time-mux PS with psWire=false — yet
+        // its ONE ADC can only see an EXTERNAL sampler tap through this relay.
+        // RoutesExternalPsFeedbackBypass adds ONLY the HermesC10 arm, so the 10E
+        // and every other board stay byte-identical. G2ePsTimeMuxOnAir is true, so
+        // this path is LIVE in production; it is "bench-gated" only in the sense
+        // that no G2E is on our bench, so first-key-down behaviour is proven by
+        // construction from the C10 gateware and confirmed on a real G2E via the
+        // p2.ps.g2e log (peakFb going non-zero once the external tap is connected).
+        if (RoutesExternalPsFeedbackBypass(_boardKind, _psFeedbackEnabled, _psFeedbackExternal)
+            && xmit)
         {
             alex0 |= AlexRxAntennaBypass;
         }
@@ -2871,6 +2935,45 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private const uint ALEX_BYPASS_HPF = 0x00001000;  // bit 12
 
     /// <summary>
+    /// Should the RX-aux BYPASS relay (alex0 bit 11, <see cref="AlexRxAntennaBypass"/>)
+    /// route an EXTERNAL PureSignal feedback tap into the RX ADC on this board?
+    ///
+    /// Two paths qualify:
+    ///  • The full-Orion dual-ADC PS wire (<see cref="ComposesPsFeedbackWire"/>):
+    ///    pihpsdr new_protocol.c:1284-1296 ORs the bit during xmit when PS is
+    ///    armed and the operator selected the external path.
+    ///  • The single-ADC HermesC10 / ANAN-G2E time-mux PS path (#960 follow-up):
+    ///    here <see cref="ComposesPsFeedbackWire"/> is <c>false</c>, but the board's
+    ///    ONE ADC can only see an external sampler tap (post-PA pad into the
+    ///    RXbypass / K36 jack — how the real G2E operator runs PS) through this
+    ///    same relay. Without the bit the external feedback never reaches the ADC
+    ///    and calcc can never converge — the observed "PS doesn't work on the G2E".
+    ///
+    /// IMPORTANT — the <paramref name="psExternal"/> toggle is honoured ONLY on the
+    /// dual-ADC family, where "Internal" selects the board's dedicated feedback ADC1.
+    /// The single-ADC HermesC10 has NO internal feedback coupler: its one ADC is the
+    /// raw LTC2208 (<c>temp_ADC = INA</c>, Hermes.v:1117-1130) with no internal mux,
+    /// so PureSignal feedback is physically reachable ONLY through this external
+    /// bypass relay (bit 11 "RX 1 Out", SPI.v:47). "Internal" is not a valid source
+    /// on this board — it silently leaves the ADC on the antenna and the PS meter
+    /// dead ("as if PS isn't on"). So on HermesC10 the relay is routed whenever PS is
+    /// armed, regardless of the operator's Internal/External pick. Every OTHER board
+    /// still requires <paramref name="psExternal"/> and stays byte-identical; the 10E
+    /// (HermesII) is deliberately left off until a 10E owner can bench-confirm the
+    /// same routing. The caller still ANDs the transmit-edge (xmit / MOX) condition.
+    /// </summary>
+    internal static bool RoutesExternalPsFeedbackBypass(
+        HpsdrBoardKind board, bool psEnabled, bool psExternal)
+    {
+        if (!psEnabled) return false;
+        // Single-ADC G2E: external tap is the ONLY feedback path — route it on any
+        // PS-armed burst, independent of the (physically meaningless) Internal pick.
+        if (board == HpsdrBoardKind.HermesC10) return G2ePsTimeMuxOnAir;
+        // Dual-ADC family: honour the operator's Internal(ADC1)/External(bypass) pick.
+        return psExternal && ComposesPsFeedbackWire(psEnabled, board);
+    }
+
+    /// <summary>
     /// Compose the alex0 word the way <see cref="SendCmdHighPriority"/>
     /// does, exposed internal so wire-format tests can assert the
     /// PureSignal-related bits without standing up a socket. Mirrors the
@@ -2913,8 +3016,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         uint alex0 = (alexCommon & ~ALEX_TX_ANTENNA_MASK) | EncodeTxAntennaBits(alex0AntWire)
                      | (moxOn ? ALEX_TX_RELAY : 0u);
         alex0 |= ComposeRxAuxBits(rxAuxInput, mkiiBpfRxSelect);
-        if (psEnabled && moxOn) alex0 |= AlexPsBit;
-        if (psEnabled && psExternal && moxOn) alex0 |= AlexRxAntennaBypass;
+        // PS bit is the full-Orion dual-ADC wire ONLY — single-ADC boards
+        // (HermesC10/G2E, HermesII/10E) never set ALEX_PS. Gate on the same
+        // predicate the live path uses so this helper mirrors the wire exactly.
+        if (ComposesPsFeedbackWire(psEnabled, board) && moxOn) alex0 |= AlexPsBit;
+        if (RoutesExternalPsFeedbackBypass(board, psEnabled, psExternal) && moxOn)
+            alex0 |= AlexRxAntennaBypass;
         return alex0;
     }
 
@@ -3408,6 +3515,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                     else
                     {
                         HandleDdcPacket(buf, ddcIndex);
+                        // Keyed heartbeat: on the G2E, if PS is armed + keyed but the
+                        // DDC0 packet did NOT route to the paired-feedback path (burst
+                        // not forming, wrong rate, or reverted to plain RX), still tick
+                        // the ~1 Hz diagnostic so the bench sees an explicit frames=0
+                        // line instead of silence. Inert on every other board.
+                        if (ddcIndex == 0 && ShouldLogG2ePsWireDiag(
+                                _boardKind, _psFeedbackEnabled, _moxOn || _tuneActive))
+                        {
+                            MaybeEmitG2ePsDiag();
+                        }
                     }
                 }
                 else if (srcPort == 1025 && n >= HiPriStatusMinBytes)
@@ -3683,6 +3800,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             samplesPerPacket = 119;
         }
 
+        // HermesC10 (ANAN-G2E) PS wire instrumentation gate — computed once per
+        // packet (see field block near _psBlockStartSeq). When true we track the
+        // peak coupler/reference magnitudes in the decode loop below and emit a
+        // ~1 Hz diagnostic. Inert (false) for every other board — dual-ADC boards
+        // also reach this method but are excluded by ShouldLogG2ePsWireDiag.
+        bool g2eDiag = ShouldLogG2ePsWireDiag(
+            _boardKind, _psFeedbackEnabled, _moxOn || _tuneActive);
+
         for (int i = 0; i < samplesPerPacket; i++)
         {
             int off = 16 + i * 12;
@@ -3691,6 +3816,15 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             // the live decode path so the regression guard is real.
             var (sampleRxI, sampleRxQ, sampleTxI, sampleTxQ) =
                 DecodePsPairForTest(new ReadOnlySpan<byte>(buf, off, 12));
+            if (g2eDiag)
+            {
+                // Peak |coupler| (rx_I[0]) and |reference| (rx_I[NR]) as a cheap
+                // max-of-|I|,|Q| — the level the next real-G2E bench needs to see.
+                float couplerMag = MathF.Max(MathF.Abs(sampleRxI), MathF.Abs(sampleRxQ));
+                float refMag = MathF.Max(MathF.Abs(sampleTxI), MathF.Abs(sampleTxQ));
+                if (couplerMag > _g2ePsDiagPeakCoupler) _g2ePsDiagPeakCoupler = couplerMag;
+                if (refMag > _g2ePsDiagPeakReference) _g2ePsDiagPeakReference = refMag;
+            }
             _psRxI[_psBlockFill] = sampleRxI;
             _psRxQ[_psBlockFill] = sampleRxQ;
             _psTxI[_psBlockFill] = sampleTxI;
@@ -3725,7 +3859,72 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 _psBlockFill = 0;
             }
         }
+
+        if (g2eDiag)
+        {
+            _g2ePsDiagFramesInWindow++;
+            MaybeEmitG2ePsDiag();
+        }
     }
+
+    /// <summary>
+    /// Emit the ~1 Hz HermesC10 (ANAN-G2E) PS wire diagnostic when the window has
+    /// elapsed, then reset the window. Called from two places, both on the RX
+    /// thread (no synchronisation needed): once per PS-paired packet in
+    /// <see cref="HandlePsPairedPacket"/> (with <c>frames</c> already incremented),
+    /// AND as a keyed heartbeat from the RX dispatch loop on every DDC0 packet
+    /// during a keyed PS burst. The heartbeat is load-bearing for the bench: without
+    /// it the line only prints when feedback pairs actually arrive, so a totally
+    /// dead feedback path emits NOTHING and the tester cannot tell "zero frames"
+    /// (routing/burst broken) from "frames but flat level" (byte-59 / pad too high).
+    /// With it the tester always gets a line, and <c>frames=0</c> vs <c>frames=N,
+    /// peakFb≈0</c> is the one-line discriminator (see the #1249 bench notes).
+    /// </summary>
+    private void MaybeEmitG2ePsDiag()
+    {
+        long nowMs = Environment.TickCount64;
+        if (_g2ePsDiagWindowStartMs == 0) _g2ePsDiagWindowStartMs = nowMs;
+        if (nowMs - _g2ePsDiagWindowStartMs < 1000) return;
+
+        // Mirrors the existing p1.tx.rate / p2.rxdiag 1 Hz cadence.
+        //   arm     = byte 1363 = 0x02 (SyncRx[0][1]) is on the wire whenever this
+        //             path runs;
+        //   external= the operator's Internal/External feedback pick;
+        //   bypass  = whether alex0 bit 11 (RX 1 Out) is actually routed on the wire
+        //             for this keyed PS burst — the single-ADC G2E's ONLY tap path,
+        //             now armed regardless of the Internal/External pick (#960);
+        //   atten   = the byte-59 (Angelia_atten_Tx0) TX-time ADC attenuation the
+        //             host is sending (stacks on the operator's external pad);
+        //   frames  = DDC0 feedback packets on port 1035 in the window;
+        //   peakFb / peakRef = de-interleaved coupler/reference magnitudes (0..1).
+        // Read-only diagnostic.
+        bool bypass = RoutesExternalPsFeedbackBypass(
+                          _boardKind, _psFeedbackEnabled, _psFeedbackExternal)
+                      && (_moxOn || _tuneActive);
+        _log.LogInformation(
+            "p2.ps.g2e arm={Arm} external={External} bypass={Bypass} atten={Atten} frames={Frames} peakFb={PeakFb:F4} peakRef={PeakRef:F4}",
+            1, _psFeedbackExternal, bypass, _txStepAttnDb, _g2ePsDiagFramesInWindow,
+            _g2ePsDiagPeakCoupler, _g2ePsDiagPeakReference);
+        _g2ePsDiagWindowStartMs = nowMs;
+        _g2ePsDiagFramesInWindow = 0;
+        _g2ePsDiagPeakCoupler = 0f;
+        _g2ePsDiagPeakReference = 0f;
+    }
+
+    /// <summary>
+    /// Gate for the read-only HermesC10 (ANAN-G2E) PS wire instrumentation
+    /// (<c>p2.ps.g2e</c>): emit ONLY on the ANAN-G2E, and only while PS feedback
+    /// is armed AND transmit is asserted (the single-ADC time-mux burst is the
+    /// only time DDC0 carries feedback). Deliberately excludes the sibling 10E
+    /// (<see cref="HpsdrBoardKind.HermesII"/>) — the diagnostic is scoped to the
+    /// G2E bench (#960, lb5va) — and every dual-ADC board (which also reaches the
+    /// paired-packet decoder via <see cref="ReservesPsFeedbackDdcs"/>), so it is
+    /// inert everywhere else. Pure predicate, no side effects — unit-testable
+    /// without sockets.
+    /// </summary>
+    internal static bool ShouldLogG2ePsWireDiag(
+        HpsdrBoardKind board, bool psFeedbackEnabled, bool txKeyed)
+        => board == HpsdrBoardKind.HermesC10 && psFeedbackEnabled && txKeyed;
 
     private static int SignExtend24(int raw)
     {

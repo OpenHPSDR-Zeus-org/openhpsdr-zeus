@@ -664,17 +664,16 @@ public class PsFeedbackDdcRoutingTests
 
     [Theory]
     [InlineData(HpsdrBoardKind.HermesII, true)]    // ANAN-10E — seeds byte 59 (#1209)
-    [InlineData(HpsdrBoardKind.HermesC10, true)]   // ANAN-G2E — now seeds byte 59 too (#960)
+    [InlineData(HpsdrBoardKind.HermesC10, false)]  // ANAN-G2E — external pad protects, NO seed (#960)
     [InlineData(HpsdrBoardKind.Hermes, false)]     // not gateware-verified
     [InlineData(HpsdrBoardKind.OrionMkII, false)]  // dual-ADC G2 — never reads the flag
-    public void SeedsTxAdcProtection_OnByDefault_ForBothSingleAdcBoards(
+    public void SeedsTxAdcProtection_OnlyTheHermes10e(
         HpsdrBoardKind board, bool expected)
     {
-        // v0.10.8 (#960 / #1209): with single-ADC PS on by default, BOTH the 10E
-        // and the G2E seed the byte-59 (Angelia_atten_Tx0) protective floor on a
-        // keyed PS burst so a first key-down can't slam the PA coupler into the
-        // one RX ADC at 0 dB. Every other board (and either with its kill-switch
-        // forced false) stays byte-identical.
+        // #960 (KB2UKA 2026-07-01): the 10E seeds the byte-59 protective floor, but
+        // the G2E does NOT — its single ADC is protected by the operator's EXTERNAL
+        // sampler pad, and forcing 31 dB over-attenuated that padded tap and killed
+        // the PS meter. Every other board stays byte-identical (never reads the flag).
         Assert.Equal(expected, Protocol2Client.SeedsTxAdcProtection(board));
     }
 
@@ -690,7 +689,9 @@ public class PsFeedbackDdcRoutingTests
             Protocol2Client.Hermes10ePsTimeMuxOnAir = false;
             Protocol2Client.G2ePsTimeMuxOnAir = true;
             Assert.False(Protocol2Client.SeedsTxAdcProtection(HpsdrBoardKind.HermesII));
-            Assert.True(Protocol2Client.SeedsTxAdcProtection(HpsdrBoardKind.HermesC10));
+            // G2E never seeds byte 59 regardless of its flag — the external pad is
+            // the ADC protection, not byte 59 (#960).
+            Assert.False(Protocol2Client.SeedsTxAdcProtection(HpsdrBoardKind.HermesC10));
             Assert.False(Protocol2Client.SeedsTxAdcProtection(HpsdrBoardKind.OrionMkII));
         }
         finally
@@ -698,6 +699,26 @@ public class PsFeedbackDdcRoutingTests
             Protocol2Client.Hermes10ePsTimeMuxOnAir = saved10e;
             Protocol2Client.G2ePsTimeMuxOnAir = savedG2e;
         }
+    }
+
+    [Fact]
+    public void SetPsFeedbackEnabled_HermesC10_DoesNotForceSeedByte59()
+    {
+        // #960 (KB2UKA 2026-07-01): arming PS on the G2E must NOT override the
+        // operator's TX step attenuation with the 31 dB floor — the external tap
+        // is padded and self-protecting, and forcing 31 dB killed the PS meter.
+        // ComposeCmdTxBuffer takes the non-PS branch for HermesC10
+        // (ComposesPsFeedbackWire == false), so byte 59 carries whatever the
+        // operator set — here 0 — not the protective floor.
+        Assert.False(Protocol2Client.SeedsTxAdcProtection(HpsdrBoardKind.HermesC10));
+
+        var p = Protocol2Client.ComposeCmdTxBuffer(
+            seq: 1, sampleRateKhz: 192,
+            txStepAttnDb: 0,
+            paEnabled: true,
+            psEnabled: Protocol2Client.ComposesPsFeedbackWire(
+                psFeedbackEnabled: true, HpsdrBoardKind.HermesC10));
+        Assert.Equal(0, p[59]); // operator value reaches the wire, NOT the 31 dB floor
     }
 
     [Fact]
@@ -747,21 +768,23 @@ public class PsFeedbackDdcRoutingTests
     }
 
     [Fact]
-    public void SetPsFeedbackEnabled_G2E_SeedsByte59_RestoresOnDisarm()
+    public void SetPsFeedbackEnabled_G2E_DoesNotSeedByte59_LeavesOperatorValue()
     {
-        // v0.10.8 (#960): arming PS on a G2E now seeds the byte-59 protective
-        // floor (31) — same single-shared-ADC protection the 10E gets — so the
-        // PA coupler can't slam the one RX ADC at 0 dB on first key-down; disarm
-        // restores the operator's prior value verbatim. Default-on, no force.
+        // #960 (KB2UKA 2026-07-01): arming PS on a G2E must NOT force byte 59 to the
+        // protective floor. Its single ADC is protected by the operator's EXTERNAL
+        // sampler pad, not byte 59; forcing 31 dB over-attenuated the padded tap and
+        // deadlocked PS (dead meter on External). So the operator's TX-att value
+        // (3 dB here) is left untouched through arm AND disarm. Contrast the 10E,
+        // which still seeds (SetPsFeedbackEnabled_HermesII_FlagOn_SeedsByte59...).
         using var p2 = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
         p2.SetBoardKind(HpsdrBoardKind.HermesC10);
         p2.SetTxAttenuationDb(3);
 
         p2.SetPsFeedbackEnabled(true);
-        Assert.Equal(Protocol2Client.PsTxAdcProtectFloorDb, p2.TxStepAttnDb); // 31
+        Assert.Equal((byte)3, p2.TxStepAttnDb); // untouched — NOT forced to 31
 
         p2.SetPsFeedbackEnabled(false);
-        Assert.Equal((byte)3, p2.TxStepAttnDb); // restored
+        Assert.Equal((byte)3, p2.TxStepAttnDb); // still the operator's value
     }
 
     [Fact]
