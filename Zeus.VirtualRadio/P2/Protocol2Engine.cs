@@ -77,10 +77,15 @@ public sealed class Protocol2Engine : IVirtualRadio
     // byte-59 (Angelia_atten_Tx0) protective seed was NOT pushed by the host, so
     // the TX-DAC reference + PA coupler hit the single RX ADC at < the protective
     // floor. This is the exact first-key-down ADC-overload condition a real
-    // G2E/10E would raise and that bench verification (#289) must confirm. The
-    // 10E host path seeds byte 59 to 31 dB (clears it); the G2E host path does
-    // NOT yet seed it (SeedsTxAdcProtection excludes HermesC10), so this latches
-    // on a G2E PS burst — the observable signature of the open byte-59 gap.
+    // G2E/10E would raise and that bench verification (#960) must confirm. As of
+    // v0.10.8 (#960) BOTH single-shared-ADC host paths seed byte 59 to the
+    // protective floor on arm — SeedsTxAdcProtection now covers the G2E
+    // (HermesC10) as well as the 10E (HermesII) — so in normal loopback the
+    // emulator floor (TxAdcProtectFloorDb = 1) is below the client-seeded 31 dB
+    // and this latch does NOT fire. It remains here as the observable signature
+    // of a MISSING byte-59 seed: it can only latch if some future edit stops
+    // seeding byte 59 (a PureSignal-hard-rule regression), which is exactly what
+    // the loopback test guards against.
     private volatile bool _psAdcOverloadLatched;
 
     // De-dup edge-trigger for CommandDecoded (steady re-sends of the same

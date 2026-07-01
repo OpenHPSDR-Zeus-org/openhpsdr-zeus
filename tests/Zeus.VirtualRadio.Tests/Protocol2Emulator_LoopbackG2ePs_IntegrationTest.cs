@@ -30,21 +30,19 @@ namespace Zeus.VirtualRadio.Tests;
 /// and the client decodes <see cref="PsFeedbackFrame"/>s. Unkeying returns DDC0
 /// to the user RX.
 ///
-/// THE G2E DELTA vs the 10E (the open, KB2UKA-gated item this test documents):
-/// the 10E host path seeds byte 59 (Angelia_atten_Tx0) to the protective floor
-/// (31 dB) on arm (<see cref="Protocol2Client.SeedsTxAdcProtection"/> is true for
-/// HermesII), so its loopback test asserts byte 59 >= 1. The G2E host path does
-/// NOT seed byte 59 — <c>SeedsTxAdcProtection(HermesC10)</c> is deliberately
-/// false (the G2E byte-59 seed is a separate, independently-gated pre-condition
-/// per the <see cref="Protocol2Client.G2ePsTimeMuxOnAir"/> doc, pre-condition A,
-/// and touching it is a PureSignal-hard-rule change requiring KB2UKA sign-off).
-/// So on the G2E byte 59 stays at the operator default (0) through the keyed
-/// burst, and the emulator — modelling the single-ADC hazard — raises
-/// first-key-down ADC overload in its hi-priority status. This test asserts BOTH:
-/// the feedback frames flow (the path is functionally complete) AND the overload
-/// latches (the byte-59 protective seed is still missing). That is exactly the
-/// "does the dark G2E PS path work, and what needs sign-off before real RF"
-/// answer, captured as a deterministic, hardware-free bench.
+/// THE G2E BYTE-59 SEED (v0.10.8, #960): the shipped client now seeds byte 59
+/// (Angelia_atten_Tx0) to the protective floor (31 dB) on arm for the G2E, just
+/// like the 10E — <see cref="Protocol2Client.SeedsTxAdcProtection"/> returns true
+/// for HermesC10 as well as HermesII. So through the keyed PS burst byte 59 is
+/// protective, the emulator's single-ADC overload model does NOT latch, and on
+/// disarm byte 59 restores to the operator's pre-arm value (0 here). This test
+/// therefore asserts: the feedback frames flow (the path is functionally
+/// complete) AND byte 59 is seeded protective AND NO ADC overload latches. It is
+/// a SELF-CONSISTENCY / regression bench — it proves the client and emulator
+/// agree on the digital wire, NOT that real-RF PS converges on a G2E. Real-G2E
+/// hardware validation (lb5va, #960) is still the open, KB2UKA-gated item; the
+/// byte-59 floor value itself (<see cref="Protocol2Client.PsTxAdcProtectFloorDb"/>)
+/// remains a burn-zone default that stays behind KB2UKA sign-off + bench.
 ///
 /// Gated behind <c>ZEUS_VRADIO_LOOPBACK</c> (it binds the well-known radio ports
 /// and uses real loopback sockets), so it never runs in the default socketless
@@ -79,7 +77,7 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
     }
 
     [SkippableFact]
-    public async Task ArmPs_KeyTx_DeliversFeedback_ButByte59Unseeded_RaisesAdcOverload()
+    public async Task ArmPs_KeyTx_DeliversFeedback_Byte59Seeded_NoAdcOverload()
     {
         Skip.IfNot(
             !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ZEUS_VRADIO_LOOPBACK")),
