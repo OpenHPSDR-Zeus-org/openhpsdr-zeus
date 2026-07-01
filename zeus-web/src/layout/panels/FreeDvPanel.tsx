@@ -524,7 +524,9 @@ function FreeDvBandModeIndicator({
   const haveDial = connected && vfoHz > 0;
   const band = haveDial ? freqHzToBand(vfoHz) : null;
   const sideband = haveDial ? freedvSidebandForFreq(vfoHz) : null;
-  const freqMhz = haveDial ? (vfoHz / 1e6).toFixed(3) : null;
+  // 4 decimals = 100 Hz resolution — 60m channel dials sit on 500 Hz offsets
+  // (e.g. 5.3685 MHz) which .toFixed(3) rounds away.
+  const freqMhz = haveDial ? (vfoHz / 1e6).toFixed(4) : null;
 
   // freedv-gui semantics: gray "unk" when the mode can't be determined (no CAT /
   // here: no radio). When we do know the dial, the convention sideband is what
