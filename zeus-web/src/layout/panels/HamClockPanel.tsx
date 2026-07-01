@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ActivationSpotDto } from '../../api/client';
 import { openExternalUrl } from '../../components/report-problem/openExternalUrl';
-import { hamclockIframeUrl, useHamClockStore } from '../../state/hamclock-store';
+import { hamclockIframeUrl, useHamClockStore, type HamClockStatus } from '../../state/hamclock-store';
 import { useSpotsStore } from '../../state/spots-store';
 
 const HAMCLOCK_DX_TUNE_MESSAGE = 'zeus.hamclock.dxSpotTune';
@@ -78,6 +78,10 @@ function toActivationSpot(msg: HamClockDxTuneMessage): ActivationSpotDto {
   };
 }
 
+function isHamClockReady(status: HamClockStatus): boolean {
+  return status.phase === 'Running' && status.running && status.port > 0;
+}
+
 export function HamClockPanel() {
   const status = useHamClockStore((s) => s.status);
   const loadStatus = useHamClockStore((s) => s.loadStatus);
@@ -92,6 +96,8 @@ export function HamClockPanel() {
   // first resolves; true means a returning session that needs no reload.
   const wasRunningOnMountRef = useRef<boolean | null>(null);
   const didColdStartReloadRef = useRef(false);
+  const autoStartAttemptedRef = useRef(false);
+  const running = isHamClockReady(status);
 
   // Auto-start the sidecar on mount if it's installed but not running, then
   // poll until it reaches Running so the iframe appears. Faster tick while an
@@ -102,8 +108,9 @@ export function HamClockPanel() {
       await loadStatus();
       if (cancelled) return;
       const s = useHamClockStore.getState().status;
-      wasRunningOnMountRef.current = s.running && s.port > 0;
+      wasRunningOnMountRef.current = isHamClockReady(s);
       if (s.installed && !s.running && !s.busy && s.phase !== 'Starting') {
+        autoStartAttemptedRef.current = true;
         await start();
       }
     })();
@@ -116,12 +123,18 @@ export function HamClockPanel() {
 
   useEffect(() => {
     const busy = status.busy || status.phase === 'Installing' || status.phase === 'Starting';
-    if (!busy && status.running) return; // settled — no need to keep polling
+    if (!busy && running) return; // settled — no need to keep polling
     const id = window.setInterval(() => void loadStatus(), busy ? 1500 : 4000);
     return () => window.clearInterval(id);
-  }, [loadStatus, status.busy, status.phase, status.running]);
+  }, [loadStatus, running, status.busy, status.phase]);
 
-  const running = status.running && status.port > 0;
+  useEffect(() => {
+    if (autoStartAttemptedRef.current) return;
+    if (!status.installed || status.running || status.busy || status.phase !== 'Installed') return;
+    autoStartAttemptedRef.current = true;
+    void start();
+  }, [start, status.busy, status.installed, status.phase, status.running]);
+
   const url = running ? hamclockIframeUrl(status.port) : '';
 
   // Cold-start fix: on a brand-new install the backend reports Running as soon
