@@ -156,6 +156,14 @@ export type QrzPublishResult = {
   message: string | null;
 };
 
+export type LogDeleteRequest = {
+  logEntryIds: string[];
+};
+
+export type LogDeleteResponse = {
+  deletedCount: number;
+};
+
 // API functions
 
 export async function getLogEntries(
@@ -273,6 +281,20 @@ export async function publishToQrz(
   signal?: AbortSignal
 ): Promise<QrzPublishResponse> {
   const response = await fetch('/api/log/publish/qrz', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+    signal,
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return await response.json();
+}
+
+export async function deleteLogEntries(
+  request: LogDeleteRequest,
+  signal?: AbortSignal
+): Promise<LogDeleteResponse> {
+  const response = await fetch('/api/log/delete', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),

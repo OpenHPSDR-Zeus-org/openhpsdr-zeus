@@ -216,6 +216,26 @@ public sealed class LogService : IDisposable
         }, ct);
     }
 
+    /// <summary>
+    /// Permanently delete the given log entries. Returns the number of rows
+    /// actually removed (ids that no longer exist are simply skipped, so a
+    /// double-click or a stale selection deletes what it can and reports the
+    /// true count). A null/empty id list is a no-op.
+    /// </summary>
+    public async Task<int> DeleteLogEntriesAsync(IEnumerable<string> ids, CancellationToken ct = default)
+    {
+        var idList = ids?.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct().ToList();
+        if (idList == null || idList.Count == 0)
+            return 0;
+
+        return await Task.Run(() =>
+        {
+            var deleted = _logs.DeleteMany(x => idList.Contains(x.Id));
+            _log.LogInformation("Deleted {Count} log entr(y/ies)", deleted);
+            return deleted;
+        }, ct);
+    }
+
     public async Task<string> ExportToAdifAsync(IEnumerable<string>? logEntryIds = null, CancellationToken ct = default)
     {
         return await Task.Run(() =>
