@@ -118,6 +118,7 @@ import { useLayoutStore } from './state/layout-store';
 import { useSavedLayoutsStore } from './state/saved-layouts-store';
 import { useDisplaySettingsStore } from './state/display-settings-store';
 import { useCapabilitiesStore } from './state/capabilities-store';
+import { useMidiStore } from './state/midi-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import { useFilterAutopan } from './util/filter-autopan';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
@@ -143,6 +144,12 @@ const MobileApp = lazy(async () => {
 // previous 333 ms cadence accounted for ~3 of the ~5 idle-RX fetches/sec and
 // drove repeated applyState/hydrateFromState fan-out into the React tree.
 const STATE_POLL_MS = 1000;
+// When MIDI is enabled the operator's physical knob/fader can change server
+// state at whatever rate they move it; the 1 s poll makes the on-screen
+// slider jump ~1 s behind their hand, which reads as broken. Speeding up
+// only while MIDI is active pays the fetch cost only when the operator is
+// actually driving the radio from a controller (issue #1231).
+const MIDI_ACTIVE_STATE_POLL_MS = 250;
 
 export default function App() {
   const detachedLayoutId = useMemo(() => currentDetachedWorkspaceLayoutId(), []);
@@ -394,7 +401,10 @@ export default function App() {
       } catch {
         /* transient errors reconcile on the next tick */
       }
-      if (!cancelled) timer = setTimeout(tick, STATE_POLL_MS);
+      if (!cancelled) {
+        const midiOn = useMidiStore.getState().config.enabled;
+        timer = setTimeout(tick, midiOn ? MIDI_ACTIVE_STATE_POLL_MS : STATE_POLL_MS);
+      }
     };
     tick();
     return () => {

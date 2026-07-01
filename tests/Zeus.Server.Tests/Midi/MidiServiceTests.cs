@@ -191,4 +191,61 @@ public sealed class MidiServiceTests : IDisposable
         Assert.Empty(status.MidiDevices);
         Assert.Empty(status.StreamDeckDevices);
     }
+
+    [Fact]
+    public void SetConfig_RepairsWheelCommandStoredAsKnobOrSlider()
+    {
+        // Issue #1231: DryWetMidiEngine classifies every CC event (fader OR
+        // jog encoder) as KnobOrSlider, so before the panel's bug-2 fix a jog
+        // wheel bound to ChangeFreqVfoA persisted with ControlType=KnobOrSlider
+        // and routed through the delta==0 no-op branch. The reconciliation
+        // pass in Normalize snaps the stored type to the command's catalogued
+        // type so a subsequent inbound CC carrying a real delta actually tunes.
+        using var h = Build();
+        h.Service.SetConfig(ConfigWith(
+            new MidiMappingDto("DJ", "cc:0:20", MidiControlType.KnobOrSlider, ZeusMidiCommand.ChangeFreqVfoA)));
+
+        var stored = h.Service.GetConfig().Bindings.Mappings;
+        Assert.Single(stored);
+        Assert.Equal(MidiControlType.Wheel, stored[0].ControlType);
+
+        h.Radio.SetVfo(14_200_000);
+        h.Midi.Inject(new MidiInputMessage("DJ", MidiControlType.KnobOrSlider, "cc:0:20", 1, 1));
+        Assert.Equal(14_200_010, h.Radio.Snapshot().VfoHz);
+    }
+
+    [Fact]
+    public void SetConfig_LeavesButtonMappingUntouched()
+    {
+        // The reconciliation must never rewrite a Button binding, since Notes
+        // are the only wire shape the router treats as a discrete press.
+        using var h = Build();
+        h.Service.SetConfig(ConfigWith(
+            new MidiMappingDto("DJ", "note:0:62", MidiControlType.Button, ZeusMidiCommand.Band40m)));
+        var stored = h.Service.GetConfig().Bindings.Mappings;
+        Assert.Equal(MidiControlType.Button, stored[0].ControlType);
+    }
+
+    [Fact]
+    public void FilterShift_IsCatalogedAsWheelSoSliderBindingRepairsToDelta()
+    {
+        // Prior to issue #1231 FilterShift was catalogued KnobOrSlider but
+        // dispatched from delta, so any slider bound to it was silent. The
+        // catalog now agrees with the dispatcher (Wheel), and Normalize
+        // repairs a legacy slider binding into a Wheel binding that routes
+        // its delta through the dispatcher.
+        using var h = Build();
+        h.Service.SetConfig(ConfigWith(
+            new MidiMappingDto("DJ", "cc:0:30", MidiControlType.KnobOrSlider, ZeusMidiCommand.FilterShift)));
+        var stored = h.Service.GetConfig().Bindings.Mappings;
+        Assert.Equal(MidiControlType.Wheel, stored[0].ControlType);
+
+        var beforeLow = h.Radio.Snapshot().FilterLowHz;
+        var beforeHigh = h.Radio.Snapshot().FilterHighHz;
+        h.Midi.Inject(new MidiInputMessage("DJ", MidiControlType.KnobOrSlider, "cc:0:30", 5, 5));
+        var afterLow = h.Radio.Snapshot().FilterLowHz;
+        var afterHigh = h.Radio.Snapshot().FilterHighHz;
+        Assert.Equal(beforeLow + 50, afterLow);
+        Assert.Equal(beforeHigh + 50, afterHigh);
+    }
 }

@@ -177,4 +177,15 @@ public sealed class MidiCommandDispatcherTests : IDisposable
         d.Dispatch(ZeusMidiCommand.MoxOnOff, value: 0, delta: 0);
         Assert.False(tx.IsMoxOn);
     }
+
+    [Fact]
+    public void FilterShift_IsCataloguedAsWheel_MatchingDispatch()
+    {
+        // Issue #1231: the catalog previously advertised FilterShift as
+        // KnobOrSlider even though the dispatcher only responds to a delta —
+        // a mismatch that made every slider binding silent. This locks the
+        // two together so future edits can't silently drift again.
+        var info = MidiCommandCatalog.All.First(c => c.Command == ZeusMidiCommand.FilterShift);
+        Assert.Equal(MidiControlType.Wheel, info.ControlType);
+    }
 }

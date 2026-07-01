@@ -91,7 +91,11 @@ public sealed class MidiService : IHostedService, IDisposable
         lock (_sync)
         {
             _enabled = _store.GetEnabled();
-            _bindings = _store.GetBindings();
+            // Reconcile on load so a binding that predates the catalogue-fix
+            // (e.g. a jog wheel stored as KnobOrSlider before issue #1231's
+            // fix) routes correctly on the very first inbound event, before
+            // the operator visits the settings panel to re-save.
+            _bindings = Normalize(_store.GetBindings());
             RebuildMapsLocked();
             _started = true;
             if (_enabled) StartEnginesLocked();
@@ -210,12 +214,31 @@ public sealed class MidiService : IHostedService, IDisposable
         _sdMap = sdMap;
     }
 
+    // Reconcile every mapping's ControlType against the command catalogue's
+    // expected type. A raw MIDI CC event carries no distinction between an
+    // absolute fader and a relative jog encoder, so the engine classifies
+    // every CC as KnobOrSlider; a jog-wheel binding to a Wheel-only command
+    // (ChangeFreqVfoA, FilterBandwidth, RIT, XIT, FilterShift, …) would
+    // otherwise route through the delta==0 no-op branch and appear dead in
+    // the panel while looking correctly bound (issue #1231). Snapping the
+    // stored type to the command's catalogued type is a silent, one-way
+    // repair — new bindings from the fixed panel are unaffected because
+    // they already match.
     private static MidiBindingsDoc Normalize(MidiBindingsDoc? doc)
     {
         if (doc is null) return MidiBindingsDoc.Empty;
+        var mappings = doc.Mappings ?? new List<MidiMappingDto>();
+        var reconciled = new List<MidiMappingDto>(mappings.Count);
+        var catalog = new Dictionary<ZeusMidiCommand, MidiControlType>(MidiCommandCatalog.All.Count);
+        foreach (var info in MidiCommandCatalog.All) catalog[info.Command] = info.ControlType;
+        foreach (var m in mappings)
+        {
+            var target = catalog.TryGetValue(m.Command, out var t) ? t : m.ControlType;
+            reconciled.Add(m.ControlType == target ? m : m with { ControlType = target });
+        }
         return new MidiBindingsDoc(
             MidiBindingsDoc.CurrentVersion,
-            doc.Mappings ?? new List<MidiMappingDto>(),
+            reconciled,
             doc.StreamDeckMappings ?? new List<StreamDeckMappingDto>());
     }
 
