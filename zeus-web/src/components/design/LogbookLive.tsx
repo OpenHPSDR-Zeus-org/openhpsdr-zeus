@@ -69,6 +69,17 @@ function formatFrequencyMhz(freq: number | null | undefined): string | null {
   return typeof freq === 'number' && Number.isFinite(freq) ? freq.toFixed(3) : null;
 }
 
+/**
+ * Whether a QSO is already on QRZ.com — uploaded by Zeus (sets both fields via
+ * UpdateQrzUploadStatusAsync) OR imported from an ADIF that carried the QRZ
+ * log-id (APP_QRZLOG_LOGID → qrzLogId), i.e. sent to QRZ before. Either marker
+ * counts. Drives the translucent row highlight + the "✓ QRZ" pill, both keyed
+ * in the logbook footer legend.
+ */
+export function isQrzPublished(entry: LogEntry): boolean {
+  return Boolean(entry.qrzLogId || entry.qrzUploadedUtc);
+}
+
 function logRowTitle(entry: LogEntry): string {
   const frequency = formatFrequencyMhz(entry.frequencyMhz);
   return compactList([
@@ -201,7 +212,7 @@ export function LogbookLive({ searchText, hideQrzPublished }: LogbookLiveProps) 
           <button
             key={entry.id}
             type="button"
-            className={`log-row mono ${selectedIds.has(entry.id) ? 'selected' : ''}`}
+            className={`log-row mono ${selectedIds.has(entry.id) ? 'selected' : ''} ${isQrzPublished(entry) ? 'log-row--qrz' : ''}`}
             onClick={() => toggleSelected(entry.id)}
             title={logRowTitle(entry)}
           >
@@ -235,7 +246,7 @@ export function LogbookLive({ searchText, hideQrzPublished }: LogbookLiveProps) 
                 <span className="log-name-text">
                   {entry.name ?? '—'}
                 </span>
-                {entry.qrzLogId && (
+                {isQrzPublished(entry) && (
                   <span className="log-sync-pill">✓ QRZ</span>
                 )}
               </span>
@@ -245,6 +256,10 @@ export function LogbookLive({ searchText, hideQrzPublished }: LogbookLiveProps) 
         ))}
       </div>
       <div className="log-foot">
+        <span className="log-legend" title="Rows tinted green are already on QRZ.com — uploaded by Zeus or imported as already sent">
+          <span className="log-legend__sw" aria-hidden="true" />
+          <span className="log-legend__label">On QRZ</span>
+        </span>
         <span style={{ flex: 1 }} />
         <span className="label-xs">
           {filtersActive
