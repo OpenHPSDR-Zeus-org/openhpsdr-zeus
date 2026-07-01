@@ -315,17 +315,29 @@ export class Ft8TxController {
     if (msg != null) void this.postStage(msg);
   }
 
-  /** Start calling CQ. `opts.cqDirective` sets the CQ directive (CQ vs CQ DX). */
+  /** Start calling CQ. `opts.cqDirective` sets the CQ directive (CQ vs CQ DX).
+   *  Preserves session-level operator state (arm, HOLD TX FREQ, TX slot) so that
+   *  pressing CQ while armed does NOT silently disarm the sequencer — the backend
+   *  keyer stays armed on its own arm state, and the sequencer must match, or
+   *  incoming replies decode but never get staged (issue #1223). */
   startCq(opts?: Partial<NewQsoOpts>): void {
-    this.state = seqStartCq({
-      myCall: this.state.myCall,
-      myGrid4: this.state.myGrid4,
-      mode: this.state.mode,
-      txAck: this.txAck,
-      noReplyLimit: this.noReplyLimit,
-      disableTxAfter73: this.disableTxAfter73,
-      ...opts,
-    });
+    const preserved = {
+      enableTx: this.state.enableTx,
+      holdTxFreq: this.state.holdTxFreq,
+      txSlot: this.state.txSlot,
+    };
+    this.state = {
+      ...seqStartCq({
+        myCall: this.state.myCall,
+        myGrid4: this.state.myGrid4,
+        mode: this.state.mode,
+        txAck: this.txAck,
+        noReplyLimit: this.noReplyLimit,
+        disableTxAfter73: this.disableTxAfter73,
+        ...opts,
+      }),
+      ...preserved,
+    };
   }
 
   /** Call an arbitrary decoded station (click a decode row). Treats any decode
