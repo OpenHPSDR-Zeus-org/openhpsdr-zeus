@@ -23,9 +23,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { HF_BANDS, usePaStore } from '../state/pa-store';
 import { useRadioStore } from '../state/radio-store';
+import { useTxStore } from '../state/tx-store';
 import { BOARD_LABELS } from '../api/radio';
+import { setTxTimeout } from '../api/client';
 import type { PaBandSettings } from '../api/pa';
 import anvelinaLogo from '../assets/anvelina-logo.png';
+
+// TX timeout clamp — matches RadioService.MinTxTimeoutSec / MaxTxTimeoutSec.
+// Issue #1270.
+const TX_TIMEOUT_MIN_S = 30;
+const TX_TIMEOUT_MAX_S = 600;
 
 const OC_PINS = [1, 2, 3, 4, 5, 6, 7] as const;
 
@@ -296,6 +303,8 @@ export function PaSettingsPanel() {
   const copyOcMasks = usePaStore((s) => s.copyOcMasks);
   const selection = useRadioStore((s) => s.selection);
   const capabilities = useRadioStore((s) => s.capabilities);
+  const txTimeoutSec = useTxStore((s) => s.txTimeoutSec);
+  const setTxTimeoutSecLocal = useTxStore((s) => s.setTxTimeoutSec);
 
   // Active inner tab — TX / RX / AUTO (HL2 only). Persisted in
   // localStorage so reload doesn't pop the operator back to TX on every
@@ -443,6 +452,29 @@ export function PaSettingsPanel() {
                 (0 = raw drive-byte mode — PA Gain ignored)
               </span>
             )}
+          </label>
+
+          <label
+            className="pa-field flex items-center gap-2 text-xs"
+            title="Maximum length of a single MOX or TUN transmission in seconds. When exceeded, Zeus drops TX to protect the PA and shows an alert. Range 30..600; default 120. About 30 seconds before the timeout fires you'll see a pre-warning banner so you can un-key or reset. Issue #1270."
+          >
+            TX Timeout (s)
+            <input
+              type="number"
+              min={TX_TIMEOUT_MIN_S}
+              max={TX_TIMEOUT_MAX_S}
+              step={5}
+              value={txTimeoutSec}
+              onChange={(e) => {
+                const v = clamp(Number(e.target.value) || 0, TX_TIMEOUT_MIN_S, TX_TIMEOUT_MAX_S);
+                // Optimistic; reconcile with server-applied value on success.
+                setTxTimeoutSecLocal(v);
+                setTxTimeout(v)
+                  .then((r) => setTxTimeoutSecLocal(r.txTimeoutSec))
+                  .catch(() => {});
+              }}
+              className="pa-num-input w-20 rounded px-2 py-0.5 text-right text-xs"
+            />
           </label>
         </div>
       </section>

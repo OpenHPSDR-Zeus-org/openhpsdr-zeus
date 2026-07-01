@@ -2330,6 +2330,21 @@ public static class ZeusEndpoints
             return Results.Ok(new { txMoxPreKeyDelayMs = state.TxMoxPreKeyDelayMs });
         });
 
+        // TX timeout (issue #1270). Maximum single-transmission length that
+        // TxMetersService allows before it trips MOX/TUN to protect the PA. The
+        // server clamps to [30, 600] s so the echoed value may be different from
+        // the request. A pre-warning AlertKind.TxTimeoutWarning is emitted ~30 s
+        // before the trip fires so the operator gets a heads-up rather than a
+        // silent drop.
+        app.MapPost("/api/tx/timeout", (TxTimeoutSetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.tx.timeout seconds={S}", req.Seconds);
+            if (req.Seconds < RadioService.MinTxTimeoutSec || req.Seconds > RadioService.MaxTxTimeoutSec)
+                return Results.BadRequest(new { error = $"seconds must be {RadioService.MinTxTimeoutSec}..{RadioService.MaxTxTimeoutSec}" });
+            var state = r.SetTxTimeoutSec(req.Seconds);
+            return Results.Ok(new { txTimeoutSec = state.TxTimeoutSec });
+        });
+
         // TUN drive %. Symmetric with /api/tx/drive; the same PA-gain math applies,
         // so equal slider positions emit equal watts. Backend selects between the
         // two sources based on whether TUN is keyed (TxService.TrySetTun →

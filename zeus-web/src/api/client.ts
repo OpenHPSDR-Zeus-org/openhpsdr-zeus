@@ -420,6 +420,10 @@ export type RadioStateDto = {
   // key-down so an external amp's T/R relay settles before RF. Server-clamped
   // below the PS MOX hold-off; hydrated on connect like the drive sliders.
   txMoxPreKeyDelayMs: number;
+  // TX timeout in seconds (issue #1270). Maximum single-transmission length
+  // before the PA-protection guard fires. Server-clamped to [30, 600]. Legacy
+  // servers without this field fall back to 120 in normalizeState.
+  txTimeoutSec: number;
   twoToneFreq1: number;
   twoToneFreq2: number;
   twoToneMag: number;
@@ -2544,6 +2548,10 @@ export function normalizeState(raw: unknown): RadioStateDto {
     tunePercent: typeof r.tunePct === 'number' ? r.tunePct : 10,
     txMoxPreKeyDelayMs:
       typeof r.txMoxPreKeyDelayMs === 'number' ? r.txMoxPreKeyDelayMs : 0,
+    txTimeoutSec:
+      typeof r.txTimeoutSec === 'number' && r.txTimeoutSec > 0
+        ? Math.round(r.txTimeoutSec)
+        : 120,
     twoToneFreq1: typeof r.twoToneFreq1 === 'number' ? r.twoToneFreq1 : 700,
     twoToneFreq2: typeof r.twoToneFreq2 === 'number' ? r.twoToneFreq2 : 1900,
     twoToneMag: typeof r.twoToneMag === 'number' ? r.twoToneMag : 0.49,
@@ -6569,6 +6577,28 @@ export function setTxPreKeyDelay(
     (raw) => {
       const v = (raw as { txMoxPreKeyDelayMs?: unknown }).txMoxPreKeyDelayMs;
       return { txMoxPreKeyDelayMs: typeof v === 'number' ? v : 0 };
+    },
+  );
+}
+
+// TX timeout: POST /api/tx/timeout { seconds }. Returns { txTimeoutSec }.
+// Server clamps to [30, 600] s; echoed value reflects what was applied.
+// Issue #1270.
+export function setTxTimeout(
+  seconds: number,
+  signal?: AbortSignal,
+): Promise<{ txTimeoutSec: number }> {
+  return jsonFetch(
+    '/api/tx/timeout',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ seconds: Math.round(seconds) }),
+      signal,
+    },
+    (raw) => {
+      const v = (raw as { txTimeoutSec?: unknown }).txTimeoutSec;
+      return { txTimeoutSec: typeof v === 'number' ? v : 120 };
     },
   );
 }

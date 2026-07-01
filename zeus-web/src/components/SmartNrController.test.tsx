@@ -132,6 +132,7 @@ function mockState(nr: NrConfigDto): RadioStateDto {
     drivePercent: 0,
     tunePercent: 10,
     txMoxPreKeyDelayMs: 0,
+    txTimeoutSec: 120,
     twoToneFreq1: 700,
     twoToneFreq2: 1900,
     twoToneMag: 0.5,
