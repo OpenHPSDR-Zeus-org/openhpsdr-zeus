@@ -19,8 +19,9 @@
 // sidechannel — driven by GET /api/freedv/status (polled ~4 Hz) and
 // PUT /api/freedv/config. FreeDV is a normal RxMode ('FREEDV'); selecting it
 // from the mode row engages the modem (backend runs the SSB demod underneath on
-// the FreeDV band-convention sideband — LSB < 10 MHz, USB ≥). This panel is
-// telemetry/config only — it does NOT select the mode itself.
+// the FreeDV band-convention sideband — LSB < 10 MHz, USB ≥, with 60 m as the
+// regulatory USB-only exception). This panel is telemetry/config only — it does
+// NOT select the mode itself.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -35,6 +36,11 @@ import {
   type FreeDvInstallStatusDto,
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
+import {
+  FREEDV_60M_HIGH_HZ,
+  FREEDV_60M_LOW_HZ,
+  FREEDV_USB_THRESHOLD_HZ,
+} from '../../state/receiver-state';
 import { useQrzStore } from '../../state/qrz-store';
 import { freqHzToBand } from '../../state/spots-store';
 import { startEfficientPolling } from '../../util/efficient-polling';
@@ -45,14 +51,19 @@ const HIDDEN_POLL_MS = false;
 const SNR_SQUELCH_MIN = -2;
 const SNR_SQUELCH_MAX = 10;
 
-// FreeDV community sideband convention: LSB below 10 MHz, USB at/above 10 MHz —
+// FreeDV community sideband convention: LSB below 10 MHz, USB at/above 10 MHz,
+// with 60 m as the regulatory USB-only exception (FCC §97.305, Ofcom IR 2002).
 // FreeDV adopted the SSB voice-mode convention so every station on a band shares
 // one spectral orientation. Zeus runs the FreeDV modem on this sideband
 // underneath; a mismatch would invert the OFDM carriers in RF and nothing would
-// decode. This mirrors freedv-gui's "current mode" readout (which shows the rig
-// sideband, red when it's unexpected for the band).
-const FREEDV_USB_THRESHOLD_HZ = 10_000_000;
+// decode. This mirrors RadioService.EffectiveEngineMode on the server and
+// freedv-gui's "current mode" readout (which shows the rig sideband, red when
+// it's unexpected for the band).
+function freedvIsSixtyMeters(hz: number): boolean {
+  return hz >= FREEDV_60M_LOW_HZ && hz <= FREEDV_60M_HIGH_HZ;
+}
 function freedvSidebandForFreq(hz: number): 'LSB' | 'USB' {
+  if (freedvIsSixtyMeters(hz)) return 'USB';
   return hz < FREEDV_USB_THRESHOLD_HZ ? 'LSB' : 'USB';
 }
 
@@ -518,6 +529,7 @@ function FreeDvBandModeIndicator({
   const haveDial = connected && vfoHz > 0;
   const band = haveDial ? freqHzToBand(vfoHz) : null;
   const sideband = haveDial ? freedvSidebandForFreq(vfoHz) : null;
+  const isSixtyMeters = haveDial && freedvIsSixtyMeters(vfoHz);
   // 4 decimals = 100 Hz resolution — 60m channel dials sit on 500 Hz offsets
   // (e.g. 5.3685 MHz) which .toFixed(3) rounds away.
   const freqMhz = haveDial ? (vfoHz / 1e6).toFixed(4) : null;
@@ -542,9 +554,11 @@ function FreeDvBandModeIndicator({
         className="mono dsp-cfg-unit"
         title={
           haveDial
-            ? `FreeDV uses ${sideband} ${
-                sideband === 'LSB' ? 'below' : 'at/above'
-              } 10 MHz — Zeus rides this sideband so its carriers line up with other FreeDV stations on the band.`
+            ? isSixtyMeters
+              ? 'FreeDV uses USB on 60 m — regulators (FCC §97.305, Ofcom IR 2002) mandate USB-only on this band, overriding the usual "below 10 MHz → LSB" convention. Zeus rides USB so its carriers line up with other FreeDV stations on the band.'
+              : `FreeDV uses ${sideband} ${
+                  sideband === 'LSB' ? 'below' : 'at/above'
+                } 10 MHz — Zeus rides this sideband so its carriers line up with other FreeDV stations on the band.`
             : 'Connect a radio so the dial frequency can be read (freedv-gui shows "unk" here without CAT).'
         }
         style={{ color: valueColor, display: 'flex', alignItems: 'center', gap: 6 }}
