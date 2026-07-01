@@ -13,6 +13,7 @@ using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Zeus.Protocol2;
 using Zeus.VirtualRadio.Discovery;
 using Zeus.VirtualRadio.Observation;
 using Zeus.VirtualRadio.Rf;
@@ -77,10 +78,15 @@ public sealed class Protocol2Engine : IVirtualRadio
     // byte-59 (Angelia_atten_Tx0) protective seed was NOT pushed by the host, so
     // the TX-DAC reference + PA coupler hit the single RX ADC at < the protective
     // floor. This is the exact first-key-down ADC-overload condition a real
-    // G2E/10E would raise and that bench verification (#289) must confirm. The
-    // 10E host path seeds byte 59 to 31 dB (clears it); the G2E host path does
-    // NOT yet seed it (SeedsTxAdcProtection excludes HermesC10), so this latches
-    // on a G2E PS burst — the observable signature of the open byte-59 gap.
+    // G2E/10E would raise and that bench verification (#960) must confirm. As of
+    // v0.10.8 (#960) BOTH single-shared-ADC host paths seed byte 59 to the
+    // protective floor on arm — SeedsTxAdcProtection now covers the G2E
+    // (HermesC10) as well as the 10E (HermesII) — so in normal loopback the
+    // emulator floor (TxAdcProtectFloorDb = 1) is below the client-seeded 31 dB
+    // and this latch does NOT fire. It remains here as the observable signature
+    // of a MISSING byte-59 seed: it can only latch if some future edit stops
+    // seeding byte 59 (a PureSignal-hard-rule regression), which is exactly what
+    // the loopback test guards against.
     private volatile bool _psAdcOverloadLatched;
 
     // De-dup edge-trigger for CommandDecoded (steady re-sends of the same
@@ -288,15 +294,20 @@ public sealed class Protocol2Engine : IVirtualRadio
         while (!ct.IsCancellationRequested)
         {
             IPEndPoint? host = _hostEndPoint;
-            bool running, feedback;
+            bool running, feedback, couplerRouted;
             int rateKhz;
             long tunedHz;
             lock (_stateGate)
             {
                 running = _state.Running;
-                // The host only sets byte 1363 during an armed keyed burst, so
-                // the Mux bit alone is the gateware-faithful discriminator.
+                // Byte 1363 (SyncRx[0][1]/Mux[1]) arms the interleaved DDC0 burst —
+                // feedback FRAMES flow whenever it is set during a keyed TX.
                 feedback = _state.PsArmedBurst;
+                // ...but on the single-ADC board the COUPLER only carries the PA
+                // sample when the external tap relay (alex0 bit 11) is also routed.
+                // Without it the frames still flow with a silent coupler — exactly
+                // the G2E-Internal dead-meter symptom this PR fixes.
+                couplerRouted = _state.PsCouplerRouted;
                 rateKhz = _state.SampleRateKhz > 0 ? _state.SampleRateKhz : _profile.SampleRateKhz;
                 tunedHz = _currentTunedHz;
             }
@@ -312,15 +323,14 @@ public sealed class Protocol2Engine : IVirtualRadio
             double intervalSec;
             if (feedback)
             {
-                // Clean reference → coupler-through-PA (identity if distortion
-                // off). Coupler is DDC0 (pscc "rx"), reference is DDC1 (pscc "tx").
+                // Reference (DDC1 / pscc "tx") is always the clean TX-DAC sample.
+                // Coupler (DDC0 / pscc "rx") = reference-through-PA distortion, but
+                // ONLY when the external tap relay is routed; otherwise the single
+                // ADC sees no PA sample and the coupler is silent (frames still
+                // flow — the dead-meter case the fix eliminates by routing bit 11).
                 _txRef.Fill(refBuf, P2RxDdcEncoder.PsPairsPerPacket);
-                for (int i = 0; i < P2RxDdcEncoder.PsPairsPerPacket; i++)
-                {
-                    var (ci, cq) = _distortion.Apply(refBuf[2 * i], refBuf[2 * i + 1]);
-                    coupBuf[2 * i] = ci;
-                    coupBuf[2 * i + 1] = cq;
-                }
+                FillPsCoupler(refBuf, coupBuf, P2RxDdcEncoder.PsPairsPerPacket,
+                    couplerRouted, _distortion);
                 _rxEncoder.EncodePsFeedback(packet, seq++, coupBuf, refBuf);
                 Interlocked.Increment(ref _psFeedbackPacketsSent);
                 intervalSec = P2RxDdcEncoder.PsPairsPerPacket / PsBurstRateHz;
@@ -382,11 +392,17 @@ public sealed class Protocol2Engine : IVirtualRadio
             }
 
             RfTelemetry tel = _rf.Compute(driveByte, tunedHz, mox);
-            // Model the single-ADC PS hazard: with the time-mux armed and keyed,
-            // a missing byte-59 protective seed (txAttn below the floor) slams
-            // the DAC feedback into the only RX ADC at 0 dB → ADC overload. A
-            // correctly-seeded host clears it.
-            byte overload = (feedback && txAttn < TxAdcProtectFloorDb) ? (byte)0x01 : (byte)0x00;
+            // Model the single-ADC PS hazard, but ONLY for boards whose ADC is
+            // protected by the byte-59 seed. With the time-mux armed and keyed, a
+            // missing seed (txAttn below the floor) slams the DAC feedback into the
+            // only RX ADC at 0 dB → overload; a correctly-seeded host clears it.
+            // Tied to the client's protection contract so the two stay in sync: the
+            // G2E (HermesC10) is protected by the operator's EXTERNAL pad, not byte
+            // 59 (SeedsTxAdcProtection(HermesC10) == false), so it never models this
+            // overload and a low byte 59 is expected/correct there.
+            bool byte59IsAdcProtection = Protocol2Client.SeedsTxAdcProtection(_profile.Board);
+            byte overload = (feedback && byte59IsAdcProtection && txAttn < TxAdcProtectFloorDb)
+                ? (byte)0x01 : (byte)0x00;
             if (overload != 0) _psAdcOverloadLatched = true;
 
             byte[] packet = _hiPriEncoder.Build(seq++, tel, ptt: mox, pllLocked: true, overload);
@@ -427,6 +443,39 @@ public sealed class Protocol2Engine : IVirtualRadio
             Ep2PacketsReceived: Interlocked.Read(ref _cmdPacketsReceived),
             SeqGaps: 0,
             LastCommands: _commandLog.Snapshot());
+    }
+
+    /// <summary>
+    /// Fill the PS feedback coupler buffer from the clean TX reference, modelling
+    /// the single-ADC gateware faithfully: the coupler carries the PA-through-
+    /// distortion sample ONLY when the external tap relay is routed
+    /// (<paramref name="couplerRouted"/> = alex0 bit 11). With it clear the one
+    /// ADC sees no PA sample, so the coupler is silent (zeros) while the byte-1363
+    /// interleave still streams FRAMES — reproducing the exact G2E dead-meter the
+    /// fix eliminates by routing bit 11. Extracted internal + static so the silent
+    /// branch is provable socketlessly (no bind, no real UDP). Note: through the
+    /// FIXED client the byte-1363 arm and the bit-11 route always coincide on
+    /// HermesC10, so the silent branch is reached only by the regression scenario
+    /// (arm without route) a test drives deliberately — that is the point.
+    /// </summary>
+    internal static void FillPsCoupler(
+        ReadOnlySpan<double> refBuf, Span<double> coupBuf, int pairs,
+        bool couplerRouted, PaDistortionModel distortion)
+    {
+        for (int i = 0; i < pairs; i++)
+        {
+            if (couplerRouted)
+            {
+                var (ci, cq) = distortion.Apply(refBuf[2 * i], refBuf[2 * i + 1]);
+                coupBuf[2 * i] = ci;
+                coupBuf[2 * i + 1] = cq;
+            }
+            else
+            {
+                coupBuf[2 * i] = 0.0;
+                coupBuf[2 * i + 1] = 0.0;
+            }
+        }
     }
 
     // ---- Test observability (InternalsVisibleTo) --------------------------

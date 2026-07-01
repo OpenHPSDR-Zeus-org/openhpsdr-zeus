@@ -81,6 +81,14 @@ public sealed class PsAutoAttenuateService : BackgroundService
     private const int Hl2TxAttnMinDb = -28;
     private const int Hl2TxAttnMaxDb = 31;
 
+    // G2E acquire-from-stall step (#960, KB2UKA 2026-07-01). When calcc reports no
+    // fit (feedback <= 0) on the single-ADC G2E, the coupler is almost always too
+    // HOT (clipped) for calcc to fit — you cannot be over-attenuated starting from
+    // byte 59 = 0. Walk byte 59 UP by this much per failed fit — the SAFE direction
+    // (more attenuation, never more ADC drive) — so a hot/marginal external tap
+    // self-corrects into a fittable range instead of deadlocking at "fb-zero".
+    private const int AcquireStepDb = 3;
+
     // Settle time after a step change: give the radio one wire-cycle to pick
     // up the new attenuator, then issue the reset so calcc starts fresh.
     // Mirrors mi0bot PSForm.cs:783 Thread.Sleep(100).
@@ -545,6 +553,30 @@ public sealed class PsAutoAttenuateService : BackgroundService
         return Math.Clamp(p2, TxAttnMinDb, TxAttnMaxDb);
     }
 
+    /// <summary>
+    /// Pure decision for the P2 "calcc reported no fit" (feedback &lt;= 0) case:
+    /// how many dB to add to byte 59 (ATTOnTX) to ACQUIRE from a stall.
+    ///
+    /// Returns a positive step ONLY for the single-ADC G2E (<see cref="HpsdrBoardKind.HermesC10"/>)
+    /// and only below the max attenuation. On that board a no-fit almost always
+    /// means the external coupler is too HOT (clipped) for calcc — you cannot be
+    /// over-attenuated starting from 0 dB — so we walk attenuation UP a little
+    /// (<see cref="AcquireStepDb"/>), the safe direction, until the envelope drops
+    /// into a fittable range (feedback &gt; 0, where the normal dance resumes) or we
+    /// hit the ceiling (return 0 → hold; the next real signal fits at max attenuation
+    /// and the tooQuiet dance walks it back down). Every other board and a positive
+    /// feedback return 0 (historical "wait"), so a working dual-ADC G2 and the 10E
+    /// are byte-identical. Extracted static + internal so the acquire rule is
+    /// unit-testable without the full service harness.
+    /// </summary>
+    internal static int AcquireStepFromStall(HpsdrBoardKind board, int feedback, int currentAttnDb)
+    {
+        if (feedback > 0) return 0;                        // calcc fit — normal dance owns it
+        if (board != HpsdrBoardKind.HermesC10) return 0;  // scoped to the G2E
+        if (currentAttnDb >= TxAttnMaxDb) return 0;       // ceiling — hold, no fittable feedback
+        return Math.Min(AcquireStepDb, TxAttnMaxDb - currentAttnDb);
+    }
+
     // *** DEVIATION FROM mi0bot ***
     // Silent server-side auto-cal of WDSP hw_peak from observed TX envelope
     // (GetPSMaxTX). mi0bot leaves hw_peak as the operator-tuned PSForm.cs
@@ -765,10 +797,32 @@ public sealed class PsAutoAttenuateService : BackgroundService
                 }
                 _lastCalibrationAttempts = psm.CalibrationAttempts;
 
-                // info[4] == 0 → calcc hasn't completed a fit yet.
+                // info[4] <= 0 → calcc completed an attempt but could NOT fit. On the
+                // single-ADC G2E this is the "PS meter never moves" stall: the coupler
+                // is too HOT (clipped) for calcc to fit (you can't be over-attenuated
+                // from byte 59 = 0). Walk byte 59 UP a little — the SAFE direction
+                // (more attenuation, never more ADC drive) — so a hot/marginal external
+                // tap self-corrects into a fittable range; once calcc fits (feedback >
+                // 0) the normal dance below takes over, and at max attenuation we hold.
+                // Scoped to HermesC10 (AcquireStepFromStall) so the working dual-ADC G2
+                // and the 10E keep the historical "wait" (byte-identical).
                 if (feedback <= 0)
                 {
-                    LogGate($"p2.skip=fb-zero psm.fb={psm.FeedbackLevel:F2}");
+                    int acquireStep = AcquireStepFromStall(
+                        _radio.ConnectedBoardKind, feedback, _currentAttnDb);
+                    if (acquireStep <= 0)
+                    {
+                        LogGate($"p2.skip=fb-zero psm.fb={psm.FeedbackLevel:F2} attn={_currentAttnDb}");
+                        return;
+                    }
+                    _p2DeltaDb = acquireStep;
+                    _p2SavedAuto = s.PsAuto;
+                    _p2SavedSingle = s.PsSingle;
+                    engine.SetPsControl(autoCal: false, singleCal: false);
+                    _log.LogInformation(
+                        "psAutoAttn.p2.acquire fb=0 info5={Cal} step=+{Step} attn={Db} (calcc no fit; coupler likely hot)",
+                        psm.CalibrationAttempts, _p2DeltaDb, _currentAttnDb);
+                    _p2State = P2AutoAttState.SetNewValues;
                     return;
                 }
 

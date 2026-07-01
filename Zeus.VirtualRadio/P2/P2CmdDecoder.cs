@@ -137,9 +137,16 @@ internal sealed class P2CmdDecoder
         state.RxFreqHz = (long)Math.Round(rxPhase / P2Wire.HzToPhase);
         state.TxFreqHz = (long)Math.Round(txPhase / P2Wire.HzToPhase);
 
+        // alex0 bit 11 = external PS feedback tap relay (RX 1 Out). On the
+        // single-ADC G2E this is the ONLY path the one ADC can see the coupler, so
+        // the emulator keys the coupler CONTENT off it (frames still flow on the
+        // byte-1363 arm, but the coupler is silent until the tap is routed).
+        uint alex0 = BinaryPrimitives.ReadUInt32BigEndian(p.Slice(P2Wire.HpAlex0Offset, 4));
+        state.PsCouplerRouted = (alex0 & P2Wire.AlexBypassBit) != 0;
+
         return One("CmdHighPriority",
             $"run={(state.Running ? 1 : 0)} mox={(state.Mox ? 1 : 0)} drive={state.DriveByte} " +
-            $"rxFreq={state.RxFreqHz}Hz txFreq={state.TxFreqHz}Hz");
+            $"rxFreq={state.RxFreqHz}Hz txFreq={state.TxFreqHz}Hz psTap={(state.PsCouplerRouted ? 1 : 0)}");
     }
 
     private static IReadOnlyList<DecodedHostCommand> One(string kind, string summary) =>

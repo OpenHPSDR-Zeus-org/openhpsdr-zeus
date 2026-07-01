@@ -5162,7 +5162,15 @@ public class DspPipelineService : BackgroundService,
         DrainDspCommands();
         var engine = Volatile.Read(ref _engine);
         engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
-        // No Tick on PS-feedback — display cadence is paced by IQ frames.
+        // PS-feedback frames drive the display tick too (see the P2 sink for
+        // the full rationale): on a single-ADC time-mux board the user-RX IQ
+        // stream — the normal tick pacer — stops entirely for the keyed burst,
+        // and without this the panadapter/waterfall freeze for the whole
+        // transmission. Same RX-loop thread as OnIqFrame; the elapsed-time
+        // throttle inside keeps the cadence at ~30 Hz when both streams flow
+        // (HL2 4-DDC keeps DDC0 user RX alive during PS, so this is a no-op
+        // there in practice).
+        MaybeTickInline();
     }
 
     // ---- IRxPacketSink (Protocol 2) -----------------------------------------
@@ -5217,6 +5225,20 @@ public class DspPipelineService : BackgroundService,
         DrainDspCommands();
         var engine = Volatile.Read(ref _engine);
         engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
+        // Display tick (#960 G2E bench): the display cadence is normally paced
+        // by OnIqFrame, and ExecuteAsync's PeriodicTimer stands down while an
+        // RX sink is attached. On a single-ADC time-mux board (HermesC10/G2E)
+        // a keyed PS burst diverts the operator's ONLY DDC to these feedback
+        // frames, so no IQ frame — and therefore no display tick — arrives for
+        // the entire transmission: the panadapter/waterfall freeze at the last
+        // RX frame until unkey. Ticking from the feedback cadence keeps the
+        // display alive; while keyed, Tick's source-select already prefers the
+        // TX / PS-feedback analyzers, so the operator sees a live TX spectrum
+        // during the burst — the same UX as the dual-ADC G2/Orion family.
+        // Same RX-loop thread as OnIqFrame (HandlePsPairedPacket runs on the
+        // RxLoop thread), and MaybeTickInline's elapsed-time gate throttles to
+        // ~30 Hz on dual-ADC boards where IQ and feedback frames both flow.
+        MaybeTickInline();
     }
 
     // RX2 bring-up probe: 1 Hz log of incoming IQ RMS/peak per receiver. A live
@@ -5277,13 +5299,25 @@ public class DspPipelineService : BackgroundService,
     {
         long now = Stopwatch.GetTimestamp();
         long last = _lastTickStopwatchTicks;
-        if (last == 0 || (now - last) >= TickPeriodStopwatchTicks)
+        if (ShouldTickInline(now, last, TickPeriodStopwatchTicks))
         {
             if (last != 0) RecordTickInterval(now - last, now);
             _lastTickStopwatchTicks = now;
             Tick(_panBuf, _wfBuf, _audioBuf);
         }
     }
+
+    /// <summary>
+    /// Pure inline-tick throttle: tick on the very first call, then at most
+    /// once per <paramref name="periodTicks"/>. Extracted static + internal so
+    /// the cadence contract is unit-testable — it is what keeps the display at
+    /// ~30 Hz no matter how many producers call <see cref="MaybeTickInline"/>
+    /// (user-RX IQ frames AND PS-feedback frames both pace it; on a single-ADC
+    /// time-mux board the feedback frames are the ONLY pacer during a keyed
+    /// burst — see the P2 <c>OnPsFeedbackFrame</c> sink).
+    /// </summary>
+    internal static bool ShouldTickInline(long nowTicks, long lastTicks, long periodTicks)
+        => lastTicks == 0 || (nowTicks - lastTicks) >= periodTicks;
 
     // #1148: accumulate inline-tick interval stats and emit at ~1 Hz. Called
     // only from MaybeTickInline (single active RX thread), so no synchronisation

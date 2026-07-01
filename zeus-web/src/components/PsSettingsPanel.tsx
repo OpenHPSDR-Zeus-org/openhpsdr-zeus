@@ -413,7 +413,7 @@ export function PsSettingsPanel() {
                 <span className="ps-rd" />
                 <span className="ps-rd-label">
                   <strong>External (bypass)</strong>
-                  <em>External coupler on RX2 antenna jack</em>
+                  <em>External sampler into the RX BYPASS jack (K36)</em>
                 </span>
               </button>
             </div>

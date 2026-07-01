@@ -21,6 +21,7 @@
 // Both are GPL-2.0-or-later.
 
 using Xunit;
+using Zeus.Contracts;
 
 namespace Zeus.Protocol2.Tests;
 
@@ -246,6 +247,92 @@ public class PsWireFormatTests
             "Bypass bit must not flip when PS isn't armed even if External is selected.");
     }
 
+    // ---- G2E (HermesC10) single-ADC external-feedback bypass routing ----
+    // The single-ADC G2E can only see an external sampler tap through the
+    // RX-aux BYPASS relay. psWire is false for HermesC10, so the historical
+    // gate never set the bit and calcc could never receive feedback. The fix
+    // routes it via RoutesExternalPsFeedbackBypass, scoped to HermesC10.
+
+    [Fact]
+    public void Alex0_G2e_BypassBit_SetWhenExternal_PsArmed_AndMox()
+    {
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: 14_200_000,
+            moxOn: true,
+            psEnabled: true,
+            psExternal: true,
+            board: HpsdrBoardKind.HermesC10);
+
+        Assert.True((alex0 & Protocol2Client.AlexRxAntennaBypass) != 0,
+            "G2E external PS armed + MOX must route the tap via the BYPASS relay.");
+        // Parity: the single-ADC G2E must NOT assert ALEX_PS (that is the
+        // dual-ADC Orion wire only). A spurious PS bit here would diverge
+        // from the C10 gateware.
+        Assert.True((alex0 & Protocol2Client.AlexPsBit) == 0,
+            "G2E must never set ALEX_PS — it is not on the dual-ADC PS wire.");
+    }
+
+    [Fact]
+    public void Alex0_G2e_BypassBit_SetEvenWhenInternal_SingleAdcHasNoInternalCoupler()
+    {
+        // Root-cause regression (#960): the single-ADC G2E has NO internal feedback
+        // coupler — its one ADC (raw LTC2208, temp_ADC = INA, Hermes.v:1117-1130) can
+        // only see the external sampler tap through the bit-11 BYPASS relay. So
+        // "Internal" is a physically-impossible selection on this board, and the tap
+        // MUST route regardless of the operator's Internal/External pick. Before the
+        // fix, a G2E left on the default Internal source left the relay clear -> ADC
+        // on the antenna -> calcc never converged -> dead PS meter ("as if PS isn't
+        // on"). This test would PASS on the old code only by asserting == 0; it now
+        // asserts the tap is routed even when Internal is selected.
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: 14_200_000,
+            moxOn: true,
+            psEnabled: true,
+            psExternal: false,
+            board: HpsdrBoardKind.HermesC10);
+
+        Assert.True((alex0 & Protocol2Client.AlexRxAntennaBypass) != 0,
+            "G2E must route the external tap even on the Internal pick — it has no " +
+            "internal coupler; Internal-default is the dead-meter bug this fixes.");
+        // Still never the dual-ADC Orion PS bit.
+        Assert.True((alex0 & Protocol2Client.AlexPsBit) == 0,
+            "G2E must never set ALEX_PS — it is not on the dual-ADC PS wire.");
+    }
+
+    [Fact]
+    public void Alex0_G2e_BypassBit_ClearWhenMoxOff()
+    {
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: 14_200_000,
+            moxOn: false,
+            psEnabled: true,
+            psExternal: true,
+            board: HpsdrBoardKind.HermesC10);
+
+        Assert.True((alex0 & Protocol2Client.AlexRxAntennaBypass) == 0,
+            "G2E BYPASS relay must not flip outside xmit.");
+    }
+
+    [Fact]
+    public void Alex0_10e_BypassBit_StaysClear_ProvingG2eScoping()
+    {
+        // Other-board safety (KB2UKA hard constraint): the 10E (HermesII) is
+        // the same single-ADC class but is intentionally left byte-identical
+        // until a 10E owner can bench-confirm the routing. The fix must NOT
+        // change the 10E wire.
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: 14_200_000,
+            moxOn: true,
+            psEnabled: true,
+            psExternal: true,
+            board: HpsdrBoardKind.HermesII);
+
+        Assert.True((alex0 & Protocol2Client.AlexRxAntennaBypass) == 0,
+            "10E BYPASS relay must stay clear — the fix is scoped to the G2E.");
+        Assert.True((alex0 & Protocol2Client.AlexPsBit) == 0,
+            "10E must never set ALEX_PS either (single-ADC board).");
+    }
+
     // ---- RxSpecific buffer parity between Internal and External ----
 
     [Fact]
@@ -337,5 +424,145 @@ public class PsWireFormatTests
         // Sample rate at bytes 14..15 BE — 192 = 0x00C0
         Assert.Equal((byte)0x00, p[14]);
         Assert.Equal((byte)0xC0, p[15]);
+    }
+
+    // ---- Golden full-buffer regression guards (issue #960) ----
+    // These pin the ENTIRE composed wire buffer (every non-zero byte, and by
+    // exhaustion every zero byte) for the HermesC10 (ANAN-G2E) single-ADC PS
+    // time-mux path, the shared 10E (HermesII) burst, and the dual-ADC family.
+    // They prove the G2E documentation + read-only instrumentation change made
+    // ZERO wire-byte change: if any compose byte drifts on any of these boards,
+    // exactly one of these fails.
+
+    // Collect the sparse (index -> value) map of all non-zero bytes. Comparing
+    // this against an explicit expected map pins the whole buffer: anything not
+    // listed MUST be zero, or the count/equality check fails.
+    private static SortedDictionary<int, byte> NonZeroBytes(byte[] p)
+    {
+        var map = new SortedDictionary<int, byte>();
+        for (int i = 0; i < p.Length; i++)
+            if (p[i] != 0) map[i] = p[i];
+        return map;
+    }
+
+    [Fact]
+    public void CmdRx_G2E_FeedbackBurst_GoldenBytes()
+    {
+        // ANAN-G2E (HermesC10) single-ADC time-mux PS feedback descriptor:
+        // DDC0 enable ONLY (no DDC1 — the TX-DAC reference is the hardwired
+        // rx_I[NR] receiver synced into Rx0), ADC0, 192 kHz / 24-bit, and
+        // byte 1363 = 0x02 arming the SyncRx[0][1] coupler/reference interleave.
+        var p = Protocol2Client.ComposeCmdRxBuffer(
+            seq: 7, numAdc: 1, sampleRateKhz: 192, psEnabled: true,
+            boardKind: HpsdrBoardKind.HermesC10, g2eFeedbackBurst: true);
+
+        var expected = new SortedDictionary<int, byte>
+        {
+            [3] = 7,       // seq (BE)
+            [4] = 1,       // single ADC
+            [7] = 0x01,    // DDC0 enable only, NO DDC1
+            [19] = 0xC0,   // DDC0 192 kHz BE low (0x00C0)
+            [22] = 24,     // DDC0 24-bit
+            [1363] = 0x02, // SyncRx[0][1] coupler/reference interleave
+        };
+        Assert.Equal(expected, NonZeroBytes(p));
+    }
+
+    [Fact]
+    public void CmdRx_10E_FeedbackBurst_ByteIdenticalToG2E()
+    {
+        // The 10E (HermesII) burst is composed by the SAME g2eFeedbackBurst
+        // branch — it MUST be byte-for-byte identical to the G2E burst. This
+        // guards the shared branch: a G2E-scoped change must not perturb it.
+        var g2e = Protocol2Client.ComposeCmdRxBuffer(
+            seq: 7, numAdc: 1, sampleRateKhz: 192, psEnabled: true,
+            boardKind: HpsdrBoardKind.HermesC10, g2eFeedbackBurst: true);
+        var tenE = Protocol2Client.ComposeCmdRxBuffer(
+            seq: 7, numAdc: 1, sampleRateKhz: 192, psEnabled: true,
+            boardKind: HpsdrBoardKind.HermesII, g2eFeedbackBurst: true);
+
+        Assert.Equal(g2e, tenE);
+    }
+
+    [Fact]
+    public void CmdRx_DualAdc_PsArmed_GoldenBytes_Unaffected()
+    {
+        // Dual-ADC OrionMkII (G2/Saturn family) PS-armed compose: the dedicated
+        // DDC0+DDC1 feedback pair (0x05 enable = DDC0|DDC2) plus user RX on DDC2,
+        // byte 1363 = 0x02. Pinned to prove the bench radio's wire is untouched.
+        var p = Protocol2Client.ComposeCmdRxBuffer(
+            seq: 7, numAdc: 2, sampleRateKhz: 192, psEnabled: true,
+            boardKind: HpsdrBoardKind.OrionMkII);
+
+        var expected = new SortedDictionary<int, byte>
+        {
+            [3] = 7,       // seq (BE)
+            [4] = 2,       // dual ADC
+            [7] = 0x05,    // DDC0 (feedback) | DDC2 (user RX)
+            [19] = 0xC0,   // DDC0 192 kHz
+            [22] = 24,     // DDC0 24-bit
+            [23] = 2,      // DDC1 ADC = numAdc
+            [25] = 0xC0,   // DDC1 192 kHz
+            [28] = 24,     // DDC1 24-bit
+            [31] = 0xC0,   // DDC2 (user RX) 192 kHz
+            [34] = 24,     // DDC2 24-bit
+            [1363] = 0x02, // feedback pair sync
+        };
+        Assert.Equal(expected, NonZeroBytes(p));
+    }
+
+    [Fact]
+    public void CmdTx_G2E_PsArmed_Byte57Through59_TakeProtectiveFloor()
+    {
+        // On the G2E, ComposesPsFeedbackWire(HermesC10) is false, so SendCmdTx
+        // composes CmdTx with psEnabled=false while the byte-59 seed has driven
+        // txStepAttnDb to the protective floor (31). Bytes 57/58/59 all carry 31
+        // — the historical single-ADC shape with the protective attenuation.
+        var p = Protocol2Client.ComposeCmdTxBuffer(
+            seq: 7, sampleRateKhz: 48, txStepAttnDb: 31, paEnabled: true, psEnabled: false);
+
+        var expected = new SortedDictionary<int, byte>
+        {
+            [3] = 7,    // seq (BE)
+            [4] = 1,    // num_dac
+            [15] = 48,  // DAC sample rate 48 kHz BE low
+            [57] = 31,  // ADC step atten (historical shape)
+            [58] = 31,
+            [59] = 31,  // Angelia_atten_Tx0 protective floor
+        };
+        Assert.Equal(expected, NonZeroBytes(p));
+    }
+
+    // ---- HermesC10 PS wire-instrumentation gate (issue #960) ----
+    // The read-only p2.ps.g2e ~1 Hz diagnostic is gated by this pure predicate.
+    // Deterministic, socketless: proves the log fires ONLY on the ANAN-G2E while
+    // PS is armed AND keyed, and NEVER for the 10E or any dual-ADC board.
+
+    [Fact]
+    public void PsWireDiag_Emitted_OnlyFor_G2E_Armed_AndKeyed()
+    {
+        Assert.True(Protocol2Client.ShouldLogG2ePsWireDiag(
+            HpsdrBoardKind.HermesC10, psFeedbackEnabled: true, txKeyed: true));
+    }
+
+    [Theory]
+    [InlineData(false, true)]  // disarmed
+    [InlineData(true, false)]  // armed but not keyed (DDC0 is user RX at rest)
+    [InlineData(false, false)]
+    public void PsWireDiag_NotEmitted_ForG2E_WhenNotArmedAndKeyed(bool armed, bool keyed)
+    {
+        Assert.False(Protocol2Client.ShouldLogG2ePsWireDiag(
+            HpsdrBoardKind.HermesC10, psFeedbackEnabled: armed, txKeyed: keyed));
+    }
+
+    [Theory]
+    [InlineData(HpsdrBoardKind.HermesII)]   // sibling 10E — diagnostic is G2E-scoped
+    [InlineData(HpsdrBoardKind.OrionMkII)]  // dual-ADC — also reaches the paired decoder
+    [InlineData(HpsdrBoardKind.Orion)]
+    [InlineData(HpsdrBoardKind.Hermes)]
+    public void PsWireDiag_NeverEmitted_ForOtherBoards_EvenArmedAndKeyed(HpsdrBoardKind board)
+    {
+        Assert.False(Protocol2Client.ShouldLogG2ePsWireDiag(
+            board, psFeedbackEnabled: true, txKeyed: true));
     }
 }

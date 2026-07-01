@@ -82,12 +82,18 @@ internal static class P2Wire
     public const int HpDdc0PhaseOffset = 9;           // DDC0 RX NCO phase (Hermes-class RxBaseDdc=0)
     public const int HpTxDucPhaseOffset = 329;        // TX DUC NCO phase
     public const int HpDriveByte = 345;               // drive level 0..255
+    public const int HpAlex0Offset = 1432;            // alex0 BE u32 (Protocol2Client.cs WriteBeU32(p,1432,alex0))
+    public const uint AlexBypassBit = 0x00000800;     // alex0 bit 11 = RX 1 Out / external PS tap relay (SPI.v:47)
 
     // CmdRx (port 1025):
     public const int RxNumAdcByte = 4;
     public const int RxDdcEnableByte = 7;
-    public const int RxMuxByte = 1363;                // the Mux register on the 10E
-    public const byte RxMuxPsBit = 0x02;              // Mux[1] — Rx PS time-mux select
+    // Byte 1363 bit 1 (0x02) arms the single-ADC PS time-mux. It is a DIFFERENT
+    // register on each single-ADC firmware but the same offset+bit: SyncRx[0] on
+    // the ANAN-G2E C10 gateware (Rx_specific_C&C.v:181, Hermes.v:720) and the Mux
+    // register on the ANAN-10E Hermes_v10.3 (Rx_specific_C&C.v:181). Not byte 1443.
+    public const int RxMuxByte = 1363;
+    public const byte RxMuxPsBit = 0x02;              // SyncRx[0][1] (C10) / Mux[1] (10E) — Rx PS time-mux select
     public const int RxDdc0SampleRateOffset = 18;     // BE u16 kHz in the burst descriptor
 
     // CmdTx (port 1026):

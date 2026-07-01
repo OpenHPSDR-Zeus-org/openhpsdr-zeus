@@ -30,27 +30,26 @@ namespace Zeus.VirtualRadio.Tests;
 /// and the client decodes <see cref="PsFeedbackFrame"/>s. Unkeying returns DDC0
 /// to the user RX.
 ///
-/// THE G2E DELTA vs the 10E (the open, KB2UKA-gated item this test documents):
-/// the 10E host path seeds byte 59 (Angelia_atten_Tx0) to the protective floor
-/// (31 dB) on arm (<see cref="Protocol2Client.SeedsTxAdcProtection"/> is true for
-/// HermesII), so its loopback test asserts byte 59 >= 1. The G2E host path does
-/// NOT seed byte 59 — <c>SeedsTxAdcProtection(HermesC10)</c> is deliberately
-/// false (the G2E byte-59 seed is a separate, independently-gated pre-condition
-/// per the <see cref="Protocol2Client.G2ePsTimeMuxOnAir"/> doc, pre-condition A,
-/// and touching it is a PureSignal-hard-rule change requiring KB2UKA sign-off).
-/// So on the G2E byte 59 stays at the operator default (0) through the keyed
-/// burst, and the emulator — modelling the single-ADC hazard — raises
-/// first-key-down ADC overload in its hi-priority status. This test asserts BOTH:
-/// the feedback frames flow (the path is functionally complete) AND the overload
-/// latches (the byte-59 protective seed is still missing). That is exactly the
-/// "does the dark G2E PS path work, and what needs sign-off before real RF"
-/// answer, captured as a deterministic, hardware-free bench.
+/// THE G2E BYTE-59 SEED (#960, KB2UKA 2026-07-01): the G2E does NOT force-seed
+/// byte 59. Its single ADC is protected by the operator's EXTERNAL sampler pad,
+/// not byte 59, so <see cref="Protocol2Client.SeedsTxAdcProtection"/> returns
+/// FALSE for HermesC10 (true only for the 10E). Forcing 31 dB previously
+/// over-attenuated the padded tap and deadlocked PS (dead meter on External).
+/// So through the keyed PS burst byte 59 stays at the operator's value (0 here),
+/// and because the G2E is off the protection contract the emulator does NOT model
+/// a byte-59 overload for it (a low byte 59 is expected/correct with a padded
+/// external tap). This test asserts: feedback frames flow AND the coupler carries
+/// signal on the DEFAULT Internal pick AND byte 59 is left at the operator value
+/// AND no overload latches. It is a SELF-CONSISTENCY / regression bench — it
+/// proves the client and emulator agree on the digital wire, NOT that real-RF PS
+/// converges on a G2E. Real-G2E hardware validation (lb5va, #960) is the open item.
 ///
 /// Gated behind <c>ZEUS_VRADIO_LOOPBACK</c> (it binds the well-known radio ports
 /// and uses real loopback sockets), so it never runs in the default socketless
-/// CI unit pass. Flipping <see cref="Protocol2Client.G2ePsTimeMuxOnAir"/> is a
-/// TEST-ONLY, try/finally-restored, process-global mutation; the burn-zone
-/// production flag stays false. NOTHING here flips the seed itself.
+/// CI unit pass. The test sets <see cref="Protocol2Client.G2ePsTimeMuxOnAir"/>
+/// (already true in production since #1209/#960) explicitly and restores the
+/// prior value in a try/finally so it is order-independent; NOTHING here flips
+/// the byte-59 seed itself.
 /// </summary>
 public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
 {
@@ -59,27 +58,38 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
         private long _iq;
         private long _ps;
         private volatile bool _sawNonFiniteSample;
+        private readonly object _peakGate = new();
+        private float _peakCoupler;
 
         public long IqCount => Interlocked.Read(ref _iq);
         public long PsCount => Interlocked.Read(ref _ps);
         public bool AllSamplesFinite => !_sawNonFiniteSample;
+        /// <summary>Peak |coupler| (DDC0/RX) magnitude seen — 0 means the coupler
+        /// was silent (the dead-meter case: tap not routed to the single ADC).</summary>
+        public float PeakCoupler { get { lock (_peakGate) return _peakCoupler; } }
 
         public void OnIqFrame(in IqFrame frame) => Interlocked.Increment(ref _iq);
 
         public void OnPsFeedbackFrame(in PsFeedbackFrame frame)
         {
-            // Spot-check the first few samples are finite (a real WDSP feed).
-            for (int i = 0; i < 4 && i < frame.RxI.Length; i++)
+            float peak = 0f;
+            for (int i = 0; i < frame.RxI.Length; i++)
             {
                 if (!float.IsFinite(frame.RxI[i]) || !float.IsFinite(frame.TxI[i]))
                     _sawNonFiniteSample = true;
+                // Coupler = DDC0 (RX). Track its peak so the test can prove the tap
+                // actually carries signal, not just that frames arrive (an all-zero
+                // coupler is finite and would sail past a count-only assertion).
+                float m = MathF.Max(MathF.Abs(frame.RxI[i]), MathF.Abs(frame.RxQ[i]));
+                if (m > peak) peak = m;
             }
+            lock (_peakGate) { if (peak > _peakCoupler) _peakCoupler = peak; }
             Interlocked.Increment(ref _ps);
         }
     }
 
     [SkippableFact]
-    public async Task ArmPs_KeyTx_DeliversFeedback_ButByte59Unseeded_RaisesAdcOverload()
+    public async Task ArmPs_KeyTx_DeliversFeedback_Byte59Seeded_NoAdcOverload()
     {
         Skip.IfNot(
             !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ZEUS_VRADIO_LOOPBACK")),
@@ -120,9 +130,11 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
             Assert.True(await WaitUntil(() => sink.IqCount > 5, TimeSpan.FromSeconds(5)),
                 "no user-RX IQ frames at rest");
 
-            // 2) Arm PS and key TX. v0.10.8 (#960): the G2E now seeds byte 59 to
-            //    the protective floor on arm (SeedsTxAdcProtection(HermesC10) ==
-            //    true), exactly like the 10E.
+            // 2) Arm PS and key TX. #960 (KB2UKA 2026-07-01): the G2E does NOT
+            //    force-seed byte 59 — its single ADC is protected by the operator's
+            //    external sampler pad, not byte 59, so arming leaves byte 59 at the
+            //    operator's value (0 here). (The 10E keeps its seed; see its own
+            //    loopback test.)
             client.SetPsFeedbackEnabled(true);
             client.SetDriveByte(200);
             client.SetMox(true);
@@ -154,21 +166,31 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
             Assert.True(gotFrames, "no PS feedback frames delivered while keyed");
             Assert.True(sink.AllSamplesFinite, "PS feedback carried a non-finite sample");
 
-            // 5) SAFETY (v0.10.8, #960): byte 59 (Angelia_atten_Tx0) IS now seeded
-            //    to the protective floor on the G2E during the keyed PS burst, so
-            //    the single shared RX ADC is attenuated on first key-down instead
-            //    of being slammed by the PA coupler at 0 dB. The emulator's
-            //    single-ADC model therefore raises NO ADC overload.
-            Assert.True(
-                await WaitUntil(
-                    () => engine.DecodedTxStepAttnDb >= Protocol2Engine.TxAdcProtectFloorDb,
-                    TimeSpan.FromSeconds(2)),
-                $"G2E byte 59 was not seeded to the protective floor (was {engine.DecodedTxStepAttnDb})");
-            Assert.False(engine.PsAdcOverloadLatched,
-                "emulator latched a first-key-down ADC overload despite the G2E byte-59 protective seed");
+            // 4b) …and the COUPLER actually carries signal. This test never selects
+            //     the External source, so it runs on the DEFAULT Internal pick — the
+            //     exact configuration that produced the dead meter before the fix.
+            //     With the fix the G2E routes the tap (alex0 bit 11) regardless of
+            //     the toggle, so the emulator's single-ADC coupler is live and its
+            //     peak is > 0. Before the fix bit 11 stayed clear on Internal, the
+            //     emulator's coupler was silent, and this assertion would FAIL —
+            //     which is precisely the regression that count-only checks missed.
+            Assert.True(sink.PeakCoupler > 0f,
+                "PS coupler was silent on the default Internal source — the tap was " +
+                $"not routed to the single ADC (peakCoupler={sink.PeakCoupler}).");
 
-            // 6) Unkey + disarm → DDC0 returns to user RX and byte 59 RESTORES to
-            //    the operator's pre-arm value (0 here).
+            // 5) SAFETY (#960, KB2UKA 2026-07-01): the G2E does NOT force byte 59 to
+            //    the protective floor — the operator's external pad is the ADC
+            //    protection. So byte 59 stays at the operator's value (0) through the
+            //    keyed PS burst, and because SeedsTxAdcProtection(HermesC10) is false
+            //    the emulator does not model a byte-59 overload for the G2E (a low
+            //    byte 59 is expected and correct with a padded external tap).
+            Assert.Equal(0, engine.DecodedTxStepAttnDb);
+            Assert.False(engine.PsAdcOverloadLatched,
+                "emulator modelled a byte-59 ADC overload for the G2E, whose external " +
+                "pad — not byte 59 — is the protection");
+
+            // 6) Unkey + disarm → DDC0 returns to user RX; byte 59 was never altered,
+            //    so it is still the operator's value (0).
             client.SetMox(false);
             client.SetPsFeedbackEnabled(false);
 
@@ -176,9 +198,7 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
             Assert.True(await WaitUntil(() => sink.IqCount > iqAtUnkey + 5, TimeSpan.FromSeconds(5)),
                 "user-RX did not resume after unkey");
             Assert.False(engine.PsBurstArmed, "PS burst still armed after unkey");
-            Assert.True(
-                await WaitUntil(() => engine.DecodedTxStepAttnDb == 0, TimeSpan.FromSeconds(2)),
-                "byte 59 did not restore to the operator default after disarm");
+            Assert.Equal(0, engine.DecodedTxStepAttnDb);
         }
         finally
         {
@@ -188,6 +208,35 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
             engineCts.Cancel();
             try { await engineRun; } catch (OperationCanceledException) { } catch { }
         }
+    }
+
+    // Socketless (CI-safe) proof of the single-ADC coupler model: with the tap
+    // NOT routed (alex0 bit 11 clear) the coupler must be silent even though the
+    // byte-1363 burst is armed — the dead-meter case — and with it routed the
+    // coupler must carry the reference-through-distortion signal. This is the
+    // ground-truth the loopback relies on, isolated from any real UDP socket.
+    [Fact]
+    public void FillPsCoupler_SilentWhenTapNotRouted_LiveWhenRouted()
+    {
+        const int pairs = P2RxDdcEncoder.PsPairsPerPacket;
+        var refBuf = new double[2 * pairs];
+        for (int i = 0; i < pairs; i++)
+        {
+            refBuf[2 * i] = 0.5 * Math.Cos(2 * Math.PI * i / 16.0);
+            refBuf[2 * i + 1] = 0.5 * Math.Sin(2 * Math.PI * i / 16.0);
+        }
+        var distortion = new Zeus.VirtualRadio.Rf.PaDistortionModel(enabled: true);
+        var coupBuf = new double[2 * pairs];
+
+        // Tap NOT routed → coupler silent (frames still flow, but dead meter).
+        Protocol2Engine.FillPsCoupler(refBuf, coupBuf, pairs, couplerRouted: false, distortion);
+        Assert.All(coupBuf, v => Assert.Equal(0.0, v));
+
+        // Tap routed → coupler live (peak > 0).
+        Protocol2Engine.FillPsCoupler(refBuf, coupBuf, pairs, couplerRouted: true, distortion);
+        double peak = 0;
+        foreach (var v in coupBuf) peak = Math.Max(peak, Math.Abs(v));
+        Assert.True(peak > 0.0, "routed coupler must carry the PA-through-distortion signal");
     }
 
     private static async Task<bool> WaitUntil(Func<bool> predicate, TimeSpan timeout)
