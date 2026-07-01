@@ -3228,6 +3228,24 @@ public static class ZeusEndpoints
             return Results.Ok(new Hl2GpioDto(Supported: true, Bits: radio.GetHl2GpioMask()));
         });
 
+        // Thetis-style Alex RF filter matrix. GET returns the editable RX BPF /
+        // HPF and TX LPF windows plus a live active-filter readout. PUT replaces
+        // the matrix atomically; RadioService persists, normalizes, and replays
+        // the P2 Alex snapshot server-authoritatively. POST /reset restores the
+        // stock Zeus/pihpsdr thresholds and disables custom mode.
+        app.MapGet("/api/radio/rf-filters", (RadioService radio) =>
+            Results.Ok(radio.GetRfFilterSettings()));
+
+        app.MapPut("/api/radio/rf-filters", (RfFilterSettingsSetRequest req, RadioService radio) =>
+        {
+            if (req is null)
+                return Results.BadRequest(new { error = "body required" });
+            return Results.Ok(radio.SetRfFilterSettings(req));
+        });
+
+        app.MapPost("/api/radio/rf-filters/reset", (RadioService radio) =>
+            Results.Ok(radio.ResetRfFilterSettings()));
+
         // External antenna ports (external-ports plan — antenna slice, #804).
         // GET returns the per-band TX/RX antenna + RX-aux selection plus the
         // board-capability gates the frontend renders the right selectors from.

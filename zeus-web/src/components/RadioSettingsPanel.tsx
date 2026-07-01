@@ -35,6 +35,7 @@ import {
   type RxAuxName,
 } from '../state/antenna-store';
 import { useHl2GpioStore } from '../state/hl2-gpio-store';
+import { RfFiltersSettingsCard } from './RfFiltersSettingsCard';
 
 // TX-audio source labels for the single-select control. The control is a radio-
 // button group (role="radiogroup") bound to the ONE TxAudioSource enum value —
@@ -520,6 +521,8 @@ export function RadioSettingsPanel() {
           </div>
         </div>
       ) : null}
+
+      <RfFiltersSettingsCard />
 
       {showAntenna && (
         <div className="ps-card">

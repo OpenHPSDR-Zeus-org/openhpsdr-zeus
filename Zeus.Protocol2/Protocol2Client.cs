@@ -300,6 +300,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // alongside the relay-population gate. MkII-BPF boards (0x0A / G2E) use it;
     // classic-Alex boards do not.
     private bool _mkiiBpfRxSelect;
+    // Operator-editable RF filter matrix (Thetis-style Ant/Filters parity).
+    // Null or CustomMatrixEnabled=false preserves the built-in Alex BPF/LPF
+    // tables byte-for-byte. Like antenna relays, changes are deferred while
+    // keyed so an edited range cannot hot-switch the filter board under power.
+    private RfFilterRuntimeSettings? _rfFilters;
+    private RfFilterRuntimeSettings? _pendingRfFilters;
+    private bool _hasPendingRfFilters;
 
     // TX audio front-end (external-audio-jacks re-port). Wire-encoded into the
     // TxSpecific (CmdTx, port 1026) packet byte 50 (mic_control flags) + byte
@@ -1165,13 +1172,39 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (changed && _rxTask is not null) SendCmdHighPriority(run: true);
     }
 
+    /// <summary>
+    /// Set the normalized Thetis-style RF filter matrix. Custom ranges and
+    /// bypass policies are resolved inside <see cref="ComputeAlexWord"/> so the
+    /// wire path remains the single source of Alex bit truth. Mid-key edits are
+    /// deferred with the antenna relays and flushed on the next unkey edge.
+    /// </summary>
+    public void SetRfFilters(RfFilterRuntimeSettings? settings)
+    {
+        if (_moxOn || _tuneActive)
+        {
+            _pendingRfFilters = settings;
+            _hasPendingRfFilters = true;
+            return;
+        }
+
+        bool changed = !Equals(_rfFilters, settings);
+        _rfFilters = settings;
+        _pendingRfFilters = null;
+        _hasPendingRfFilters = false;
+        if (changed && _rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
     // Apply any antenna selection deferred while keyed. Called on the unkey edge
-    // from SetMox/SetTune AFTER the MOX/TUNE flag clears, so the relay re-push
-    // happens at idle, never under power. Returns true if a re-push is warranted
-    // (the caller's SendCmdHighPriority covers it).
+    // from SetMox/SetTune AFTER the MOX/TUNE flag clears, so the relay/filter
+    // re-push happens at idle, never under power. Returns true if a re-push is
+    // warranted (the caller's SendCmdHighPriority covers it).
     private bool FlushPendingAntennas()
     {
-        if (_pendingTxAntenna < 0 && _pendingRxAntenna < 0 && _pendingRxAuxInput < 0) return false;
+        if (_pendingTxAntenna < 0
+            && _pendingRxAntenna < 0
+            && _pendingRxAuxInput < 0
+            && !_hasPendingRfFilters)
+            return false;
         int tx = _pendingTxAntenna >= 0 ? _pendingTxAntenna : _txAntenna;
         int rx = _pendingRxAntenna >= 0 ? _pendingRxAntenna : _rxAntenna;
         int aux = _pendingRxAuxInput >= 0 ? _pendingRxAuxInput : _rxAuxInput;
@@ -1182,6 +1215,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _pendingTxAntenna = -1;
         _pendingRxAntenna = -1;
         _pendingRxAuxInput = -1;
+        if (_hasPendingRfFilters)
+        {
+            changed |= !Equals(_rfFilters, _pendingRfFilters);
+            _rfFilters = _pendingRfFilters;
+            _pendingRfFilters = null;
+            _hasPendingRfFilters = false;
+        }
         return changed;
     }
 
@@ -2703,7 +2743,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // the VFO-B carrier, so there was NO RF output on a different band.
         uint txLpfFreqHz = xmit ? _txDucFreqHz : _rxFreqHz;
         // alex0 BPF follows RX1 (_rxFreqHz); LPF follows the TX freq.
-        uint alex0Common = ComputeAlexWord(_rxFreqHz, txLpfFreqHz, txAnt: txAntWire, board: _boardKind);
+        uint alex0Common = ComputeAlexWord(
+            _rxFreqHz,
+            txLpfFreqHz,
+            txAnt: txAntWire,
+            board: _boardKind,
+            rfFilters: _rfFilters,
+            xmit: xmit,
+            psEnabled: psWire);
         // alex1 keeps the TX antenna from txAntWire; alex0 swaps in the
         // state-correct antenna (clear [26:24], re-OR via the shared encoder).
         uint alex0 = (alex0Common & ~ALEX_TX_ANTENNA_MASK) | EncodeTxAntennaBits(alex0AntWire)
@@ -2716,7 +2763,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             xmit,
             psWire,          // board-gated PS arm (#960): no ALEX_PS on single-ADC
             _boardKind,
-            txAntWire);
+            txAntWire,
+            _rfFilters);
         // RX auxiliary input select (external-ports plan — antenna slice, #804).
         // Emitted on alex0 — XVTR/EXT1/EXT2/BYPASS bits 8..11 (+ Saturn RX_SELECT
         // bit 14). ORDER IS LOAD-BEARING (the PS-K36 firewall): the operator aux
@@ -2838,7 +2886,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         bool hasTxAntennaRelays = false,
         int rxAuxInput = 0,
         bool mkiiBpfRxSelect = false,
-        int rxAntWire = 1)
+        int rxAntWire = 1,
+        RfFilterRuntimeSettings? rfFilters = null)
     {
         // Mirrors the SendCmdHighPriority alex0 path EXACTLY, in the same order,
         // so the golden test asserts real behaviour:
@@ -2853,7 +2902,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         int alex0AntWire = (moxOn || rxAuxInput != 0)
             ? wire
             : ((rxAntWire is 1 or 2 or 3) ? rxAntWire : 1);
-        uint alexCommon = ComputeAlexWord(rxFreqHz, rxFreqHz, txAnt: wire, board: board);
+        uint alexCommon = ComputeAlexWord(
+            rxFreqHz,
+            rxFreqHz,
+            txAnt: wire,
+            board: board,
+            rfFilters: rfFilters,
+            xmit: moxOn,
+            psEnabled: psEnabled);
         uint alex0 = (alexCommon & ~ALEX_TX_ANTENNA_MASK) | EncodeTxAntennaBits(alex0AntWire)
                      | (moxOn ? ALEX_TX_RELAY : 0u);
         alex0 |= ComposeRxAuxBits(rxAuxInput, mkiiBpfRxSelect);
@@ -2870,7 +2926,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         bool moxOn,
         bool psEnabled,
         HpsdrBoardKind board = HpsdrBoardKind.OrionMkII,
-        int txAntWire = 1)
+        int txAntWire = 1,
+        RfFilterRuntimeSettings? rfFilters = null)
     {
         // The alex1 word carries TWO independent filter selections that must NOT
         // share a frequency when RX2 / the TX VFO sit on different bands:
@@ -2895,7 +2952,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // alex1 ALWAYS reflects the TX antenna (external-ports plan — antenna
         // slice, #804) — it never carries the RX antenna, so the TX-antenna
         // selector is threaded straight through here.
-        uint alex1 = ComputeAlexWord(rx2BpfFreqHz, lpfFreqHz, txAnt: txAntWire, board: board);
+        uint alex1 = ComputeAlexWord(
+            rx2BpfFreqHz,
+            lpfFreqHz,
+            txAnt: txAntWire,
+            board: board,
+            rfFilters: rfFilters,
+            xmit: moxOn,
+            psEnabled: psEnabled);
         if (moxOn) alex1 |= ALEX_TX_RELAY | ALEX1_ANAN7000_RX_GNDonTX;
         if (psEnabled) alex1 |= AlexPsBit;
         return alex1;
@@ -2911,25 +2975,46 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         uint rxFreqHz,
         bool moxOn,
         bool psEnabled,
-        HpsdrBoardKind board = HpsdrBoardKind.OrionMkII)
+        HpsdrBoardKind board = HpsdrBoardKind.OrionMkII,
+        RfFilterRuntimeSettings? rfFilters = null)
     {
-        uint alexCommon = ComputeAlexWord(rxFreqHz, rxFreqHz, txAnt: 1, board: board);
+        uint alexCommon = ComputeAlexWord(
+            rxFreqHz,
+            rxFreqHz,
+            txAnt: 1,
+            board: board,
+            rfFilters: rfFilters,
+            xmit: moxOn,
+            psEnabled: psEnabled);
         uint alex1 = alexCommon | (moxOn ? ALEX_TX_RELAY | ALEX1_ANAN7000_RX_GNDonTX : 0u);
         if (psEnabled) alex1 |= AlexPsBit;
         return alex1;
     }
 
-    internal static uint ComputeAlexWord(uint rxFreqHz, uint txFreqHz, int txAnt, HpsdrBoardKind board = HpsdrBoardKind.OrionMkII)
+    internal static uint ComputeAlexWord(
+        uint rxFreqHz,
+        uint txFreqHz,
+        int txAnt,
+        HpsdrBoardKind board = HpsdrBoardKind.OrionMkII,
+        RfFilterRuntimeSettings? rfFilters = null,
+        bool xmit = false,
+        bool psEnabled = false)
     {
         uint word = 0;
-        word |= board is HpsdrBoardKind.Hermes or HpsdrBoardKind.HermesII
-            ? BpfBitsClassicAlex(rxFreqHz)
-            : BpfBitsAnan7000(rxFreqHz);
+        bool classicAlex = board is HpsdrBoardKind.Hermes or HpsdrBoardKind.HermesII;
+        bool forceRxBypass = rfFilters is not null
+            && (rfFilters.RxBypassAll
+                || (xmit && rfFilters.RxBypassOnTx)
+                || (xmit && psEnabled && rfFilters.RxBypassOnPureSignal));
+
+        word |= classicAlex
+            ? BpfBitsClassicAlex(rxFreqHz, rfFilters, forceRxBypass)
+            : BpfBitsAnan7000(rxFreqHz, rfFilters, forceRxBypass);
         // LPF bit positions and band thresholds are identical across both
         // filter-board generations (classic Alex on Hermes/ANAN-100 vs
         // ANAN-7000/Saturn BPF board) — confirmed against pihpsdr alex.h
         // and new_protocol.c. Same call for every board.
-        word |= LpfBits(txFreqHz);
+        word |= LpfBits(txFreqHz, rfFilters);
         word |= EncodeTxAntennaBits(txAnt);
         return word;
     }
@@ -2997,6 +3082,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         return ALEX_ANAN7000_RX_6_PRE_BPF;
     }
 
+    private static uint BpfBitsAnan7000(uint freqHz, RfFilterRuntimeSettings? rfFilters, bool forceBypass)
+    {
+        if (forceBypass) return ALEX_ANAN7000_RX_BYPASS_BPF;
+        if (rfFilters?.CustomMatrixEnabled == true)
+        {
+            var resolved = ResolveCustomFilterBits(
+                rfFilters.Anan7000RxFilters,
+                freqHz,
+                Anan7000RxKeyToBits,
+                ALEX_ANAN7000_RX_BYPASS_BPF);
+            if (resolved.HasValue) return resolved.Value;
+        }
+        return BpfBitsAnan7000(freqHz);
+    }
+
     // RX HPF band splits for the classic Alex filter board (Hermes,
     // ANAN-10, ANAN-100, ANAN-100D, ANAN-200D, HermesII / ANAN-10E,
     // ANAN-100B). Bit positions and thresholds lifted from pihpsdr
@@ -3013,6 +3113,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (freqHz < 20_000_000u) return ALEX_13MHZ_HPF;
         if (freqHz < 50_000_000u) return ALEX_20MHZ_HPF;
         return ALEX_6M_PREAMP;
+    }
+
+    private static uint BpfBitsClassicAlex(uint freqHz, RfFilterRuntimeSettings? rfFilters, bool forceBypass)
+    {
+        if (forceBypass) return ALEX_BYPASS_HPF;
+        if (rfFilters?.CustomMatrixEnabled == true)
+        {
+            var resolved = ResolveCustomFilterBits(
+                rfFilters.ClassicAlexRxFilters,
+                freqHz,
+                ClassicAlexRxKeyToBits,
+                ALEX_BYPASS_HPF);
+            if (resolved.HasValue) return resolved.Value;
+        }
+        return BpfBitsClassicAlex(freqHz);
     }
 
     // TX LPF band splits. Thresholds match pihpsdr new_protocol.c:1204-1218
@@ -3033,6 +3148,78 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (freqHz >  2_500_000u) return ALEX_80_LPF;
         return ALEX_160_LPF;
     }
+
+    private static uint LpfBits(uint freqHz, RfFilterRuntimeSettings? rfFilters)
+    {
+        if (rfFilters?.CustomMatrixEnabled == true)
+        {
+            var resolved = ResolveCustomFilterBits(
+                rfFilters.TxFilters,
+                freqHz,
+                TxLpfKeyToBits,
+                ALEX_6_BYPASS_LPF);
+            if (resolved.HasValue) return resolved.Value;
+        }
+        return LpfBits(freqHz);
+    }
+
+    private static uint? ResolveCustomFilterBits(
+        IReadOnlyList<RfFilterRangeDto>? ranges,
+        uint freqHz,
+        Func<string, uint?> keyToBits,
+        uint bypassBits)
+    {
+        if (ranges is null) return null;
+        foreach (var range in ranges)
+        {
+            if (range is null) continue;
+            long start = Math.Max(0L, range.StartHz);
+            long end = Math.Max(start, range.EndHz);
+            if (freqHz < start || freqHz > end) continue;
+            if (range.ForceBypass) return bypassBits;
+            return keyToBits(range.Key);
+        }
+        return null;
+    }
+
+    private static uint? Anan7000RxKeyToBits(string key) => NormalizeFilterKey(key) switch
+    {
+        "bypass" => ALEX_ANAN7000_RX_BYPASS_BPF,
+        "160" => ALEX_ANAN7000_RX_160_BPF,
+        "80_60" => ALEX_ANAN7000_RX_80_60_BPF,
+        "40_30" => ALEX_ANAN7000_RX_40_30_BPF,
+        "20_15" => ALEX_ANAN7000_RX_20_15_BPF,
+        "12_10" => ALEX_ANAN7000_RX_12_10_BPF,
+        "6_pre" => ALEX_ANAN7000_RX_6_PRE_BPF,
+        _ => null,
+    };
+
+    private static uint? ClassicAlexRxKeyToBits(string key) => NormalizeFilterKey(key) switch
+    {
+        "bypass" => ALEX_BYPASS_HPF,
+        "1_5" => ALEX_1_5MHZ_HPF,
+        "6_5" => ALEX_6_5MHZ_HPF,
+        "9_5" => ALEX_9_5MHZ_HPF,
+        "13" => ALEX_13MHZ_HPF,
+        "20" => ALEX_20MHZ_HPF,
+        "6_pre" => ALEX_6M_PREAMP,
+        _ => null,
+    };
+
+    private static uint? TxLpfKeyToBits(string key) => NormalizeFilterKey(key) switch
+    {
+        "160" => ALEX_160_LPF,
+        "80" => ALEX_80_LPF,
+        "60_40" => ALEX_60_40_LPF,
+        "30_20" => ALEX_30_20_LPF,
+        "17_15" => ALEX_17_15_LPF,
+        "12_10" => ALEX_12_10_LPF,
+        "6_bypass" => ALEX_6_BYPASS_LPF,
+        _ => null,
+    };
+
+    private static string NormalizeFilterKey(string? key)
+        => (key ?? string.Empty).Trim().ToLowerInvariant().Replace('-', '_');
 
     // Mirrors pihpsdr's new_protocol_timer_thread:
     //   HighPriority every 100 ms, RX/TX specific every 200 ms, General

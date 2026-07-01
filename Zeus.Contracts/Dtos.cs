@@ -2128,6 +2128,77 @@ public sealed record G2OptionsSetRequest(
     bool? RandomEnabled = null,
     int? Rx1AttenuatorDb = null);
 
+// ---- RF filter matrix ----------------------------------------------------
+//
+// Manual Alex RF filter windows, modeled after Thetis Setup -> Ant/Filters:
+// the operator edits frequency windows and bypass policy, while the live wire
+// selection still follows RX1/RX2/TX frequency automatically. The frontend and
+// server deal in named rows; Protocol2Client maps row keys to the verified Alex
+// bit constants so raw relay masks are never exposed as a user API.
+//
+// Ranges are inclusive, in Hz. StartHz/EndHz are clamped server-side to the HF+
+// 6m operating envelope and may intentionally use exact edge values such as
+// 1_499_999 to preserve the legacy strict-inequality Alex thresholds.
+public sealed record RfFilterRangeDto(
+    string Key,
+    string Label,
+    long StartHz,
+    long EndHz,
+    bool ForceBypass = false);
+
+public sealed record RfFilterProfileDto(
+    string Key,
+    string Label,
+    IReadOnlyList<RfFilterRangeDto> RxFilters,
+    IReadOnlyList<RfFilterRangeDto> TxFilters);
+
+public sealed record RfFilterActiveDto(
+    string ProfileKey,
+    string ProfileLabel,
+    long Rx1Hz,
+    long Rx2Hz,
+    long TxHz,
+    bool TxActive,
+    string Rx1Key,
+    string Rx1Label,
+    string Rx2Key,
+    string Rx2Label,
+    string TxKey,
+    string TxLabel,
+    string Reason);
+
+public sealed record RfFilterSettingsDto(
+    bool Supported,
+    string BoardFamily,
+    string ActiveProfileKey,
+    bool CustomMatrixEnabled,
+    bool RxBypassAll,
+    bool RxBypassOnTx,
+    bool RxBypassOnPureSignal,
+    IReadOnlyList<RfFilterProfileDto> Profiles,
+    RfFilterActiveDto Active,
+    IReadOnlyList<string> Warnings);
+
+public sealed record RfFilterSettingsSetRequest(
+    bool CustomMatrixEnabled,
+    bool RxBypassAll,
+    bool RxBypassOnTx,
+    bool RxBypassOnPureSignal,
+    IReadOnlyList<RfFilterProfileDto> Profiles);
+
+// Compact runtime shape pushed from RadioService to Protocol2Client. It keeps
+// Protocol2 free of LiteDB/store concerns while letting tests exercise the same
+// normalized rows the API persists. CustomMatrixEnabled=false preserves the
+// built-in Alex tables; the bypass booleans may still force an RX bypass.
+public sealed record RfFilterRuntimeSettings(
+    bool CustomMatrixEnabled,
+    bool RxBypassAll,
+    bool RxBypassOnTx,
+    bool RxBypassOnPureSignal,
+    IReadOnlyList<RfFilterRangeDto> Anan7000RxFilters,
+    IReadOnlyList<RfFilterRangeDto> ClassicAlexRxFilters,
+    IReadOnlyList<RfFilterRangeDto> TxFilters);
+
 // Panadapter background settings — Mode is one of "basic" | "beam-map" |
 // "image"; Fit is one of "fit" | "fill" | "stretch". Image bytes are NOT
 // shipped in this DTO; HasImage signals whether GET /api/display-settings/image

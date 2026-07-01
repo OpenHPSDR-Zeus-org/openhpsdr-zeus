@@ -277,6 +277,9 @@ public sealed class PaSettingsStore : IDisposable
 // on HasTxAntennaRelays and routes the operator RX-aux strictly BEFORE the PS
 // coupler OR (the PS-K36 firewall). All defaulted so existing constructions stay
 // valid (default ANT1/ANT1/None = byte-identical to today).
+//
+// RfFilters carries the normalized Thetis-style RF filter matrix. Null means
+// Protocol2Client uses its built-in Alex BPF/LPF tables exactly as before.
 public sealed record PaRuntimeSnapshot(
     byte DriveByte,
     byte OcTxMask,
@@ -288,7 +291,8 @@ public sealed record PaRuntimeSnapshot(
     HpsdrAntenna RxAntenna = HpsdrAntenna.Ant1,
     bool HasTxAntennaRelays = false,
     int RxAuxInput = 0,
-    bool MkiiBpfRxSelect = false);
+    bool MkiiBpfRxSelect = false,
+    RfFilterRuntimeSettings? RfFilters = null);
 
 public sealed class PaBandEntry
 {
