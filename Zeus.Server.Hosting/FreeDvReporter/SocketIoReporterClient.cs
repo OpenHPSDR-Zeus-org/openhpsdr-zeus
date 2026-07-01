@@ -234,6 +234,27 @@ public sealed class SocketIoReporterClient
         EmitEvent("message_update", payload);
     }
 
+    /// <summary>
+    /// Emit an rx_report — "I'm hearing <paramref name="rxCallsign"/> at
+    /// <paramref name="snrDb"/> in <paramref name="mode"/>". The reporter server
+    /// tags on our own sid and re-broadcasts, so other clients (and the public
+    /// map) can populate the SNR column on our roster row. No-op unless connected
+    /// in report role. Not cached — this is per-decode telemetry, not
+    /// operator-configured state; a reconnect just resumes emitting when sync
+    /// re-acquires.
+    /// </summary>
+    public void EmitRxReport(double snrDb, string? rxCallsign, string mode)
+    {
+        if (!Reporting) return;
+        var payload = new Dictionary<string, object?>
+        {
+            ["snr"] = Math.Round(snrDb, 1),
+            ["callsign"] = rxCallsign ?? "",
+            ["mode"] = mode ?? "",
+        };
+        EmitEvent("rx_report", payload);
+    }
+
     /// <summary>Ask another station (by sid) to QSY to the given frequency.</summary>
     public void EmitQsy(string destSid, long freqHz, string message)
     {

@@ -48,6 +48,12 @@ public sealed class FreeDvReporterService : BackgroundService
     // Coalesce freq_change emits so spinning the VFO doesn't flood the socket.
     private static readonly TimeSpan FreqEmitInterval = TimeSpan.FromMilliseconds(500);
 
+    // Cadence for the periodic rx_report loop while FreeDV is synced. Poll the
+    // modem status every RxReportPollMs; only actually emit every RxReportInterval
+    // so we don't flood the reporter with a report per second.
+    private const int RxReportPollMs = 1000;
+    private static readonly TimeSpan RxReportInterval = TimeSpan.FromSeconds(10);
+
     private readonly ILogger<FreeDvReporterService> _log;
     private readonly ConcurrentDictionary<string, Station> _stations = new();
     private readonly SocketIoReporterClient _client;
@@ -67,6 +73,13 @@ public sealed class FreeDvReporterService : BackgroundService
     // (TX state is session-only), so we keep our own copy to pair with a
     // mode-change tx_report.
     private volatile bool _transmitting;
+
+    // rx_report cadence state. _prevRxSynced flips true on the sync-transition so
+    // a freshly-acquired signal triggers an immediate emit rather than waiting
+    // for the full interval. _lastRxReportUtc is reset when sync drops so the
+    // next re-sync also emits immediately.
+    private bool _prevRxSynced;
+    private DateTime _lastRxReportUtc = DateTime.MinValue;
 
     public FreeDvReporterService(
         ILogger<FreeDvReporterService> log,
@@ -120,9 +133,12 @@ public sealed class FreeDvReporterService : BackgroundService
 
             // Watch for the handshake to complete so we can publish the operator's
             // initial freq/mode/message once in report role. Runs alongside the
-            // receive loop and exits when the loop returns.
+            // receive loop and exits when the loop returns. Sibling loop drives
+            // periodic rx_report emits so the operator's SNR readings propagate to
+            // the public map while synced.
             using var connectedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             var republishTask = RepublishOnConnectAsync(connectedCts.Token);
+            var rxReportTask = RxReportLoopAsync(connectedCts.Token);
 
             try
             {
@@ -141,6 +157,12 @@ public sealed class FreeDvReporterService : BackgroundService
                 connectedCts.Cancel();
                 try { await republishTask.ConfigureAwait(false); }
                 catch (OperationCanceledException) { /* expected on loop exit */ }
+                try { await rxReportTask.ConfigureAwait(false); }
+                catch (OperationCanceledException) { /* expected on loop exit */ }
+                // Sync-state trackers are per-connection; reset so the next
+                // connect starts with no stale "just synced" edge.
+                _prevRxSynced = false;
+                _lastRxReportUtc = DateTime.MinValue;
             }
 
             reconnect = true;
@@ -174,6 +196,106 @@ public sealed class FreeDvReporterService : BackgroundService
             }
         }
         catch (OperationCanceledException) { /* loop exited */ }
+    }
+
+    // While the reporter link is up in report role, poll the FreeDV modem and
+    // emit an rx_report whenever we're synced onto a station: SNR, the decoded
+    // callsign (if the txt sidechannel yielded one) and the submode. Emits
+    // immediately on the sync edge, then at RxReportInterval while sync holds;
+    // pauses while transmitting so we never report our own audio. Best-effort:
+    // failures are swallowed so a reporter fault can't disturb the radio path.
+    private async Task RxReportLoopAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(RxReportPollMs, ct).ConfigureAwait(false);
+                TryEmitRxReport();
+            }
+        }
+        catch (OperationCanceledException) { /* loop exited */ }
+    }
+
+    private void TryEmitRxReport()
+    {
+        try
+        {
+            if (!_client.Reporting) return;
+            if (_transmitting)
+            {
+                // Don't report our own TX audio and treat un-key as a fresh sync
+                // edge so the first post-over decode emits immediately.
+                _prevRxSynced = false;
+                _lastRxReportUtc = DateTime.MinValue;
+                return;
+            }
+
+            var status = _freeDv.Status();
+            if (!status.Active || !status.Synced)
+            {
+                _prevRxSynced = false;
+                _lastRxReportUtc = DateTime.MinValue;
+                return;
+            }
+
+            var now = DateTime.UtcNow;
+            if (!ShouldEmitRxReport(_prevRxSynced, now, _lastRxReportUtc, RxReportInterval))
+                return;
+
+            _prevRxSynced = true;
+            _lastRxReportUtc = now;
+
+            string mode = ReportModeLabel(_radio.Snapshot().Mode);
+            string call = ExtractCallsign(status.RxText) ?? "";
+            _client.EmitRxReport(status.SnrDb, call, mode);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "FreeDV Reporter: rx_report emit failed");
+        }
+    }
+
+    /// <summary>
+    /// Pure cadence guard: emit an rx_report immediately on the sync-transition
+    /// edge (<paramref name="prevSynced"/> false → true), then throttle to
+    /// <paramref name="interval"/>. Kept static + side-effect-free so the cadence
+    /// is unit-testable without a live modem or real clock.
+    /// </summary>
+    internal static bool ShouldEmitRxReport(bool prevSynced, DateTime nowUtc, DateTime lastEmitUtc, TimeSpan interval) =>
+        !prevSynced || (nowUtc - lastEmitUtc) >= interval;
+
+    /// <summary>
+    /// Extract the first callsign-shaped token from the FreeDV RX text
+    /// sidechannel. Returns null when no token plausibly a callsign is present,
+    /// so an unknown-callsign rx_report goes out with an empty callsign field
+    /// rather than junk from a partial decode. Pure so it's unit-testable.
+    /// </summary>
+    internal static string? ExtractCallsign(string? rxText)
+    {
+        if (string.IsNullOrWhiteSpace(rxText)) return null;
+        foreach (var raw in rxText.Split(
+            new[] { ' ', '\t', '\r', '\n', ',', ';', ':' },
+            StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (LooksLikeCallsign(raw))
+                return raw.ToUpperInvariant();
+        }
+        return null;
+    }
+
+    private static bool LooksLikeCallsign(string token)
+    {
+        if (token.Length is < 3 or > 10) return false;
+        bool hasLetter = false, hasDigit = false;
+        foreach (var c in token)
+        {
+            if (c is >= '0' and <= '9') hasDigit = true;
+            else if (c is >= 'A' and <= 'Z' or >= 'a' and <= 'z') hasLetter = true;
+            else if (c == '/') { /* portable prefix/suffix marker */ }
+            else return false;
+        }
+        return hasLetter && hasDigit;
     }
 
     // Resolves the CONNECT identity at handshake time from current settings,
