@@ -301,6 +301,8 @@ export function HeroPanel({
   // ≤4 receivers stitched across one row; beyond that the grid wraps so the last
   // receivers stack into a second row (e.g. 8 RX = two rows of 4). The panadapter
   // and waterfall regions share this column count so their cells line up.
+  // Multi-RX panes share the grid background through a 1px gap, giving each pane
+  // a hairline separator. Single-RX has no adjacent cells so the gap is inert.
   const spectrumGridStyle = {
     position: 'relative',
     minHeight: 0,
@@ -308,7 +310,8 @@ export function HeroPanel({
     display: 'grid',
     gridTemplateColumns: `repeat(${Math.min(spectrumPanes.length, 3)}, minmax(0, 1fr))`,
     gridAutoRows: '1fr',
-    gap: 0,
+    gap: multiRxSpectrum ? '1px' : 0,
+    background: multiRxSpectrum ? 'var(--line)' : undefined,
     overflow: 'hidden',
   } as const;
 
