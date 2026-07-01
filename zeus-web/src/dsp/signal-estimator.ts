@@ -1230,7 +1230,6 @@ export function maybeUpdateEstimator(f: EstimatorFrame): void {
 }
 
 function histIndex(db: number): number {
-  if (!Number.isFinite(db)) return 0;
   const idx = Math.round((db - FLOOR_HIST_MIN_DB) / FLOOR_HIST_STEP_DB);
   return idx < 0 ? 0 : idx >= FLOOR_HIST_BINS ? FLOOR_HIST_BINS - 1 : idx;
 }
@@ -1254,16 +1253,21 @@ function quietPercentile(src: Float32Array, radius: number, out: Float32Array): 
   let count = 0;
 
   const add = (i: number) => {
-    const idx = histIndex(src[i]!);
+    const sample = src[i]!;
+    if (!Number.isFinite(sample)) return;
+    const idx = histIndex(sample);
     h[idx] = h[idx]! + 1;
     count++;
   };
   const remove = (i: number) => {
-    const idx = histIndex(src[i]!);
+    const sample = src[i]!;
+    if (!Number.isFinite(sample)) return;
+    const idx = histIndex(sample);
     h[idx] = h[idx]! - 1;
     count--;
   };
   const percentile = () => {
+    if (count <= 0) return FALLBACK_FLOOR_DB;
     const rank = Math.max(1, Math.ceil(count * FLOOR_QUIET_PERCENTILE));
     let seen = 0;
     for (let b = 0; b < FLOOR_HIST_BINS; b++) {
