@@ -519,9 +519,12 @@ export default function App() {
 
   const qrzHome = useQrzStore((s) => s.home);
   const qrzLookup = useQrzStore((s) => s.lastLookup);
-  const qrzHasXml = useQrzStore((s) => s.hasXmlSubscription);
   const qrzLookupError = useQrzStore((s) => s.lookupError);
-  const qrzActive = !!qrzHome && qrzHasXml;
+  // QRZ XML lookups return basic callsign data (name, grid, country, DXCC/CQ/ITU)
+  // to free-tier accounts as well — an XML subscription only adds the extended
+  // license / QSL fields. Gate the card on a resolved home station, NOT on the
+  // subscription flag, so non-subscribers still get lookups.
+  const qrzActive = !!qrzHome;
 
   const addLogEntry = useLoggerStore((s) => s.addLogEntry);
   const logPublishInFlight = useLoggerStore((s) => s.publishInFlight);
@@ -729,7 +732,11 @@ export default function App() {
     setBeamOverrideDeg(null);
     setBeamInputStr('');
     const qrz = useQrzStore.getState();
-    if (qrz.connected && qrz.hasXmlSubscription) {
+    if (qrz.connected) {
+      // Free QRZ accounts get basic data (name/grid/country/DXCC); paid XML
+      // subscriptions add extended license/QSL fields. The backend returns 402
+      // for calls that QRZ actually blocks, which surfaces as lookupError in
+      // QrzCard — a clearer signal than the old "silently do nothing" gate.
       qrz.lookup(target).finally(() => setEnriching(false));
     } else {
       // Design-mock fallback: CONTACTS lookup is synchronous; just run the scan
