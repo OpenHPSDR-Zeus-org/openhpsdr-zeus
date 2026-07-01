@@ -37,8 +37,11 @@ import {
 import { useConnectionStore } from '../../state/connection-store';
 import { useQrzStore } from '../../state/qrz-store';
 import { freqHzToBand } from '../../state/spots-store';
+import { startEfficientPolling } from '../../util/efficient-polling';
 
 const POLL_MS = 250; // ~4 Hz, matches the brief.
+const INSTALL_POLL_MS = 500;
+const HIDDEN_POLL_MS = false;
 const SNR_SQUELCH_MIN = -2;
 const SNR_SQUELCH_MAX = 10;
 
@@ -71,36 +74,27 @@ export function FreeDvPanel() {
   const [txDraft, setTxDraft] = useState('');
   const txDirty = useRef(false);
 
-  const pollAbort = useRef<AbortController | null>(null);
   const cfgAbort = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-
-    const tick = () => {
-      pollAbort.current?.abort();
-      const ac = new AbortController();
-      pollAbort.current = ac;
-      getFreeDvStatus(ac.signal)
-        .then((s) => {
-          if (cancelled || ac.signal.aborted) return;
+    return startEfficientPolling(
+      async (signal) => {
+        try {
+          const s = await getFreeDvStatus(signal);
+          if (signal.aborted) return;
           setReachable(true);
           setStatus(s);
           if (!txDirty.current) setTxDraft(s.txText ?? '');
-        })
-        .catch(() => {
-          if (cancelled || ac.signal.aborted) return;
+        } catch {
+          if (signal.aborted) return;
           setReachable(false);
-        });
-    };
-
-    tick();
-    const id = window.setInterval(tick, POLL_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-      pollAbort.current?.abort();
-    };
+        }
+      },
+      {
+        intervalMs: POLL_MS,
+        hiddenIntervalMs: HIDDEN_POLL_MS,
+      },
+    );
   }, []);
 
   const sendConfig = useCallback((req: FreeDvConfigRequest) => {
@@ -576,55 +570,58 @@ function FreeDvBandModeIndicator({
 // is only ever momentary.
 function FreeDvInstallSection() {
   const [install, setInstall] = useState<FreeDvInstallStatusDto | null>(null);
-  const timerRef = useRef<number | null>(null);
-  const pollAbort = useRef<AbortController | null>(null);
+  const stopPollingRef = useRef<(() => void) | null>(null);
 
   const phase = install?.phase ?? 'idle';
   const busy = phase === 'downloading' || phase === 'staging';
   const failed = phase === 'failed';
   const done = phase === 'done';
 
-  const stopTimer = useCallback(() => {
-    if (timerRef.current != null) {
-      window.clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
+  const stopPolling = useCallback(() => {
+    stopPollingRef.current?.();
+    stopPollingRef.current = null;
   }, []);
 
-  const poll = useCallback(() => {
-    pollAbort.current?.abort();
-    const ac = new AbortController();
-    pollAbort.current = ac;
-    getFreeDvInstallStatus(ac.signal)
-      .then((s) => {
-        if (ac.signal.aborted) return;
+  const poll = useCallback(
+    async (signal: AbortSignal) => {
+      try {
+        const s = await getFreeDvInstallStatus(signal);
+        if (signal.aborted) return;
         setInstall(s);
         // Terminal phase (or already installed) — stop polling.
-        if (s.installed || (s.phase !== 'downloading' && s.phase !== 'staging')) stopTimer();
-      })
-      .catch(() => {
+        if (s.installed || (s.phase !== 'downloading' && s.phase !== 'staging')) stopPolling();
+      } catch {
+        if (signal.aborted) return;
         /* next tick retries */
-      });
-  }, [stopTimer]);
+      }
+    },
+    [stopPolling],
+  );
+
+  const startPolling = useCallback(() => {
+    stopPolling();
+    stopPollingRef.current = startEfficientPolling(poll, {
+      intervalMs: INSTALL_POLL_MS,
+      hiddenIntervalMs: HIDDEN_POLL_MS,
+    });
+  }, [poll, stopPolling]);
 
   const start = useCallback(() => {
     startFreeDvInstall()
       .then((s) => {
         setInstall(s);
         if (s.phase === 'downloading' || s.phase === 'staging') {
-          stopTimer();
-          timerRef.current = window.setInterval(poll, 500);
+          startPolling();
         }
       })
       .catch(() => setInstall({ phase: 'failed', percent: 0, message: 'Could not reach the install service.', installed: false }));
-  }, [poll, stopTimer]);
+  }, [startPolling]);
 
   useEffect(
     () => () => {
-      stopTimer();
-      pollAbort.current?.abort();
+      stopPolling();
     },
-    [stopTimer],
+    [stopPolling],
   );
 
   const label = busy

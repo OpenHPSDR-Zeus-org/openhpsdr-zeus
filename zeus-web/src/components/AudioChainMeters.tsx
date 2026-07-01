@@ -17,8 +17,10 @@ import { useEffect, useRef, useState } from 'react';
 import { recessedWellBackground, recessedWellShadow } from './meters/render/recessedWell';
 import { mercuryGradientCss } from './meters/render/fillGradient';
 import { MeterGlass } from './meters/render/MeterGlass';
+import { startEfficientPolling } from '../util/efficient-polling';
 
 const POLL_MS = 66; // ~15 Hz
+const HIDDEN_POLL_MS = false;
 const PEAK_HOLD_MS = 1200; // peak-tick decay
 const FLOOR_DB = -60; // bottom of the visual scale
 
@@ -173,29 +175,26 @@ export function AudioChainMeters({
   });
 
   useEffect(() => {
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout> | null = null;
     const endpoint =
       route === 'rx'
         ? '/api/rx-audio-suite/chain/meters'
         : '/api/tx-audio-suite/chain/meters';
-    const tick = async () => {
-      try {
-        const res = await fetch(endpoint);
-        if (alive && res.ok) {
+    return startEfficientPolling(
+      async (signal) => {
+        const res = await fetch(endpoint, { signal });
+        if (res.ok) {
           const body = (await res.json()) as Partial<ChainMetersDto>;
           setMeters(normalizeMeters(body));
         }
-      } catch {
-        /* transient — keep last reading, try again next tick */
-      }
-      if (alive) timer = setTimeout(tick, POLL_MS);
-    };
-    void tick();
-    return () => {
-      alive = false;
-      if (timer) clearTimeout(timer);
-    };
+      },
+      {
+        intervalMs: POLL_MS,
+        hiddenIntervalMs: HIDDEN_POLL_MS,
+        onError: () => {
+          /* transient — keep last reading, try again next tick */
+        },
+      },
+    );
   }, [route]);
 
   return (
