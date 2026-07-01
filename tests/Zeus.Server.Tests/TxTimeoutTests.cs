@@ -178,4 +178,115 @@ public class TxTimeoutTests : IDisposable
         Assert.Null(tx.MoxStartedAt);
         Assert.Null(svc.EvaluateTimeoutTrip(t0.AddSeconds(121)));
     }
+
+    // --- Issue #1270: operator-configurable timeout + pre-warning ---
+
+    [Fact]
+    public void OperatorSet_60s_TripsAt60s_NotAt120s()
+    {
+        var svc = BuildServiceWithRadio(out var tx, out var radio);
+        radio.SetTxTimeoutSec(60);
+        var t0 = new DateTime(2026, 7, 1, 12, 0, 0, DateTimeKind.Utc);
+        tx.SetMoxStartedAtForTest(t0);
+
+        Assert.Null(svc.EvaluateTimeoutTrip(t0.AddSeconds(59)));
+        var reason = svc.EvaluateTimeoutTrip(t0.AddSeconds(60));
+        Assert.NotNull(reason);
+        Assert.Contains("60 s", reason);
+    }
+
+    [Fact]
+    public void OperatorSet_300s_DoesNotTripAt120s()
+    {
+        var svc = BuildServiceWithRadio(out var tx, out var radio);
+        radio.SetTxTimeoutSec(300);
+        var t0 = new DateTime(2026, 7, 1, 12, 0, 0, DateTimeKind.Utc);
+        tx.SetMoxStartedAtForTest(t0);
+
+        Assert.Null(svc.EvaluateTimeoutTrip(t0.AddSeconds(120)));
+        Assert.NotNull(svc.EvaluateTimeoutTrip(t0.AddSeconds(300)));
+    }
+
+    [Fact]
+    public void SetTxTimeoutSec_BelowMin_ClampsToMin()
+    {
+        BuildServiceWithRadio(out _, out var radio);
+        var applied = radio.SetTxTimeoutSec(5);
+        Assert.Equal(RadioService.MinTxTimeoutSec, applied.TxTimeoutSec);
+    }
+
+    [Fact]
+    public void SetTxTimeoutSec_AboveMax_ClampsToMax()
+    {
+        BuildServiceWithRadio(out _, out var radio);
+        var applied = radio.SetTxTimeoutSec(9999);
+        Assert.Equal(RadioService.MaxTxTimeoutSec, applied.TxTimeoutSec);
+    }
+
+    [Fact]
+    public void EvaluateTimeoutWarning_FiresInLastLeadWindow_OncePerTransmission()
+    {
+        var svc = BuildServiceWithRadio(out var tx, out _);
+        var t0 = new DateTime(2026, 7, 1, 12, 0, 0, DateTimeKind.Utc);
+        tx.SetMoxStartedAtForTest(t0);
+
+        // Default 120 s timeout, 30 s warning lead → no warning at 89 s.
+        Assert.Null(svc.EvaluateTimeoutWarning(t0.AddSeconds(89)));
+
+        // 90 s in → within the lead window, warning fires once with the
+        // remaining seconds and the MOX label.
+        var first = svc.EvaluateTimeoutWarning(t0.AddSeconds(90));
+        Assert.NotNull(first);
+        Assert.Contains("MOX", first);
+        Assert.Contains("remaining", first);
+
+        // Same keyed edge → dedup: second call does NOT re-fire.
+        Assert.Null(svc.EvaluateTimeoutWarning(t0.AddSeconds(100)));
+    }
+
+    [Fact]
+    public void EvaluateTimeoutWarning_ResetsOnNewKeyedEdge()
+    {
+        var svc = BuildServiceWithRadio(out var tx, out _);
+        var t0 = new DateTime(2026, 7, 1, 12, 0, 0, DateTimeKind.Utc);
+        tx.SetMoxStartedAtForTest(t0);
+        Assert.NotNull(svc.EvaluateTimeoutWarning(t0.AddSeconds(95)));
+
+        // Operator un-keys, then re-keys — a fresh keyed-at timestamp must
+        // clear the dedup so the next transmission gets its own warning.
+        tx.SetMoxStartedAtForTest(null);
+        Assert.Null(svc.EvaluateTimeoutWarning(t0.AddSeconds(96)));
+        var t1 = t0.AddSeconds(200);
+        tx.SetMoxStartedAtForTest(t1);
+        Assert.NotNull(svc.EvaluateTimeoutWarning(t1.AddSeconds(95)));
+    }
+
+    [Fact]
+    public void EvaluateTimeoutWarning_ShortTimeout_StillLeavesMinLead()
+    {
+        var svc = BuildServiceWithRadio(out var tx, out var radio);
+        // Minimum timeout — the warning must not consume the entire keyed
+        // window; it should still fire only inside a bounded lead.
+        radio.SetTxTimeoutSec(RadioService.MinTxTimeoutSec);
+        var t0 = new DateTime(2026, 7, 1, 12, 0, 0, DateTimeKind.Utc);
+        tx.SetMoxStartedAtForTest(t0);
+
+        // Right at key-down there must be no warning yet (the lead is clamped
+        // to timeout − 5 s so we don't spam the client on rising edge).
+        Assert.Null(svc.EvaluateTimeoutWarning(t0));
+        // Well inside the lead window a warning does fire.
+        Assert.NotNull(svc.EvaluateTimeoutWarning(t0.AddSeconds(RadioService.MinTxTimeoutSec - 1)));
+    }
+
+    private TxMetersService BuildServiceWithRadio(out TxService tx, out RadioService radio)
+    {
+        var loggerFactory = NullLoggerFactory.Instance;
+        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath);
+        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, _dbPath + ".pa");
+        radio = new RadioService(loggerFactory, dspStore, paStore);
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        var pipeline = new DspPipelineService(radio, hub, Array.Empty<IRxAudioSink>(), loggerFactory);
+        tx = new TxService(radio, pipeline, hub, NullBandPlanService.Instance, new NullLogger<TxService>());
+        return new TxMetersService(hub, radio, tx, pipeline, new NullLogger<TxMetersService>());
+    }
 }

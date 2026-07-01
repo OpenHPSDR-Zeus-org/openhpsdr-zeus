@@ -99,12 +99,19 @@ public sealed class TxMetersService : BackgroundService
     private static readonly TimeSpan SwrStartupGraceMox = TimeSpan.FromMilliseconds(300);
     private static readonly TimeSpan SwrStartupGraceTun = TimeSpan.FromMilliseconds(500);
 
-    // PRD FR-6: a single MOX/TUN transmission may not exceed 120 s. Catches
-    // stuck spacebars, jammed buttons, or a client that forgot to unkey. The
-    // constant is internal-settable so a test can shorten the window without
-    // driving a 2-minute wall-clock delay.
-    internal static readonly TimeSpan DefaultTxTimeout = TimeSpan.FromSeconds(120);
-    internal TimeSpan TxTimeout { get; set; } = DefaultTxTimeout;
+    // PRD FR-6: a single MOX/TUN transmission may not exceed the operator-set
+    // limit (default 120 s, range 30..600 — see RadioService.SetTxTimeoutSec).
+    // Catches stuck spacebars, jammed buttons, or a client that forgot to
+    // unkey. The read is Volatile via the RadioService accessor so an in-flight
+    // change from the settings panel takes effect on the next 10 Hz tick.
+    internal TimeSpan TxTimeout => TimeSpan.FromSeconds(_radio.TxTimeoutSec);
+    // Heads-up window: emit a TxTimeoutWarning alert this many seconds before
+    // the trip so the operator can un-key or reset. Issue #1270. Clamped
+    // downward against the current TxTimeout so an operator running a very
+    // short timeout still gets some warning window; and floored at 5 s so we
+    // never spam the client with a warning that fires the instant they key up.
+    private static readonly TimeSpan TxTimeoutWarningLead = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan TxTimeoutWarningMinLead = TimeSpan.FromSeconds(5);
 
     private static readonly TimeSpan MoxTick = TimeSpan.FromMilliseconds(100); // 10 Hz
     private static readonly TimeSpan IdleTick = TimeSpan.FromMilliseconds(500); // 2 Hz
@@ -171,6 +178,12 @@ public sealed class TxMetersService : BackgroundService
     // SWR trip state: timestamp when SWR first exceeded threshold, or null if
     // SWR is currently below threshold. Checked on every meter tick (100 ms).
     private DateTime? _swrAboveThresholdSince;
+    // TX-timeout pre-warning dedup: the DateTime we last raised the warning for
+    // (matches the current MoxStartedAt / TunStartedAt); null if we haven't
+    // warned this transmission. Reset on the falling edge and on a fresh
+    // rising edge so every keyed transmission gets exactly one heads-up.
+    // Issue #1270.
+    private DateTime? _txTimeoutWarningForKeyedAt;
     // Last time a PaTempFrame was broadcast, so the 10 Hz MOX loop can
     // throttle itself down to the 2 Hz PA cadence without a separate timer.
     private DateTime _lastPaTempBroadcastAtUtc = DateTime.MinValue;
@@ -476,13 +489,19 @@ public sealed class TxMetersService : BackgroundService
         {
             while (!ct.IsCancellationRequested)
             {
-                // TX timeout guard: PRD FR-6 caps a single TX at 120 s to catch
-                // stuck spacebar / jammed PTT. TxService hands off the trip via
-                // the same AlertFrame path as SWR so the client only needs one
-                // protection-event listener.
-                if (EvaluateTimeoutTrip(DateTime.UtcNow) is { } timeoutReason)
+                // TX timeout guard: PRD FR-6 caps a single TX at the operator-
+                // set limit (default 120 s) to catch stuck spacebar / jammed
+                // PTT. TxService hands off the trip via the same AlertFrame
+                // path as SWR so the client only needs one protection-event
+                // listener.
+                var timeoutNow = DateTime.UtcNow;
+                if (EvaluateTimeoutTrip(timeoutNow) is { } timeoutReason)
                 {
                     _tx.TryTripForAlert(AlertKind.TxTimeout, timeoutReason);
+                }
+                else if (EvaluateTimeoutWarning(timeoutNow) is { } warning)
+                {
+                    _hub.Broadcast(new AlertFrame(AlertKind.TxTimeoutWarning, warning));
                 }
 
                 // Meter during MOX *or* TUN — both drive the PA, both need live
@@ -726,6 +745,49 @@ public sealed class TxMetersService : BackgroundService
         if (tunStart is not null && now - tunStart.Value >= TxTimeout)
             return $"TX timeout: TUN keyed >{(int)TxTimeout.TotalSeconds} s — dropped to protect PA";
         return null;
+    }
+
+    /// <summary>
+    /// Issue #1270 TX-timeout pre-warning: returns a heads-up message when the
+    /// current MOX/TUN transmission is within the warning lead window of the
+    /// trip, else null. Fires exactly once per keyed transmission — the fired-
+    /// for timestamp is remembered until a new keyed edge (or a trip) resets it
+    /// so the operator sees the amber banner once and can un-key or dismiss.
+    /// </summary>
+    internal string? EvaluateTimeoutWarning(DateTime now)
+    {
+        var moxStart = _tx.MoxStartedAt;
+        var tunStart = _tx.TunStartedAt;
+        DateTime? keyedAt;
+        string label;
+        if (moxStart is not null) { keyedAt = moxStart; label = "MOX"; }
+        else if (tunStart is not null) { keyedAt = tunStart; label = "TUN"; }
+        else
+        {
+            // Both null — nothing is keyed. Clear any latch so the next rising
+            // edge can raise a fresh warning.
+            _txTimeoutWarningForKeyedAt = null;
+            return null;
+        }
+
+        var timeout = TxTimeout;
+        var lead = TxTimeoutWarningLead;
+        if (lead >= timeout) lead = timeout - TxTimeoutWarningMinLead;
+        if (lead < TimeSpan.Zero) lead = TimeSpan.Zero;
+
+        // Fresh keyed edge — reset the dedup latch so we can warn once for this
+        // transmission even if a previous one already warned.
+        if (_txTimeoutWarningForKeyedAt != keyedAt) _txTimeoutWarningForKeyedAt = null;
+
+        var elapsed = now - keyedAt!.Value;
+        var untilTrip = timeout - elapsed;
+        if (untilTrip > lead) return null;
+        if (_txTimeoutWarningForKeyedAt == keyedAt) return null;
+
+        _txTimeoutWarningForKeyedAt = keyedAt;
+        int secondsRemaining = (int)Math.Ceiling(untilTrip.TotalSeconds);
+        if (secondsRemaining < 0) secondsRemaining = 0;
+        return $"TX timeout warning: {secondsRemaining} s remaining — un-key or {label} will be dropped to protect PA";
     }
 
     /// <summary>

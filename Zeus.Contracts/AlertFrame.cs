@@ -92,8 +92,10 @@ public readonly record struct AlertFrame(AlertKind Kind, string Message)
 
 /// <summary>
 /// Alert kind enum. Kind 0 = SWR trip, Kind 1 = TX timeout (MOX or TUN keyed
-/// for &gt; 120 s), Kind 2 = out-of-band TX guard (frequency/mode not permitted
-/// by the active band plan). Additional kinds reserved for future protection
+/// past the configured limit), Kind 2 = out-of-band TX guard (frequency/mode
+/// not permitted by the active band plan), Kind 3 = TX-timeout pre-warning
+/// (heads-up ~30 s before the timeout trip fires so the operator can un-key
+/// or reset the timer). Additional kinds reserved for future protection
 /// events (ADC overload, WS-drop-while-keyed, etc.).
 /// </summary>
 public enum AlertKind : byte
@@ -101,4 +103,5 @@ public enum AlertKind : byte
     SwrTrip = 0,
     TxTimeout = 1,
     OutOfBand = 2,
+    TxTimeoutWarning = 3,
 }

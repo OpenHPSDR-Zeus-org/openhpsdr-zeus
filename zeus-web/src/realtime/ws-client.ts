@@ -788,6 +788,10 @@ export function dispatchServerFrame(data: ArrayBuffer): void {
         // is intentional asymmetric: server-side MOX-on never raises
         // localMicArmed (only local interaction does — see issue #346).
         if (txStore.localMicArmed) txStore.setLocalMicArmed(false);
+        // TX-timeout pre-warning auto-dismisses on unkey (issue #1270). The
+        // sticky SwrTrip / TxTimeout / OutOfBand alerts still wait for the
+        // operator's explicit Dismiss so they retain the post-trip context.
+        if (txStore.alert?.kind === AlertKind.TxTimeoutWarning) txStore.setAlert(null);
       }
       return;
     }
