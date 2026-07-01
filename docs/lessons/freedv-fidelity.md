@@ -52,18 +52,25 @@ the FreeDV RX gain staging.
 The DSP changes are unit-tested (incl. against the real codec2/zeus_rade libs),
 but the TX-tail TIMING needs on-air confirmation. Knobs:
 
-- `TxAudioIngest.FreeDvTxTailMaxMs` (350) — hard ceiling on how long un-key blocks
-  while the final frame clocks out.
-- `TxAudioIngest.FreeDvTxTailGuardMs` (60) — extra hold after the last block so the
-  radio FIFO finishes before PTT drops. **Tune this first:** if the very end is
-  still clipped, raise it; if there is dead carrier at the end, lower it.
+- `TxAudioIngest.FreeDvTxTailDrainSlackMs` (120) / `FreeDvTxTailCeilingMs` (1200) —
+  the drain budget is now **backlog-derived**: `min(pendingMs + slack, ceiling)`,
+  where `pendingMs` is the real tail `FinishTx` queued (residual + RADE EOO). This
+  replaced the old fixed 350 ms budget, which guillotined any larger tail
+  mid-symbol (the far-station "garble at end of over"). Only touch the ceiling if a
+  pathologically long tail is being cut (`term=ceiling` in the log).
+- `TxAudioIngest.FreeDvTxTailGuardMs` (160) — extra hold after the last block so the
+  radio ring/FIFO finishes transmitting before PTT drops. **Tune this for a residual
+  clip:** if the very end is still clipped on air with `term=drained`, raise it; if
+  there is dead carrier at the end, lower it.
 - `FreeDvResampler.TapsPerPhase` / `CutoffHz` — raise the cutoff toward 3.6–3.8 kHz
   if more brightness is wanted (keep stopband < 4 kHz).
 
 Validation steps:
 1. Key FreeDV (700D) on the G2 into a dummy load; have a second FreeDV RX decode.
    Confirm the end of each over decodes cleanly (no tail garble).
-2. Watch the server log for `freedv.tx.tail drained, dropping PTT` per un-key.
+2. Watch the server log for `freedv.tx.tail dropping PTT: pendingMs=… term=…` per
+   un-key. `term=ceiling` → the backlog outran the budget (raise the ceiling);
+   `term=drained` with a residual on-air clip → FIFO latency (raise the guard).
 3. On RADE V1, confirm the decoding station shows the EOO callsign.
 4. Work some real stations; watch for `freedv.rx.in clipping` warnings. If they
    appear on strong signals, add headroom to the Fixed RX AGC seed (red-light:
