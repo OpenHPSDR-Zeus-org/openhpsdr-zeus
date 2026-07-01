@@ -553,7 +553,7 @@ function ReportSection({
             onBlur={() => persist({ message })}
             placeholder="Status message (optional)"
             maxLength={80}
-            style={{ flex: 1, minWidth: 110 }}
+            style={{ flex: 1, minWidth: 110, textTransform: 'none' }}
           />
         </div>
       )}
