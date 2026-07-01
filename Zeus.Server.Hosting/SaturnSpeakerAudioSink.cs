@@ -17,6 +17,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using Zeus.Contracts;
+using Zeus.Protocol2;
 
 namespace Zeus.Server;
 
@@ -501,6 +502,22 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
             {
                 Blocking = false,
             };
+            // Match Protocol2Client's UDP setup on this dedicated speaker socket:
+            //  - SIO_UDP_CONNRESET off (issue #1218): without it, a single ICMP
+            //    port-unreachable from the radio surfaces as WSAECONNRESET on the
+            //    next Send and takes the whole audio socket down until the 1 s
+            //    refresh reopens it. The main P2 socket disables this ioctl for
+            //    the same reason; this one carries the same Windows risk.
+            //  - Bind to the local NIC that reaches the radio, on an ephemeral
+            //    port. Leaving the socket unbound lets Windows pick both a NIC
+            //    and a port at Connect time; on a multi-homed host that can pick
+            //    a NIC different from the P2 command socket, and Windows Firewall
+            //    treats the ephemeral flow as a distinct connection that may not
+            //    inherit the P2 rule. Binding to the P2 subnet address forces the
+            //    audio egress out the same NIC the command/IQ streams use.
+            Protocol2Client.DisableUdpConnReset(socket);
+            var localBind = Protocol2Client.FindLocalAddressForSubnet(target.Address) ?? IPAddress.Any;
+            socket.Bind(new IPEndPoint(localBind, 0));
             socket.Connect(target);
             _socket = socket;
             _target = target;
@@ -508,8 +525,9 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
             _wasEligible = true;
 
             _log.LogInformation(
-                "audio.radio.speaker.p2 enabled target={Target} board={Board} variant={Variant}",
+                "audio.radio.speaker.p2 enabled target={Target} localBind={Local} board={Board} variant={Variant}",
                 target,
+                localBind.Equals(IPAddress.Any) ? "ANY (no subnet match)" : localBind.ToString(),
                 board,
                 variant);
         }
