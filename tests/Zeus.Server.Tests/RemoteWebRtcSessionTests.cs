@@ -303,6 +303,27 @@ public sealed class RemoteWebRtcSessionTests
     }
 
     [Fact]
+    public async Task PostUnlock_WindowsFirewallMutation_Refused403_WithoutTouchingLoopback()
+    {
+        var factory = new StubHttpClientFactory(_ =>
+            throw new InvalidOperationException("loopback must NOT be called for Windows Firewall mutation"));
+        ApiSession(factory, out var server);
+        await using var client = new ProverClient(Password);
+        await UnlockAsync(server, client);
+
+        // The firewall endpoint is local-only. Remote API tunnel requests arrive
+        // at Kestrel from loopback, so the tunnel denylist must refuse it before
+        // the endpoint's local-IP guard is reached.
+        var replyJson = await SendApiUntilReply(
+            client, 10, "POST", "/api/system/windows-firewall/allow", "{}", "application/json");
+        using var doc = JsonDocument.Parse(replyJson);
+        Assert.Equal(403, doc.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal(0, factory.CallCount);
+
+        server.Close();
+    }
+
+    [Fact]
     public async Task PostUnlock_TraversalToDenylistedPath_Refused_WithoutTouchingLoopback()
     {
         var factory = new StubHttpClientFactory(_ =>
