@@ -146,6 +146,65 @@ public static class ZeusEndpoints
         app.MapGet("/api/capabilities",
             (HttpContext ctx, CapabilitiesService caps) => Results.Ok(caps.Snapshot(ctx)));
 
+        static bool IsLocalRequest(HttpContext ctx)
+        {
+            static IPAddress Normalize(IPAddress ip)
+                => ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip;
+
+            var remote = ctx.Connection.RemoteIpAddress;
+            if (remote is null) return true;
+            remote = Normalize(remote);
+            if (IPAddress.IsLoopback(remote)) return true;
+
+            var local = ctx.Connection.LocalIpAddress;
+            return local is not null && remote.Equals(Normalize(local));
+        }
+
+        static object FirewallStatusDto(WindowsFirewallStatus status, bool localRequest) => new
+        {
+            status.Supported,
+            CanApply = status.CanApply && localRequest,
+            LocalRequest = localRequest,
+            status.RuleName,
+            status.ProgramPath,
+            Message = localRequest
+                ? status.Message
+                : "Open Settings on the Windows machine running Zeus to change Windows Firewall.",
+        };
+
+        // Windows Firewall helper for source builds and non-elevated installs.
+        // It adds the same inbound program allow rule the installer attempts,
+        // scoped to the running Zeus executable. POST is local-only so a LAN
+        // browser cannot trigger a UAC prompt on the host machine.
+        app.MapGet("/api/system/windows-firewall",
+            (HttpContext ctx, IWindowsFirewallService firewall) =>
+                Results.Ok(FirewallStatusDto(firewall.GetStatus(), IsLocalRequest(ctx))));
+
+        app.MapPost("/api/system/windows-firewall/allow",
+            async (HttpContext ctx, IWindowsFirewallService firewall, CancellationToken ct) =>
+            {
+                if (!IsLocalRequest(ctx))
+                {
+                    return Results.Json(
+                        new
+                        {
+                            error = "Open Settings on the Windows machine running Zeus to change Windows Firewall.",
+                        },
+                        statusCode: StatusCodes.Status403Forbidden);
+                }
+
+                var result = await firewall.ApplyAllowRuleAsync(ct);
+                if (result.Applied)
+                    return Results.Ok(result);
+
+                var statusCode = !result.Supported
+                    ? StatusCodes.Status400BadRequest
+                    : result.ElevationCanceled
+                        ? StatusCodes.Status409Conflict
+                        : StatusCodes.Status500InternalServerError;
+                return Results.Json(new { error = result.Message, result }, statusCode: statusCode);
+            });
+
         // FT8/FT4 native decode control. The FT8 workspace POSTs enable on
         // entering the mode and disable on leaving; decodes arrive out-of-band as
         // 0x38 Ft8Decode WS frames. nativeAvailable is false on a platform whose

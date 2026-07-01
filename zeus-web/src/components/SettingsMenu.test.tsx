@@ -78,6 +78,25 @@ function stubSettingsFetch(overrides: Record<string, unknown> = {}) {
           return jsonResponse({ mode: 'native', engineAvailable: false, engineActive: false });
         case '/api/tx-audio-suite/profiles':
           return jsonResponse({ profiles: [] });
+        case '/api/system/windows-firewall':
+          return jsonResponse({
+            supported: false,
+            canApply: false,
+            localRequest: true,
+            ruleName: 'OpenHPSDR Zeus (HPSDR receive)',
+            programPath: null,
+            message: 'Windows Firewall rule management is only available on Windows.',
+          });
+        case '/api/system/windows-firewall/allow':
+          return jsonResponse({
+            supported: true,
+            applied: true,
+            elevationAttempted: false,
+            elevationCanceled: false,
+            ruleName: 'OpenHPSDR Zeus (HPSDR receive)',
+            programPath: 'C:\\Zeus\\OpenhpsdrZeus.exe',
+            message: 'Windows Firewall rule applied.',
+          });
         case '/api/tx/fidelity-policy':
           return jsonResponse({ profileId: 'studio-ssb', targetSpectralDensity: 55 });
         case '/api/tx/station-profiles':
@@ -202,6 +221,72 @@ describe('SettingsView — Audio Tools', () => {
     expect(container.textContent).toContain('RX Audio');
     expect(container.textContent).not.toContain('TX Fidelity Policy');
     expect(container.textContent).toContain('Continuous Frequency Compressor');
+  });
+});
+
+describe('SettingsView — SERVER Windows Firewall action', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    seed();
+    useCapabilitiesStore.setState((s) => ({
+      ...s,
+      capabilities: s.capabilities
+        ? { ...s.capabilities, platform: 'windows' }
+        : s.capabilities,
+    }));
+    stubSettingsFetch({
+      '/api/system/windows-firewall': {
+        supported: true,
+        canApply: true,
+        localRequest: true,
+        ruleName: 'OpenHPSDR Zeus (HPSDR receive)',
+        programPath: 'C:\\Zeus\\OpenhpsdrZeus.exe',
+        message: 'Ready to add the Zeus inbound allow rule.',
+      },
+      '/api/system/windows-firewall/allow': {
+        supported: true,
+        applied: true,
+        elevationAttempted: false,
+        elevationCanceled: false,
+        ruleName: 'OpenHPSDR Zeus (HPSDR receive)',
+        programPath: 'C:\\Zeus\\OpenhpsdrZeus.exe',
+        message: 'Windows Firewall rule applied.',
+      },
+    });
+  });
+
+  afterEach(() => {
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+    vi.unstubAllGlobals();
+  });
+
+  it('renders and applies the Windows Firewall allow rule action', async () => {
+    await act(async () => {
+      root.render(<SettingsView onClose={() => {}} initialTab="server" />);
+      await flushEffects();
+    });
+
+    expect(container.textContent).toContain('Windows Firewall');
+    expect(container.textContent).toContain('Ready to add the Zeus inbound allow rule.');
+
+    const button = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((b) => b.textContent?.trim() === 'APPLY FIREWALL RULE');
+    expect(button).toBeDefined();
+
+    await act(async () => {
+      button!.click();
+      await flushEffects();
+    });
+
+    expect(container.textContent).toContain('Windows Firewall rule applied.');
   });
 });
 
