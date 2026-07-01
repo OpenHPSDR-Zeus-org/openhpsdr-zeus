@@ -727,6 +727,7 @@ public static class ZeusHost
 
         // Full "Reset & Uninstall Zeus" flow (About panel).
         builder.Services.AddSingleton<Zeus.Server.Uninstall.UninstallService>();
+        builder.Services.AddSingleton<IWindowsFirewallService, WindowsFirewallService>();
 
         // Self-diagnostic "Report a problem" feature: read-only probes, the
         // symptom→recipe registry, the known-issue rules (seeded from docs/rca +
