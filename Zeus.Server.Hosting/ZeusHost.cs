@@ -347,6 +347,11 @@ public static class ZeusHost
         builder.Services.AddSingleton<Zeus.Protocol1.RxAudioRing>();
         builder.Services.AddSingleton<Zeus.Protocol1.IRxAudioSource>(sp =>
             sp.GetRequiredService<Zeus.Protocol1.RxAudioRing>());
+        // Shared operator-mute flag consumed by every RX audio sink (issue
+        // #1252). Registered before the sinks so ctor DI resolves it — one
+        // Mute click on the desktop button silences PC playback AND the
+        // radio's onboard speaker in one go.
+        builder.Services.AddSingleton<RxAudioMuteState>();
         builder.Services.AddSingleton<RadioSpeakerSettingsStore>();
         builder.Services.AddSingleton<RadioSpeakerAudioSink>();
         builder.Services.AddSingleton<IRxAudioSink>(sp =>

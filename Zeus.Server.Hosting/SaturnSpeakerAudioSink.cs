@@ -90,6 +90,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
 
     private readonly RadioService _radio;
     private readonly RadioSpeakerSettingsStore _settings;
+    private readonly RxAudioMuteState _muteState;
     private readonly ILogger<SaturnSpeakerAudioSink> _log;
     private readonly FloatSpscRing _ring = new(RingCapacity);
     private readonly ManualResetEventSlim _wake = new(false);
@@ -153,17 +154,23 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
     public SaturnSpeakerAudioSink(
         RadioService radio,
         RadioSpeakerSettingsStore settings,
-        ILogger<SaturnSpeakerAudioSink> log)
+        ILogger<SaturnSpeakerAudioSink> log,
+        RxAudioMuteState? muteState = null)
     {
         _radio = radio;
         _settings = settings;
         _log = log;
+        // Null in tests that don't exercise the mute path — a private
+        // instance keeps the field non-null so IsMuted stays cheap and the
+        // legacy 3-arg ctor call sites keep working.
+        _muteState = muteState ?? new RxAudioMuteState();
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _radio.StateChanged += OnRadioStateChanged;
         _settings.Changed += OnSettingsChanged;
+        _muteState.Changed += OnMuteChanged;
         _refreshRequested = true;
         _worker = new Thread(WorkerLoop)
         {
@@ -178,6 +185,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
     {
         _radio.StateChanged -= OnRadioStateChanged;
         _settings.Changed -= OnSettingsChanged;
+        _muteState.Changed -= OnMuteChanged;
         _cts.Cancel();
         _wake.Set();
         try { _worker?.Join(TimeSpan.FromSeconds(2)); }
@@ -196,6 +204,18 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         // firmware doesn't bind — causing pointless traffic + a per-second
         // socket re-flap. RadioSpeakerAudioSink owns P1 via IsProtocol1Active.
         if (!_radio.IsProtocol2Active) return;
+
+        // Operator mute (issue #1252): the desktop Mute button flips the
+        // shared RxAudioMuteState; without this gate the PC playback path
+        // fell silent but the radio's onboard speaker kept ripping at 750
+        // pkt/s. Mirror MOX handling — ask the worker to drop the buffered
+        // tail so unmute doesn't replay the pre-mute audio.
+        if (_muteState.IsMuted)
+        {
+            _drainRequested = true;
+            SignalWake();
+            return;
+        }
 
         // Mirror the P1 sink's MOX mute: while transmitting, don't carry the
         // operator's TX-monitor / CW sidetone out to the radio's speaker jack.
@@ -245,6 +265,16 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         // inside RefreshTarget so a flip-on path is covered by the same refresh.
         if (!_settings.Enabled) _drainRequested = true;
         _refreshRequested = true;
+        SignalWake();
+    }
+
+    private void OnMuteChanged()
+    {
+        // On mute rising edge, drop the buffered tail so an unmute doesn't
+        // replay the pre-mute audio at the radio's speaker jack. Falling edge
+        // is a no-op — Publish just resumes writing on the next DSP tick.
+        if (!_muteState.IsMuted) return;
+        _drainRequested = true;
         SignalWake();
     }
 
@@ -637,6 +667,7 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
         _disposed = true;
         _radio.StateChanged -= OnRadioStateChanged;
         _settings.Changed -= OnSettingsChanged;
+        _muteState.Changed -= OnMuteChanged;
 
         if (!_cts.IsCancellationRequested)
         {

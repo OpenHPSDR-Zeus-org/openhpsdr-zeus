@@ -113,6 +113,12 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
 
     private readonly ILogger<NativeAudioSink> _log;
     private readonly AudioDeviceSettingsStore? _deviceSettings;
+    // Shared operator-mute flag (issue #1252). Owned by the DI container;
+    // SetMuted writes here, so every RX sink subscribed to the same state
+    // silences in lock-step. Null in the legacy test ctor — we fall back to
+    // a private instance so the sink still works standalone in tests.
+    private readonly RxAudioMuteState _muteState;
+    private readonly Action _muteChangedHandler;
     // Service-provider-based lookup for TxService, used to subscribe to
     // TxActiveChanged in StartAsync. NativeAudioSink can NOT take TxService
     // as a constructor dep directly: DspPipelineService depends on
@@ -136,13 +142,6 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     private bool _shutdown;
     private bool _disposed;
 
-    // Mute flag for the Photino-side Mute/Unmute button. Read on the DSP
-    // tick thread inside Publish, written from the REST request thread —
-    // volatile is the right tool. On mute we drain the ring so unmute
-    // doesn't replay ~1 s of stale audio; the miniaudio device stays
-    // open either way so there's no pop and no fight with the OS mixer.
-    private volatile bool _muted;
-
     private volatile bool _rebuffering = true;
 
     // Local side-channel enable flag. Audio Suite preview now uses the full
@@ -153,7 +152,7 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     // across a toggle just means one extra (or one missing) block, inaudible.
     private volatile bool _previewEnabled;
 
-    public bool IsMuted => _muted;
+    public bool IsMuted => _muteState.IsMuted;
     public bool IsEnabled => _previewEnabled;
     public string? ConfiguredOutputDeviceId => _deviceSettings?.Get().OutputDeviceId;
     public string? ActiveOutputDeviceId => _activeOutputDeviceId;
@@ -182,14 +181,16 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
         int SampleRateHz,
         bool Rebuffering);
 
-    public void SetMuted(bool muted)
+    public void SetMuted(bool muted) => _muteState.SetMuted(muted);
+
+    private void OnMuteChanged()
     {
-        _muted = muted;
-        if (muted)
-        {
-            _ring.Clear();
-            _rebuffering = true;
-        }
+        // Drain the playback ring on the rising edge so unmute doesn't
+        // replay ~1 s of stale audio. Falling edge is a no-op: an empty ring
+        // just rebuffers naturally from the next DSP tick.
+        if (!_muteState.IsMuted) return;
+        _ring.Clear();
+        _rebuffering = true;
     }
 
     public void SetEnabled(bool enabled)
@@ -208,7 +209,7 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
         // operator hasn't engaged the feature.
         if (!_previewEnabled) return;
         if (sampleRate != FrameRateHz) return;   // defence in depth — mic is always 48 kHz
-        if (_muted) return;                       // RX mute also silences preview
+        if (_muteState.IsMuted) return;           // RX mute also silences preview
 
         _previewRing.Write(monoSamples);
         // Preview overruns are not interesting enough to track — the
@@ -234,11 +235,15 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     public NativeAudioSink(
         ILogger<NativeAudioSink> log,
         AudioDeviceSettingsStore? deviceSettings = null,
-        IServiceProvider? services = null)
+        IServiceProvider? services = null,
+        RxAudioMuteState? muteState = null)
     {
         _log = log;
         _deviceSettings = deviceSettings;
         _services = services;
+        _muteState = muteState ?? new RxAudioMuteState();
+        _muteChangedHandler = OnMuteChanged;
+        _muteState.Changed += _muteChangedHandler;
     }
 
     /// <summary>
@@ -454,7 +459,7 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
         // on the playback callback's underrun path. Cheaper than gating in
         // the audio worker thread and avoids any sample-rate / channel-count
         // negotiation with the producer.
-        if (_muted) return;
+        if (_muteState.IsMuted) return;
 
         // The DSP tick produces mono float32 @ 48 kHz. We assert the format
         // softly: anything else is logged and dropped rather than corrupting
@@ -650,6 +655,7 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     {
         if (_disposed) return;
         _disposed = true;
+        _muteState.Changed -= _muteChangedHandler;
         lock (_deviceSync)
         {
             _shutdown = true;
