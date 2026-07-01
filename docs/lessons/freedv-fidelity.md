@@ -170,6 +170,35 @@ never a fixed time window. For fully deterministic clean-channel scoring,
 not yet surfaced through the shim; wire it through if a no-unsync fidelity sweep
 is wanted.
 
+## End-of-over garble in Zeus's OWN audio — reset the RX modem on the MOX edge
+
+A third operator report (zeus-japz): a garbled burst in **Zeus's own RX audio**
+at the end of **every** FreeDV over, on **both** RADE and codec2. This is a
+different failure from the stop-talk `RxSquelchGate` above — that gate mutes
+decoded **noise** when the *far* station unkeys (their signal lost → *unsynced*).
+Here the *local* operator unkeys, and the modem was genuinely **synced on its own
+transmitted signal**, so the gate stays open.
+
+Root cause: the FreeDV **receiver** was never reset across the MOX transition.
+`DspPipelineService` drains WDSP RX every tick (`engine.ReadAudio`) regardless of
+MOX — "RX is drained anyway so the audio ring doesn't back up" — and
+`FreeDvService.ProcessRx` is gated only by `!txMonitorOn` + `audioSampleCount>0`,
+**not** by `_keyed`. So while keyed the modem keeps decoding the RXA stream (the
+operator's own TX bleed/residual), holds sync, and stockpiles decoded speech in
+`_rxOut48` (capped ~250 ms). `OnRadioMoxChanged` only armed a 5 ms RX fade — it
+never cleared that FIFO or the sync state — so at un-key the resuming receiver
+dumped the self-decoded backlog into the output.
+
+Fix: a lightweight `FlushRx()` on `FreeDvModem` and `RadeModem` (mirror of
+`FlushTx`: seqlock the RX hot path out, clear `_rx8In`/`_rxOut48`, reset the
+resamplers + `RxSquelchGate`, set `_synced=false`, **no** native close/reopen),
+routed through `FreeDvService.FlushRx()` (flushes both modems so a submode change
+across the edge can't strand a backlog), and called from `OnRadioMoxChanged` on
+**both** edges. Key-down drops any pre-TX residual; key-up clears anything decoded
+from TX bleed — so RX always resumes empty and unsynced (gate closed → silent
+until it genuinely re-syncs on band audio). Validated end-to-end through the real
+decoder in `RadeFidelityTests.FlushRx_AfterSync_ResumesSilentAndUnsynced`.
+
 ## Not yet changed (deliberately)
 
 - **Fixed RX AGC headroom** — instrumented, not auto-adjusted. Needs the clipping

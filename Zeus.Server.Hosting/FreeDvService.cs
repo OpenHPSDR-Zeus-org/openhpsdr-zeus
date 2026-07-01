@@ -232,6 +232,22 @@ public sealed class FreeDvService : IDisposable
     }
 
     /// <summary>
+    /// Reset the FreeDV RECEIVER's decode state across a MOX transition so it
+    /// resumes empty and unsynced. Without this the modem keeps decoding the RXA
+    /// stream while keyed (WDSP RX is drained every tick regardless of MOX) and,
+    /// at un-key, the resuming RX dumps that self-decoded backlog — an
+    /// end-of-over garble in Zeus's own audio, on both RADE and codec2. Flushes
+    /// BOTH modems so a submode change across the edge can't strand a stale
+    /// backlog in the now-inactive one (the inactive modem is already empty, so
+    /// its flush is a cheap no-op).
+    /// </summary>
+    public void FlushRx()
+    {
+        _rade.FlushRx();
+        _modem.FlushRx();
+    }
+
+    /// <summary>
     /// End-of-over flush on the active modem: complete the final frame (and, for
     /// RADE, append the EOO callsign) so a whole frame can be clocked out on the
     /// TX tail. Returns the 48 kHz output samples now pending so the tail drain

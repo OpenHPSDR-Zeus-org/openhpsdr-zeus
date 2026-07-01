@@ -130,6 +130,50 @@ public class RadeFidelityTests
             $"(ratio={tailRms / syncedRms:P1}, peak={tailPeak:F3}) — the sync squelch is not killing the noise tail.");
     }
 
+    /// <summary>
+    /// The end-of-over garble fix (zeus-japz), validated through the real decoder:
+    /// while keyed the pipeline keeps feeding WDSP RX into the modem, so it decodes
+    /// a live backlog. <see cref="RadeModem.FlushRx"/> (called on the MOX edge) must
+    /// leave the receiver empty and unsynced so the resuming RX starts silent
+    /// instead of dumping that self-decoded backlog into Zeus's own audio. Here:
+    /// decode until synced (a real backlog exists), flush, then feed one block of
+    /// pure silence — the output must be silent and the modem unsynced.
+    /// </summary>
+    [SkippableFact]
+    public void FlushRx_AfterSync_ResumesSilentAndUnsynced()
+    {
+        using var modem = new RadeModem();
+        Skip.IfNot(modem.RadeAvailable, "zeus_rade native library not present for this RID.");
+        modem.SetTxText("N9WAR");
+        modem.Activate();
+
+        var modemAudio = Encode(modem, seconds: 6);
+
+        // Decode until the modem acquires sync (there is now a live decode backlog).
+        bool synced = false;
+        var seg = new float[Block];
+        for (int off = 0; off + Block <= modemAudio.Length; off += Block)
+        {
+            Array.Copy(modemAudio, off, seg, 0, Block);
+            modem.ProcessRxInPlace(seg);
+            if (modem.Synced) { synced = true; break; }
+        }
+        Skip.IfNot(synced, "RADE never synced — cannot exercise FlushRx.");
+
+        // Flush as the un-key MOX edge does, then feed one block of pure silence.
+        modem.FlushRx();
+        Array.Clear(seg, 0, seg.Length);
+        modem.ProcessRxInPlace(seg);
+
+        double sumSq = 0;
+        foreach (var s in seg) sumSq += (double)s * s;
+        double rms = Math.Sqrt(sumSq / seg.Length);
+
+        Assert.False(modem.Synced, "FlushRx must leave the receiver unsynced.");
+        Assert.True(rms < 1e-4,
+            $"post-flush output not silent (rms={rms:E2}) — a self-decoded backlog leaked past FlushRx.");
+    }
+
     // Encode `seconds` of wideband voiced-speech-like audio through the TX hot path,
     // returning the 48 kHz modem waveform.
     private static float[] Encode(RadeModem modem, int seconds)

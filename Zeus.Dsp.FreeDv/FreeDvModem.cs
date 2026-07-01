@@ -341,6 +341,33 @@ public sealed class FreeDvModem : IDisposable
     }
 
     /// <summary>
+    /// Drop buffered RX decode state on a MOX transition WITHOUT closing the
+    /// modem, so the receiver resumes from an empty, unsynced state instead of
+    /// dumping speech decoded from the operator's own transmission during the
+    /// over (heard as an end-of-over garble in Zeus's own RX audio). Clears the
+    /// input/output rings + stale decoded text, resets the resamplers + sync
+    /// squelch gate, and marks unsynced. Control thread; gates the RX hot path
+    /// out via the seqlock — mirrors <see cref="FlushTx"/>.
+    /// </summary>
+    public void FlushRx()
+    {
+        if (!_nativeAvailable) return;
+        lock (_reconfigGate)
+        {
+            IntPtr fd = Volatile.Read(ref _rxFreedv);
+            Volatile.Write(ref _rxFreedv, IntPtr.Zero);
+            Thread.MemoryBarrier();
+            SpinUntilIdle(ref _rxBusy);
+            _rx8In.Clear(); _rxOut48.Clear();
+            _rxDown.Reset(); _rxUp.Reset();
+            _rxGate.Reset();
+            _rxTextRing.Clear();
+            _synced = false;
+            Volatile.Write(ref _rxFreedv, fd);
+        }
+    }
+
+    /// <summary>
     /// End-of-over flush: encode the residual sub-frame of mic speech so a
     /// COMPLETE final OFDM frame exists in the output FIFO, then report how many
     /// 48 kHz output samples are now pending. The TX tail drain (TxAudioIngest)
