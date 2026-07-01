@@ -18,6 +18,11 @@ import {
   getSupportAvailability,
   setSupportAvailability,
 } from '../api/support';
+import {
+  applyWindowsFirewallRule,
+  getWindowsFirewallStatus,
+  type WindowsFirewallStatus,
+} from '../api/windows-firewall';
 
 // Settings tab: lets the operator point a Capacitor / standalone build at a
 // specific Zeus.Server on their LAN (e.g. https://192.168.1.23:6443). Browser
@@ -150,6 +155,8 @@ export function ServerUrlPanel() {
         )}
       </div>
 
+      <WindowsFirewallSection />
+
       <label style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 16 }}>
         <span
           style={{
@@ -261,6 +268,116 @@ export function ServerUrlPanel() {
       <RemoteDiagnosticsSection />
 
       <RemoteQrSection />
+    </div>
+  );
+}
+
+function WindowsFirewallSection() {
+  const [status, setStatus] = useState<WindowsFirewallStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    void (async () => {
+      try {
+        setStatus(await getWindowsFirewallStatus(ctrl.signal));
+      } catch (e) {
+        if (!ctrl.signal.aborted) setNotice((e as Error).message);
+      }
+    })();
+    return () => ctrl.abort();
+  }, []);
+
+  const apply = async () => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const result = await applyWindowsFirewallRule();
+      setStatus((prev) =>
+        prev
+          ? {
+              ...prev,
+              supported: result.supported,
+              canApply: result.supported,
+              ruleName: result.ruleName,
+              programPath: result.programPath,
+              message: result.message,
+            }
+          : null,
+      );
+      setNotice(result.message);
+    } catch (e) {
+      setNotice((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const canApply = !!status?.supported && !!status.canApply;
+
+  return (
+    <div
+      style={{
+        marginTop: 18,
+        padding: 10,
+        fontSize: 11,
+        lineHeight: 1.5,
+        color: 'var(--fg-2)',
+        background: 'var(--bg-2)',
+        border: '1px solid var(--panel-border)',
+        borderRadius: 'var(--r-sm)',
+      }}
+    >
+      <div
+        style={{
+          marginBottom: 6,
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.1em',
+          textTransform: 'uppercase',
+          color: 'var(--fg-1)',
+        }}
+      >
+        Windows Firewall
+      </div>
+      <p style={{ margin: 0 }}>
+        Adds the Zeus inbound allow rule used by the installer. Windows may ask
+        for administrator approval.
+      </p>
+      {status?.programPath && (
+        <div
+          style={{
+            marginTop: 8,
+            fontFamily: 'monospace',
+            fontSize: 11,
+            color: 'var(--fg-3)',
+            wordBreak: 'break-all',
+          }}
+        >
+          {status.programPath}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
+        <button
+          type="button"
+          className="btn sm"
+          disabled={!canApply || busy}
+          onClick={() => void apply()}
+          title={
+            status?.localRequest === false
+              ? 'Open Settings on the Windows machine running Zeus'
+              : status?.supported === false
+                ? 'Windows-only'
+                : 'Add the inbound allow rule for Zeus'
+          }
+        >
+          {busy ? 'APPLYING...' : 'APPLY FIREWALL RULE'}
+        </button>
+        <span style={{ color: notice ? 'var(--fg-1)' : 'var(--fg-3)' }}>
+          {notice ?? status?.message ?? 'Checking Windows Firewall support...'}
+        </span>
+      </div>
     </div>
   );
 }

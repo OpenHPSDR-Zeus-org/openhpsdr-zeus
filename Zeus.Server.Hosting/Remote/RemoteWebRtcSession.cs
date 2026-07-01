@@ -111,6 +111,8 @@ public sealed class RemoteWebRtcSession
     ///   /api/prefs/databases/export — downloads the entire prefs LiteDB
     ///                            (contains the QRZ password + remote verifier)
     ///   /api/log/export        — full logbook export (PII / ADIF dump)
+    ///   /api/system/windows-firewall — host OS firewall mutation; local-only
+    ///                            because remote tunnel traffic is loopback-proxied
     ///
     /// NOTE: /api/qrz and /api/chat were previously fully denied here, but the
     /// remote operator IS the authenticated station owner (SPAKE2+ session
@@ -126,6 +128,7 @@ public sealed class RemoteWebRtcSession
         "/api/remote/password",
         "/api/prefs/databases/export",
         "/api/log/export",
+        "/api/system/windows-firewall",
         // /api/support — the maintainer-support Allow/Deny surface. It is the
         // OPERATOR's local decision point; a remote peer (even the authenticated
         // station owner) must never approve a read-only support session for itself
