@@ -967,4 +967,38 @@ public class ControlFrameTests
         Assert.Equal(0, (cc[2] >> 6) & 0x01);
         Assert.Equal(0, cc[1]);
     }
+
+    // --- Dual-DDC dual-receiver (issue #1226) ------------------------------
+    // On dual-ADC P1 boards (Angelia / Orion) with RX2 armed, the RxFreq2
+    // register must carry the operator's VFO B — not mirror VFO A the way it
+    // does in the HL2 PS 4-DDC path. When VfoBHz is 0 the encoder must fall
+    // back to VfoAHz so every pre-#1226 single-DDC path stays byte-identical.
+
+    [Fact]
+    public void ControlFrame_RxFreq2_UsesVfoBHz_WhenSet()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        var s = BaseState() with
+        {
+            Board = HpsdrBoardKind.Angelia,
+            VfoAHz = 14_200_000,
+            VfoBHz = 21_050_000,
+        };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.RxFreq2, s);
+
+        Assert.Equal(0x06, cc[0]);
+        uint decoded = BinaryPrimitives.ReadUInt32BigEndian(cc[1..5]);
+        Assert.Equal(21_050_000u, decoded);
+    }
+
+    [Fact]
+    public void ControlFrame_RxFreq2_FallsBackToVfoAHz_WhenVfoBHzZero()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        var s = BaseState() with { VfoAHz = 14_200_000, VfoBHz = 0 };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.RxFreq2, s);
+
+        uint decoded = BinaryPrimitives.ReadUInt32BigEndian(cc[1..5]);
+        Assert.Equal(14_200_000u, decoded);
+    }
 }

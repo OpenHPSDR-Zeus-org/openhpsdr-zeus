@@ -78,6 +78,30 @@ public interface IProtocol1Client : IDisposable
     long TotalFrames { get; }
 
     void SetVfoAHz(long hz);
+
+    /// <summary>
+    /// Set the RX2 (DDC1) NCO frequency in Hz. Honoured on the wire only when
+    /// <see cref="SetRx2Enabled"/> is true AND the connected board has two
+    /// receive ADCs (Angelia / Orion). On single-ADC boards the wire encoder
+    /// keeps DDC1 mirroring VFO A regardless — passing a non-zero value on the
+    /// wrong board is stored but never reaches the radio because
+    /// NumReceiversMinusOne stays at 0. Issue #1226.
+    /// </summary>
+    void SetVfoBHz(long hz);
+
+    /// <summary>
+    /// Enable / disable the classic 2-DDC dual-receiver wire layout. When on
+    /// AND the connected board has two receive ADCs, the Config frame requests
+    /// NumReceiversMinusOne=1 so the radio emits 14-byte-per-slot 2-DDC EP6
+    /// packets carrying both DDC0 (RX1) and DDC1 (RX2) at their independent
+    /// NCOs, and the RX loop dispatches DDC0 and DDC1 as separate
+    /// <see cref="IqFrame"/>s (via <see cref="IqFrame.ReceiverIndex"/> 0/1).
+    /// Ignored on HL2 — its single ADC has no true second receiver and its
+    /// existing PureSignal 4-DDC path (which uses NumReceiversMinusOne=3)
+    /// stays untouched. Defaults to false. Issue #1226.
+    /// </summary>
+    void SetRx2Enabled(bool enabled);
+
     void SetSampleRate(HpsdrSampleRate rate);
     void SetPreamp(bool on);
     /// <summary>

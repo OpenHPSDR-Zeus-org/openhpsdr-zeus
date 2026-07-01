@@ -1116,6 +1116,14 @@ public class DspPipelineService : BackgroundService,
     // RadioService nulls its ActiveClient before raising Disconnected, so the
     // event handler can't pull the client off that surface.
     private IProtocol1Client? _attachedSinkP1;
+    // Issue #1226: cache whether the Protocol-1 wire is currently delivering
+    // TWO independent DDC streams (classic 2-DDC layout on Angelia / Orion with
+    // RX2 armed). When true the RX sink feeds DDC0 into RX1 only and waits for
+    // the paired DDC1 frame (ReceiverIndex=1) to feed RX2 — instead of piping
+    // DDC0 into both channels the way the HL2 single-ADC sub-receiver fallback
+    // does. Set/cleared in OnRadioStateChanged so the read on the RX sink hot
+    // path is a plain Volatile.Read. int-typed for Interlocked; 0/1.
+    private int _p1DualDdcOnWire;
     private Zeus.Protocol2.Protocol2Client? _attachedSinkP2;
     private long _lastTickStopwatchTicks;
     private static readonly long TickPeriodStopwatchTicks =
@@ -3421,12 +3429,32 @@ public class DspPipelineService : BackgroundService,
         // VFO B's effective LO so it demodulates its own band, independent of
         // RX1. SetRx2Enabled is idempotent (only re-sends on a real change);
         // SetVfoBHz no-ops on the wire while RX2 is disabled.
+        var p1 = _attachedSinkP1;
         p2?.SetRx2Enabled(s.Rx2Enabled);
+        // Issue #1226: mirror the same push into the Protocol-1 client so
+        // dual-ADC boards (Angelia / Orion) actually stream DDC1 at VFO B —
+        // otherwise DDC1's NCO stays on VFO A and both "receivers" demodulate
+        // the same slice. Wire gate lives in Protocol1Client.SnapshotState and
+        // ControlFrame; HL2 ignores this (single ADC).
+        p1?.SetRx2Enabled(s.Rx2Enabled);
+        // Cache whether the P1 wire is delivering 2 independent DDC streams so
+        // the RX sink can skip the DDC0→RX2 fanout when the paired DDC1 frame
+        // is going to arrive on its own. Same gate as
+        // Protocol1Client.SnapshotState.NumReceiversMinusOne=1: RX2 armed AND
+        // the connected P1 board has a real second ADC (not HL2). Cleared
+        // whenever we're on Protocol 2 or no P1 client is attached.
+        Interlocked.Exchange(
+            ref _p1DualDdcOnWire,
+            p1 is not null
+                && s.Rx2Enabled
+                && _radio.ConnectedBoardKind != HpsdrBoardKind.HermesLite2
+                ? 1 : 0);
         // Tune RX2's DDC to its (CTUN-frozen) centre, not the raw dial, so the
         // panel holds still while VFO B roams under CTUN. The WDSP shift in
         // ApplyStateToRx2Channel moves the dial within that window.
         UpdateRxLo(1, s);
         p2?.SetVfoBHz(_secondaryRx[1].LoHz);
+        p1?.SetVfoBHz(_secondaryRx[1].LoHz);
 
         // Dual-RX split TX: when VFO B is the TX VFO and RX2 is on, drive the TX
         // DUC to VFO B's effective LO (the same centre RX2 sits on) INDEPENDENTLY
@@ -5120,14 +5148,40 @@ public class DspPipelineService : BackgroundService,
             int channel = Volatile.Read(ref _channelId);
             if (engine is not null)
             {
-                FeedProtocol1Iq(
-                    engine,
-                    channel,
-                    Volatile.Read(ref _secondaryRx[1].ChannelId),
-                    frame.InterleavedSamples.Span);
-                RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
+                // Issue #1226: on a dual-ADC P1 board with RX2 armed, the
+                // client emits DDC0 as ReceiverIndex=0 and DDC1 as
+                // ReceiverIndex=1 — feed each into its own WDSP channel
+                // instead of piping DDC0 to both (which was the "same slice
+                // twice" symptom). Single-DDC frames still carry
+                // ReceiverIndex=0 by default, so the pre-1226 path is
+                // byte-identical.
+                if (frame.ReceiverIndex >= 1)
+                {
+                    int secChan = Volatile.Read(ref _secondaryRx[1].ChannelId);
+                    if (secChan >= 0)
+                        engine.FeedIq(secChan, frame.InterleavedSamples.Span);
+                }
+                else if (Volatile.Read(ref _p1DualDdcOnWire) != 0)
+                {
+                    // DDC0 alone — the paired DDC1 frame will land next and
+                    // drive RX2, so don't fan DDC0 out to the RX2 channel.
+                    engine.FeedIq(channel, frame.InterleavedSamples.Span);
+                    RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
+                }
+                else
+                {
+                    FeedProtocol1Iq(
+                        engine,
+                        channel,
+                        Volatile.Read(ref _secondaryRx[1].ChannelId),
+                        frame.InterleavedSamples.Span);
+                    RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
+                }
             }
-            MaybeTickInline();
+            // Display / tick is paced by the DDC0 (RX1) frame; DDC1 frames
+            // arrive in the same packet so a second inline tick here would
+            // just double the WDSP display drain rate.
+            if (frame.ReceiverIndex == 0) MaybeTickInline();
         }
         finally
         {
@@ -5331,6 +5385,7 @@ public class DspPipelineService : BackgroundService,
         var client = _attachedSinkP1;
         _attachedSinkP1 = null;
         _rxSinkAttached = false;
+        Interlocked.Exchange(ref _p1DualDdcOnWire, 0);
         client?.DetachRxSink();
         // The codec radio-mic handler is bound to this client instance; clear our
         // attach latch and quiesce the re-blocker so a reconnect re-attaches

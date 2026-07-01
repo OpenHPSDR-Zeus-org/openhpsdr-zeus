@@ -60,4 +60,11 @@ public readonly record struct IqFrame(
     int SampleCount,
     int SampleRateHz,
     uint Sequence,
-    long TimestampNs);
+    long TimestampNs,
+    // Logical receiver this frame belongs to: 0 = primary RX (DDC0 → RX1),
+    // 1 = the second receiver (DDC1 → RX2) when the standard 2-DDC layout is
+    // active on a dual-ADC P1 board (Angelia / Orion). Mirrors the Protocol-2
+    // <see cref="Zeus.Protocol2.IqFrame.ReceiverIndex"/> field so consumers
+    // route to the right DSP channel without knowing per-DDC numbering.
+    // Defaults to 0 → every single-receiver path is unchanged. Issue #1226.
+    int ReceiverIndex = 0);

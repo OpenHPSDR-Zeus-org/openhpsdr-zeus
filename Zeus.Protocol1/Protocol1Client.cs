@@ -78,6 +78,18 @@ public sealed class Protocol1Client : IProtocol1Client
     // Mutation state written from any thread, read from the TX thread.
     // 64-bit fields are written atomically on 64-bit .NET (Interlocked.Exchange used for safety).
     private long _vfoAHz = 7_100_000;
+    // RX2 (DDC1) NCO frequency in Hz for the classic 2-DDC dual-ADC path
+    // (Angelia / Orion). Default 0 → RxFreq2 falls back to VfoAHz in the wire
+    // encoder, byte-identical to before this fix. Issue #1226.
+    private long _vfoBHz;
+    // Toggle for the classic 2-DDC layout on dual-ADC P1 boards (Angelia /
+    // Orion). When set on a dual-ADC board, SnapshotState requests
+    // NumReceiversMinusOne=1 in the Config frame and the RX loop switches to
+    // the 2-DDC packet parser, publishing DDC0 as ReceiverIndex=0 and DDC1 as
+    // ReceiverIndex=1. HL2 ignores this — its single ADC has no true second
+    // receiver, and its PureSignal path uses its own NumReceiversMinusOne=3
+    // 4-DDC layout. Issue #1226.
+    private int _rx2Enabled;
     // Frequency-correction factor (issue #325) — dimensionless multiplier
     // near 1.0 applied to the incoming dial Hz before _vfoAHz is updated,
     // matching piHPSDR / Thetis. Stored as int64 bits for atomic
@@ -511,6 +523,116 @@ public sealed class Protocol1Client : IProtocol1Client
         }
     }
 
+    /// <summary>
+    /// Decode a classic 2-DDC EP6 packet and publish DDC0 + DDC1 as two
+    /// receiver-tagged <see cref="IqFrame"/>s (ReceiverIndex 0 and 1). Used on
+    /// dual-ADC P1 boards (Angelia / Orion) whenever the last Config frame
+    /// requested NumReceiversMinusOne=1 — the wire layout is 14 bytes per
+    /// sample slot, so the single-DDC parser above would misalign every
+    /// sample. Telemetry / ADC-overload / hardware-PTT / CW-key-down / mic
+    /// extraction / TX pacing all mirror the standard 1-DDC path so only the
+    /// IQ-payload layout differs. Issue #1226.
+    /// </summary>
+    private void Handle2DdcPacket(ReadOnlySpan<byte> packet, ref int rxPktCounter)
+    {
+        int needed = 2 * PacketParser.TwoDdcSamplesPerPacket;
+        var ddc0 = ArrayPool<double>.Shared.Rent(needed);
+        var ddc1 = ArrayPool<double>.Shared.Rent(needed);
+        bool ddc0Handoff = false;
+        bool ddc1Handoff = false;
+        try
+        {
+            if (!PacketParser.TryParse2DdcPacket(
+                    packet, ddc0, ddc1,
+                    out uint seq, out int samples,
+                    out TelemetryReading telemetry0,
+                    out TelemetryReading telemetry1,
+                    out byte overloadBits))
+                return;
+
+            ObserveSequence(seq);
+            Interlocked.Increment(ref _totalFrames);
+
+            if (telemetry0.C0Address != 0)
+            {
+                try { TelemetryReceived?.Invoke(telemetry0); }
+                catch (Exception ex) { _log.LogWarning(ex, "TelemetryReceived handler threw"); }
+            }
+            if (telemetry1.C0Address != 0)
+            {
+                try { TelemetryReceived?.Invoke(telemetry1); }
+                catch (Exception ex) { _log.LogWarning(ex, "TelemetryReceived handler threw"); }
+            }
+            try { AdcOverloadObserved?.Invoke(AdcOverloadStatus.FromBits(overloadBits)); }
+            catch (Exception ex) { _log.LogWarning(ex, "AdcOverloadObserved handler threw"); }
+
+            UpdateHardwarePtt(PacketParser.ExtractHardwarePtt(packet));
+            UpdateCwKeyDown(PacketParser.ExtractCwKeyDown(packet));
+
+            int rateHz = (HpsdrSampleRate)Volatile.Read(ref _rate) switch
+            {
+                HpsdrSampleRate.Rate48k => 48_000,
+                HpsdrSampleRate.Rate96k => 96_000,
+                HpsdrSampleRate.Rate192k => 192_000,
+                HpsdrSampleRate.Rate384k => 384_000,
+                _ => 48_000,
+            };
+
+            // TX pacing — DDC0 emits (rateHz / 72) packets/s in the 2-DDC
+            // layout (72 paired samples per packet, half the 1-DDC 126). The
+            // target TX rate is unchanged at 48 kHz / 126 ≈ 381 pkt/s. Round
+            // to the nearest divider so a 48 kHz session still fires every RX
+            // packet.
+            double rxPktsPerSec = rateHz / (double)PacketParser.TwoDdcSamplesPerPacket;
+            int txDivider = Math.Max(1, (int)Math.Round(rxPktsPerSec / 381.0));
+            if ((++rxPktCounter % txDivider) == 0)
+            {
+                try { _txSignal.Release(); } catch (SemaphoreFullException) { }
+            }
+
+            ddc0Handoff = PublishDualDdcFrame(ddc0, samples, rateHz, seq, receiverIndex: 0);
+            ddc1Handoff = PublishDualDdcFrame(ddc1, samples, rateHz, seq, receiverIndex: 1);
+        }
+        finally
+        {
+            if (!ddc0Handoff) ArrayPool<double>.Shared.Return(ddc0);
+            if (!ddc1Handoff) ArrayPool<double>.Shared.Return(ddc1);
+        }
+    }
+
+    /// <summary>
+    /// Publish one DDC of a 2-DDC packet as an <see cref="IqFrame"/> to the
+    /// attached sink or the channel. Returns true when the sink / channel took
+    /// ownership of <paramref name="buffer"/> (the caller must NOT return it to
+    /// the pool). Issue #1226.
+    /// </summary>
+    private bool PublishDualDdcFrame(double[] buffer, int samples, int rateHz, uint seq, int receiverIndex)
+    {
+        var memory = new ReadOnlyMemory<double>(buffer, 0, 2 * samples);
+        var frame = new IqFrame(memory, samples, rateHz, seq, NowNs(), receiverIndex);
+        var sinkSnap = Volatile.Read(ref _rxSink);
+        if (sinkSnap != null)
+        {
+            try
+            {
+                sinkSnap.OnIqFrame(in frame);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "p1.rx.sink_threw kind=iq rx={Rx}", receiverIndex);
+                return false;
+            }
+        }
+        // Only publish RX1 (index 0) to the legacy IqFrames channel — it has no
+        // receiver-index dimension. RX2 frames without a sink are dropped; the
+        // sink path is the production consumer (DspPipelineService), and the
+        // channel path is only exercised by tests / tools that predate the
+        // dual-receiver work.
+        if (receiverIndex == 0 && _channel.Writer.TryWrite(frame)) return true;
+        return false;
+    }
+
     public bool EnableHl2BandVolts
     {
         get => Volatile.Read(ref _enableHl2BandVolts) != 0;
@@ -655,6 +777,19 @@ public sealed class Protocol1Client : IProtocol1Client
         long corrected = (long)Math.Round(hz * factor, MidpointRounding.AwayFromZero);
         Interlocked.Exchange(ref _vfoAHz, corrected);
     }
+
+    public void SetVfoBHz(long hz)
+    {
+        // Apply the same host-side frequency-correction factor to VFO B so
+        // both DDCs land on the operator's dialled Hz once the radio applies
+        // its factory oscillator trim.
+        double factor = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _freqCorrectionBits));
+        long corrected = (long)Math.Round(hz * factor, MidpointRounding.AwayFromZero);
+        Interlocked.Exchange(ref _vfoBHz, corrected);
+    }
+
+    public void SetRx2Enabled(bool enabled) =>
+        Interlocked.Exchange(ref _rx2Enabled, enabled ? 1 : 0);
 
     /// <summary>
     /// Sets the per-radio frequency-correction factor (issue #325). The
@@ -882,20 +1017,26 @@ public sealed class Protocol1Client : IProtocol1Client
 
         bool psOn = Volatile.Read(ref _psEnabled) != 0;
         bool moxOn = Volatile.Read(ref _mox) != 0;
-        bool isHl2 = (HpsdrBoardKind)Volatile.Read(ref _boardKind) == HpsdrBoardKind.HermesLite2;
+        var boardSnap = (HpsdrBoardKind)Volatile.Read(ref _boardKind);
+        bool isHl2 = boardSnap == HpsdrBoardKind.HermesLite2;
+        bool rx2On = Volatile.Read(ref _rx2Enabled) != 0;
         // Number of receivers requested in the Config payload (`(N-1) << 3`
-        // in C4 bits [5:3]). mi0bot's HL2 path (Thetis console.cs:8186-8265)
-        // uses **4 DDCs** during PS+MOX:
-        //   DDC0 → RX1 audio (mix2_0+adcpipe[0] at VfoAHz) — stays alive!
-        //   DDC1 → mix2_2 input at VfoAHz, demods to junk during MOX+PS
-        //          (mix2_2.adc is forced to tx_data_dac then) — discarded.
-        //   DDC2 → mix2_0+adcpipe[0] at TX freq → pscc "rx". On HL2 this
-        //          is RF leakage of the radiated TX (no coupler hardware).
-        //   DDC3 → mix2_2+tx_data_dac at TX freq → pscc "tx" (pre-PA DAC).
-        // See HandlePs4DdcPacket above for the cross-reference to upstream
-        // gateware. Outside PS+MOX we stay at single-DDC so the existing
-        // 1-DDC EP6 packet shape and parser are bit-exact unchanged.
-        byte numRxMinus1 = (byte)(psOn && isHl2 && moxOn ? 3 : 0);
+        // in C4 bits [5:3]). Three paths:
+        //   1. HL2 + PS + MOX: 4 DDCs (mi0bot canonical, see HandlePs4DdcPacket).
+        //      DDC0 stays on the operator's freq so audio + panadapter survive
+        //      the keyed window; DDC2/DDC3 carry the pscc feedback pair.
+        //   2. Dual-ADC P1 boards (Angelia / Orion) with RX2 enabled: 2 DDCs.
+        //      DDC0 = RX1 at VfoA, DDC1 = RX2 at VfoB — the fix for #1226. Gated
+        //      off HL2 (single ADC, and its PS branch owns the numRxMinus1
+        //      channel) so the existing HL2 wire stays byte-identical.
+        //   3. Everything else: single DDC (byte-identical to before).
+        byte numRxMinus1;
+        if (psOn && isHl2 && moxOn)
+            numRxMinus1 = 3;
+        else if (rx2On && !isHl2)
+            numRxMinus1 = 1;
+        else
+            numRxMinus1 = 0;
 
         return new(
             VfoAHz: Interlocked.Read(ref _vfoAHz),
@@ -930,7 +1071,14 @@ public sealed class Protocol1Client : IProtocol1Client
             LineInGain: (byte)Volatile.Read(ref _lineInGain),
             AtuTune: Volatile.Read(ref _atuTuneUntilTicks) > Environment.TickCount64,
             TxAntenna: (HpsdrAntenna)Volatile.Read(ref _txAntenna),
-            UserDigOut: (byte)Volatile.Read(ref _userDigOut));
+            UserDigOut: (byte)Volatile.Read(ref _userDigOut),
+            // VFO B (DDC1) NCO. Zero when RX2 is disabled or the board is HL2
+            // → the wire encoder falls back to VfoAHz, byte-identical to before
+            // #1226. Only send a non-zero value when both RX2 is on AND the wire
+            // is actually in 2-DDC mode, so the HL2 PS 4-DDC branch — which
+            // shares this register but expects DDC1 mirrored on VFO A — stays
+            // untouched.
+            VfoBHz: rx2On && !isHl2 ? Volatile.Read(ref _vfoBHz) : 0);
     }
 
     private void RxLoop()
@@ -1063,6 +1211,20 @@ public sealed class Protocol1Client : IProtocol1Client
                     {
                         try { _txSignal.Release(); } catch (SemaphoreFullException) { }
                     }
+                    continue;
+                }
+
+                // Classic 2-DDC dual-receiver layout (Angelia / Orion with RX2
+                // enabled). Same gate as SnapshotState.NumReceiversMinusOne=1:
+                // any board that requested 2 DDCs on the wire emits
+                // 14-byte-per-slot packets, and the single-DDC parser below
+                // would misalign every sample. Route to the 2-DDC parser
+                // instead and publish DDC0 (RX1) and DDC1 (RX2) as separate
+                // IqFrames tagged with their receiver index. Issue #1226.
+                if (Volatile.Read(ref _rx2Enabled) != 0
+                    && (HpsdrBoardKind)Volatile.Read(ref _boardKind) != HpsdrBoardKind.HermesLite2)
+                {
+                    Handle2DdcPacket(buffer.AsSpan(0, n), ref rxPktCounter);
                     continue;
                 }
 
@@ -1218,7 +1380,11 @@ public sealed class Protocol1Client : IProtocol1Client
     // TxFreq when Split/RIT are off, which matches what we do here since Zeus
     // has no separate TX VFO yet.
     internal static (ControlFrame.CcRegister first, ControlFrame.CcRegister second) PhaseRegisters(int phase, bool mox)
-        => PhaseRegisters(phase, mox, psArmed: false);
+        => PhaseRegisters(phase, mox, psArmed: false, rx2Armed: false);
+
+    internal static (ControlFrame.CcRegister first, ControlFrame.CcRegister second) PhaseRegisters(
+        int phase, bool mox, bool psArmed)
+        => PhaseRegisters(phase, mox, psArmed, rx2Armed: false);
 
     /// <summary>
     /// Round-robin register selector. When <paramref name="psArmed"/> is true
@@ -1234,9 +1400,15 @@ public sealed class Protocol1Client : IProtocol1Client
     /// HL2 gateware semantics — see CcRegister.LnaTxGainStable for the
     /// long-form explanation. Mirrors mi0bot networkproto1.c:WriteMainLoop_HL2
     /// case 2/3/4 wire-byte-by-wire-byte even though the comments diverge.
+    ///
+    /// When <paramref name="rx2Armed"/> is true (dual-ADC boards with the
+    /// operator's RX2 enabled, and PS not armed) the RX-only rotation widens to
+    /// 6 phases and folds in RxFreq2 so DDC1's NCO tracks VFO B — otherwise
+    /// DDC1 would sit at whatever RxFreq2 was last written to, which is either
+    /// 0 or a stale value from the previous session. Issue #1226.
     /// </summary>
     internal static (ControlFrame.CcRegister first, ControlFrame.CcRegister second) PhaseRegisters(
-        int phase, bool mox, bool psArmed)
+        int phase, bool mox, bool psArmed, bool rx2Armed)
     {
         if (psArmed)
         {
@@ -1295,11 +1467,26 @@ public sealed class Protocol1Client : IProtocol1Client
             };
         }
 
-        // Non-PS rotation is 5 phases. Phase 4 carries the CW keyer config
-        // (0x0B) in the RX-only branch so the on-board iambic keyer speed/
-        // mode tracks the operator's CW panel — it's set before keying, so
-        // the MOX branch doesn't waste a slot on it. Adding one phase drops
-        // the RxFreq NCO refresh from 3-of-4 to 4-of-5 frames — negligible.
+        // Non-PS rotation is 5 phases (6 when rx2Armed). Phase 4 carries the CW
+        // keyer config (0x0B) in the RX-only branch so the on-board iambic
+        // keyer speed / mode tracks the operator's CW panel — it's set before
+        // keying, so the MOX branch doesn't waste a slot on it. Adding one
+        // phase drops the RxFreq NCO refresh from 3-of-4 to 4-of-5 frames —
+        // negligible. Dual-RX (rx2Armed) adds one more phase that pairs
+        // RxFreq2 with RxFreq so both DDC NCOs get refreshed each cycle.
+        if (rx2Armed && !mox)
+        {
+            int q = phase % 6;
+            return q switch
+            {
+                0 => (ControlFrame.CcRegister.Config,        ControlFrame.CcRegister.RxFreq),
+                1 => (ControlFrame.CcRegister.RxFreq,        ControlFrame.CcRegister.DriveFilter),
+                2 => (ControlFrame.CcRegister.Attenuator,    ControlFrame.CcRegister.RxFreq2),
+                3 => (ControlFrame.CcRegister.RxFreq,        ControlFrame.CcRegister.TxFreq),
+                4 => (ControlFrame.CcRegister.CwKeyerConfig, ControlFrame.CcRegister.RxFreq),
+                _ => (ControlFrame.CcRegister.RxFreq2,       ControlFrame.CcRegister.RxFreq),
+            };
+        }
         int p = phase % 5;
         if (mox)
         {
@@ -1347,8 +1534,17 @@ public sealed class Protocol1Client : IProtocol1Client
                 // effect, recomputed every tick so a mid-stream PS toggle
                 // doesn't lose its slot.
                 bool psArmed = state.PsEnabled && state.Board == HpsdrBoardKind.HermesLite2;
-                var (first, second) = PhaseRegisters(phase, state.Mox, psArmed);
-                phase = psArmed ? ((phase + 1) & 0xF) : ((phase + 1) % 5);
+                // Dual-ADC 2-DDC rotation kicks in when RX2 is armed on a
+                // non-HL2 P1 board (same gate as SnapshotState.NumReceiversMinusOne=1).
+                // Widens the RX-only cycle to 6 phases so RxFreq2 gets its own
+                // slot; PS takes priority when both are armed (HL2-only, so the
+                // gates are mutually exclusive today, but the ordering is
+                // deliberate). Issue #1226.
+                bool rx2Armed = state.NumReceiversMinusOne == 1
+                    && state.Board != HpsdrBoardKind.HermesLite2;
+                var (first, second) = PhaseRegisters(phase, state.Mox, psArmed, rx2Armed);
+                int phaseMod = psArmed ? 16 : (rx2Armed && !state.Mox ? 6 : 5);
+                phase = (phase + 1) % phaseMod;
                 ControlFrame.BuildDataPacket(buf, sendSeq++, first, second, in state, _txIqSource, _rxAudioSource);
                 rateWindowPkts++;
                 var nowUtc = DateTime.UtcNow;

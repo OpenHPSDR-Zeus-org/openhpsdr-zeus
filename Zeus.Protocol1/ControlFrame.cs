@@ -306,7 +306,14 @@ internal static class ControlFrame
         // off for HL2. Both default false → matches Thetis' netInterface.c init
         // (`adc[i].dither = adc[i].random = 0`) and is byte-identical to today.
         bool AdcDitherEnabled = false,
-        bool AdcRandomEnabled = false);
+        bool AdcRandomEnabled = false,
+        // RX2 NCO (DDC1) frequency, Hz. Used only on the classic dual-DDC path
+        // (Angelia / Orion with Rx2Enabled and NumReceiversMinusOne=1). When 0,
+        // the RxFreq2 payload falls back to VfoAHz so every single-DDC path
+        // stays byte-identical to before — the HL2 PS 4-DDC branch, which
+        // deliberately mirrors DDC1's NCO onto VfoAHz, never has to change.
+        // Issue #1226.
+        long VfoBHz = 0);
 
     /// <summary>
     /// Write the 5 C&amp;C bytes for <paramref name="register"/> given the current
@@ -328,16 +335,28 @@ internal static class ControlFrame
 
             case CcRegister.RxFreq:
             case CcRegister.TxFreq:
-            case CcRegister.RxFreq2:
             case CcRegister.RxFreq3:
             case CcRegister.RxFreq4:
                 // Frequency payload is a BE uint32 in C1..C4 (doc 02 §4 "Frequency payload").
-                // All five frequency registers (TxFreq + four RX NCOs) carry the
-                // same VfoAHz here — Zeus has no separate TX VFO. During HL2
-                // PS+MOX, mi0bot tunes DDC2 and DDC3 to TX freq, which is the
-                // operator-tuned freq for SSB; for CW, EffectiveLoHz is already
-                // baked into VfoAHz upstream in RadioService.SetVfo.
+                // TxFreq + RxFreq/RxFreq3/RxFreq4 all carry VfoAHz — Zeus has no
+                // separate TX VFO. During HL2 PS+MOX, mi0bot tunes DDC2 and DDC3
+                // to TX freq, which is the operator-tuned freq for SSB; for CW,
+                // EffectiveLoHz is already baked into VfoAHz upstream in
+                // RadioService.SetVfo.
                 BinaryPrimitives.WriteUInt32BigEndian(cc[1..5], (uint)state.VfoAHz);
+                break;
+
+            case CcRegister.RxFreq2:
+                // DDC1 NCO. On the classic 2-DDC dual-ADC path (Angelia / Orion
+                // with Rx2Enabled) this carries the operator's VFO B frequency
+                // so DDC1 demodulates its own slice independent of DDC0. When
+                // VfoBHz is 0 (single-RX or the HL2 PS 4-DDC path, which
+                // deliberately mirrors DDC1's NCO onto VfoAHz — see
+                // CcRegister.RxFreq2 doc above), fall back to VfoAHz so the
+                // pre-#1226 behaviour is byte-identical. Issue #1226.
+                BinaryPrimitives.WriteUInt32BigEndian(
+                    cc[1..5],
+                    (uint)(state.VfoBHz != 0 ? state.VfoBHz : state.VfoAHz));
                 break;
 
             case CcRegister.DriveFilter:
