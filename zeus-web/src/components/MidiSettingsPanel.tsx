@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useMidiStore } from '../state/midi-store';
-import type { MidiCommandInfo, MidiControlType } from '../api/midi';
+import type { MidiCommandInfo, MidiControlType, MidiMapping } from '../api/midi';
 
 const SECTION_TITLE: React.CSSProperties = {
   margin: '0 0 10px',
@@ -38,15 +38,38 @@ const INPUT: React.CSSProperties = {
   color: 'var(--fg-0)',
 };
 
+// Human-readable control-type badge shown beside each command so the operator
+// knows which physical control the command expects before binding (fader/pot
+// vs endless encoder vs button). A jog wheel bound to a KnobOrSlider command
+// or a fader bound to a Wheel command produces a silent no-op — the label
+// makes that mismatch visible up front.
+function typeBadge(t: MidiControlType): string {
+  switch (t) {
+    case 'Wheel':
+      return 'encoder';
+    case 'KnobOrSlider':
+      return 'knob/slider';
+    case 'Button':
+      return 'button';
+    default:
+      return '';
+  }
+}
+
 function CommandSelect({
   commands,
   value,
   onChange,
+  boundCommands,
   id,
 }: {
   commands: MidiCommandInfo[];
   value: string;
   onChange: (cmd: string) => void;
+  // Map of command id → human-readable "where it's bound" string, so options
+  // for already-mapped commands can flag the current assignment. Never hidden
+  // — operators still need to be able to re-bind or replace an assignment.
+  boundCommands?: Map<string, string>;
   id?: string;
 }) {
   return (
@@ -54,14 +77,20 @@ function CommandSelect({
       id={id}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      style={{ ...INPUT, minWidth: 220 }}
+      style={{ ...INPUT, minWidth: 260 }}
     >
       <option value="">— select command —</option>
-      {commands.map((c) => (
-        <option key={c.command} value={c.command}>
-          {c.label} {c.supported ? '' : '(parity)'}
-        </option>
-      ))}
+      {commands.map((c) => {
+        const badge = typeBadge(c.controlType);
+        const parity = c.supported ? '' : ' (parity)';
+        const bound = boundCommands?.get(c.command);
+        const boundTag = bound ? ` • ★ ${bound}` : '';
+        return (
+          <option key={c.command} value={c.command}>
+            {c.label} [{badge}]{parity}{boundTag}
+          </option>
+        );
+      })}
     </select>
   );
 }
@@ -115,16 +144,46 @@ export function MidiSettingsPanel() {
     );
   }, [commands, search]);
 
+  // Which commands already have a MIDI binding. Feeds a `★ device/control`
+  // tag next to those options so the operator can see (and choose to
+  // replace) an existing assignment instead of accidentally double-mapping.
+  const boundCommands = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const map of config.bindings.mappings) {
+      // Short "control@device" tag — keeps the option label readable even
+      // when the device name is long (e.g. DJ2GO2 Touch).
+      m.set(map.command, `${map.controlId}@${map.deviceName}`);
+    }
+    return m;
+  }, [config.bindings.mappings]);
+
+  // If the operator moves an already-mapped control while learning, pre-fill
+  // the command picker with the existing assignment so they can see what
+  // it's bound to and re-select or replace in one step.
+  useEffect(() => {
+    if (!lastLearn) return;
+    const existing = config.bindings.mappings.find(
+      (m) => m.deviceName === lastLearn.deviceName && m.controlId === lastLearn.controlId,
+    );
+    if (existing) setLearnCommand(existing.command);
+  }, [lastLearn, config.bindings.mappings]);
+
+  // The command's expected control type — hardware CC events are always
+  // classified KnobOrSlider by the engine (an encoder and a fader emit
+  // identical wire messages), so a jog wheel bound to a Wheel-only command
+  // like ChangeFreqVfoA would previously persist as KnobOrSlider and route
+  // through the delta==0 no-op path (issue #1231). The command's catalogued
+  // controlType decides which routing branch the mapping takes.
   function inferControlType(): MidiControlType {
-    if (lastLearn) return lastLearn.controlType;
     const info = commandLabel.get(learnCommand);
-    return info?.controlType ?? 'Button';
+    if (info) return info.controlType;
+    return lastLearn?.controlType ?? 'Button';
   }
 
   async function bindLearned() {
     if (!lastLearn || !learnCommand) return;
     const info = commandLabel.get(learnCommand);
-    await upsertMapping({
+    const mapping: MidiMapping = {
       deviceName: lastLearn.deviceName,
       controlId: lastLearn.controlId,
       controlType: inferControlType(),
@@ -132,7 +191,8 @@ export function MidiSettingsPanel() {
       min: 0,
       max: 127,
       toggle: info?.isToggle ?? false,
-    });
+    };
+    await upsertMapping(mapping);
     setLearnCommand('');
   }
 
@@ -239,7 +299,12 @@ export function MidiSettingsPanel() {
               on {lastLearn.deviceName} ({lastLearn.controlType}, val {lastLearn.value}
               {lastLearn.delta !== 0 ? `, Δ${lastLearn.delta}` : ''})
             </span>
-            <CommandSelect commands={filteredCommands} value={learnCommand} onChange={setLearnCommand} />
+            <CommandSelect
+              commands={filteredCommands}
+              value={learnCommand}
+              onChange={setLearnCommand}
+              boundCommands={boundCommands}
+            />
             <button type="button" className="btn sm active" disabled={!learnCommand} onClick={() => void bindLearned()}>
               BIND
             </button>
@@ -358,7 +423,12 @@ export function MidiSettingsPanel() {
             <span style={{ fontSize: 11, color: 'var(--fg-2)' }}>
               Key {selectedKey.index + 1} →
             </span>
-            <CommandSelect commands={filteredCommands} value={sdCommand} onChange={setSdCommand} />
+            <CommandSelect
+              commands={filteredCommands}
+              value={sdCommand}
+              onChange={setSdCommand}
+              boundCommands={boundCommands}
+            />
             <button type="button" className="btn sm active" disabled={!sdCommand} onClick={() => void bindStreamDeckKey()}>
               BIND
             </button>
