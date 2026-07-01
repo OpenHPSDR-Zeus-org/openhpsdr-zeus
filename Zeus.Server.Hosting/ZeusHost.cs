@@ -680,6 +680,10 @@ public static class ZeusHost
         // ports plan — antenna slice, #804). RadioService takes it as an
         // optional ctor param and re-pushes on its Changed event.
         builder.Services.AddSingleton<AntennaSettingsStore>();
+        // Thetis-style RF filter windows / bypass policy for Protocol-2 Alex
+        // BPF/LPF words. RadioService normalizes and replays it with the PA
+        // snapshot so edits apply server-authoritatively.
+        builder.Services.AddSingleton<RfFilterSettingsStore>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<ExternalPttService>());
 
         // ANAN G2 / G2-Ultra hardware front-panel bridge (FrontPanel/). Opens

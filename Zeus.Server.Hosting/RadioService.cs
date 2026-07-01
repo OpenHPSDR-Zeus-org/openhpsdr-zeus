@@ -87,6 +87,9 @@ public sealed class RadioService : IDisposable
     // #804). Optional so existing constructions (tests) stay valid; null → the
     // antenna path resolves to ANT1/ANT1/None (byte-identical to today).
     private readonly AntennaSettingsStore? _antennaStore;
+    // Thetis-style RF filter windows and bypass policy for the Protocol-2 Alex
+    // BPF/LPF words. Optional so older tests keep their constructor shape.
+    private readonly RfFilterSettingsStore? _rfFilterStore;
     private readonly PreferredRadioStore? _preferredRadioStore;
     private readonly PsSettingsStore? _psStore;
     private readonly FilterPresetStore? _filterPresetStore;
@@ -391,7 +394,7 @@ public sealed class RadioService : IDisposable
     // tests / hosts without the Kiwi feature wired.
     private readonly IKiwiReceiverProvider? _kiwiReceiverProvider;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null, Nr3ModelStore? nr3ModelStore = null, Hl2GpioSettingsStore? hl2GpioStore = null, BandMemoryStore? bandMemoryStore = null, IKiwiReceiverProvider? kiwiReceiverProvider = null, Zeus.Protocol1.IRxAudioSource? rxAudioSource = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null, Nr3ModelStore? nr3ModelStore = null, Hl2GpioSettingsStore? hl2GpioStore = null, BandMemoryStore? bandMemoryStore = null, IKiwiReceiverProvider? kiwiReceiverProvider = null, Zeus.Protocol1.IRxAudioSource? rxAudioSource = null, RfFilterSettingsStore? rfFilterStore = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
@@ -399,6 +402,7 @@ public sealed class RadioService : IDisposable
         _nr3ModelStore = nr3ModelStore;
         _paStore = paStore;
         _antennaStore = antennaStore;
+        _rfFilterStore = rfFilterStore;
         _preferredRadioStore = preferredRadioStore;
         _psStore = psStore;
         _filterPresetStore = filterPresetStore;
@@ -411,6 +415,8 @@ public sealed class RadioService : IDisposable
         // SetAntennaRx directly / P2 via PaSnapshotChanged → SetAntennas).
         if (_antennaStore is not null)
             _antennaStore.Changed += RecomputePaAndPush;
+        if (_rfFilterStore is not null)
+            _rfFilterStore.Changed += RecomputePaAndPush;
         // Audio front-end is global per-radio (not per-band), so it has its own
         // store + push rather than riding the PA snapshot. A store edit re-pushes
         // the resolved wire bytes + StateDto (PR #359/#360 anti-clobber pattern).
@@ -2941,6 +2947,35 @@ public sealed class RadioService : IDisposable
     // next state change.
     public void ReplayPaSnapshot() => RecomputePaAndPush();
 
+    public RfFilterSettingsDto GetRfFilterSettings()
+    {
+        if (_rfFilterStore is null)
+            throw new InvalidOperationException("RF filter settings store is not configured.");
+        var snap = Snapshot();
+        return _rfFilterStore.GetDto(EffectiveBoardKind, snap, IsTxActive(), snap.PsEnabled);
+    }
+
+    public RfFilterSettingsDto SetRfFilterSettings(RfFilterSettingsSetRequest req)
+    {
+        if (_rfFilterStore is null)
+            throw new InvalidOperationException("RF filter settings store is not configured.");
+        var snap = Snapshot();
+        return _rfFilterStore.Set(req, EffectiveBoardKind, snap, IsTxActive(), snap.PsEnabled);
+    }
+
+    public RfFilterSettingsDto ResetRfFilterSettings()
+    {
+        if (_rfFilterStore is null)
+            throw new InvalidOperationException("RF filter settings store is not configured.");
+        var snap = Snapshot();
+        return _rfFilterStore.Reset(EffectiveBoardKind, snap, IsTxActive(), snap.PsEnabled);
+    }
+
+    private bool IsTxActive()
+    {
+        lock (_sync) return _mox || _tunActive;
+    }
+
     // Global audio front-end push (external-audio-jacks re-port). Server-
     // authoritative: read AudioSettingsStore, clamp per-board, push to the P1
     // client directly and fire AudioFrontEndChanged for the P2 forwarder + the
@@ -3384,7 +3419,8 @@ public sealed class RadioService : IDisposable
             RxAntenna: antSel.RxAnt,
             HasTxAntennaRelays: caps.HasTxAntennaRelays,
             RxAuxInput: rxAuxWire,
-            MkiiBpfRxSelect: caps.MkiiBpf));
+            MkiiBpfRxSelect: caps.MkiiBpf,
+            RfFilters: _rfFilterStore?.GetRuntime(ConnectedBoardKind)));
     }
 
     // Gate a persisted per-band RX-aux pick against the connected board's
@@ -4034,6 +4070,8 @@ public sealed class RadioService : IDisposable
         _paStore.Changed -= RecomputePaAndPush;
         if (_antennaStore is not null)
             _antennaStore.Changed -= RecomputePaAndPush;
+        if (_rfFilterStore is not null)
+            _rfFilterStore.Changed -= RecomputePaAndPush;
         if (_audioStore is not null)
             _audioStore.Changed -= PushAudioFrontEnd;
         if (_hl2GpioStore is not null)

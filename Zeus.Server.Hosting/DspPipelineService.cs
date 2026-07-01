@@ -4544,6 +4544,7 @@ public class DspPipelineService : BackgroundService,
         // stay at zero per EU2AV's reserved-bit rule.
         p2.SetOcDxMasks(snap.OcDxTxMask, snap.OcDxRxMask);
         p2.SetPaEnabled(snap.PaEnabled);
+        p2.SetRfFilters(snap.RfFilters);
         // External antenna (antenna slice — #804). HpsdrAntenna.Ant1=0 → wire 1
         // → ALEX_TX_ANTENNA_1, so the +1 maps the 0-based enum to the 1-based
         // wire selector. SetAntennas gates the TX-antenna emission on
