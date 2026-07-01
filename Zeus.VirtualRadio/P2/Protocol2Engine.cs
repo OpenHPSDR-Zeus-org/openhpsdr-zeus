@@ -13,6 +13,7 @@ using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Zeus.Protocol2;
 using Zeus.VirtualRadio.Discovery;
 using Zeus.VirtualRadio.Observation;
 using Zeus.VirtualRadio.Rf;
@@ -391,11 +392,17 @@ public sealed class Protocol2Engine : IVirtualRadio
             }
 
             RfTelemetry tel = _rf.Compute(driveByte, tunedHz, mox);
-            // Model the single-ADC PS hazard: with the time-mux armed and keyed,
-            // a missing byte-59 protective seed (txAttn below the floor) slams
-            // the DAC feedback into the only RX ADC at 0 dB → ADC overload. A
-            // correctly-seeded host clears it.
-            byte overload = (feedback && txAttn < TxAdcProtectFloorDb) ? (byte)0x01 : (byte)0x00;
+            // Model the single-ADC PS hazard, but ONLY for boards whose ADC is
+            // protected by the byte-59 seed. With the time-mux armed and keyed, a
+            // missing seed (txAttn below the floor) slams the DAC feedback into the
+            // only RX ADC at 0 dB → overload; a correctly-seeded host clears it.
+            // Tied to the client's protection contract so the two stay in sync: the
+            // G2E (HermesC10) is protected by the operator's EXTERNAL pad, not byte
+            // 59 (SeedsTxAdcProtection(HermesC10) == false), so it never models this
+            // overload and a low byte 59 is expected/correct there.
+            bool byte59IsAdcProtection = Protocol2Client.SeedsTxAdcProtection(_profile.Board);
+            byte overload = (feedback && byte59IsAdcProtection && txAttn < TxAdcProtectFloorDb)
+                ? (byte)0x01 : (byte)0x00;
             if (overload != 0) _psAdcOverloadLatched = true;
 
             byte[] packet = _hiPriEncoder.Build(seq++, tel, ptt: mox, pllLocked: true, overload);

@@ -30,19 +30,19 @@ namespace Zeus.VirtualRadio.Tests;
 /// and the client decodes <see cref="PsFeedbackFrame"/>s. Unkeying returns DDC0
 /// to the user RX.
 ///
-/// THE G2E BYTE-59 SEED (v0.10.8, #960): the shipped client now seeds byte 59
-/// (Angelia_atten_Tx0) to the protective floor (31 dB) on arm for the G2E, just
-/// like the 10E — <see cref="Protocol2Client.SeedsTxAdcProtection"/> returns true
-/// for HermesC10 as well as HermesII. So through the keyed PS burst byte 59 is
-/// protective, the emulator's single-ADC overload model does NOT latch, and on
-/// disarm byte 59 restores to the operator's pre-arm value (0 here). This test
-/// therefore asserts: the feedback frames flow (the path is functionally
-/// complete) AND byte 59 is seeded protective AND NO ADC overload latches. It is
-/// a SELF-CONSISTENCY / regression bench — it proves the client and emulator
-/// agree on the digital wire, NOT that real-RF PS converges on a G2E. Real-G2E
-/// hardware validation (lb5va, #960) is still the open, KB2UKA-gated item; the
-/// byte-59 floor value itself (<see cref="Protocol2Client.PsTxAdcProtectFloorDb"/>)
-/// remains a burn-zone default that stays behind KB2UKA sign-off + bench.
+/// THE G2E BYTE-59 SEED (#960, KB2UKA 2026-07-01): the G2E does NOT force-seed
+/// byte 59. Its single ADC is protected by the operator's EXTERNAL sampler pad,
+/// not byte 59, so <see cref="Protocol2Client.SeedsTxAdcProtection"/> returns
+/// FALSE for HermesC10 (true only for the 10E). Forcing 31 dB previously
+/// over-attenuated the padded tap and deadlocked PS (dead meter on External).
+/// So through the keyed PS burst byte 59 stays at the operator's value (0 here),
+/// and because the G2E is off the protection contract the emulator does NOT model
+/// a byte-59 overload for it (a low byte 59 is expected/correct with a padded
+/// external tap). This test asserts: feedback frames flow AND the coupler carries
+/// signal on the DEFAULT Internal pick AND byte 59 is left at the operator value
+/// AND no overload latches. It is a SELF-CONSISTENCY / regression bench — it
+/// proves the client and emulator agree on the digital wire, NOT that real-RF PS
+/// converges on a G2E. Real-G2E hardware validation (lb5va, #960) is the open item.
 ///
 /// Gated behind <c>ZEUS_VRADIO_LOOPBACK</c> (it binds the well-known radio ports
 /// and uses real loopback sockets), so it never runs in the default socketless
@@ -130,9 +130,11 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
             Assert.True(await WaitUntil(() => sink.IqCount > 5, TimeSpan.FromSeconds(5)),
                 "no user-RX IQ frames at rest");
 
-            // 2) Arm PS and key TX. v0.10.8 (#960): the G2E now seeds byte 59 to
-            //    the protective floor on arm (SeedsTxAdcProtection(HermesC10) ==
-            //    true), exactly like the 10E.
+            // 2) Arm PS and key TX. #960 (KB2UKA 2026-07-01): the G2E does NOT
+            //    force-seed byte 59 — its single ADC is protected by the operator's
+            //    external sampler pad, not byte 59, so arming leaves byte 59 at the
+            //    operator's value (0 here). (The 10E keeps its seed; see its own
+            //    loopback test.)
             client.SetPsFeedbackEnabled(true);
             client.SetDriveByte(200);
             client.SetMox(true);
@@ -176,21 +178,19 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
                 "PS coupler was silent on the default Internal source — the tap was " +
                 $"not routed to the single ADC (peakCoupler={sink.PeakCoupler}).");
 
-            // 5) SAFETY (v0.10.8, #960): byte 59 (Angelia_atten_Tx0) IS now seeded
-            //    to the protective floor on the G2E during the keyed PS burst, so
-            //    the single shared RX ADC is attenuated on first key-down instead
-            //    of being slammed by the PA coupler at 0 dB. The emulator's
-            //    single-ADC model therefore raises NO ADC overload.
-            Assert.True(
-                await WaitUntil(
-                    () => engine.DecodedTxStepAttnDb >= Protocol2Engine.TxAdcProtectFloorDb,
-                    TimeSpan.FromSeconds(2)),
-                $"G2E byte 59 was not seeded to the protective floor (was {engine.DecodedTxStepAttnDb})");
+            // 5) SAFETY (#960, KB2UKA 2026-07-01): the G2E does NOT force byte 59 to
+            //    the protective floor — the operator's external pad is the ADC
+            //    protection. So byte 59 stays at the operator's value (0) through the
+            //    keyed PS burst, and because SeedsTxAdcProtection(HermesC10) is false
+            //    the emulator does not model a byte-59 overload for the G2E (a low
+            //    byte 59 is expected and correct with a padded external tap).
+            Assert.Equal(0, engine.DecodedTxStepAttnDb);
             Assert.False(engine.PsAdcOverloadLatched,
-                "emulator latched a first-key-down ADC overload despite the G2E byte-59 protective seed");
+                "emulator modelled a byte-59 ADC overload for the G2E, whose external " +
+                "pad — not byte 59 — is the protection");
 
-            // 6) Unkey + disarm → DDC0 returns to user RX and byte 59 RESTORES to
-            //    the operator's pre-arm value (0 here).
+            // 6) Unkey + disarm → DDC0 returns to user RX; byte 59 was never altered,
+            //    so it is still the operator's value (0).
             client.SetMox(false);
             client.SetPsFeedbackEnabled(false);
 
@@ -198,9 +198,7 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
             Assert.True(await WaitUntil(() => sink.IqCount > iqAtUnkey + 5, TimeSpan.FromSeconds(5)),
                 "user-RX did not resume after unkey");
             Assert.False(engine.PsBurstArmed, "PS burst still armed after unkey");
-            Assert.True(
-                await WaitUntil(() => engine.DecodedTxStepAttnDb == 0, TimeSpan.FromSeconds(2)),
-                "byte 59 did not restore to the operator default after disarm");
+            Assert.Equal(0, engine.DecodedTxStepAttnDb);
         }
         finally
         {

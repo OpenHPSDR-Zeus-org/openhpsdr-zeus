@@ -1365,12 +1365,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // protective floor while armed pushes byte 59 protective, and restoring
         // the operator's prior value on disarm returns the wire to normal. The
         // seed/restore is the ONLY non-byte-identical effect, and it is reached
-        // only when SeedsTxAdcProtection is true. As of v0.10.8 (#960) that
-        // covers BOTH single-shared-ADC boards — the 10E (HermesII) and the G2E
-        // (HermesC10) — so each seeds the protective floor on a keyed PS burst.
-        // Every other board, and either board with its kill-switch forced false,
-        // takes the historical path untouched (the dual-ADC G2/OrionMkII never
-        // qualifies, so its wire is provably unchanged).
+        // only when SeedsTxAdcProtection is true — now the 10E (HermesII) ONLY.
+        // The G2E (HermesC10) is deliberately excluded (#960, KB2UKA 2026-07-01):
+        // its single ADC is protected by the operator's EXTERNAL sampler pad, not
+        // byte 59, so forcing 31 dB over-attenuated the padded tap and deadlocked
+        // PS (dead meter on External). Leaving byte 59 at the operator's value
+        // lets the external pad set the level (Thetis-parity). Every other board,
+        // and the 10E with its kill-switch forced false, takes the historical path
+        // untouched (the dual-ADC G2/OrionMkII never qualifies).
         bool seededTxAttn = false;
         if (SeedsTxAdcProtection(_boardKind))
         {
@@ -2015,20 +2017,26 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// while PS feedback is armed on this board — the single-ADC time-mux case
     /// where the TX-DAC reference + PA coupler hit the one RX ADC on a TX burst.
     ///
-    /// Covers BOTH single-ADC time-mux boards — the ANAN-10E
-    /// (<see cref="HpsdrBoardKind.HermesII"/>) under
-    /// <see cref="Hermes10ePsTimeMuxOnAir"/> and, as of v0.10.8 (#960) with
-    /// KB2UKA sign-off, the ANAN-G2E (<see cref="HpsdrBoardKind.HermesC10"/>)
-    /// under <see cref="G2ePsTimeMuxOnAir"/>. The G2E presents the identical
-    /// single-shared-ADC hazard (Hermes.v:1483 `atten0 = FPGA_PTT ? atten0_on_Tx
-    /// : Attenuator0`, Tx_specific_C&amp;C.v:182-183), so it seeds byte 59 to the
-    /// same protective floor on key-down. Any other board — and either board with
-    /// its kill-switch forced false — returns false and is byte-identical to the
-    /// historical path.
+    /// Scoped to the ANAN-10E (<see cref="HpsdrBoardKind.HermesII"/>) under
+    /// <see cref="Hermes10ePsTimeMuxOnAir"/> ONLY.
+    ///
+    /// The ANAN-G2E (<see cref="HpsdrBoardKind.HermesC10"/>) is DELIBERATELY
+    /// EXCLUDED (#960, KB2UKA sign-off 2026-07-01). The G2E has NO internal
+    /// feedback coupler — its single ADC only ever sees the operator's EXTERNAL
+    /// sampler tap through the RX-bypass relay (a properly-sized post-PA pad, e.g.
+    /// −55…−65 dB rated for 1500 W). That external pad IS the ADC-overload
+    /// protection, so forcing byte 59 to 31 dB was pure over-attenuation stacked
+    /// on the pad — it drove the coupler below <c>calcc</c>'s convergence floor
+    /// and, because <c>PsAutoAttenuateService</c> only walks byte 59 down once
+    /// feedback reads &gt; 0, it deadlocked there: the observed "PS meter never
+    /// moves on the G2E even on External." Leaving byte 59 at the operator's value
+    /// lets the external pad set the level, matching Thetis (which does not force a
+    /// TX-time attenuation for an external feedback tap). Every other board — and
+    /// the 10E with its kill-switch forced false — returns false and is
+    /// byte-identical to the historical path.
     /// </summary>
     internal static bool SeedsTxAdcProtection(HpsdrBoardKind board)
-        => (board == HpsdrBoardKind.HermesII && Hermes10ePsTimeMuxOnAir)
-            || (board == HpsdrBoardKind.HermesC10 && G2ePsTimeMuxOnAir);
+        => board == HpsdrBoardKind.HermesII && Hermes10ePsTimeMuxOnAir;
 
     /// <summary>
     /// True iff this board does Orion-style PureSignal on a SINGLE ADC by
