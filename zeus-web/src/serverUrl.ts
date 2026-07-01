@@ -24,6 +24,12 @@ const REWRITE_PREFIXES = ['/api/', '/ws', '/hub/'] as const;
 
 export type ServerUrlChangedEvent = CustomEvent<{ url: string }>;
 
+interface PhotinoSurface {
+  external?: {
+    sendMessage?: unknown;
+  };
+}
+
 function readRaw(): string {
   if (typeof localStorage === 'undefined') return '';
   try {
@@ -39,12 +45,12 @@ function readRaw(): string {
  * (the standard browser flow). Never throws.
  */
 export function getServerBaseUrl(): string {
-  return normalize(readRaw());
+  return sanitizeForCurrentRuntime(normalize(readRaw()));
 }
 
 /** Persist a new base URL. Pass empty string to clear. */
 export function setServerBaseUrl(url: string): void {
-  const cleaned = normalize(url);
+  const cleaned = sanitizeForCurrentRuntime(normalize(url));
   try {
     if (cleaned === '') {
       localStorage.removeItem(STORAGE_KEY);
@@ -60,6 +66,74 @@ export function setServerBaseUrl(url: string): void {
       new CustomEvent(CHANGED_EVENT, { detail: { url: cleaned } }) as ServerUrlChangedEvent,
     );
   }
+}
+
+function sanitizeForCurrentRuntime(url: string): string {
+  if (!shouldClearForDesktopLoopback(url)) return url;
+  clearStoredServerBaseUrl();
+  return '';
+}
+
+function clearStoredServerBaseUrl(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Storage may be unavailable; the in-memory return value is still safe.
+  }
+}
+
+function shouldClearForDesktopLoopback(url: string): boolean {
+  if (url === '' || typeof window === 'undefined') return false;
+  // Desktop Photino must stay on loopback HTTP; LAN HTTPS uses Zeus' self-signed cert.
+  if (!isPhotinoDesktopShell() || !isLoopbackPage()) return false;
+  try {
+    const target = new URL(url);
+    return target.protocol === 'https:' && isLocalNetworkHost(target.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isPhotinoDesktopShell(): boolean {
+  if (typeof window === 'undefined') return false;
+  const external = (window as unknown as PhotinoSurface).external;
+  return typeof external?.sendMessage === 'function';
+}
+
+function isLoopbackPage(): boolean {
+  try {
+    return isLocalNetworkHost(window.location.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isLocalNetworkHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[(.*)]$/, '$1');
+  if (host === 'localhost' || host === '::1') return true;
+  if (isPrivateIpv4(host)) return true;
+  return (
+    host.includes(':') &&
+    (host.startsWith('fe80:') || host.startsWith('fc') || host.startsWith('fd'))
+  );
+}
+
+function isPrivateIpv4(host: string): boolean {
+  const parts = host.split('.');
+  if (parts.length !== 4) return false;
+  const octets = parts.map((part) => Number(part));
+  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  const a = octets[0] ?? -1;
+  const b = octets[1] ?? -1;
+  return (
+    a === 10 ||
+    a === 127 ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168)
+  );
 }
 
 /** Strip whitespace and any trailing slashes. Empty in → empty out. */
