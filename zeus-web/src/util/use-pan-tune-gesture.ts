@@ -50,6 +50,7 @@ import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import {
   getReceiverVfoFromState,
   getReceiverVfoHz,
+  getReceiverMode,
   isSecondaryReceiver,
   KIWI_RECEIVER_INDEX,
   optimisticSetReceiverVfo,
@@ -183,6 +184,7 @@ export function resolvePanTuneTarget(
   lineHz: number,
   includeHistory = true,
   receiver: SpectrumReceiver = 'A',
+  tuneReceiver: SpectrumReceiver = receiver,
 ): PanTuneTarget {
   const fallbackHz = snapHz(lineHz);
   const fallback = {
@@ -206,7 +208,7 @@ export function resolvePanTuneTarget(
   const maxRadiusHz = Math.min(ds.hzPerPixel * SNAP_RADIUS_PX, enhance.snapRadiusHz);
   const hysteresisHz = ds.hzPerPixel * SNAP_HYSTERESIS_PX;
   const sticky = lastSnapHz.get(rxIdx) ?? null;
-  const mode = useConnectionStore.getState().mode;
+  const mode = getReceiverMode(useConnectionStore.getState(), tuneReceiver);
   const centerHz = Number(ds.centerHz);
   const stepHz = useToolbarFavoritesStore.getState().stepHz;
   const liveHz = computeSnapToLineHz(
@@ -919,7 +921,7 @@ export function usePanTuneGesture(
         // cursor and return that signal's mode-aware tuning frequency. The
         // shared resolver also drives the hover preview so it cannot advertise
         // one target and commit another.
-        const target = resolvePanTuneTarget(clickHz, true, receiver);
+        const target = resolvePanTuneTarget(clickHz, true, receiver, tuneReceiver);
         if (target.snappedToSignal) {
           commitFinal(target.tuneHz, true);
           // Only a LIVE signal can be tracked frame-to-frame; a waterfall-memory

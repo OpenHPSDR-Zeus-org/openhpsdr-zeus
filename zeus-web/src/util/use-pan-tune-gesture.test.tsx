@@ -76,6 +76,21 @@ function pushSnapFrame(spec: Float32Array, seq = 1): void {
   });
 }
 
+function pushRx2SnapFrame(spec: Float32Array, seq = 1): void {
+  maybeUpdateEstimator({ panDb: spec, panValid: true, width: SNAP_WIDTH, hzPerPixel: SNAP_HZ_PER_PX });
+  useDisplayStore.setState({
+    rx2: {
+      ...createEmptyDisplaySlice(),
+      width: SNAP_WIDTH,
+      centerHz: BigInt(SNAP_CENTER),
+      hzPerPixel: SNAP_HZ_PER_PX,
+      panDb: spec,
+      panValid: true,
+      lastSeq: seq,
+    },
+  });
+}
+
 function GestureProbe({
   touchMode,
   receiver = 'A',
@@ -325,6 +340,25 @@ describe('usePanTuneGesture mobile touch mode', () => {
     expect(target.snappedToSignal).toBe(true);
     expect(target.tuneHz).toBe(Math.round(binHz(140) / 100) * 100);
     expect(target.tuneHz % 100).toBe(0);
+  });
+
+  it('uses the tuned secondary receiver mode for snap edge placement', () => {
+    useConnectionStore.setState({
+      mode: 'USB',
+      receivers: [
+        rxEntry(0, SNAP_CENTER),
+        { ...rxEntry(1, SNAP_CENTER), mode: 'LSB' as RxMode },
+      ],
+    });
+    useSignalEnhanceStore.setState({ snapEnabled: true, snapRadiusHz: 3000, snapMinSnrDb: 5 });
+    useToolbarFavoritesStore.setState({ stepHz: 1 });
+    const spec = voiceBlock();
+    for (let k = 0; k < 5; k++) pushRx2SnapFrame(spec, k + 1);
+
+    const target = resolvePanTuneTarget(binHz(152), true, 'B', 'B');
+
+    expect(target.snappedToSignal).toBe(true);
+    expect(target.tuneHz).toBe(Math.round(binHz(160)));
   });
 
   it('holds the snapped signal between two close carriers, switching only when the cursor reaches the other', () => {

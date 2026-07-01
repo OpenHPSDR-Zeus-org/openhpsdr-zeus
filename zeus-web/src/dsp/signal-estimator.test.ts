@@ -815,6 +815,26 @@ describe('signal estimator — spatial floor', () => {
     expect(confidence[150]).toBe(0);
     expect(confidence[151]).toBe(0);
   });
+
+  it('ignores non-finite bins as CFAR training cells so malformed spans do not light nearby noise', () => {
+    useSignalEnhanceStore.setState({ popEnabled: true });
+    const noise = new Float32Array(WIDTH).fill(NOISE_DB);
+    for (let k = 0; k < 5; k++) pushFrame(noise);
+
+    const bad = new Float32Array(WIDTH).fill(NOISE_DB);
+    for (let i = 120; i <= 150; i++) bad[i] = i % 2 === 0 ? NaN : Infinity;
+    pushFrame(bad);
+
+    const floor = getNoiseFloor()!;
+    const out = new Float32Array(WIDTH).fill(0.5);
+    enhanceInto(bad, out);
+
+    expect(floor[119]).toBeGreaterThan(NOISE_DB - 5);
+    expect(floor[135]).toBeGreaterThan(NOISE_DB - 5);
+    expect(floor[151]).toBeGreaterThan(NOISE_DB - 5);
+    expect(out[119]).toBe(0);
+    expect(out[151]).toBe(0);
+  });
 });
 
 describe('signal estimator — snap-to-signal', () => {
