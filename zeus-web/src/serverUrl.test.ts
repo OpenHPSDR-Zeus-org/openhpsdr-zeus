@@ -44,11 +44,20 @@ const {
 
 const STORAGE_KEY = 'zeus.serverUrl';
 
+function setPhotinoDesktopShell(enabled: boolean) {
+  Object.defineProperty(window, 'external', {
+    configurable: true,
+    value: enabled ? { sendMessage: vi.fn() } : undefined,
+  });
+}
+
 beforeEach(() => {
+  setPhotinoDesktopShell(false);
   localStorage.removeItem(STORAGE_KEY);
 });
 
 afterEach(() => {
+  setPhotinoDesktopShell(false);
   localStorage.removeItem(STORAGE_KEY);
 });
 
@@ -79,6 +88,39 @@ describe('getServerBaseUrl / setServerBaseUrl', () => {
     setServerBaseUrl('');
     expect(getServerBaseUrl()).toBe('');
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it('clears persisted LAN HTTPS URLs in the Photino desktop shell', () => {
+    setPhotinoDesktopShell(true);
+    localStorage.setItem(STORAGE_KEY, 'https://192.168.1.44:6443');
+
+    expect(getServerBaseUrl()).toBe('');
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it('does not persist LAN HTTPS URLs in the Photino desktop shell', () => {
+    setPhotinoDesktopShell(true);
+
+    setServerBaseUrl('https://10.0.0.5:6443');
+
+    expect(getServerBaseUrl()).toBe('');
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it('keeps LAN HTTPS URLs outside the Photino desktop shell', () => {
+    setServerBaseUrl('https://192.168.1.44:6443');
+
+    expect(getServerBaseUrl()).toBe('https://192.168.1.44:6443');
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('https://192.168.1.44:6443');
+  });
+
+  it('keeps public HTTPS URLs in the Photino desktop shell', () => {
+    setPhotinoDesktopShell(true);
+
+    setServerBaseUrl('https://radio.example:443');
+
+    expect(getServerBaseUrl()).toBe('https://radio.example:443');
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('https://radio.example:443');
   });
 });
 
@@ -130,6 +172,19 @@ describe('installFetchInterceptor', () => {
       'http://192.168.1.23:6060/api/state',
       undefined,
     );
+  });
+
+  it('ignores stale LAN HTTPS bases in the Photino desktop shell', async () => {
+    const spy = vi.fn(async () => new Response('ok'));
+    setPhotinoDesktopShell(true);
+    localStorage.setItem(STORAGE_KEY, 'https://192.168.1.44:6443');
+    window.fetch = spy as unknown as typeof fetch;
+    installFetchInterceptor();
+
+    await window.fetch('/api/state');
+
+    expect(spy).toHaveBeenCalledWith('/api/state', undefined);
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
 
   it('leaves non-matching relative paths alone', async () => {
