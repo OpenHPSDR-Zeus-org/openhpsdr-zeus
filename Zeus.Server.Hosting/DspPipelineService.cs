@@ -4653,6 +4653,14 @@ public class DspPipelineService : BackgroundService,
         if (on) _rxFadeOutPending = true;
         else _rxFadeInPending = true;
         _p2Client?.SetMox(on);
+        // Reset the FreeDV RECEIVER on both MOX edges so it resumes empty and
+        // unsynced. WDSP RX is drained every tick regardless of MOX, so without
+        // this the modem keeps decoding the operator's own transmission during
+        // the over and the resuming RX dumps that self-decoded backlog at
+        // un-key — an end-of-over garble in Zeus's own audio, on both RADE and
+        // codec2. Key-down drops any pre-TX residual; key-up clears anything
+        // decoded from TX bleed. No-op when FreeDV isn't engaged.
+        _freeDv?.FlushRx();
         // Falling edge: pick up any PS knob changes that OnRadioStateChanged
         // deferred while we were keyed (HwPeak / Ptol / Advanced / Control).
         // Without this re-trigger a deferred change would sit unapplied until

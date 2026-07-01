@@ -391,6 +391,35 @@ public sealed class RadeModem : IDisposable
     }
 
     /// <summary>
+    /// Drop buffered RX decode state on a MOX transition WITHOUT closing the
+    /// modem, so the receiver resumes from an empty, unsynced state instead of
+    /// dumping speech decoded from the operator's own transmission during the
+    /// over (heard as an end-of-over garble in Zeus's own RX audio). Clears the
+    /// input/output rings, resets the resamplers + sync squelch gate, and marks
+    /// unsynced. Control thread; gates the RX hot path out via the seqlock —
+    /// mirrors <see cref="FlushTx"/>. RADE has no codec2-style squelch, so this
+    /// is the only thing that stops the FARGAN decoder replaying a self-decoded
+    /// backlog at un-key.
+    /// </summary>
+    public void FlushRx()
+    {
+        if (!_nativeAvailable) return;
+        lock (_reconfigGate)
+        {
+            IntPtr rx = Volatile.Read(ref _rade);
+            if (rx == IntPtr.Zero) return;
+            Volatile.Write(ref _rade, IntPtr.Zero);
+            Thread.MemoryBarrier();
+            SpinUntilIdle(ref _rxBusy);
+            _rx8In.Clear(); _rxOut48.Clear();
+            _rxDown.Reset(); _rxUp.Reset();
+            _rxGate.Reset();
+            _synced = false;
+            Volatile.Write(ref _rade, rx);
+        }
+    }
+
+    /// <summary>
     /// End-of-over flush: encode the residual sub-frame of mic speech so a
     /// COMPLETE final RADE frame exists, then append the End-of-Over frame (which
     /// carries the configured callsign via the FreeDV reliable-text LDPC), and

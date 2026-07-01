@@ -52,18 +52,25 @@ the FreeDV RX gain staging.
 The DSP changes are unit-tested (incl. against the real codec2/zeus_rade libs),
 but the TX-tail TIMING needs on-air confirmation. Knobs:
 
-- `TxAudioIngest.FreeDvTxTailMaxMs` (350) — hard ceiling on how long un-key blocks
-  while the final frame clocks out.
-- `TxAudioIngest.FreeDvTxTailGuardMs` (60) — extra hold after the last block so the
-  radio FIFO finishes before PTT drops. **Tune this first:** if the very end is
-  still clipped, raise it; if there is dead carrier at the end, lower it.
+- `TxAudioIngest.FreeDvTxTailDrainSlackMs` (120) / `FreeDvTxTailCeilingMs` (1200) —
+  the drain budget is now **backlog-derived**: `min(pendingMs + slack, ceiling)`,
+  where `pendingMs` is the real tail `FinishTx` queued (residual + RADE EOO). This
+  replaced the old fixed 350 ms budget, which guillotined any larger tail
+  mid-symbol (the far-station "garble at end of over"). Only touch the ceiling if a
+  pathologically long tail is being cut (`term=ceiling` in the log).
+- `TxAudioIngest.FreeDvTxTailGuardMs` (160) — extra hold after the last block so the
+  radio ring/FIFO finishes transmitting before PTT drops. **Tune this for a residual
+  clip:** if the very end is still clipped on air with `term=drained`, raise it; if
+  there is dead carrier at the end, lower it.
 - `FreeDvResampler.TapsPerPhase` / `CutoffHz` — raise the cutoff toward 3.6–3.8 kHz
   if more brightness is wanted (keep stopband < 4 kHz).
 
 Validation steps:
 1. Key FreeDV (700D) on the G2 into a dummy load; have a second FreeDV RX decode.
    Confirm the end of each over decodes cleanly (no tail garble).
-2. Watch the server log for `freedv.tx.tail drained, dropping PTT` per un-key.
+2. Watch the server log for `freedv.tx.tail dropping PTT: pendingMs=… term=…` per
+   un-key. `term=ceiling` → the backlog outran the budget (raise the ceiling);
+   `term=drained` with a residual on-air clip → FIFO latency (raise the guard).
 3. On RADE V1, confirm the decoding station shows the EOO callsign.
 4. Work some real stations; watch for `freedv.rx.in clipping` warnings. If they
    appear on strong signals, add headroom to the Fixed RX AGC seed (red-light:
@@ -169,6 +176,35 @@ never a fixed time window. For fully deterministic clean-channel scoring,
 `rade_api.h` exposes `rade_set_disable_unsync(seconds)` (radae's own test hook) —
 not yet surfaced through the shim; wire it through if a no-unsync fidelity sweep
 is wanted.
+
+## End-of-over garble in Zeus's OWN audio — reset the RX modem on the MOX edge
+
+A third operator report (zeus-japz): a garbled burst in **Zeus's own RX audio**
+at the end of **every** FreeDV over, on **both** RADE and codec2. This is a
+different failure from the stop-talk `RxSquelchGate` above — that gate mutes
+decoded **noise** when the *far* station unkeys (their signal lost → *unsynced*).
+Here the *local* operator unkeys, and the modem was genuinely **synced on its own
+transmitted signal**, so the gate stays open.
+
+Root cause: the FreeDV **receiver** was never reset across the MOX transition.
+`DspPipelineService` drains WDSP RX every tick (`engine.ReadAudio`) regardless of
+MOX — "RX is drained anyway so the audio ring doesn't back up" — and
+`FreeDvService.ProcessRx` is gated only by `!txMonitorOn` + `audioSampleCount>0`,
+**not** by `_keyed`. So while keyed the modem keeps decoding the RXA stream (the
+operator's own TX bleed/residual), holds sync, and stockpiles decoded speech in
+`_rxOut48` (capped ~250 ms). `OnRadioMoxChanged` only armed a 5 ms RX fade — it
+never cleared that FIFO or the sync state — so at un-key the resuming receiver
+dumped the self-decoded backlog into the output.
+
+Fix: a lightweight `FlushRx()` on `FreeDvModem` and `RadeModem` (mirror of
+`FlushTx`: seqlock the RX hot path out, clear `_rx8In`/`_rxOut48`, reset the
+resamplers + `RxSquelchGate`, set `_synced=false`, **no** native close/reopen),
+routed through `FreeDvService.FlushRx()` (flushes both modems so a submode change
+across the edge can't strand a backlog), and called from `OnRadioMoxChanged` on
+**both** edges. Key-down drops any pre-TX residual; key-up clears anything decoded
+from TX bleed — so RX always resumes empty and unsynced (gate closed → silent
+until it genuinely re-syncs on band audio). Validated end-to-end through the real
+decoder in `RadeFidelityTests.FlushRx_AfterSync_ResumesSilentAndUnsynced`.
 
 ## Not yet changed (deliberately)
 

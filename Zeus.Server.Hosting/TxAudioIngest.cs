@@ -133,11 +133,17 @@ public sealed class TxAudioIngest : IDisposable
     private readonly float[] _tailMic = new float[1024];
     private readonly float[] _tailIq = new float[4096];
     private const int TxRateHz = 48000;          // TX block / DAC rate
-    // Bench-tunable on the G2: hard ceiling on how long the un-key blocks while
-    // the final FreeDV frame clocks out, and the extra hold after the last block
-    // so the radio FIFO finishes transmitting before PTT drops.
-    private const int FreeDvTxTailMaxMs = 350;
-    private const int FreeDvTxTailGuardMs = 60;
+    // Bench-tunable on the G2. The tail drain paces the queued modem audio out at
+    // the DAC rate, so its time budget must cover the ACTUAL backlog FinishTx
+    // queued (residual frame + RADE EOO). The OLD fixed 350 ms budget guillotined
+    // any larger tail mid-symbol — the far-station "garble at end of over". Budget
+    // is now backlog-derived (pending + slack), bounded only by a runaway ceiling.
+    // The guard is the extra hold after the last block so the radio ring/FIFO
+    // finishes transmitting before PTT drops (raise if the very end is still
+    // clipped on air; lower if there is dead carrier at the end).
+    private const int FreeDvTxTailDrainSlackMs = 120;   // headroom over the measured backlog
+    private const int FreeDvTxTailCeilingMs = 1200;     // absolute runaway cap on the drain
+    private const int FreeDvTxTailGuardMs = 160;        // post-drain FIFO flush hold
 
     private long _totalMicSamples;
     private long _totalTxBlocks;
@@ -353,20 +359,30 @@ public sealed class TxAudioIngest : IDisposable
         lock (_sync) { _accumulatorFill = 0; }
         try
         {
-            // Complete the final frame so a well-formed last OFDM symbol exists.
-            freeDv.FinishTx();
+            // Complete the final frame (residual + RADE EOO) so a well-formed last
+            // OFDM symbol exists, and capture the queued 48 kHz backlog so the drain
+            // budget can cover it — a fixed budget truncated a large tail on air.
+            int pendingOut = freeDv.FinishTx();
+            double pendingMs = pendingOut * 1000.0 / TxRateHz;
 
             long freq = System.Diagnostics.Stopwatch.Frequency;
             long periodTicks = (long)(freq * (double)blockSize / TxRateHz);
-            long deadline = System.Diagnostics.Stopwatch.GetTimestamp();
-            long hardStop = deadline + (long)(freq * (FreeDvTxTailMaxMs / 1000.0));
-            int idle = 0;
+            long startTs = System.Diagnostics.Stopwatch.GetTimestamp();
+            long deadline = startTs;
+            // Budget = the measured backlog + slack, bounded by the runaway ceiling.
+            // Draining paces at the DAC rate, so this many ms of wall-time is what it
+            // takes to clock the whole tail out; sizing it to the backlog (not a
+            // fixed 350 ms) means the final data + EOO frame is never guillotined.
+            double budgetMs = Math.Min(pendingMs + FreeDvTxTailDrainSlackMs, FreeDvTxTailCeilingMs);
+            long hardStop = startTs + (long)(freq * (budgetMs / 1000.0));
+            int idle = 0, drainedBlocks = 0;
+            bool queueEmptied = false;
             while (System.Diagnostics.Stopwatch.GetTimestamp() < hardStop)
             {
                 int real = freeDv.DrainTx(new Span<float>(_tailMic, 0, blockSize));
                 // DrainTx silence-pads a short block; once the queue is empty
                 // (two fully-silent blocks) stop so we don't key dead carrier.
-                if (real == 0) { if (++idle >= 2) break; }
+                if (real == 0) { if (++idle >= 2) { queueEmptied = true; break; } }
                 else idle = 0;
 
                 int produced = engine.ProcessTxBlock(
@@ -377,6 +393,7 @@ public sealed class TxAudioIngest : IDisposable
                     var iqSpan = new ReadOnlySpan<float>(_tailIq, 0, 2 * produced);
                     _ring.Write(iqSpan);                                   // P1 EP2 packer
                     _forwardP2?.Invoke(new ReadOnlyMemory<float>(_tailIq, 0, 2 * produced)); // P2 DUC
+                    drainedBlocks++;
                 }
 
                 // Pace at the DAC rate so the radio FIFO transmits as we feed it.
@@ -390,10 +407,18 @@ public sealed class TxAudioIngest : IDisposable
                 else deadline = System.Diagnostics.Stopwatch.GetTimestamp(); // re-anchor if behind
             }
 
-            // Hold long enough for the radio FIFO to finish the last blocks before
-            // PTT drops (bench-tunable on the G2).
+            double drainMs = (System.Diagnostics.Stopwatch.GetTimestamp() - startTs) * 1000.0 / freq;
+
+            // Hold long enough for the radio ring/FIFO to finish the last blocks
+            // before PTT drops (bench-tunable on the G2).
             Thread.Sleep(FreeDvTxTailGuardMs);
-            _log.LogInformation("freedv.tx.tail drained, dropping PTT");
+            // On-air evidence for the end-of-over garble: term=drained means the
+            // whole tail clocked out (any residual clip is FIFO latency → raise the
+            // guard); term=ceiling means the backlog outran the budget (raise the
+            // ceiling). pendingMs is the true tail length.
+            _log.LogInformation(
+                "freedv.tx.tail dropping PTT: pendingMs={Pending:F0} blocks={Blocks} drainMs={Drain:F0} term={Term} guardMs={Guard}",
+                pendingMs, drainedBlocks, drainMs, queueEmptied ? "drained" : "ceiling", FreeDvTxTailGuardMs);
         }
         catch (Exception ex)
         {
