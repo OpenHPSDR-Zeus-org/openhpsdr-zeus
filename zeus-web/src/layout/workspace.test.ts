@@ -7,6 +7,8 @@ import {
   parseWorkspaceLayout,
   placeTileInGrid,
   placeTileInPage,
+  repairWorkspaceTileOverlaps,
+  resolveWorkspaceColumnCount,
   type WorkspaceTile,
 } from './workspace';
 
@@ -92,6 +94,73 @@ describe('parseWorkspaceLayout', () => {
     expect(layout.locked).toBe(true);
     expect(layout.tiles[0]).toMatchObject({ uid: 'tile-hero', locked: true });
     expect(layout.tiles[1]).not.toHaveProperty('locked');
+  });
+
+  it('repairs saved overlaps so right-side panels cannot hide under the panadapter', () => {
+    const layout = parseWorkspaceLayout({
+      schemaVersion: 8,
+      tiles: [
+        { uid: 'tile-filter', panelId: 'filter', x: 0, y: 0, w: 21, h: 9 },
+        { uid: 'tile-hero', panelId: 'hero', x: 0, y: 9, w: 21, h: 43 },
+        { uid: 'tile-vfo', panelId: 'vfo', x: 19, y: 0, w: 5, h: 17 },
+        { uid: 'tile-smeter', panelId: 'smeter', x: 19, y: 17, w: 5, h: 8 },
+      ],
+    });
+
+    expect(layout.tiles.find((t) => t.uid === 'tile-vfo')).toMatchObject({
+      x: 21,
+    });
+    expect(layout.tiles.find((t) => t.uid === 'tile-smeter')).toMatchObject({
+      x: 21,
+    });
+    for (let i = 0; i < layout.tiles.length; i += 1) {
+      for (let j = i + 1; j < layout.tiles.length; j += 1) {
+        expect(overlaps(layout.tiles[i]!, layout.tiles[j]!)).toBe(false);
+      }
+    }
+  });
+});
+
+describe('repairWorkspaceTileOverlaps', () => {
+  it('keeps clean layouts reference-stable', () => {
+    const tiles = [
+      tile({ uid: 'a', x: 0, y: 0, w: 12, h: 10 }),
+      tile({ uid: 'b', x: 12, y: 0, w: 6, h: 10 }),
+    ];
+    expect(repairWorkspaceTileOverlaps(tiles)).toBe(tiles);
+  });
+
+  it('moves only later overlapping tiles to the right', () => {
+    const tiles = [
+      tile({ uid: 'wide', x: 0, y: 0, w: 21, h: 20 }),
+      tile({ uid: 'right', x: 19, y: 0, w: 5, h: 8 }),
+    ];
+    const repaired = repairWorkspaceTileOverlaps(tiles);
+    expect(repaired[0]).toMatchObject({ uid: 'wide', x: 0, w: 21 });
+    expect(repaired[1]).toMatchObject({ uid: 'right', x: 21, w: 5 });
+    expect(overlaps(repaired[0]!, repaired[1]!)).toBe(false);
+  });
+});
+
+describe('resolveWorkspaceColumnCount', () => {
+  it('never lets the monitor cap compress existing saved tiles', () => {
+    expect(
+      resolveWorkspaceColumnCount({
+        occupiedCols: 26,
+        colsForWidth: 26,
+        monitorCols: 24,
+      }),
+    ).toBe(26);
+  });
+
+  it('still caps empty drag space to the monitor when the layout fits', () => {
+    expect(
+      resolveWorkspaceColumnCount({
+        occupiedCols: 24,
+        colsForWidth: 40,
+        monitorCols: 30,
+      }),
+    ).toBe(30);
   });
 });
 

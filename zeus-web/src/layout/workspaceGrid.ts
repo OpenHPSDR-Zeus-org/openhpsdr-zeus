@@ -21,17 +21,11 @@
 //       • lands squarely on ONE movable same-footprint-ish neighbour → the two
 //         SWAP and nothing else moves (an in-place exchange — never pushes a
 //         tile below the fold).
-//       • lands overlapping anything else (or a locked tile) → it STAYS exactly
-//         where dropped, OVERLAPPING what it covers. Nothing relocates: the old
-//         relocate-to-free-slot searched downward and shoved the tile off the
-//         bottom (bringing the scrollbar back). The operator clears space by
-//         moving/shrinking the covered panel.
-//   - On RESIZE STOP (resolveResizeOverlaps): the resized tile keeps its new
-//     size and OVERLAPS whatever it now covers — neighbours never move. Growing
-//     a panel must not displace another (that used to shove neighbours down past
-//     the fold or off the monitor, where they were then pruned). To clear the
-//     space, the operator shrinks/moves the covered panel. Only a LOCKED tile is
-//     protected: the resized tile is clamped back out of it instead.
+//       • lands overlapping anything else (or a locked tile) → only the dragged
+//         tile moves, nudged right until it is clear. Neighbours never move.
+//   - On RESIZE STOP (resolveResizeOverlaps): the resized tile is clamped back
+//     out of whatever it would cover. Neighbours never move. The workspace must
+//     never persist a state where one panel hides under another.
 //   - Tidy (tidyWorkspacePlacements): an explicit, operator-invoked pack that
 //     closes vertical gaps. Horizontal placement stays operator-directed (x is
 //     preserved); locked tiles never move. This is the ONLY path that packs.
@@ -90,7 +84,7 @@ const SWAP_OVERLAP_FRACTION = 0.5;
  */
 export function autoFitDroppedPanel(
   layout: Layout,
-  cols: number,
+  _cols: number,
   previous?: LayoutItem | WorkspaceDragStartSnapshot | null,
 ): Layout {
   const dragStart = normalizeDragStart(previous);
@@ -101,8 +95,7 @@ export function autoFitDroppedPanel(
   if (!dragged) return next;
 
   // Snap the drop point into the grid (clamp x; floor y to a row).
-  const maxX = Math.max(0, cols - dragged.w);
-  const dropX = clampInt(dragged.x, 0, maxX);
+  const dropX = Math.max(0, Math.round(dragged.x));
   const dropY = Math.max(0, Math.round(dragged.y));
   dragged.x = dropX;
   dragged.y = dropY;
@@ -124,7 +117,7 @@ export function autoFitDroppedPanel(
       const ty = target.y;
       dragged.x = tx;
       dragged.y = ty;
-      target.x = clampInt(origin.x, 0, Math.max(0, cols - target.w));
+      target.x = Math.max(0, Math.round(origin.x));
       target.y = Math.max(0, Math.round(origin.y));
       if (!anyCollision(next)) return next;
       // Swap would overlap a third tile — undo and relocate instead.
@@ -135,47 +128,87 @@ export function autoFitDroppedPanel(
     }
   }
 
-  // Otherwise the dropped tile STAYS exactly where the operator dropped it,
-  // OVERLAPPING whatever it now covers (including a locked tile — only the
-  // locked tile's own position is protected, and it never moves because it is
-  // not the dragged tile). It used to relocate to the nearest free slot, but
-  // that search ran downward and shoved the tile below the fold, bringing the
-  // scrollbar back. Overlap is allowed; nothing moves but the tile in hand. To
-  // clear the space, the operator moves or shrinks the covered panel.
-  return next;
+  return moveItemRightOfCollisions(next, draggedId);
 }
 
 /**
- * Resolve a resize. OVERLAP IS ALLOWED: the resized tile keeps its new geometry
- * and grows OVER its neighbours, which stay exactly where they are. Resizing a
- * panel larger must never displace another panel — pushing a neighbour to a
- * "free slot" used to shove it down past the fold (bringing the scrollbar back)
- * or off the monitor entirely (where it would then be pruned and lost). The
- * operator covers a panel deliberately; to clear the space they shrink or move
- * the covered panel themselves. This holds for every panel, the panadapter
- * included.
- *
- * The one thing still enforced: a resize cannot cover a LOCKED (pinned) tile.
- * Rather than move the locked tile, clamp the resized tile back out of it (trim
- * height first — the common "grew downward into a locked tile" — then width).
- * Nothing is ever relocated, so there is no cascade and nothing leaves the field.
+ * Resolve a resize. The resized tile keeps as much of its new geometry as it
+ * can without covering any neighbour. Neighbours never move, and overlap is
+ * never persisted. This preserves the fixed-lattice model without allowing the
+ * panadapter or any other large panel to hide the right-side stack.
  */
 export function resolveResizeOverlaps(
   layout: Layout,
   resizedId: string,
   _cols: number,
+  previous?: LayoutItem | null,
 ): Layout {
   const next = clearMovedFlags(cloneLayout(layout));
   const resized = next.find((item) => item.i === resizedId);
   if (!resized) return next;
+  if (!previous) return moveItemRightOfCollisions(next, resizedId);
 
-  for (const blocker of next) {
-    if (blocker.i === resizedId || !blocker.static) continue;
-    if (!collides(resized, blocker)) continue;
-    if (resized.y < blocker.y) {
-      resized.h = Math.max(1, blocker.y - resized.y);
-    } else if (resized.x < blocker.x) {
-      resized.w = Math.max(1, blocker.x - resized.x);
+  const before = { ...previous };
+  const beforeRight = before.x + before.w;
+  const beforeBottom = before.y + before.h;
+
+  for (let guard = 0; guard <= next.length; guard += 1) {
+    const blockers = next.filter((item) => item.i !== resizedId && collides(resized, item));
+    if (blockers.length === 0) return next;
+    let changed = false;
+
+    for (const blocker of blockers) {
+      const resizedRight = resized.x + resized.w;
+      const resizedBottom = resized.y + resized.h;
+      if (
+        beforeRight <= blocker.x &&
+        resizedRight > blocker.x &&
+        verticalOverlaps(resized, blocker)
+      ) {
+        resized.w = Math.max(1, blocker.x - resized.x);
+        changed = true;
+        continue;
+      }
+
+      if (
+        before.x >= blocker.x + blocker.w &&
+        resized.x < blocker.x + blocker.w &&
+        verticalOverlaps(resized, blocker)
+      ) {
+        const nextX = blocker.x + blocker.w;
+        resized.x = nextX;
+        resized.w = Math.max(1, resizedRight - nextX);
+        changed = true;
+        continue;
+      }
+
+      if (
+        beforeBottom <= blocker.y &&
+        resizedBottom > blocker.y &&
+        horizontalOverlaps(resized, blocker)
+      ) {
+        resized.h = Math.max(1, blocker.y - resized.y);
+        changed = true;
+      }
+    }
+
+    if (!changed) return moveItemRightOfCollisions(next, resizedId);
+  }
+  return next;
+}
+
+export function repairLayoutOverlaps(layout: Layout): Layout {
+  const next = clearMovedFlags(cloneLayout(layout));
+  for (let index = 0; index < next.length; index += 1) {
+    const item = next[index]!;
+    const placed = next.slice(0, index);
+    for (let guard = 0; guard <= placed.length; guard += 1) {
+      const colliders = placed.filter((candidate) => collides(item, candidate));
+      if (colliders.length === 0) break;
+      item.x = Math.max(
+        item.x,
+        ...colliders.map((candidate) => candidate.x + candidate.w),
+      );
     }
   }
   return next;
@@ -230,6 +263,22 @@ function anyCollision(layout: Layout): boolean {
   return false;
 }
 
+function moveItemRightOfCollisions(layout: Layout, itemId: string): Layout {
+  const item = layout.find((candidate) => candidate.i === itemId);
+  if (!item) return layout;
+  for (let guard = 0; guard <= layout.length; guard += 1) {
+    const colliders = layout.filter(
+      (candidate) => candidate.i !== itemId && collides(item, candidate),
+    );
+    if (colliders.length === 0) return layout;
+    item.x = Math.max(
+      item.x,
+      ...colliders.map((candidate) => candidate.x + candidate.w),
+    );
+  }
+  return layout;
+}
+
 function collides(a: LayoutItem, b: LayoutItem) {
   if (a.i === b.i) return false;
   if (a.x + a.w <= b.x) return false;
@@ -239,6 +288,10 @@ function collides(a: LayoutItem, b: LayoutItem) {
   return true;
 }
 
-function clampInt(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, Math.round(value)));
+function horizontalOverlaps(a: LayoutItem, b: LayoutItem) {
+  return a.x < b.x + b.w && a.x + a.w > b.x;
+}
+
+function verticalOverlaps(a: LayoutItem, b: LayoutItem) {
+  return a.y < b.y + b.h && a.y + a.h > b.y;
 }
