@@ -247,6 +247,79 @@ public class PsWireFormatTests
             "Bypass bit must not flip when PS isn't armed even if External is selected.");
     }
 
+    // ---- G2E (HermesC10) single-ADC external-feedback bypass routing ----
+    // The single-ADC G2E can only see an external sampler tap through the
+    // RX-aux BYPASS relay. psWire is false for HermesC10, so the historical
+    // gate never set the bit and calcc could never receive feedback. The fix
+    // routes it via RoutesExternalPsFeedbackBypass, scoped to HermesC10.
+
+    [Fact]
+    public void Alex0_G2e_BypassBit_SetWhenExternal_PsArmed_AndMox()
+    {
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: 14_200_000,
+            moxOn: true,
+            psEnabled: true,
+            psExternal: true,
+            board: HpsdrBoardKind.HermesC10);
+
+        Assert.True((alex0 & Protocol2Client.AlexRxAntennaBypass) != 0,
+            "G2E external PS armed + MOX must route the tap via the BYPASS relay.");
+        // Parity: the single-ADC G2E must NOT assert ALEX_PS (that is the
+        // dual-ADC Orion wire only). A spurious PS bit here would diverge
+        // from the C10 gateware.
+        Assert.True((alex0 & Protocol2Client.AlexPsBit) == 0,
+            "G2E must never set ALEX_PS — it is not on the dual-ADC PS wire.");
+    }
+
+    [Fact]
+    public void Alex0_G2e_BypassBit_ClearWhenInternal()
+    {
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: 14_200_000,
+            moxOn: true,
+            psEnabled: true,
+            psExternal: false,
+            board: HpsdrBoardKind.HermesC10);
+
+        Assert.True((alex0 & Protocol2Client.AlexRxAntennaBypass) == 0,
+            "G2E internal-coupler PS leaves the BYPASS relay clear.");
+    }
+
+    [Fact]
+    public void Alex0_G2e_BypassBit_ClearWhenMoxOff()
+    {
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: 14_200_000,
+            moxOn: false,
+            psEnabled: true,
+            psExternal: true,
+            board: HpsdrBoardKind.HermesC10);
+
+        Assert.True((alex0 & Protocol2Client.AlexRxAntennaBypass) == 0,
+            "G2E BYPASS relay must not flip outside xmit.");
+    }
+
+    [Fact]
+    public void Alex0_10e_BypassBit_StaysClear_ProvingG2eScoping()
+    {
+        // Other-board safety (KB2UKA hard constraint): the 10E (HermesII) is
+        // the same single-ADC class but is intentionally left byte-identical
+        // until a 10E owner can bench-confirm the routing. The fix must NOT
+        // change the 10E wire.
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: 14_200_000,
+            moxOn: true,
+            psEnabled: true,
+            psExternal: true,
+            board: HpsdrBoardKind.HermesII);
+
+        Assert.True((alex0 & Protocol2Client.AlexRxAntennaBypass) == 0,
+            "10E BYPASS relay must stay clear — the fix is scoped to the G2E.");
+        Assert.True((alex0 & Protocol2Client.AlexPsBit) == 0,
+            "10E must never set ALEX_PS either (single-ADC board).");
+    }
+
     // ---- RxSpecific buffer parity between Internal and External ----
 
     [Fact]

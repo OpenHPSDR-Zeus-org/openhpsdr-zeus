@@ -2830,7 +2830,15 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // 1296 ORs ALEX_RX_ANTENNA_BYPASS into alex0 only during xmit when
         // PS is armed and the operator selected the external path. Internal
         // coupler leaves this bit clear.
-        if (psWire && _psFeedbackExternal && xmit)
+        //
+        // G2E (#960 follow-up): on the full-Orion dual-ADC wire psWire owns this,
+        // but the single-ADC HermesC10 does time-mux PS with psWire=false — yet
+        // its ONE ADC can only see an EXTERNAL sampler tap through this relay.
+        // RoutesExternalPsFeedbackBypass adds ONLY the HermesC10 arm, so the 10E
+        // and every other board stay byte-identical. BENCH-GATED: needs a real
+        // G2E + external tap (the p2.ps.g2e log will show peakFb going non-zero).
+        if (RoutesExternalPsFeedbackBypass(_boardKind, _psFeedbackEnabled, _psFeedbackExternal)
+            && xmit)
         {
             alex0 |= AlexRxAntennaBypass;
         }
@@ -2916,6 +2924,34 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private const uint ALEX_BYPASS_HPF = 0x00001000;  // bit 12
 
     /// <summary>
+    /// Should the RX-aux BYPASS relay (alex0 bit 11, <see cref="AlexRxAntennaBypass"/>)
+    /// route an EXTERNAL PureSignal feedback tap into the RX ADC on this board?
+    ///
+    /// Two paths qualify:
+    ///  • The full-Orion dual-ADC PS wire (<see cref="ComposesPsFeedbackWire"/>):
+    ///    pihpsdr new_protocol.c:1284-1296 ORs the bit during xmit when PS is
+    ///    armed and the operator selected the external path.
+    ///  • The single-ADC HermesC10 / ANAN-G2E time-mux PS path (#960 follow-up):
+    ///    here <see cref="ComposesPsFeedbackWire"/> is <c>false</c>, but the board's
+    ///    ONE ADC can only see an external sampler tap (post-PA pad into the
+    ///    RXbypass / K36 jack — how the real G2E operator runs PS) through this
+    ///    same relay. Without the bit the external feedback never reaches the ADC
+    ///    and calcc can never converge — the observed "PS doesn't work on the G2E".
+    ///
+    /// Deliberately scoped to HermesC10: the 10E (HermesII) is the same class and
+    /// almost certainly needs the same routing, but is left byte-identical here
+    /// until a 10E owner can bench-confirm it. Every other board is unaffected.
+    /// The caller still ANDs the transmit-edge (xmit / MOX) condition.
+    /// </summary>
+    internal static bool RoutesExternalPsFeedbackBypass(
+        HpsdrBoardKind board, bool psEnabled, bool psExternal)
+    {
+        if (!psEnabled || !psExternal) return false;
+        if (ComposesPsFeedbackWire(psEnabled, board)) return true;
+        return board == HpsdrBoardKind.HermesC10 && G2ePsTimeMuxOnAir;
+    }
+
+    /// <summary>
     /// Compose the alex0 word the way <see cref="SendCmdHighPriority"/>
     /// does, exposed internal so wire-format tests can assert the
     /// PureSignal-related bits without standing up a socket. Mirrors the
@@ -2958,8 +2994,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         uint alex0 = (alexCommon & ~ALEX_TX_ANTENNA_MASK) | EncodeTxAntennaBits(alex0AntWire)
                      | (moxOn ? ALEX_TX_RELAY : 0u);
         alex0 |= ComposeRxAuxBits(rxAuxInput, mkiiBpfRxSelect);
-        if (psEnabled && moxOn) alex0 |= AlexPsBit;
-        if (psEnabled && psExternal && moxOn) alex0 |= AlexRxAntennaBypass;
+        // PS bit is the full-Orion dual-ADC wire ONLY — single-ADC boards
+        // (HermesC10/G2E, HermesII/10E) never set ALEX_PS. Gate on the same
+        // predicate the live path uses so this helper mirrors the wire exactly.
+        if (ComposesPsFeedbackWire(psEnabled, board) && moxOn) alex0 |= AlexPsBit;
+        if (RoutesExternalPsFeedbackBypass(board, psEnabled, psExternal) && moxOn)
+            alex0 |= AlexRxAntennaBypass;
         return alex0;
     }
 
