@@ -1263,7 +1263,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                           {ep || '—'} · {r.macAddress || '—'}
                         </span>
                       </div>
-                      {!isP3 && (r.busy ? (
+                      {r.busy && !isP3 ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span
                             className="label-xs"
@@ -1288,13 +1288,19 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
                             type="button"
                             onClick={() => handleConnect(r)}
                             disabled={inflight}
-                            title={isP2 ? 'Protocol 2 path — experimental, RX only' : undefined}
+                            title={
+                              isP3
+                                ? PROTOCOL3_CONNECT_TITLE
+                                : isP2
+                                  ? 'Protocol 2 path — experimental, RX only'
+                                  : undefined
+                            }
                             className="btn sm active"
                           >
                             {inflight ? 'Connecting…' : 'Connect'}
                           </button>
                         </div>
-                      ))}
+                      )}
                     </li>
                   );
                 })}
