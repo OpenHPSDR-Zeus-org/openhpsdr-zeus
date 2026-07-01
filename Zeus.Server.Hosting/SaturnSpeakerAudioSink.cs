@@ -17,6 +17,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using Zeus.Contracts;
+using Zeus.Protocol2;
 
 namespace Zeus.Server;
 
@@ -531,6 +532,28 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
             {
                 Blocking = false,
             };
+            // Match Protocol2Client's UDP setup on this dedicated speaker socket:
+            //  - SIO_UDP_CONNRESET off (issue #1218): without it, a single ICMP
+            //    port-unreachable from the radio surfaces as WSAECONNRESET on the
+            //    next Send and takes the whole audio socket down until the 1 s
+            //    refresh reopens it. The main P2 socket disables this ioctl for
+            //    the same reason; this one carries the same Windows risk.
+            //  - Bind to the local address on the radio's subnet, on an
+            //    ephemeral port. Leaving the socket unbound lets the OS pick a
+            //    source address at Connect time; binding pins the source
+            //    address to the same local IP the P2 command socket binds
+            //    (parity with Protocol2Client), so the radio and Windows
+            //    Firewall see one consistent flow across all P2 traffic.
+            Protocol2Client.DisableUdpConnReset(socket);
+            // NIC enumeration inside FindLocalAddressForSubnet can throw
+            // NetworkInformationException (not a SocketException) during NIC
+            // churn / sleep-resume — and RefreshTarget runs on the raw sender
+            // thread, where an escaped throw kills the whole process. A failed
+            // lookup just means bind-to-Any, same as a no-subnet-match result.
+            IPAddress localBind;
+            try { localBind = Protocol2Client.FindLocalAddressForSubnet(target.Address) ?? IPAddress.Any; }
+            catch { localBind = IPAddress.Any; }
+            socket.Bind(new IPEndPoint(localBind, 0));
             socket.Connect(target);
             _socket = socket;
             _target = target;
@@ -538,8 +561,9 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
             _wasEligible = true;
 
             _log.LogInformation(
-                "audio.radio.speaker.p2 enabled target={Target} board={Board} variant={Variant}",
+                "audio.radio.speaker.p2 enabled target={Target} localBind={Local} board={Board} variant={Variant}",
                 target,
+                localBind.Equals(IPAddress.Any) ? "ANY (no subnet match)" : localBind.ToString(),
                 board,
                 variant);
         }
