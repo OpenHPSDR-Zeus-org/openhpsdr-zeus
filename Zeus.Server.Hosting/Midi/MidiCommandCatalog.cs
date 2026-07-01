@@ -112,7 +112,10 @@ public static class MidiCommandCatalog
         new(ZeusMidiCommand.Rx2FilterNarrower, "RX2 Filter Narrower", MidiControlType.Button, false, true),
         new(ZeusMidiCommand.FilterHigh, "Filter High", MidiControlType.Wheel, false, true),
         new(ZeusMidiCommand.FilterLow, "Filter Low", MidiControlType.Wheel, false, true),
-        new(ZeusMidiCommand.FilterShift, "Filter Shift", MidiControlType.KnobOrSlider, false, true),
+        // FilterShift is dispatched as a relative encoder step (see
+        // MidiCommandDispatcher: shift = delta * 10) — cataloguing it as
+        // KnobOrSlider silently no-ops on any absolute-control binding.
+        new(ZeusMidiCommand.FilterShift, "Filter Shift", MidiControlType.Wheel, false, true),
         new(ZeusMidiCommand.FilterBandwidth, "FilterBandwidth", MidiControlType.Wheel, false, true),
         new(ZeusMidiCommand.TxFilterHigh, "TX Filter high", MidiControlType.Wheel, false, true),
         new(ZeusMidiCommand.TxFilterLow, "TX Filter low", MidiControlType.Wheel, false, true),

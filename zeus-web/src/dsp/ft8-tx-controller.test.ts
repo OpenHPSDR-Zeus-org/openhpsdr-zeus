@@ -257,6 +257,53 @@ describe('Ft8TxController', () => {
     expect(ctrl.getState().enableTx).toBe(false);
   });
 
+  it('startCq() preserves arm/hold/slot so pressing CQ while armed does not silently disarm (#1223)', () => {
+    const { fn, calls } = makeFetch();
+    const ctrl = new Ft8TxController({ myCall: 'KB2UKA', myGrid4: 'FN12', fetchFn: fn });
+
+    // Operator arms the keyer, then flips slot + turns HOLD TX FREQ off.
+    ctrl.enableTx();
+    ctrl.setTxSlot('odd');
+    ctrl.setHoldTxFreq(false);
+    expect(ctrl.getState().enableTx).toBe(true);
+
+    // Pressing the CQ button re-seeds the CQ-calling QSO. It must NOT disarm the
+    // sequencer or reset the operator's session prefs — otherwise the backend
+    // stays armed (no /arm false was sent) while the sequencer thinks it's off,
+    // so subsequent replies never get staged.
+    const armCallsBefore = arm(calls).length;
+    ctrl.startCq({ cqDirective: 'DX' });
+    expect(ctrl.getState().enableTx).toBe(true);
+    expect(ctrl.getState().holdTxFreq).toBe(false);
+    expect(ctrl.getState().txSlot).toBe('odd');
+    expect(ctrl.getState().cqDirective).toBe('DX');
+    expect(ctrl.getState().progress).toBe('calling');
+    expect(ctrl.getState().dxCall).toBeNull();
+    // startCq must not touch /arm — the backend arm state is unchanged.
+    expect(arm(calls).length).toBe(armCallsBefore);
+  });
+
+  it('startCq() while armed still lets the sequencer stage a reply to an answerer (#1223)', () => {
+    const { fn, calls } = makeFetch();
+    const ctrl = new Ft8TxController({ myCall: 'KB2UKA', myGrid4: 'FN12', fetchFn: fn });
+
+    // Arm → press CQ (with fix, arm state survives).
+    ctrl.enableTx();
+    ctrl.startCq({ cqDirective: null });
+    const txCountBefore = tx(calls).length;
+
+    // Someone answers our CQ. The sequencer must advance to 'report' and stage
+    // Tx2 (his call, mine, SNR). Before the fix, startCq disarmed the sequencer
+    // so step() early-returned noChange() and no reply was ever staged.
+    ctrl.onWindow(['KB2UKA K1ABC FN31']);
+    expect(ctrl.getState().dxCall).toBe('K1ABC');
+    expect(ctrl.getState().progress).toBe('report');
+    const staged = tx(calls).at(-1);
+    expect(staged).toBeDefined();
+    expect(String(staged?.body.message)).toContain('K1ABC KB2UKA');
+    expect(tx(calls).length).toBeGreaterThan(txCountBefore);
+  });
+
   it('respects HOLD TX FREQ for waterfall clicks', () => {
     const { fn } = makeFetch();
     const ctrl = new Ft8TxController({ myCall: 'KB2UKA', audioHz: 1500, fetchFn: fn });

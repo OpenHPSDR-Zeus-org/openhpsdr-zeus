@@ -3364,6 +3364,11 @@
   border-bottom: 1px solid rgba(0,0,0,0.15);
   transition: background var(--dur-fast), color var(--dur-fast);
 }
+/* Already on QRZ.com (uploaded by Zeus or imported as already-sent) — a
+   translucent green wash so published QSOs read at a glance without fighting
+   the row text. Keyed in the footer legend. Placed before :hover/.selected so
+   interaction states still take over on the active row. */
+.log-row--qrz { background: color-mix(in srgb, var(--ok) 9%, transparent); }
 .log-row:hover { background: rgba(74, 158, 255, 0.12); color: var(--fg-0); }
 .log-row .t-call { color: var(--accent); font-weight: 700; }
 .log-row .t-mode { color: var(--fg-2); }
@@ -3397,7 +3402,7 @@
 .log-sync-pill {
   flex-shrink: 0;
   margin-left: auto;
-  color: var(--accent);
+  color: var(--ok); /* matches the "On QRZ" row tint + footer legend */
   font-size: 9px;
   font-weight: 800;
 }
@@ -3417,6 +3422,25 @@
   border-top: 1px solid rgba(0,0,0,0.4);
   background: linear-gradient(90deg, color-mix(in srgb, var(--panel-top) 60%, var(--panel-bot)), var(--panel-bot));
 }
+/* Footer key for the "On QRZ" row tint. */
+.log-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+.log-legend__sw {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  /* Same green wash as .log-row--qrz, opaque-blended over the panel so the
+     swatch is visible at legend size. */
+  background: color-mix(in srgb, var(--ok) 45%, var(--panel-bot));
+  border: 1px solid color-mix(in srgb, var(--ok) 60%, transparent);
+}
+.log-legend__label { letter-spacing: 0.02em; }
 
 /* ===== Memory ===== */
 .memgrid { padding: 6px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; overflow-y: auto; background: var(--bg-1); }

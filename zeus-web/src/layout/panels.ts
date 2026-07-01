@@ -417,14 +417,15 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'tools',
     tags: ['puresignal', 'ps', 'tx', 'predistortion', 'linearization', 'twotone'],
     component: PsFlexPanel,
-    // Root is flex:1 + overflow:auto, so it needs a DEFINITE box — explicit
-    // design size, not auto-measure (which collapses the fill). Scales the PS
-    // controls uniformly with the tile; bench-tunable. Presentation-only: this
-    // generic workspace sizing touches NO PureSignal logic, arm/disarm,
-    // persistence, or calibration. Added under explicit KB2UKA authorization
-    // (PureSignal is a full-stop subsystem; sign-off on record for this change).
-    designW: 340,
-    designH: 240,
+    // PS is a control/readout panel (Cal dial, Signal Flow, Peak meters, plus
+    // the sections below), NOT an instrument face — uniform scaling would
+    // shrink the controls to unreadable. Render native and let PsFlexPanel's
+    // flex:1 + overflow:auto scroll when the tile is smaller than the content;
+    // the flex-body CSS in all-panels.css makes the workspace tile body a
+    // flex column so that flex:1 resolves. Presentation-only: this generic
+    // workspace sizing touches NO PureSignal logic, arm/disarm, persistence,
+    // or calibration.
+    fillNative: true,
     minW: 6,
     minH: 8,
   },
