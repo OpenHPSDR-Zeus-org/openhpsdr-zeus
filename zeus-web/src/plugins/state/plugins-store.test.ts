@@ -17,6 +17,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 function resetStore() {
   usePluginsStore.setState({
     installed: [],
+    installedVsts: [],
     sdkAbi: 0,
     sdkVersion: '',
     installedLoad: { loaded: false, inflight: false, loadError: null },
@@ -88,10 +89,15 @@ describe('usePluginsStore', () => {
 
     const s = usePluginsStore.getState();
     expect(s.installedLoad.loaded).toBe(true);
-    // Both scanned audio plugins are filtered out; only the repo plugins remain.
+    // Both scanned audio plugins are filtered out of the regular list and
+    // retained in the separate VSTs list.
     expect(s.installed.map((p) => p.id)).toEqual([
       'com.openhpsdr.zeus.samples.eq',
       'com.example.repo',
+    ]);
+    expect(s.installedVsts.map((p) => p.id)).toEqual([
+      'com.openhpsdr.zeus.vst.tdrnova',
+      'com.openhpsdr.zeus.rxau.clear',
     ]);
   });
 
@@ -178,6 +184,7 @@ describe('usePluginsStore', () => {
     const s = usePluginsStore.getState();
     expect(s.lastInstallOk).toMatch(/Installed Demo 0\.1\.0/);
     expect(s.installed).toHaveLength(1);
+    expect(s.installedVsts).toHaveLength(0);
     expect(fetchMock).toHaveBeenCalledTimes(3);
 
     const installCall = fetchMock.mock.calls[0];
@@ -229,6 +236,7 @@ describe('usePluginsStore', () => {
     const s = usePluginsStore.getState();
     expect(s.lastUninstallNotice).toBe('restart required');
     expect(s.installed).toEqual([]);
+    expect(s.installedVsts).toEqual([]);
   });
 
   it('clearInstallFeedback / clearUninstallFeedback zero the flash slots', () => {
