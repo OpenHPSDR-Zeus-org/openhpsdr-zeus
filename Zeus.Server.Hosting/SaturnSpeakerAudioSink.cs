@@ -508,15 +508,21 @@ internal sealed class SaturnSpeakerAudioSink : IRxAudioSink, IHostedService, IDi
             //    next Send and takes the whole audio socket down until the 1 s
             //    refresh reopens it. The main P2 socket disables this ioctl for
             //    the same reason; this one carries the same Windows risk.
-            //  - Bind to the local NIC that reaches the radio, on an ephemeral
-            //    port. Leaving the socket unbound lets Windows pick both a NIC
-            //    and a port at Connect time; on a multi-homed host that can pick
-            //    a NIC different from the P2 command socket, and Windows Firewall
-            //    treats the ephemeral flow as a distinct connection that may not
-            //    inherit the P2 rule. Binding to the P2 subnet address forces the
-            //    audio egress out the same NIC the command/IQ streams use.
+            //  - Bind to the local address on the radio's subnet, on an
+            //    ephemeral port. Leaving the socket unbound lets the OS pick a
+            //    source address at Connect time; binding pins the source
+            //    address to the same local IP the P2 command socket binds
+            //    (parity with Protocol2Client), so the radio and Windows
+            //    Firewall see one consistent flow across all P2 traffic.
             Protocol2Client.DisableUdpConnReset(socket);
-            var localBind = Protocol2Client.FindLocalAddressForSubnet(target.Address) ?? IPAddress.Any;
+            // NIC enumeration inside FindLocalAddressForSubnet can throw
+            // NetworkInformationException (not a SocketException) during NIC
+            // churn / sleep-resume — and RefreshTarget runs on the raw sender
+            // thread, where an escaped throw kills the whole process. A failed
+            // lookup just means bind-to-Any, same as a no-subnet-match result.
+            IPAddress localBind;
+            try { localBind = Protocol2Client.FindLocalAddressForSubnet(target.Address) ?? IPAddress.Any; }
+            catch { localBind = IPAddress.Any; }
             socket.Bind(new IPEndPoint(localBind, 0));
             socket.Connect(target);
             _socket = socket;
