@@ -160,3 +160,24 @@ public sealed class PresenceThrottle
         }
     }
 }
+
+/// <summary>
+/// Shared ZeusChat presence-state rules. The relay wire status remains the
+/// existing rx/tx/away set; Zeus uses "away" for operator idle.
+/// </summary>
+public static class ChatPresence
+{
+    public const string Rx = "rx";
+    public const string Tx = "tx";
+    public const string Away = "away";
+
+    public static string StatusFor(
+        bool transmitting,
+        DateTimeOffset now,
+        DateTimeOffset lastOperatorActivity,
+        TimeSpan idleTimeout)
+    {
+        if (transmitting) return Tx;
+        return now - lastOperatorActivity >= idleTimeout ? Away : Rx;
+    }
+}

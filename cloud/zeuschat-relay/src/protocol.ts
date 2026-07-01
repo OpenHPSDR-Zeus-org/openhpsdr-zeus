@@ -15,7 +15,7 @@
 // connection. `hello` thereafter carries presence; its `callsign` is only used
 // as a fallback in local dev (QRZ_VERIFY=off), where header auth is unavailable.
 
-/** Operator presence/activity state. */
+/** Operator presence/activity state. `away` means idle in Zeus clients. */
 export type PresenceStatus = 'rx' | 'tx' | 'away';
 
 /** The kind of a channel. "public" is the single all-operators lobby. */

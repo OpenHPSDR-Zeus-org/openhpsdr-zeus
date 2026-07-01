@@ -24,6 +24,7 @@ export type ChatOperator = {
   grid: string | null;
   freqHz: number | null;
   mode: string | null;
+  /** rx=active receive, tx=transmitting, away=idle. */
   status: ChatOperatorStatus | null;
   /** Epoch ms — when this operator joined / was last seen. */
   since: number;
@@ -252,9 +253,9 @@ export function chatSetEnabled(enabled: boolean, signal?: AbortSignal): Promise<
 }
 
 /**
- * Heartbeat telling the backend whether this client currently has the Chat
- * panel displayed. Presence (the relay connection) is gated on this, so an
- * enabled operator who isn't showing the panel stays off everyone's roster.
+ * Legacy heartbeat telling the backend whether this client currently has the
+ * Chat panel displayed. Current backends keep relay presence tied to the
+ * persisted chat opt-in; this call remains for compatibility with older hosts.
  */
 export function chatSetVisible(visible: boolean, signal?: AbortSignal): Promise<ChatStatus> {
   return jsonFetch(
