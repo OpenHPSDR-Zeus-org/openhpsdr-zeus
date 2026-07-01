@@ -22,6 +22,7 @@ import {
 } from '../state/digital-window-store';
 import { Ft8PopBody } from '../layout/ft8/Ft8PopBody';
 import { WsprPopBody } from '../layout/ft8/WsprPopBody';
+import { useLayoutStore } from '../state/layout-store';
 import '../styles/ft8-theme.css';
 
 export function DigitalWindow() {
@@ -31,6 +32,11 @@ export function DigitalWindow() {
   const x = useDigitalWindowStore((s) => s.x);
   const y = useDigitalWindowStore((s) => s.y);
   const setPosition = useDigitalWindowStore((s) => s.setPosition);
+  // Settings replaces the workspace inline (not a modal), with no z-index
+  // of its own — so this fixed-position, zIndex:420 popup would paint over
+  // it. Hide while Settings is showing without exiting the digital mode,
+  // so the popup reappears in place when Settings closes.
+  const settingsViewOpen = useLayoutStore((s) => s.settingsViewOpen);
 
   const open = ft8Open || wsprOpen;
 
@@ -119,7 +125,7 @@ export function DigitalWindow() {
     dragStateRef.current = null;
   }, []);
 
-  if (!open) return null;
+  if (!open || settingsViewOpen) return null;
 
   // Fixed size; height clamped to the viewport so the frame stays fully on-screen
   // and grabbable on a laptop (the body scrolls within). Not user-resizable.

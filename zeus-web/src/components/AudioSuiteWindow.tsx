@@ -29,6 +29,7 @@ import { ConfirmDialog } from '../layout/ConfirmDialog';
 import { TextInputDialog } from '../layout/TextInputDialog';
 import { TxAudioProfileBar } from './TxAudioProfileBar';
 import { useTxAudioProfileStore } from '../state/tx-audio-profile-store';
+import { useLayoutStore } from '../state/layout-store';
 
 const CHAIN_SLOT = 'tx-audio-tools.chain';
 const RX_CHAIN_SLOT = 'rx-audio-tools.chain';
@@ -973,6 +974,13 @@ export function AudioSuiteWindow({
   const isRxSuite = route === 'rx';
   const txProfileApplyRevision = useTxAudioProfileStore((s) => s.applyRevision);
   const isOpen = useAudioSuiteStore((s) => (isRxSuite ? s.rxOpen : s.txOpen));
+  // Floating window vs. embedded (inside the Audio Tools settings pane):
+  // when Settings replaces the workspace inline, the fixed-position
+  // floating instance (zIndex 400/410) would paint over the Settings view.
+  // Hide only the floating case; embedded stays because it IS the settings
+  // pane content. The store's txOpen/rxOpen stays true so the floating
+  // window reappears at its saved position when Settings closes.
+  const settingsViewOpen = useLayoutStore((s) => s.settingsViewOpen);
   const close = useAudioSuiteStore((s) => (isRxSuite ? s.closeRx : s.closeTx));
   const x = useAudioSuiteStore((s) => (isRxSuite ? s.rxX : s.txX));
   const y = useAudioSuiteStore((s) => (isRxSuite ? s.rxY : s.txY));
@@ -1602,7 +1610,7 @@ export function AudioSuiteWindow({
 
   // Embedded mode (rendered inline inside Audio Tools) is always
   // visible; the floating window only renders when opened.
-  if (!embedded && !isOpen) return null;
+  if (!embedded && (!isOpen || settingsViewOpen)) return null;
 
   // Outer container differs by mode: a fixed, draggable, resizable
   // floating window vs. a normal-flow block that fills the host panel's
