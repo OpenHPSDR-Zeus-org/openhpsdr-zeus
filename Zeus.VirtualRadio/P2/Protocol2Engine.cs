@@ -328,20 +328,8 @@ public sealed class Protocol2Engine : IVirtualRadio
                 // ADC sees no PA sample and the coupler is silent (frames still
                 // flow — the dead-meter case the fix eliminates by routing bit 11).
                 _txRef.Fill(refBuf, P2RxDdcEncoder.PsPairsPerPacket);
-                for (int i = 0; i < P2RxDdcEncoder.PsPairsPerPacket; i++)
-                {
-                    if (couplerRouted)
-                    {
-                        var (ci, cq) = _distortion.Apply(refBuf[2 * i], refBuf[2 * i + 1]);
-                        coupBuf[2 * i] = ci;
-                        coupBuf[2 * i + 1] = cq;
-                    }
-                    else
-                    {
-                        coupBuf[2 * i] = 0f;
-                        coupBuf[2 * i + 1] = 0f;
-                    }
-                }
+                FillPsCoupler(refBuf, coupBuf, P2RxDdcEncoder.PsPairsPerPacket,
+                    couplerRouted, _distortion);
                 _rxEncoder.EncodePsFeedback(packet, seq++, coupBuf, refBuf);
                 Interlocked.Increment(ref _psFeedbackPacketsSent);
                 intervalSec = P2RxDdcEncoder.PsPairsPerPacket / PsBurstRateHz;
@@ -448,6 +436,39 @@ public sealed class Protocol2Engine : IVirtualRadio
             Ep2PacketsReceived: Interlocked.Read(ref _cmdPacketsReceived),
             SeqGaps: 0,
             LastCommands: _commandLog.Snapshot());
+    }
+
+    /// <summary>
+    /// Fill the PS feedback coupler buffer from the clean TX reference, modelling
+    /// the single-ADC gateware faithfully: the coupler carries the PA-through-
+    /// distortion sample ONLY when the external tap relay is routed
+    /// (<paramref name="couplerRouted"/> = alex0 bit 11). With it clear the one
+    /// ADC sees no PA sample, so the coupler is silent (zeros) while the byte-1363
+    /// interleave still streams FRAMES — reproducing the exact G2E dead-meter the
+    /// fix eliminates by routing bit 11. Extracted internal + static so the silent
+    /// branch is provable socketlessly (no bind, no real UDP). Note: through the
+    /// FIXED client the byte-1363 arm and the bit-11 route always coincide on
+    /// HermesC10, so the silent branch is reached only by the regression scenario
+    /// (arm without route) a test drives deliberately — that is the point.
+    /// </summary>
+    internal static void FillPsCoupler(
+        ReadOnlySpan<double> refBuf, Span<double> coupBuf, int pairs,
+        bool couplerRouted, PaDistortionModel distortion)
+    {
+        for (int i = 0; i < pairs; i++)
+        {
+            if (couplerRouted)
+            {
+                var (ci, cq) = distortion.Apply(refBuf[2 * i], refBuf[2 * i + 1]);
+                coupBuf[2 * i] = ci;
+                coupBuf[2 * i + 1] = cq;
+            }
+            else
+            {
+                coupBuf[2 * i] = 0.0;
+                coupBuf[2 * i + 1] = 0.0;
+            }
+        }
     }
 
     // ---- Test observability (InternalsVisibleTo) --------------------------

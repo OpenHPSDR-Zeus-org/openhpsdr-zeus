@@ -2835,8 +2835,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // but the single-ADC HermesC10 does time-mux PS with psWire=false — yet
         // its ONE ADC can only see an EXTERNAL sampler tap through this relay.
         // RoutesExternalPsFeedbackBypass adds ONLY the HermesC10 arm, so the 10E
-        // and every other board stay byte-identical. BENCH-GATED: needs a real
-        // G2E + external tap (the p2.ps.g2e log will show peakFb going non-zero).
+        // and every other board stay byte-identical. G2ePsTimeMuxOnAir is true, so
+        // this path is LIVE in production; it is "bench-gated" only in the sense
+        // that no G2E is on our bench, so first-key-down behaviour is proven by
+        // construction from the C10 gateware and confirmed on a real G2E via the
+        // p2.ps.g2e log (peakFb going non-zero once the external tap is connected).
         if (RoutesExternalPsFeedbackBypass(_boardKind, _psFeedbackEnabled, _psFeedbackExternal)
             && xmit)
         {

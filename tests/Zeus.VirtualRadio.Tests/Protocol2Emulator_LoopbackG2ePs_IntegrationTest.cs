@@ -46,9 +46,10 @@ namespace Zeus.VirtualRadio.Tests;
 ///
 /// Gated behind <c>ZEUS_VRADIO_LOOPBACK</c> (it binds the well-known radio ports
 /// and uses real loopback sockets), so it never runs in the default socketless
-/// CI unit pass. Flipping <see cref="Protocol2Client.G2ePsTimeMuxOnAir"/> is a
-/// TEST-ONLY, try/finally-restored, process-global mutation; the burn-zone
-/// production flag stays false. NOTHING here flips the seed itself.
+/// CI unit pass. The test sets <see cref="Protocol2Client.G2ePsTimeMuxOnAir"/>
+/// (already true in production since #1209/#960) explicitly and restores the
+/// prior value in a try/finally so it is order-independent; NOTHING here flips
+/// the byte-59 seed itself.
 /// </summary>
 public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
 {
@@ -57,21 +58,32 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
         private long _iq;
         private long _ps;
         private volatile bool _sawNonFiniteSample;
+        private readonly object _peakGate = new();
+        private float _peakCoupler;
 
         public long IqCount => Interlocked.Read(ref _iq);
         public long PsCount => Interlocked.Read(ref _ps);
         public bool AllSamplesFinite => !_sawNonFiniteSample;
+        /// <summary>Peak |coupler| (DDC0/RX) magnitude seen — 0 means the coupler
+        /// was silent (the dead-meter case: tap not routed to the single ADC).</summary>
+        public float PeakCoupler { get { lock (_peakGate) return _peakCoupler; } }
 
         public void OnIqFrame(in IqFrame frame) => Interlocked.Increment(ref _iq);
 
         public void OnPsFeedbackFrame(in PsFeedbackFrame frame)
         {
-            // Spot-check the first few samples are finite (a real WDSP feed).
-            for (int i = 0; i < 4 && i < frame.RxI.Length; i++)
+            float peak = 0f;
+            for (int i = 0; i < frame.RxI.Length; i++)
             {
                 if (!float.IsFinite(frame.RxI[i]) || !float.IsFinite(frame.TxI[i]))
                     _sawNonFiniteSample = true;
+                // Coupler = DDC0 (RX). Track its peak so the test can prove the tap
+                // actually carries signal, not just that frames arrive (an all-zero
+                // coupler is finite and would sail past a count-only assertion).
+                float m = MathF.Max(MathF.Abs(frame.RxI[i]), MathF.Abs(frame.RxQ[i]));
+                if (m > peak) peak = m;
             }
+            lock (_peakGate) { if (peak > _peakCoupler) _peakCoupler = peak; }
             Interlocked.Increment(ref _ps);
         }
     }
@@ -152,6 +164,18 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
             Assert.True(gotFrames, "no PS feedback frames delivered while keyed");
             Assert.True(sink.AllSamplesFinite, "PS feedback carried a non-finite sample");
 
+            // 4b) …and the COUPLER actually carries signal. This test never selects
+            //     the External source, so it runs on the DEFAULT Internal pick — the
+            //     exact configuration that produced the dead meter before the fix.
+            //     With the fix the G2E routes the tap (alex0 bit 11) regardless of
+            //     the toggle, so the emulator's single-ADC coupler is live and its
+            //     peak is > 0. Before the fix bit 11 stayed clear on Internal, the
+            //     emulator's coupler was silent, and this assertion would FAIL —
+            //     which is precisely the regression that count-only checks missed.
+            Assert.True(sink.PeakCoupler > 0f,
+                "PS coupler was silent on the default Internal source — the tap was " +
+                $"not routed to the single ADC (peakCoupler={sink.PeakCoupler}).");
+
             // 5) SAFETY (v0.10.8, #960): byte 59 (Angelia_atten_Tx0) IS now seeded
             //    to the protective floor on the G2E during the keyed PS burst, so
             //    the single shared RX ADC is attenuated on first key-down instead
@@ -186,6 +210,35 @@ public class Protocol2Emulator_LoopbackG2ePs_IntegrationTest
             engineCts.Cancel();
             try { await engineRun; } catch (OperationCanceledException) { } catch { }
         }
+    }
+
+    // Socketless (CI-safe) proof of the single-ADC coupler model: with the tap
+    // NOT routed (alex0 bit 11 clear) the coupler must be silent even though the
+    // byte-1363 burst is armed — the dead-meter case — and with it routed the
+    // coupler must carry the reference-through-distortion signal. This is the
+    // ground-truth the loopback relies on, isolated from any real UDP socket.
+    [Fact]
+    public void FillPsCoupler_SilentWhenTapNotRouted_LiveWhenRouted()
+    {
+        const int pairs = P2RxDdcEncoder.PsPairsPerPacket;
+        var refBuf = new double[2 * pairs];
+        for (int i = 0; i < pairs; i++)
+        {
+            refBuf[2 * i] = 0.5 * Math.Cos(2 * Math.PI * i / 16.0);
+            refBuf[2 * i + 1] = 0.5 * Math.Sin(2 * Math.PI * i / 16.0);
+        }
+        var distortion = new Zeus.VirtualRadio.Rf.PaDistortionModel(enabled: true);
+        var coupBuf = new double[2 * pairs];
+
+        // Tap NOT routed → coupler silent (frames still flow, but dead meter).
+        Protocol2Engine.FillPsCoupler(refBuf, coupBuf, pairs, couplerRouted: false, distortion);
+        Assert.All(coupBuf, v => Assert.Equal(0.0, v));
+
+        // Tap routed → coupler live (peak > 0).
+        Protocol2Engine.FillPsCoupler(refBuf, coupBuf, pairs, couplerRouted: true, distortion);
+        double peak = 0;
+        foreach (var v in coupBuf) peak = Math.Max(peak, Math.Abs(v));
+        Assert.True(peak > 0.0, "routed coupler must carry the PA-through-distortion signal");
     }
 
     private static async Task<bool> WaitUntil(Func<bool> predicate, TimeSpan timeout)
