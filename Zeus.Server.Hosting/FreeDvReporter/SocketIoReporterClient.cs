@@ -248,7 +248,11 @@ public sealed class SocketIoReporterClient
         if (!Reporting) return;
         var payload = new Dictionary<string, object?>
         {
-            ["snr"] = Math.Round(snrDb, 1),
+            // Integer, not a rounded double: the reference client (freedv-gui
+            // FreeDVReporter::addReceiveRecord) sends yyjson add_int((int)snr),
+            // and the server's handling of a float here is unverified — match
+            // the reference wire format exactly.
+            ["snr"] = (int)Math.Round(snrDb),
             ["callsign"] = rxCallsign ?? "",
             ["mode"] = mode ?? "",
         };
