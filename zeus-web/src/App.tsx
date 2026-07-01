@@ -862,7 +862,7 @@ export default function App() {
         </>
       )
     ) : (
-      <>Panadapter · {(vfoHz / 1e6).toFixed(3)} MHz · {bandLabel}</>
+      <>Panadapter · {(vfoHz / 1e6).toFixed(6)} MHz · {bandLabel}</>
     )
   ), [bandLabel, contact, dist, sp, terminatorActive, vfoHz]);
 
