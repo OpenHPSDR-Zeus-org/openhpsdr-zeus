@@ -141,6 +141,41 @@ public sealed class SaturnSpeakerAudioSinkTests : IDisposable
         sink.Dispose();
     }
 
+    // Issue #1252 — operator Mute button must silence the P2 speaker path too.
+    // Before this fix, muting silenced only PC playback (NativeAudioSink); the
+    // radio's onboard speaker kept ripping at 750 pkt/s (report snapshot showed
+    // audio.muted=true concurrent with audio.radio.speaker.p2.diag pkts/s=750).
+    // The socket stays open (opened on connect) but no packets ship while muted.
+    [Fact]
+    public async Task OperatorMute_SendsNoPackets_WhileMuted()
+    {
+        using var radio = NewRadio();
+        using var settings = new RadioSpeakerSettingsStore(
+            NullLogger<RadioSpeakerSettingsStore>.Instance, _dbPath + ".spk");
+        var mute = new RxAudioMuteState();
+        var sink = new SaturnSpeakerAudioSink(radio, settings, NullLogger<SaturnSpeakerAudioSink>.Instance, mute);
+
+        await sink.StartAsync(default);
+        settings.Set(true);
+        radio.MarkProtocol2Connected("127.0.0.1:1024", 192_000, client: null, boardKind: HpsdrBoardKind.HermesII);
+        WaitForIdle(sink);
+
+        mute.SetMuted(true);
+        // Muted: a full packet's worth of frames must produce no outgoing packet.
+        sink.Publish(MakeMonoFrame(64));
+        WaitForIdle(sink);
+        Assert.Equal(0u, SequenceOf(sink));
+
+        mute.SetMuted(false);
+        // Unmute: RX audio flows out again (the 4-byte sequence advances).
+        sink.Publish(MakeMonoFrame(64));
+        WaitForIdle(sink);
+        Assert.True(SequenceOf(sink) >= 1u, "expected at least one packet sent after unmute");
+
+        await sink.StopAsync(default);
+        sink.Dispose();
+    }
+
     // MOX mute — while transmitting, the P2 sink must not forward TX-monitor /
     // sidetone to the radio speaker (mirrors the P1 sink). The socket stays open
     // (opened on connect), but no packets are sent while keyed.

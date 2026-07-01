@@ -151,6 +151,26 @@ public class RadioSpeakerAudioSinkTests : IDisposable
         Assert.Equal(0, ring.Count);
     }
 
+    // Issue #1252 — operator Mute must silence the P1 radio-speaker path too.
+    // The P1 sink writes into RxAudioRing; on mute rising edge it must drop
+    // the buffered tail so a later unmute doesn't replay pre-mute audio into
+    // the EP2 L/R slots the moment the operator un-silences the radio.
+    [Fact]
+    public void OperatorMute_ClearsRingOnRisingEdge()
+    {
+        using var radio = NewDisconnectedRadio();
+        using var settings = NewSettings();
+        var ring = new RxAudioRing();
+        var mute = new RxAudioMuteState();
+        _ = new RadioSpeakerAudioSink(radio, ring, settings, mute);
+
+        // Simulate a buffered tail then flip mute on.
+        ring.Write(new float[] { 0.5f, 0.5f, 0.5f });
+        mute.SetMuted(true);
+
+        Assert.Equal(0, ring.Count);
+    }
+
     [Fact]
     public void AvailableForConnectedBoard_False_OnHl2()
     {

@@ -46,15 +46,24 @@ public sealed class RadioSpeakerAudioSink : IRxAudioSink, IDisposable
     private readonly RadioService _radio;
     private readonly RxAudioRing _ring;
     private readonly RadioSpeakerSettingsStore _settings;
+    private readonly RxAudioMuteState _muteState;
 
-    public RadioSpeakerAudioSink(RadioService radio, RxAudioRing ring, RadioSpeakerSettingsStore settings)
+    public RadioSpeakerAudioSink(
+        RadioService radio,
+        RxAudioRing ring,
+        RadioSpeakerSettingsStore settings,
+        RxAudioMuteState? muteState = null)
     {
         _radio = radio;
         _ring = ring;
         _settings = settings;
+        // Null in tests that don't exercise mute — a private instance keeps
+        // the field non-null so the ctor stays legacy-compatible.
+        _muteState = muteState ?? new RxAudioMuteState();
         // Drop any buffered tail when the operator turns the feature off so a
         // later re-enable starts clean rather than replaying stale audio.
         _settings.Changed += OnSettingsChanged;
+        _muteState.Changed += OnMuteChanged;
     }
 
     /// <summary>True when a codec-equipped radio is currently connected (P1 or P2),
@@ -78,6 +87,14 @@ public sealed class RadioSpeakerAudioSink : IRxAudioSink, IDisposable
         // ring has no consumer and SaturnSpeakerAudioSink handles the wire
         // instead, so don't write here.
         if (!_radio.IsProtocol1Active) return;
+        // Operator mute (issue #1252): silence the radio's own speaker jack in
+        // sync with the PC playback path. Drop the buffered tail so unmute
+        // doesn't replay pre-mute audio into the EP2 L/R slots.
+        if (_muteState.IsMuted)
+        {
+            _ring.Clear();
+            return;
+        }
         if (_radio.IsMox)
         {
             // While transmitting, the EP2 L/R slots carry no audio (WriteUsbFrame
@@ -99,5 +116,16 @@ public sealed class RadioSpeakerAudioSink : IRxAudioSink, IDisposable
         if (!_settings.Enabled) _ring.Clear();
     }
 
-    public void Dispose() => _settings.Changed -= OnSettingsChanged;
+    private void OnMuteChanged()
+    {
+        // Rising edge: drop the buffered tail so an unmute starts clean.
+        // Falling edge: no-op — the ring drains naturally.
+        if (_muteState.IsMuted) _ring.Clear();
+    }
+
+    public void Dispose()
+    {
+        _settings.Changed -= OnSettingsChanged;
+        _muteState.Changed -= OnMuteChanged;
+    }
 }
