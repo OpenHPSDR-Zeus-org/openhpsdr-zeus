@@ -32,6 +32,12 @@ const RUNNING_STATUS: HamClockStatus = {
   log: [],
 };
 
+const STARTING_STATUS: HamClockStatus = {
+  ...RUNNING_STATUS,
+  phase: 'Starting',
+  busy: true,
+};
+
 async function flush() {
   await act(async () => {
     for (let i = 0; i < 8; i++) await Promise.resolve();
@@ -71,6 +77,27 @@ describe('HamClockPanel external-link forwarding', () => {
       window.dispatchEvent(event);
     });
   }
+
+  it('waits for the healthy Running phase before mounting the iframe', async () => {
+    useHamClockStore.setState({ status: STARTING_STATUS });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify(STARTING_STATUS), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    );
+
+    const { container, unmount } = render(createElement(HamClockPanel));
+    await flush();
+
+    expect(container.querySelector('iframe')).toBeNull();
+    expect(container.textContent).toContain('Starting HamClock server');
+
+    unmount();
+  });
 
   it('forwards a zeus.openExternal message from the iframe to the OS browser', async () => {
     const { container, unmount } = render(createElement(HamClockPanel));
