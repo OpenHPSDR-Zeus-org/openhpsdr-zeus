@@ -101,7 +101,9 @@ export function QrzSettingsPanel() {
                 fontWeight: 500,
               }}
             >
-              {hasXml ? '✓ XML subscription active' : '⚠ No XML subscription — lookups disabled'}
+              {hasXml
+                ? '✓ XML subscription active'
+                : '⚠ No XML subscription — basic data only (name, grid, country, DXCC)'}
             </div>
           </div>
 
