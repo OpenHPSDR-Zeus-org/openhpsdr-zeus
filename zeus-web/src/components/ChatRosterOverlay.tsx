@@ -31,13 +31,13 @@ import { openProfileCard } from '../state/profile-overlay-store';
 const STATUS_COLOR: Record<string, string> = {
   rx: 'var(--ok)',
   tx: 'var(--tx)',
-  away: 'var(--fg-3)',
+  away: 'var(--power)',
 };
 
 const STATUS_LABEL: Record<string, string> = {
   rx: 'Receiving',
   tx: 'Transmitting',
-  away: 'Away',
+  away: 'Idle',
 };
 
 // Small chat-bubble glyph — mirrors the DM button in the chat roster row.

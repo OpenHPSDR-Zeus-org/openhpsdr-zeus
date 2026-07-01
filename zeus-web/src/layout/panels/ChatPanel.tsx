@@ -181,7 +181,7 @@ function fmtRelative(ts: number): string {
 const STATUS_META: Record<string, { color: string; label: string }> = {
   rx: { color: 'var(--ok)', label: 'Receiving' },
   tx: { color: 'var(--tx)', label: 'Transmitting' },
-  away: { color: 'var(--fg-3)', label: 'Away' },
+  away: { color: 'var(--power)', label: 'Idle' },
 };
 
 // ---------------------------------------------------------------------------
@@ -1845,9 +1845,8 @@ export function ChatPanel() {
     void loadFriends();
   }, [refreshStatus, loadHistory, loadRoster, loadRooms, loadFriends]);
 
-  // Presence is gated on the operator actually showing this panel: heartbeat
-  // "visible" while mounted (re-pinged so a closed browser lapses on the
-  // backend timeout) and "hidden" on unmount, which drops us off the roster.
+  // Legacy host hint while mounted. Current hosts keep relay presence tied to
+  // the enabled opt-in, so missed browser timers no longer churn the roster.
   useEffect(() => {
     void setPanelVisible(true);
     const id = window.setInterval(() => void setPanelVisible(true), 15_000);

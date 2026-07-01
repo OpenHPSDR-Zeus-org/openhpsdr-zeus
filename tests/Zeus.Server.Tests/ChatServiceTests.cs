@@ -101,6 +101,31 @@ public class ChatServiceTests : IDisposable
         Assert.Equal("tx", p.Status);
     }
 
+    [Fact]
+    public void PresenceStatus_TurnsAwayAfterThreeMinutesIdle_ButTxWins()
+    {
+        var t0 = DateTimeOffset.UnixEpoch;
+        var timeout = TimeSpan.FromMinutes(3);
+
+        Assert.Equal("rx", ChatPresence.StatusFor(
+            transmitting: false,
+            now: t0 + timeout - TimeSpan.FromMilliseconds(1),
+            lastOperatorActivity: t0,
+            idleTimeout: timeout));
+
+        Assert.Equal("away", ChatPresence.StatusFor(
+            transmitting: false,
+            now: t0 + timeout,
+            lastOperatorActivity: t0,
+            idleTimeout: timeout));
+
+        Assert.Equal("tx", ChatPresence.StatusFor(
+            transmitting: true,
+            now: t0 + timeout + TimeSpan.FromMinutes(10),
+            lastOperatorActivity: t0,
+            idleTimeout: timeout));
+    }
+
     // ── Relay-frame parsing (inbound) ──────────────────────────────────────
 
     [Fact]

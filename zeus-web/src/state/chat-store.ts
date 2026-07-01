@@ -137,7 +137,7 @@ export type ChatStoreState = {
 
   refreshStatus: () => Promise<void>;
   setEnabled: (enabled: boolean) => Promise<void>;
-  /** Report whether the Chat panel is currently displayed (gates presence). */
+  /** Report whether the Chat panel is currently displayed (legacy host hint). */
   setPanelVisible: (visible: boolean) => Promise<void>;
   /** Send a message to the active room. `attachment` is an optional inline
    *  photo; when present `text` may be empty (image-only message). */
@@ -255,8 +255,8 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
     try {
       set(applyStatus(await chatSetVisible(visible)));
     } catch {
-      // Best-effort presence heartbeat; a missed ping just lapses on the
-      // backend timeout and the next interval tick re-asserts visibility.
+      // Best-effort legacy hint; relay presence is owned by the enabled opt-in
+      // on current hosts, so a missed ping should not change local state.
     }
   },
 

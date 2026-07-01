@@ -99,7 +99,8 @@ public sealed record ChatMessage(
 /// <summary>
 /// A connected operator in the relay roster. <paramref name="FreqHz"/> is the
 /// operator's VFO frequency in Hz; <paramref name="Status"/> is "rx"|"tx"|
-/// "away"; <paramref name="Since"/> is epoch milliseconds the operator joined.
+/// "away" ("away" means idle); <paramref name="Since"/> is epoch milliseconds
+/// the operator joined.
 /// <paramref name="Admin"/> is true when the operator is a relay moderator, so
 /// clients can paint their callsign distinctly (gold).
 /// </summary>
@@ -155,11 +156,9 @@ public sealed record ChatFriendsDto(
 public sealed record ChatEnableRequest(bool Enabled);
 
 /// <summary>
-/// Heartbeat from the web client reporting whether the operator currently has
-/// the Chat panel displayed. Presence (the relay connection) is gated on this
-/// in addition to <see cref="ChatEnableRequest"/>: an enabled operator who is
-/// not showing the panel stays off everyone's roster. Sent on panel mount, on
-/// a periodic interval while shown, and as <c>false</c> on unmount.
+/// Legacy heartbeat from the web client reporting whether the operator currently
+/// has the Chat panel displayed. Presence is now owned by the persisted chat
+/// opt-in, not by panel mount state; the endpoint is kept for old web bundles.
 /// </summary>
 public sealed record ChatVisibleRequest(bool Visible);
 

@@ -27,8 +27,8 @@ namespace Zeus.Server;
 
 /// <summary>
 /// Owns the operator's connection to the ZeusChat Cloudflare relay. Connects
-/// only while chat is enabled (persisted opt-in, default OFF) AND QRZ is logged
-/// in (the relay validates the QRZ session on the WS upgrade). Mirrors radio
+/// while chat is enabled (persisted opt-in, default OFF) AND QRZ is logged in
+/// (the relay validates the QRZ session on the WS upgrade). Mirrors radio
 /// presence to the relay, fans incoming relay events out to web clients via
 /// <see cref="StreamingHub"/> as ChatEvent (0x35) frames, and keeps an in-memory
 /// roster + bounded message history for push-on-attach.
@@ -42,13 +42,9 @@ public sealed class ChatService : BackgroundService
     private const int MessageHistoryCap = 200;
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PresenceThrottleWindow = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan IdleStatusTimeout = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan ReconnectMinDelay = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan ReconnectMaxDelay = TimeSpan.FromSeconds(30);
-
-    // How long a panel-visible heartbeat keeps the operator "showing the panel"
-    // before it lapses. The web client re-pings every ~15s; this leaves room for
-    // a couple of misses before we drop presence (e.g. the browser was closed).
-    private static readonly TimeSpan PanelActiveTimeout = TimeSpan.FromSeconds(45);
 
     private readonly QrzService _qrz;
     private readonly RadioService _radio;
@@ -97,10 +93,11 @@ public sealed class ChatService : BackgroundService
     private readonly PresenceThrottle _presence = new(PresenceThrottleWindow);
     private volatile bool _moxOn;
 
-    // UTC ticks of the last "Chat panel is displayed" heartbeat from the web
-    // client; 0 means the panel is not shown. Presence is gated on this so an
-    // enabled operator who has the panel closed never appears on the roster.
-    private long _panelHeartbeatTicks;
+    // UTC ticks of the last operator activity that keeps the roster light green:
+    // outgoing chat, a TX edge, or a VFO-A frequency change. After
+    // IdleStatusTimeout, the backend publishes "away" (yellow in the UI).
+    private long _lastOperatorActivityTicks;
+    private long _lastObservedVfoHz;
 
     // The live socket, set while connected so SendMessageAsync (API path) can
     // post a {t:"msg"} frame. Null when disconnected.
@@ -128,6 +125,10 @@ public sealed class ChatService : BackgroundService
         _hub.SetChatSnapshotProvider(BuildSnapshotFrames);
         _radio.StateChanged += OnRadioStateChanged;
         _radio.MoxChanged += OnMoxChanged;
+
+        var initial = _radio.Snapshot();
+        _lastObservedVfoHz = initial.VfoHz;
+        MarkOperatorActivity(DateTimeOffset.UtcNow);
     }
 
     // ── Public API surface (used by ZeusEndpoints) ─────────────────────────
@@ -157,31 +158,15 @@ public sealed class ChatService : BackgroundService
     }
 
     /// <summary>
-    /// Records a heartbeat from the web client reporting whether the operator
-    /// currently has the Chat panel displayed, and wakes the worker so it can
-    /// connect (panel shown) or drop presence (panel hidden). Presence is gated
-    /// on this in addition to the enabled opt-in — see <see cref="PanelActive"/>.
+    /// Accepts the web client's legacy Chat-panel visibility heartbeat. The
+    /// relay connection is intentionally no longer gated on panel mount state:
+    /// the persisted chat opt-in owns presence, which avoids roster churn from
+    /// missed browser timers or workspace tile unmounts.
     /// </summary>
     public ChatStatusDto ReportPanelVisible(bool visible)
     {
-        Interlocked.Exchange(ref _panelHeartbeatTicks, visible ? DateTimeOffset.UtcNow.UtcTicks : 0L);
         Wake();
         return GetStatus();
-    }
-
-    /// <summary>
-    /// True while a recent panel-visible heartbeat is in force. Lapses
-    /// <see cref="PanelActiveTimeout"/> after the last heartbeat so a closed
-    /// browser (which can't send the explicit <c>false</c>) still drops off.
-    /// </summary>
-    private bool PanelActive
-    {
-        get
-        {
-            var ticks = Interlocked.Read(ref _panelHeartbeatTicks);
-            if (ticks == 0L) return false;
-            return DateTimeOffset.UtcNow - new DateTimeOffset(ticks, TimeSpan.Zero) < PanelActiveTimeout;
-        }
     }
 
     public IReadOnlyList<ChatMessage> GetMessages(int limit) => _messages.Snapshot(limit);
@@ -210,6 +195,7 @@ public sealed class ChatService : BackgroundService
         await SendFrameAsync(socket, attachment is null
             ? new { t = "msg", text, room = roomId }
             : new { t = "msg", text, room = roomId, attachment }, ct);
+        NoteOperatorActivity();
     }
 
     /// <summary>Sends a direct message to <paramref name="to"/> (creates the DM on demand).</summary>
@@ -224,6 +210,7 @@ public sealed class ChatService : BackgroundService
         await SendFrameAsync(socket, attachment is null
             ? new { t = "dm", to = call, text }
             : new { t = "dm", to = call, text, attachment }, ct);
+        NoteOperatorActivity();
     }
 
     /// <summary>
@@ -431,10 +418,10 @@ public sealed class ChatService : BackgroundService
         var backoff = ReconnectMinDelay;
         while (!stoppingToken.IsCancellationRequested)
         {
-            // Connect only while the operator both opted in AND is showing the
-            // Chat panel. Idling here (no socket) keeps them off everyone's
-            // roster. A heartbeat or enable toggle wakes the loop to re-evaluate.
-            if (!_store.GetEnabled() || !PanelActive)
+            // The persisted opt-in owns roster presence. Older builds tied the
+            // relay socket to ChatPanel visibility, which made harmless browser
+            // timer stalls look like operators connecting/disconnecting.
+            if (!_store.GetEnabled())
             {
                 await WaitForWakeAsync(Timeout.InfiniteTimeSpan, stoppingToken);
                 continue;
@@ -535,7 +522,10 @@ public sealed class ChatService : BackgroundService
 
         // First frame: hello with current presence.
         var snap = _radio.Snapshot();
+        Interlocked.Exchange(ref _lastObservedVfoHz, snap.VfoHz);
+        MarkOperatorActivity(DateTimeOffset.UtcNow);
         var grid = TryGetGrid();
+        var status = CurrentStatus();
         await SendFrameAsync(socket, new
         {
             t = "hello",
@@ -543,14 +533,14 @@ public sealed class ChatService : BackgroundService
             grid,
             freq = snap.VfoHz,
             mode = snap.Mode.ToString(),
-            status = CurrentStatus(),
+            status,
             freqPublic = _store.GetFreqPublic(),
             client = "zeus",
         }, ct);
 
         // Seed the throttle so the first idle presence is suppressed (hello
         // already carried it) but a genuine change still fires.
-        _presence.Seed(snap.VfoHz, snap.Mode.ToString(), CurrentStatus());
+        _presence.Seed(snap.VfoHz, snap.Mode.ToString(), status);
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var receiveTask = ReceiveLoopAsync(socket, linked.Token);
@@ -597,13 +587,13 @@ public sealed class ChatService : BackgroundService
             // boundary without a busy loop.
             await WaitForWakeAsync(TimeSpan.FromSeconds(1), ct);
 
-            // If the operator disabled chat or stopped showing the panel (the
-            // visible heartbeat lapsed, or the browser closed), tear the link
-            // down so the relay drops them from everyone's roster.
-            if (!_store.GetEnabled() || !PanelActive)
+            // If the operator disabled chat, tear the link down so the relay
+            // drops them from everyone's roster.
+            if (!_store.GetEnabled())
                 return;
 
             var now = DateTimeOffset.UtcNow;
+            OfferCurrentPresence(now);
             if (_presence.TryTake(now, out var p))
                 await SendFrameAsync(socket, new { t = "presence", freq = p.FreqHz, mode = p.Mode, status = p.Status }, ct);
 
@@ -832,6 +822,10 @@ public sealed class ChatService : BackgroundService
 
     private void OnRadioStateChanged(StateDto state)
     {
+        var previous = Interlocked.Exchange(ref _lastObservedVfoHz, state.VfoHz);
+        if (previous != state.VfoHz)
+            MarkOperatorActivity(DateTimeOffset.UtcNow);
+
         if (!_connected) return;
         if (_presence.Offer(state.VfoHz, state.Mode.ToString(), CurrentStatus()))
             Wake();
@@ -840,13 +834,38 @@ public sealed class ChatService : BackgroundService
     private void OnMoxChanged(bool on)
     {
         _moxOn = on;
+        MarkOperatorActivity(DateTimeOffset.UtcNow);
         if (!_connected) return;
         var snap = _radio.Snapshot();
         if (_presence.Offer(snap.VfoHz, snap.Mode.ToString(), CurrentStatus()))
             Wake();
     }
 
-    private string CurrentStatus() => _moxOn ? "tx" : "rx";
+    private string CurrentStatus() => CurrentStatus(DateTimeOffset.UtcNow);
+
+    private string CurrentStatus(DateTimeOffset now)
+    {
+        var ticks = Interlocked.Read(ref _lastOperatorActivityTicks);
+        var last = ticks > 0 ? new DateTimeOffset(ticks, TimeSpan.Zero) : now;
+        return ChatPresence.StatusFor(_moxOn, now, last, IdleStatusTimeout);
+    }
+
+    private void MarkOperatorActivity(DateTimeOffset now) =>
+        Interlocked.Exchange(ref _lastOperatorActivityTicks, now.UtcTicks);
+
+    private void NoteOperatorActivity()
+    {
+        var now = DateTimeOffset.UtcNow;
+        MarkOperatorActivity(now);
+        if (_connected && OfferCurrentPresence(now))
+            Wake();
+    }
+
+    private bool OfferCurrentPresence(DateTimeOffset now)
+    {
+        var snap = _radio.Snapshot();
+        return _presence.Offer(snap.VfoHz, snap.Mode.ToString(), CurrentStatus(now));
+    }
 
     private string? TryGetGrid() => _qrz.GetStatus().Home?.Grid;
 
