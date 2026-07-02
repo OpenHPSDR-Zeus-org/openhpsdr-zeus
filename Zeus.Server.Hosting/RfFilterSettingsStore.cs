@@ -16,7 +16,7 @@ public sealed class RfFilterSettingsStore : IDisposable
 {
     private const int SingletonId = 1;
     private const long MinHz = 0;
-    private const long MaxHz = 65_000_000;
+    private const long MaxHz = 61_440_000;
     private const string AnanProfileKey = "anan-7000";
     private const string ClassicProfileKey = "classic-alex";
 
