@@ -1500,8 +1500,13 @@ public sealed class RadioService : IDisposable
                 if (BandUtils.FreqToBand(previous) != BandUtils.FreqToBand(clamped))
                 {
                     RecomputePaAndPush();
-                    if (!fromExternal && RestoreBandMode(BandUtils.FreqToBand(clamped)) is { } recalled)
-                        return recalled;
+                    if (!fromExternal)
+                    {
+                        var newBand = BandUtils.FreqToBand(clamped);
+                        RestoreBandDrive(newBand);
+                        if (RestoreBandMode(newBand) is { } recalled)
+                            return recalled;
+                    }
                 }
                 return Snapshot();
             }
@@ -1524,8 +1529,13 @@ public sealed class RadioService : IDisposable
         if (BandUtils.FreqToBand(previous) != BandUtils.FreqToBand(clamped))
         {
             RecomputePaAndPush();
-            if (!fromExternal && RestoreBandMode(BandUtils.FreqToBand(clamped)) is { } recalled)
-                return recalled;
+            if (!fromExternal)
+            {
+                var newBand = BandUtils.FreqToBand(clamped);
+                RestoreBandDrive(newBand);
+                if (RestoreBandMode(newBand) is { } recalled)
+                    return recalled;
+            }
         }
         return Snapshot();
     }
@@ -2769,6 +2779,13 @@ public sealed class RadioService : IDisposable
         // value until something else dirtied the state.
         Mutate(s => s with { DrivePct = clamped });
         RecomputePaAndPush();
+        // Per-band Drive% recall write-back (issue #1279). The current band's
+        // stored value shadows the global _drivePct: on the next band cross
+        // RestoreBandDrive will pull it back. Suppressed while we're INSIDE
+        // RestoreBandDrive (would loop) and when the current band is locked
+        // (that's the whole point of the lock — the recalled value stays
+        // stable even if the operator drags the slider).
+        WriteBackPerBandDriveIfNeeded(clamped, drive: true);
     }
 
     // ---- TX pre-key (MOX) delay (issue #630) -----------------------------
@@ -2930,6 +2947,79 @@ public sealed class RadioService : IDisposable
         Interlocked.Exchange(ref _tunePct, clamped);
         Mutate(s => s with { TunePct = clamped });
         RecomputePaAndPush();
+        WriteBackPerBandDriveIfNeeded(clamped, drive: false);
+    }
+
+    // Re-entry guard for RestoreBandDrive: SetDrive/SetTuneDrive would otherwise
+    // write back the just-recalled value, defeating the whole point (and racing
+    // any other band-crossing recall in progress). Not for thread-safety —
+    // RestoreBandDrive runs on the same thread that then re-enters the setters.
+    private bool _restoringBandDrive;
+
+    // Persist the just-set Drive%/Tune% to the current band's PaBandEntry so
+    // the next band cross will recall it. Suppressed when either the band is
+    // locked or we are already inside a RestoreBandDrive call. Uses the RX1
+    // VFO A dial band — the same band the drive byte is actually being
+    // computed against inside RecomputePaAndPush.
+    private void WriteBackPerBandDriveIfNeeded(int percent, bool drive)
+    {
+        if (_restoringBandDrive) return;
+        long vfoHz;
+        lock (_sync) vfoHz = _state.VfoHz;
+        var band = BandUtils.FreqToBand(vfoHz);
+        if (band is null) return;
+        var stored = _paStore.GetBandDrive(band);
+        bool locked = drive ? (stored?.DriveLocked ?? false) : (stored?.TuneLocked ?? false);
+        if (locked) return;
+        _paStore.SetBandDrive(band, percent, drive);
+    }
+
+    // Per-band Drive% / Tune% recall on band-crossing. Sibling of
+    // RestoreBandMode — same seam, same rules: RX1 / VFO A only, and we only
+    // fire when the operator crosses a band edge. When the target band has
+    // no stored value the current global Drive/Tune carries forward, which
+    // matches today's behaviour and keeps first-visit bands safe (issue
+    // #1279 asked for this fallback explicitly). Returns the (possibly
+    // recomputed) snapshot when either slider was pushed, otherwise null.
+    private StateDto? RestoreBandDrive(string? newBand)
+    {
+        if (newBand is null) return null;
+        var stored = _paStore.GetBandDrive(newBand);
+        if (stored is null) return null;
+
+        bool pushed = false;
+        _restoringBandDrive = true;
+        try
+        {
+            if (stored.Value.DrivePct is int d)
+            {
+                int cur = Volatile.Read(ref _drivePct);
+                if (d != cur)
+                {
+                    SetDrive(d);
+                    pushed = true;
+                }
+            }
+            if (stored.Value.TunePct is int t)
+            {
+                int cur = Volatile.Read(ref _tunePct);
+                if (t != cur)
+                {
+                    SetTuneDrive(t);
+                    pushed = true;
+                }
+            }
+        }
+        finally
+        {
+            _restoringBandDrive = false;
+        }
+
+        if (!pushed) return null;
+        _log.LogInformation(
+            "band.drive.recall band={Band} drivePct={Drive} tunePct={Tune}",
+            newBand, stored.Value.DrivePct, stored.Value.TunePct);
+        return Snapshot();
     }
 
     // TxService calls this on every MOX/TUN edge. Runs the same recompute the

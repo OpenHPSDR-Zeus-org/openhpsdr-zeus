@@ -49,6 +49,7 @@ import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
 import { usePaStore } from '../state/pa-store';
 import { useLiveSlider } from '../hooks/useLiveSlider';
+import { bandOf } from './design/data';
 
 // PRD FR-4 drive range: 0..100 percent. Stream during drag via rAF coalesce
 // (one POST per paint at most) so the radio's drive byte tracks the thumb in
@@ -67,6 +68,15 @@ export function DriveSlider() {
   // when Rated PA Output is 0 (raw drive-byte mode — watts have no meaning).
   const paMaxWatts = usePaStore((s) => s.settings.global.paMaxPowerWatts);
   const targetWatts = paMaxWatts > 0 ? Math.round((paMaxWatts * drivePercent) / 100) : null;
+  // Per-band Drive lock (issue #1279). Locked = write-back to the per-band
+  // recall entry is suppressed server-side, so the slider still moves but
+  // the next band cross recalls the locked value.
+  const vfoHz = useConnectionStore((s) => s.vfoHz);
+  const currentBand = bandOf(vfoHz);
+  const driveLocked = usePaStore(
+    (s) => s.settings.bands.find((b) => b.band === currentBand)?.driveLocked ?? false,
+  );
+  const toggleLock = usePaStore((s) => s.setBandLocks);
 
   // Tracks the most recently acknowledged value so we can roll back on error.
   const previousOnError = useRef<number>(drivePercent);
@@ -104,16 +114,48 @@ export function DriveSlider() {
     liveSlider.push(v);
   };
 
+  const onLockClick = () => {
+    if (!connected || currentBand === '—') return;
+    void toggleLock(currentBand, { driveLocked: !driveLocked });
+  };
+
   return (
     <label className="knob-group">
       <span className="label-xs">DRV</span>
+      <button
+        type="button"
+        onClick={onLockClick}
+        disabled={!connected || currentBand === '—'}
+        aria-pressed={driveLocked}
+        aria-label={driveLocked ? `Unlock Drive on ${currentBand}` : `Lock Drive on ${currentBand}`}
+        title={
+          driveLocked
+            ? `Drive locked on ${currentBand} — the recalled value will hold across band changes`
+            : `Lock Drive on ${currentBand} so the current value is remembered and can't be nudged`
+        }
+        style={{
+          background: 'transparent',
+          border: 'none',
+          padding: 0,
+          cursor: connected && currentBand !== '—' ? 'pointer' : 'default',
+          color: driveLocked ? 'var(--power)' : 'var(--neutral-400, #888)',
+          fontSize: 12,
+          lineHeight: 1,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 16,
+        }}
+      >
+        {driveLocked ? '🔒' : '🔓'}
+      </button>
       <input
         type="range"
         min={MIN}
         max={MAX}
         step={1}
         value={drivePercent}
-        disabled={!connected}
+        disabled={!connected || driveLocked}
         onChange={onChange}
         onMouseUp={() => liveSlider.flush()}
         onTouchEnd={() => liveSlider.flush()}

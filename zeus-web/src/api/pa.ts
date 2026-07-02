@@ -39,6 +39,15 @@ export type PaBandSettings = {
   // DX wiring travels with the band selection.
   ocDxTx: number;
   ocDxRx: number;
+  // Per-band Drive%/Tune% recall + lock (issue #1279). null = never set;
+  // band-crossing will carry the current global value forward on first
+  // visit. Locked = the recalled value is stable — the operator can still
+  // drag the slider, but the write-back to the per-band entry is skipped
+  // until they unlock, so the next band cross recalls the locked value.
+  drivePct: number | null;
+  tunePct: number | null;
+  driveLocked: boolean;
+  tuneLocked: boolean;
 };
 
 export type PaGlobalSettings = {
@@ -60,6 +69,10 @@ type PaBandDtoRaw = {
   autoOcMask?: unknown;
   ocDxTx?: unknown;
   ocDxRx?: unknown;
+  drivePct?: unknown;
+  tunePct?: unknown;
+  driveLocked?: unknown;
+  tuneLocked?: unknown;
 };
 
 type PaGlobalDtoRaw = {
@@ -87,6 +100,11 @@ function normalizeGlobal(raw: PaGlobalDtoRaw | undefined): PaGlobalSettings {
   };
 }
 
+function toPercentOrNull(v: unknown): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+  return Math.max(0, Math.min(100, Math.round(v)));
+}
+
 function normalizeBand(raw: PaBandDtoRaw): PaBandSettings {
   return {
     band: typeof raw.band === 'string' ? raw.band : '',
@@ -100,6 +118,10 @@ function normalizeBand(raw: PaBandDtoRaw): PaBandSettings {
     // smuggle bits the wire path would silently zero anyway.
     ocDxTx: Math.max(0, Math.min(0x0f, Math.round(toNumber(raw.ocDxTx, 0)))),
     ocDxRx: Math.max(0, Math.min(0x0f, Math.round(toNumber(raw.ocDxRx, 0)))),
+    drivePct: toPercentOrNull(raw.drivePct),
+    tunePct: toPercentOrNull(raw.tunePct),
+    driveLocked: toBool(raw.driveLocked, false),
+    tuneLocked: toBool(raw.tuneLocked, false),
   };
 }
 
@@ -156,6 +178,26 @@ export async function updatePaSettings(
     signal,
   });
   if (!res.ok) throw new Error(`PUT /api/pa-settings → ${res.status}`);
+  const raw = (await res.json()) as PaSettingsDtoRaw;
+  return normalize(raw);
+}
+
+// Per-band Drive%/Tune% lock toggle (issue #1279). Either flag can be omitted
+// to leave the other untouched. Server returns the whole PA snapshot so the
+// pa-store picks up the new lock state without a follow-up GET.
+export async function updatePaBandLocks(
+  band: string,
+  locks: { driveLocked?: boolean; tuneLocked?: boolean },
+  signal?: AbortSignal,
+): Promise<PaSettings> {
+  const url = `/api/pa-settings/band/${encodeURIComponent(band)}/locks`;
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(locks),
+    signal,
+  });
+  if (!res.ok) throw new Error(`PUT ${url} → ${res.status}`);
   const raw = (await res.json()) as PaSettingsDtoRaw;
   return normalize(raw);
 }

@@ -25,6 +25,7 @@ import {
   fetchPaSettings,
   fetchPaDefaults,
   updatePaSettings,
+  updatePaBandLocks,
   type PaBandSettings,
   type PaGlobalSettings,
   type PaSettings,
@@ -38,7 +39,20 @@ export const HF_BANDS: readonly string[] = [
 ] as const;
 
 function defaultBand(band: string): PaBandSettings {
-  return { band, paGainDb: 0, disablePa: false, ocTx: 0, ocRx: 0, autoOcMask: 0, ocDxTx: 0, ocDxRx: 0 };
+  return {
+    band,
+    paGainDb: 0,
+    disablePa: false,
+    ocTx: 0,
+    ocRx: 0,
+    autoOcMask: 0,
+    ocDxTx: 0,
+    ocDxRx: 0,
+    drivePct: null,
+    tunePct: null,
+    driveLocked: false,
+    tuneLocked: false,
+  };
 }
 
 function defaultState(): PaSettings {
@@ -81,6 +95,10 @@ type PaStore = {
   // destination side for every band in one shot. Stops short of APPLY;
   // the operator still has to persist via the modal footer.
   copyOcMasks: (direction: 'tx->rx' | 'rx->tx') => void;
+  // Toggle per-band Drive/Tune lock (issue #1279). Immediately persists via
+  // the dedicated /locks endpoint — no APPLY step, matches the operator's
+  // padlock-click expectation ("locked or unlocked, right now").
+  setBandLocks: (band: string, locks: { driveLocked?: boolean; tuneLocked?: boolean }) => Promise<void>;
 };
 
 export const usePaStore = create<PaStore>((set, get) => ({
@@ -137,6 +155,15 @@ export const usePaStore = create<PaStore>((set, get) => ({
         ),
       },
     })),
+
+  setBandLocks: async (band, locks) => {
+    try {
+      const s = await updatePaBandLocks(band, locks);
+      set({ settings: canonicalize(s), error: null });
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
 
   resetToBoardDefaults: async (boardOverride) => {
     set({ inflight: true, error: null });
