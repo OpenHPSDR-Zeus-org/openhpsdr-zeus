@@ -15,7 +15,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 import { PluginsPanel } from './PluginsPanel';
-import { InstalledPlugins } from './InstalledPlugins';
+import { InstalledPlugins, InstalledVsts } from './InstalledPlugins';
 import { PluginBrowser } from './PluginBrowser';
 import { InstallFromUrl } from './InstallFromUrl';
 import { usePluginsStore } from '../state/plugins-store';
@@ -30,6 +30,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 const EMPTY_INSTALLED = {
   installed: [] as PluginDto[],
+  installedVsts: [] as PluginDto[],
   sdkAbi: 1,
   sdkVersion: '0.6.0',
   installedLoad: { loaded: true, inflight: false, loadError: null },
@@ -48,6 +49,7 @@ const EMPTY_REGISTRY = {
 function resetStore() {
   usePluginsStore.setState({
     installed: [],
+    installedVsts: [],
     sdkAbi: 0,
     sdkVersion: '',
     installedLoad: { loaded: false, inflight: false, loadError: null },
@@ -144,6 +146,22 @@ describe('PluginsPanel — sub-tab routing', () => {
     ).not.toBeNull();
   });
 
+  it('switches to the VSTs tab on click', () => {
+    act(() => {
+      root.render(<PluginsPanel />);
+    });
+    const vstsTab = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+    ).find((b) => b.textContent?.includes('VSTS'));
+    expect(vstsTab).toBeDefined();
+    act(() => {
+      vstsTab!.click();
+    });
+    expect(
+      container.querySelector('[data-testid="plugins-installed-vsts"]'),
+    ).not.toBeNull();
+  });
+
   it('switches to the InstallFromUrl tab on click', () => {
     act(() => {
       root.render(<PluginsPanel />);
@@ -205,6 +223,103 @@ describe('InstalledPlugins', () => {
     expect(container.textContent).toContain('Demo Plugin');
     expect(container.textContent).toContain('hub:emit');
     expect(container.textContent).toContain('SDK ABI v1');
+  });
+
+  it('keeps scanned VSTs out of the regular Installed list', () => {
+    usePluginsStore.setState({
+      ...EMPTY_INSTALLED,
+      installed: [
+        {
+          id: 'demo',
+          scanned: false,
+          name: 'Demo Plugin',
+          version: '0.1.0',
+          author: '',
+          description: '',
+          homepage: null,
+          license: '',
+          capabilities: [],
+          ui: null,
+          audio: null,
+        },
+      ],
+      installedVsts: [
+        {
+          id: 'com.openhpsdr.zeus.vst.tdrnova',
+          scanned: true,
+          name: 'TDR Nova',
+          version: '1.0.0',
+          author: 'Scanned VST',
+          description: 'VST3 plugin registered from a scanned directory.',
+          homepage: null,
+          license: 'Unknown',
+          capabilities: [],
+          ui: null,
+          audio: {
+            vst3Path: 'C:\\VST PLUGINS\\TDR Nova.vst3',
+            slot: 'tx.post-leveler',
+            channels: 1,
+            sampleRate: 48000,
+          },
+        },
+      ],
+    });
+
+    act(() => {
+      root.render(<InstalledPlugins />);
+    });
+
+    expect(container.textContent).toContain('Demo Plugin');
+    expect(container.textContent).not.toContain('TDR Nova');
+  });
+
+  it('renders scanned VSTs in their own list', () => {
+    usePluginsStore.setState({
+      ...EMPTY_INSTALLED,
+      installed: [
+        {
+          id: 'demo',
+          scanned: false,
+          name: 'Demo Plugin',
+          version: '0.1.0',
+          author: '',
+          description: '',
+          homepage: null,
+          license: '',
+          capabilities: [],
+          ui: null,
+          audio: null,
+        },
+      ],
+      installedVsts: [
+        {
+          id: 'com.openhpsdr.zeus.rxvst.rnnoise',
+          scanned: true,
+          name: 'RNNoise RX',
+          version: '1.0.0',
+          author: 'Scanned VST',
+          description: 'VST3 plugin registered from a scanned directory.',
+          homepage: null,
+          license: 'Unknown',
+          capabilities: [],
+          ui: null,
+          audio: {
+            vst3Path: 'C:\\VST PLUGINS\\RNNoise.vst3',
+            slot: 'rx.post-demod',
+            channels: 1,
+            sampleRate: 48000,
+          },
+        },
+      ],
+    });
+
+    act(() => {
+      root.render(<InstalledVsts />);
+    });
+
+    expect(container.textContent).toContain('RNNoise RX');
+    expect(container.textContent).toContain('rx.post-demod');
+    expect(container.textContent).not.toContain('Demo Plugin');
   });
 
   it('renders the empty state when loaded with no plugins', () => {
