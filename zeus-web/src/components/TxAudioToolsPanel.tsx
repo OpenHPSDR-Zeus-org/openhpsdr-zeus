@@ -738,11 +738,16 @@ function RxChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) 
       }
       actions={
         <>
-          {/* RX inserts host in-process. On macOS/Linux there is no engine to
-              download, so surface the same Scan/Add affordance as TX — this is
-              how AU plugins reach the RX path. Windows adds RX VST3s via the
-              suite's "Add VST folder"; AU is macOS-only. */}
-          {engineSupportLoaded && !engineSupported && <InProcessPluginScanButton route="rx" />}
+          {/* Windows: RX audio is routed through the shared out-of-process VST
+              engine. When the engine is missing (rxVstEngineAvailable=false)
+              show the RX-scoped Download button so operators who only want RX
+              VST don't have to detour through the TX row (which also switches
+              TX to VST as a side effect — see issue #1276). The shared
+              installer button component handles the busy/failed/done UI.
+              macOS/Linux: RX inserts host in-process (AU on macOS, VST3
+              elsewhere), so surface the same Scan/Add affordance as TX. */}
+          {engineSupportLoaded &&
+            (engineSupported ? <DownloadVstEngineButton route="rx" /> : <InProcessPluginScanButton route="rx" />)}
           <SuiteButton route="rx" />
         </>
       }

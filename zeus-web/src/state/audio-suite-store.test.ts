@@ -717,6 +717,47 @@ describe('audio-suite-store VST engine install', () => {
     expect(useAudioSuiteStore.getState().vstEngineActive).toBe(true);
   });
 
+  it('RX install refreshes RX diagnostics without switching TX to VST (#1276)', async () => {
+    vi.useFakeTimers();
+    let processingModePutCalled = false;
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/tx-audio-suite/vst-engine/install' && init?.method === 'POST') {
+        return response({ phase: 'downloading', percent: 0 });
+      }
+      if (url === '/api/tx-audio-suite/vst-engine/install') {
+        return response({ phase: 'done', percent: 100, message: 'installed' });
+      }
+      if (url === '/api/tx-audio-suite/processing-mode' && init?.method === 'PUT') {
+        processingModePutCalled = true;
+        return response({ mode: 'vst', engineAvailable: true, engineActive: true });
+      }
+      if (url === '/api/rx-audio-suite/processing-mode') {
+        return response({ engineAvailable: true, engineActive: true, activePlugins: 1, degradedBlocks: 0 });
+      }
+      return response({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const promise = useAudioSuiteStore
+      .getState()
+      .installVstEngine('/api/tx-audio-suite/vst-engine/install', 'rx');
+    await vi.advanceTimersByTimeAsync(1100);
+    await promise;
+
+    expect(useAudioSuiteStore.getState().vstEngineInstall.phase).toBe('done');
+    expect(useAudioSuiteStore.getState().vstEngineInstall.message).toBe(
+      'VST engine ready — RX audio now routes through VST.',
+    );
+    // RX diagnostics were refreshed with the shared engine now installed.
+    expect(useAudioSuiteStore.getState().rxVstEngineAvailable).toBe(true);
+    expect(useAudioSuiteStore.getState().rxVstEngineActive).toBe(true);
+    // TX processing-mode PUT MUST NOT be called — the RX install path leaves
+    // the TX route alone. Regression guard for issue #1276.
+    expect(processingModePutCalled).toBe(false);
+    expect(useAudioSuiteStore.getState().processingMode).toBe('native');
+  });
+
   it('surfaces a failed install for retry', async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL, init?: RequestInit) => {
