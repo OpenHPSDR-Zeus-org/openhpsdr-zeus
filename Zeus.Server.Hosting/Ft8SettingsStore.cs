@@ -7,7 +7,7 @@
 //
 // Ft8SettingsStore — persists the FT8/FT4/WSPR workspace behaviour + display
 // preferences (Ft8Settings) PER MODE in a LiteDB collection sharing
-// zeus-prefs.db, mirroring SpottingSettingsStore. Each digital mode (FT8, FT4,
+// zeus-prefs.db, mirroring FreeDvReporterSettingsStore. Each digital mode (FT8, FT4,
 // WSPR) keeps its OWN row keyed by Mode; first run (no row) returns the
 // Ft8Settings defaults, which match the current pre-settings behaviour exactly.
 // A legacy single, un-keyed row written before per-mode keying is migrated

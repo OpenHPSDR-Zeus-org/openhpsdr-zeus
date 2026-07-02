@@ -31,7 +31,8 @@ public sealed class N1mmBroadcaster : IDisposable
 {
     private readonly ILogger<N1mmBroadcaster> _log;
     private readonly N1mmConfigStore _store;
-    private readonly SpottingManagementService? _operator;
+    private readonly OperatorIdentityStore? _identity;
+    private readonly QrzService? _qrz;
     private readonly SemaphoreSlim _sendGate = new(1, 1);
     private readonly object _sync = new();
     private N1mmConfig _config;
@@ -41,11 +42,16 @@ public sealed class N1mmBroadcaster : IDisposable
     public N1mmBroadcaster(
         ILogger<N1mmBroadcaster> log,
         N1mmConfigStore store,
-        SpottingManagementService? operatorIdentity = null)
+        // Optional so the existing broadcaster tests keep their 2-arg
+        // construction. Supplies the operator callsign for the contactinfo
+        // datagram via OperatorIdentityResolver (override → QRZ home fallback).
+        OperatorIdentityStore? identity = null,
+        QrzService? qrz = null)
     {
         _log = log;
         _store = store;
-        _operator = operatorIdentity;
+        _identity = identity;
+        _qrz = qrz;
         _config = _store.Get() ?? new N1mmConfig();
     }
 
@@ -80,7 +86,9 @@ public sealed class N1mmBroadcaster : IDisposable
 
         try
         {
-            var (myCall, _) = _operator?.ResolveOperator() ?? ("", "");
+            var (myCall, _) = _identity is not null && _qrz is not null
+                ? OperatorIdentityResolver.Resolve(_identity, _qrz)
+                : ("", "");
             var datagram = N1mmContactInfoEncoder.Encode(entry, myCall);
             await SendAsync(cfg, datagram, ct).ConfigureAwait(false);
             _log.LogInformation(

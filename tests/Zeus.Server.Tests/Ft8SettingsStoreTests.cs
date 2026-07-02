@@ -44,7 +44,7 @@ public sealed class Ft8SettingsStoreTests : IDisposable
         Assert.False(s.HoldTxFreq);
         Assert.Equal(0, s.DefaultTxSlot);
         Assert.Equal(1500, s.DefaultTxOffsetHz);
-        Assert.Equal(3, s.DecodePasses); // matches Ft8Service.DecodePasses (Deep/multi)
+        Assert.Equal(3, s.DecodePasses); // matches the decoder's default passes (Deep/multi)
         Assert.True(s.Rr73InsteadOfRrr); // RR73 ack — the engine's pre-settings default
         Assert.True(s.AutoLog);
         Assert.False(s.PromptBeforeLog);

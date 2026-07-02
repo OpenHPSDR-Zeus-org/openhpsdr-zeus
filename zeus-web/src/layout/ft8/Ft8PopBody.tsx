@@ -26,6 +26,8 @@ import { parseFt8Message } from '../../dsp/ft8-message';
 import { useLoggerStore } from '../../state/logger-store';
 import { useLayoutStore } from '../../state/layout-store';
 import { useHamClockStore } from '../../state/hamclock-store';
+import { useDigitalPluginStore } from '../../state/digital-plugin-store';
+import { useDigitalWorkedStore } from '../../state/digital-worked-store';
 import { useWorkspace } from '../WorkspaceContext';
 import { Ft8DecodeTable } from './Ft8DecodeTable';
 import { Ft8TxControl } from './Ft8TxControl';
@@ -54,8 +56,15 @@ export function Ft8PopBody() {
   const switchProtocol = useFt8Store((s) => s.switchProtocol);
   const qsyBand = useFt8Store((s) => s.qsyBand);
 
-  // Live keyer status (0x3A) + our own TX echoes for the decode-flow interleave.
+  // Live keyer status (txstatus SSE) + our own TX echoes for the interleave.
   const txEchoes = useFt8TxStore((s) => s.txEcho);
+
+  // SSE health for the degraded banner: decodes + TX lamps ride the plugin's
+  // event stream, which is independent of the app WS — when it is down the
+  // console can look fully connected while the lamps silently go stale, so it
+  // must be surfaced here.
+  const sseConnected = useDigitalPluginStore((s) => s.sseConnected);
+  const pluginLive = useDigitalPluginStore((s) => s.installed && s.live);
 
   // DECODE (the live operating view) vs MACROS (the compact message editor behind
   // the ✎ button). Full settings live in the main menu's Zeus Digital section.
@@ -142,7 +151,12 @@ export function Ft8PopBody() {
       });
       if (req) {
         if (s.reportToComment) req.comment = reportComment(req);
-        void useLoggerStore.getState().addLogEntry(req);
+        // Refresh the worked-before set once the entry lands so the station
+        // highlights amber on its very next decode.
+        void useLoggerStore
+          .getState()
+          .addLogEntry(req)
+          .then(() => useDigitalWorkedStore.getState().refresh());
       }
     },
   });
@@ -157,7 +171,7 @@ export function Ft8PopBody() {
     });
     if (req) {
       if (settings.reportToComment) req.comment = reportComment(req);
-      void addLogEntry(req);
+      void addLogEntry(req).then(() => useDigitalWorkedStore.getState().refresh());
       tx.markLogged();
     }
   };
@@ -305,6 +319,17 @@ export function Ft8PopBody() {
           ⚙
         </button>
       </div>
+
+      {/* Degraded banner — the plugin event stream (decodes / TX lamps) is not
+          flowing. Distinguishes a reconnecting stream from a dead plugin. */}
+      {!sseConnected && (
+        <div className="dw-banner" role="alert">
+          <strong>Live decode stream disconnected.</strong>{' '}
+          {pluginLive
+            ? 'Reconnecting to the Zeus Digital plugin — decodes and TX lamps resume automatically.'
+            : 'The Zeus Digital plugin is not responding — decodes and TX status are paused.'}
+        </div>
+      )}
 
       {/* Empty-call prompt — TX is gated on an operator callsign. */}
       {!myCall && (

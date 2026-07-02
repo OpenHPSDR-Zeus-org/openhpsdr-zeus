@@ -91,6 +91,8 @@ import App from './App.tsx';
 import { AppErrorBoundary } from './layout/AppErrorBoundary';
 import { installFetchInterceptor } from './serverUrl';
 import { loadInstalledPluginUis } from './plugins/runtime/pluginRuntime';
+import { usePluginsStore } from './plugins/state/plugins-store';
+import { useDigitalPluginStore } from './state/digital-plugin-store';
 // Side-effect import: registers the `beforeinstallprompt` capture before the
 // lazily-loaded mobile shell mounts, so the install banner can replay it.
 import './pwa/pwa-install';
@@ -103,6 +105,14 @@ installFetchInterceptor();
 // finish loading. The Add Panel modal subscribes via usePluginPanels()
 // and re-renders when entries land.
 void loadInstalledPluginUis();
+
+// Boot-time plugin gate: the FT8/FT4 mode buttons key off the plugins-store
+// installed list + the Zeus Digital liveness probe, and neither refreshes on
+// its own until the Plugins panel mounts — seed both here so the mode pickers
+// are correct from first paint. (Re-runs on every app-WS reconnect too — see
+// state/digital-plugin-store.ts.)
+void usePluginsStore.getState().refreshInstalled();
+void useDigitalPluginStore.getState().probe();
 
 // Seed the operator's chosen theme on <html> BEFORE React paints. The
 // ThemeApplier component reapplies on store changes; this just prevents

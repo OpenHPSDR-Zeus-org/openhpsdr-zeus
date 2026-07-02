@@ -13,6 +13,7 @@
 
 import { useFt8Store } from './ft8-store';
 import { useWsprStore } from './wspr-store';
+import { useDigitalPluginStore } from './digital-plugin-store';
 
 export const DIGITAL_ENTRY_KEYS = ['FT8', 'FT4', 'WSPR'] as const;
 export type DigitalEntryKey = (typeof DIGITAL_ENTRY_KEYS)[number];
@@ -22,10 +23,35 @@ export function isDigitalEntryKey(key: string): key is DigitalEntryKey {
 }
 
 /** WSPR is not ship-ready yet (untested; tracking map still pending). Gate it OFF
- *  in the UI so it cannot be engaged. FT8/FT4 unaffected. Flip to enable later. */
+ *  in the UI so it cannot be engaged — even WITH the Zeus Digital plugin
+ *  installed. FT8/FT4 unaffected. Flip to enable later. */
 export const DIGITAL_UNAVAILABLE: Partial<Record<DigitalEntryKey, true>> = { WSPR: true };
+
+/**
+ * The single availability predicate every entry point consults (mode tile,
+ * toolbar dropdown, Alt+8, #ft8/#ft4 hash — they all funnel into enterDigital,
+ * which re-checks it). REACTIVE via the digital-plugin store: FT8/FT4 need the
+ * Zeus Digital plugin installed AND live (routes mapped this boot); WSPR stays
+ * hard-gated regardless. Components re-render off useDigitalPluginStore, then
+ * call this for the answer.
+ */
 export function isDigitalEntryAvailable(key: DigitalEntryKey): boolean {
-  return !DIGITAL_UNAVAILABLE[key];
+  if (DIGITAL_UNAVAILABLE[key]) return false;
+  const plugin = useDigitalPluginStore.getState();
+  return plugin.installed && plugin.live;
+}
+
+/**
+ * Why a digital entry is greyed out (tooltip text), or null when available.
+ * Distinguishes not-installed from installed-but-not-restarted so the operator
+ * knows the next step, and keeps WSPR's "coming soon" wording.
+ */
+export function digitalEntryUnavailableReason(key: DigitalEntryKey): string | null {
+  if (DIGITAL_UNAVAILABLE[key]) return `${key} — coming soon (not yet available)`;
+  const plugin = useDigitalPluginStore.getState();
+  if (!plugin.installed) return 'Install the Zeus Digital plugin (Settings → Plugins)';
+  if (!plugin.live) return 'Restart Zeus to activate the Zeus Digital plugin';
+  return null;
 }
 
 /**

@@ -21,6 +21,7 @@
 // never POSTs /tx. Arming is still EXPLICIT ONLY (controller.enableTx()).
 
 import { useEffect, useRef, useState } from 'react';
+import { DIGITAL_PLUGIN_BASE } from '../api/digital-plugin';
 import { useFt8Store, type Ft8Row } from '../state/ft8-store';
 import { Ft8TxController, type Ft8TxBehavior } from './ft8-tx-controller';
 import { parseFt8Message } from './ft8-message';
@@ -190,7 +191,7 @@ export function startFt8SlotDriver(opts: {
 export function beaconDisarm(): void {
   try {
     const body = new Blob([JSON.stringify({ enabled: false })], { type: 'application/json' });
-    navigator.sendBeacon?.('/api/ft8/tx/arm', body);
+    navigator.sendBeacon?.(`${DIGITAL_PLUGIN_BASE}/ft8/tx/arm`, body);
   } catch {
     // sendBeacon unavailable / blocked — the backend watchdog is the backstop.
   }

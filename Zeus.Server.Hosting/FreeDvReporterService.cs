@@ -320,8 +320,7 @@ public sealed class FreeDvReporterService : BackgroundService
     // Operator callsign/grid. Precedence per field: the shared OperatorIdentity
     // override first, then this reporter's own settings (legacy/secondary, kept
     // additively), then the QRZ home station. Returns ("","") when no source has
-    // them. Shared with SpottingManagementService and /api/operator via
-    // OperatorIdentityResolver.
+    // them. Shared with /api/operator via OperatorIdentityResolver.
     private (string Call, string Grid) ResolveOperator(FreeDvReporterSettings settings) =>
         OperatorIdentityResolver.Resolve(_identity, _qrz, settings.Callsign, settings.GridSquare);
 

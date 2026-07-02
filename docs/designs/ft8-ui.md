@@ -1,5 +1,13 @@
 # FT8 mode — UI design direction
 
+> **STATUS NOTE (2026-07-01): backend extracted to a plugin.** The FT8/FT4/WSPR
+> backend (decoders, TX keying/auto-sequencing, spotting, WSJT-X egress) now
+> lives in the `openhpsdr-zeus-plugins` repo under `modes/Digital/` as the
+> **Zeus Digital** plugin (`com.kb2uka.digital`). This document covers the
+> **in-core UI shell** that remains in Zeus — the pop-out, mode gating, stores,
+> and settings surfaces — which talks to the plugin over
+> `/api/plugins/com.kb2uka.digital/*` (REST + SSE).
+
 Status: **SHIPPED as a FreeDV-style pop-out (2026-06-27), superseding the
 full-screen workspace below.** Source of truth for the look/feel of Zeus's
 built-in FT8/FT4/WSPR UI. Original direction provided by KB2UKA 2026-06-25;

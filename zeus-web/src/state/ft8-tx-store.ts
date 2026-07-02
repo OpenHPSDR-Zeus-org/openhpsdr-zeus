@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// FT8/FT4/WSPR TX keyer status store. Holds the authoritative keyer state pushed
-// by the backend as 0x3A Ft8TxStatus WS frames (one per arm/stage/transmit
-// edge). The TX HUD renders the arm/transmit lamps from THIS — what the backend
-// actually keyed — not from what the operator staged locally. Mirrors the
-// ft8-store / ptt-store split: WS push for live state.
+// FT8/FT4/WSPR TX keyer status store. Holds the authoritative keyer state
+// pushed by the Zeus Digital plugin as `txstatus` SSE events (one per arm/
+// stage/transmit edge — payload identical to the old 0x3A WS frame), dispatched
+// in state/digital-plugin-store.ts. The TX HUD renders the arm/transmit lamps
+// from THIS — what the backend actually keyed — not from what the operator
+// staged locally. Mirrors the ft8-store / ptt-store split: push for live state,
+// with a GET /ft8/tx re-hydrate on every SSE (re)connect so a push gap can
+// never leave the lamps stale.
 
 import { create } from 'zustand';
 
-/** The 0x3A Ft8TxStatusDto payload (camelCase JSON off the wire). */
+/** The `txstatus` Ft8TxStatusDto payload (camelCase JSON off the wire). */
 export interface Ft8TxStatus {
   armed: boolean;
   transmitting: boolean;

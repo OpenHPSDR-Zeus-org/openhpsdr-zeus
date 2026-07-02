@@ -16,10 +16,11 @@ import {
   type SpottingStatus,
 } from '../api/spotting';
 
-// The backend (SpottingSettingsStore on disk) is the source of truth. The form
-// initialises from /api/spotting/status once it arrives. Do NOT seed from
-// localStorage and do NOT auto-POST on load (same lesson as TCI/CAT/WSJT-X).
-// Both uploaders default OFF — new network egress is opt-in only.
+// The Zeus Digital plugin (its IPluginSettings store) is the source of truth.
+// The form initialises from the plugin's /spotting/status once it arrives —
+// which fails harmlessly while the plugin is absent (the panel greys out).
+// Do NOT seed from localStorage and do NOT auto-POST on load (same lesson as
+// TCI/CAT/WSJT-X). Both uploaders default OFF — network egress is opt-in only.
 const DEFAULT_CONFIG: SpottingConfig = {
   pskReporterEnabled: false,
   wsprnetEnabled: false,

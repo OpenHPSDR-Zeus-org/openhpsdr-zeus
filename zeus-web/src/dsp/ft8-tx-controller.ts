@@ -17,6 +17,7 @@
 // to /arm {enabled:false} and /halt. A message is only staged when enableTx is
 // true, so a disarmed controller never POSTs /tx.
 
+import { DIGITAL_PLUGIN_BASE } from '../api/digital-plugin';
 import { parseFt8Message } from './ft8-message';
 import { FT8_MAX_TX_OFFSET_HZ, FT8_MIN_OFFSET_HZ } from './ft8-passband';
 import {
@@ -398,7 +399,7 @@ export class Ft8TxController {
   // ---- backend POSTs ------------------------------------------------------
 
   private postStage(message: string): Promise<unknown> {
-    return this.post('/api/ft8/tx', {
+    return this.post(`${DIGITAL_PLUGIN_BASE}/ft8/tx`, {
       message,
       audioHz: this.audioHz,
       slot: this.state.txSlot,
@@ -407,11 +408,11 @@ export class Ft8TxController {
   }
 
   private postArm(enabled: boolean): Promise<unknown> {
-    return this.post('/api/ft8/tx/arm', { enabled });
+    return this.post(`${DIGITAL_PLUGIN_BASE}/ft8/tx/arm`, { enabled });
   }
 
   private postHalt(): Promise<unknown> {
-    return this.post('/api/ft8/tx/halt', {});
+    return this.post(`${DIGITAL_PLUGIN_BASE}/ft8/tx/halt`, {});
   }
 
   private async post(url: string, body: unknown): Promise<unknown> {

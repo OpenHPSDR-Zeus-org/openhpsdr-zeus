@@ -1,6 +1,6 @@
 ## Digital Modes — FreeDV, RADE & FT8/FT4
 
-Zeus runs the popular digital modes **natively** — there is no second program to launch, no virtual audio cable to wire up, and no CAT loop-back to configure. Two families live here: **FreeDV** (and the new neural **RADE** waveform) for digital *voice*, and **FT8 / FT4** for the weak-signal *data* modes that dominate today's HF bands. This chapter covers selecting them, the panels that appear, and how Zeus logs and reports your contacts.
+Zeus runs the popular digital modes **natively** — there is no second program to launch, no virtual audio cable to wire up, and no CAT loop-back to configure. Two families live here: **FreeDV** (and the new neural **RADE** waveform) for digital *voice*, and **FT8 / FT4** for the weak-signal *data* modes that dominate today's HF bands. FreeDV is built into every Zeus download; FT8 and FT4 are delivered by the free **Zeus Digital plugin**, installed in a minute from **Settings → Plugins** — and once it is in, they run natively just the same. This chapter covers installing and selecting them, the panels that appear, and how Zeus logs and reports your contacts.
 
 The classic data modes you drive with *external* software — RTTY, PSK31, JS8 — still use the **DIGL / DIGU** modes from the previous chapter together with CAT control (see *Connecting*). FreeDV and FT8/FT4 are different: Zeus decodes and transmits them itself.
 
@@ -41,7 +41,17 @@ Key up the way you normally would (MOX, PTT, or a footswitch). Zeus encodes your
 
 ### FT8 and FT4 — the Zeus Digital suite
 
-**FT8** and **FT4** are the weak-signal data modes you hear all over the bands — fixed-length transmissions on a strict timing cycle that decode signals far below the noise floor. Zeus has a **complete FT8/FT4 client built in**, so you can work the band without WSJT-X or any companion program.
+**FT8** and **FT4** are the weak-signal data modes you hear all over the bands — fixed-length transmissions on a strict timing cycle that decode signals far below the noise floor. Zeus's **complete FT8/FT4 client** ships as the installable **Zeus Digital** plugin, so you can work the band without WSJT-X or any companion program.
+
+#### Installing the Zeus Digital plugin
+
+The **FT8** and **FT4** buttons are always present on the Mode panel (and in the toolbar mode drop-down), but they stay **greyed out** until the plugin is active. Hover a greyed button and its tooltip tells you exactly what to do next:
+
+1. Open **Settings → Plugins**, find **Zeus Digital · FT8/FT4** in the plugin browser, and click **Install**.
+2. **Restart Zeus once** when prompted — plugins register when the server starts, so until then the buttons stay greyed with a *"Restart Zeus to activate"* tooltip.
+3. After the restart, **FT8** and **FT4** light up and behave like any other mode.
+
+That's it — nothing to unpack and nothing to configure. Because Zeus Digital is a plugin, it also updates independently of Zeus itself, from the same Plugins page. If you later uninstall it, the mode buttons simply grey out again; your call sign, grid, and digital settings are kept on the server for the next install.
 
 Select **FT8** or **FT4** from the Mode panel, and the **Zeus Digital** workspace appears. It can pop out into its own window, where it reuses the main panadapter, your QRZ look-ups, and the Zeus logbook — so there is nothing redundant to learn.
 
@@ -79,14 +89,14 @@ Because Zeus speaks the standard WSJT-X protocol, anything that already works wi
 
 #### WSPR is coming
 
-**WSPR** (the very-low-power beacon mode) is present in the engine but **disabled in the UI for this release** — its button is greyed out and selecting it does nothing. It returns in a later release once its reporting map lands. **FT8 and FT4 are the live data modes today.**
+**WSPR** (the very-low-power beacon mode) is present in the engine but **disabled in the UI for this release** — its button stays greyed out even with the Zeus Digital plugin installed, and selecting it does nothing. It returns in a later release once its reporting map lands. **FT8 and FT4 are the live data modes today.**
 
 ### Which digital mode should I pick?
 
 | You want to… | Use |
 |--------------|-----|
 | Have a clean, noise-free *voice* QSO or join a digital-voice net | **FreeDV** (AUTO, or RADE for best quality) |
-| Work weak-signal *data* contacts, chase DX/grids, spot the band | **FT8** (or **FT4** for a faster cycle) |
+| Work weak-signal *data* contacts, chase DX/grids, spot the band | **FT8** (or **FT4** for a faster cycle) — install the **Zeus Digital** plugin |
 | Run RTTY / PSK31 / JS8 in external software | **DIGL / DIGU** + CAT (see *Connecting*) |
 
 All three coexist with the rest of Zeus — the logbook, QRZ look-ups, the panadapter, spotting, and (for FT8/FT4) the multi-receiver and remote-operation features in the chapters that follow.

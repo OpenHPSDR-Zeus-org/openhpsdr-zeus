@@ -125,6 +125,7 @@ vi.mock('../api/cloud-log', () => {
 
 import { ZeusDigitalSettingsPanel } from './ZeusDigitalSettingsPanel';
 import { useFt8Store } from '../state/ft8-store';
+import { useDigitalPluginStore } from '../state/digital-plugin-store';
 import { useFt8SettingsStore } from '../state/ft8-settings-store';
 import { useLayoutStore } from '../state/layout-store';
 import { useWsjtxStore } from '../state/wsjtx-store';
@@ -190,6 +191,9 @@ function clickByText(container: HTMLElement, text: string) {
 describe('ZeusDigitalSettingsPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: the Zeus Digital plugin is installed + live (the historical
+    // behaviour). The plugin-absent banner/gating has its own tests below.
+    useDigitalPluginStore.setState({ installed: true, live: true, probed: true });
     useFt8Store.setState({ enabled: false, passes: 3, receiver: -1, protocol: 'FT8' });
     useFt8SettingsStore.setState({
       byMode: { FT8: FT8_DEFAULTS, FT4: FT8_DEFAULTS, WSPR: FT8_DEFAULTS },
@@ -426,6 +430,38 @@ describe('ZeusDigitalSettingsPanel', () => {
     expect(cloudLogApi.postCloudLogCredentials).toHaveBeenCalledWith(
       expect.objectContaining({ wavelogApiKey: 'SECRETKEY' }),
     );
+    unmount();
+  });
+
+  it('shows the install banner and greys the live-decode toggle when the plugin is absent', () => {
+    useDigitalPluginStore.setState({ installed: false, live: false, probed: true });
+    const { container, unmount } = render(createElement(ZeusDigitalSettingsPanel));
+    expect(container.textContent).toContain('Zeus Digital plugin, which is not installed');
+    // Core-stored per-mode controls stay editable (autoseq/decode depth).
+    const autoSeq = container.querySelector(
+      'button[aria-label="Auto-sequence"]',
+    ) as HTMLButtonElement;
+    expect(autoSeq.disabled).toBe(false);
+    // The WSJT-X live-decode toggle is plugin-hosted — greyed out.
+    clickSwitch(container, 'Also send to an external logger');
+    const live = container.querySelector(
+      'button[aria-label="Send live decodes & status (for GridTracker)"]',
+    ) as HTMLButtonElement;
+    expect(live.disabled).toBe(true);
+    unmount();
+  });
+
+  it('shows the restart banner when the plugin is installed but not live', () => {
+    useDigitalPluginStore.setState({ installed: true, live: false, probed: true });
+    const { container, unmount } = render(createElement(ZeusDigitalSettingsPanel));
+    expect(container.textContent).toContain('restart Zeus to activate');
+    unmount();
+  });
+
+  it('hides the plugin banner when the plugin is installed and live', () => {
+    const { container, unmount } = render(createElement(ZeusDigitalSettingsPanel));
+    expect(container.textContent).not.toContain('restart Zeus to activate');
+    expect(container.textContent).not.toContain('not installed');
     unmount();
   });
 

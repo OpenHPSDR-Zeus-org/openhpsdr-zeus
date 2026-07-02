@@ -195,15 +195,21 @@ public class PluginInstallerTests : IDisposable
         // On Windows the ALC keeps the plugin DLL open until GC reclaims
         // it; UninstallAsync surfaces that as a "deferred" PluginInstallException
         // by design. The deactivation MUST succeed on every platform;
-        // the dir removal is best-effort.
+        // the dir removal is best-effort — but a deferred removal MUST leave
+        // the .pending-delete marker so PluginManager.StartAsync completes
+        // (not resurrects) the uninstall on the next boot.
         try
         {
             await _installer.UninstallAsync("com.openhpsdr.zeus.samples.helloworld", default);
+            Assert.False(Directory.Exists(installed.Directory));
         }
         catch (PluginInstallException ex) when (ex.Message.Contains("could not be removed yet"))
         {
             // Windows-only: ALC unload latency. Test contract is just
-            // that deactivation happens — which it did before the throw.
+            // that deactivation happens — which it did before the throw —
+            // and that the deferred dir carries the pending-delete marker.
+            Assert.True(File.Exists(
+                Path.Combine(installed.Directory, PluginManager.PendingDeleteMarker)));
         }
         Assert.Null(_manager.Find("com.openhpsdr.zeus.samples.helloworld"));
     }

@@ -10,6 +10,15 @@ see the corresponding GitHub Release page.
 
 ---
 
+## [Unreleased]
+
+### 📡 FT8 / FT4 — the Zeus Digital suite is now an installable plugin
+
+- **The FT8/FT4/WSPR digital suite has moved out of the core and into an installable plugin — "Zeus Digital · FT8/FT4" (`com.kb2uka.digital`).** Following the WAV recorder's lead, the whole digital engine — decoding, click-to-tune, armed auto-sequencing TX, auto-logging, PSK Reporter / WSPRnet spotting, and the WSJT-X UDP live-decode stream — now installs from **Settings → Plugins** and updates independently of Zeus, keeping the core download lean. The **FT8** and **FT4** mode buttons stay right where they are, in the Mode panel and the toolbar mode drop-down: they show greyed out with an explanatory tooltip until the plugin is installed (one restart to activate), then light up and work **exactly as they did when built in** — same pop-out "Zeus Digital" window, same auto-sequencing, logbook, spotting, and GridTracker/QRZ/N1MM integrations.
+- **Upgrading from a release with built-in FT8?** Install the plugin once and restart — your call sign, grid, and digital settings carry over automatically. The PSK Reporter / WSPRnet spotting and WSJT-X live-decode toggles (all off by default) move into the plugin and need re-enabling once if you had them on. **WSPR stays greyed out** even with the plugin installed, exactly as before — it returns once its reporting map lands.
+
+---
+
 ## [0.10.8] — 2026-06-30
 
 > **🔧 Hotfix for ANAN-10E and ANAN-G2E PureSignal.** The 0.10.7 release added single-ADC PureSignal for the **ANAN-10E (HermesII)** and **ANAN-G2E (HermesC10)** — but it shipped with the path switched **off**, so owners had no way to actually try it. This release flips that switch: **PureSignal now engages on the normal PS button on the 10E and G2E, exactly like every other board** — no special steps. It stays **experimental** and **we still want your on-air reports** if you run one of these radios.

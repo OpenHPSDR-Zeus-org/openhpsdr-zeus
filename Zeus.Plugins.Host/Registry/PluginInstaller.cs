@@ -152,7 +152,19 @@ public sealed class PluginInstaller
                 // IOException ("file in use") and UnauthorizedAccessException
                 // ("access denied") surface depending on the open mode.
                 // Either way the deactivation succeeded; the dir cleanup
-                // needs an explicit GC + retry, or a Zeus restart.
+                // needs an explicit GC + retry, or a Zeus restart. Drop the
+                // pending-delete marker so PluginManager.StartAsync finishes
+                // the removal on the next boot INSTEAD of re-activating the
+                // leftover dir (the "uninstall resurrection" bug).
+                try
+                {
+                    File.WriteAllText(Path.Combine(dir, PluginManager.PendingDeleteMarker), "");
+                }
+                catch (Exception markerEx)
+                {
+                    _log?.LogWarning(markerEx,
+                        "Could not write {Marker} in {Dir}", PluginManager.PendingDeleteMarker, dir);
+                }
                 _log?.LogWarning(ex,
                     "Could not delete plugin dir {Dir} immediately; restart Zeus to finish removal.", dir);
                 throw new PluginInstallException(

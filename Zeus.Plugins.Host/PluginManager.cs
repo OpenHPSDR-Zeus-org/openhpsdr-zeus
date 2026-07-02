@@ -78,8 +78,17 @@ public sealed class PluginManager : IHostedService, IAsyncDisposable
         if (!Directory.Exists(root)) Directory.CreateDirectory(root);
         _log.LogInformation("Plugin root: {Root}", root);
 
+        // Complete deferred uninstalls FIRST. On Windows the ALC keeps plugin
+        // DLLs file-locked past deactivation (until a full GC), so
+        // PluginInstaller.UninstallAsync can fail the directory delete and
+        // instead drops a .pending-delete marker. Without this sweep the next
+        // boot would re-activate the "uninstalled" plugin from its leftover
+        // dir — the uninstall silently undone.
+        SweepPendingDeletes(root);
+
         var pluginDirs = Directory.EnumerateDirectories(root)
-            .Where(d => File.Exists(Path.Combine(d, "plugin.json")))
+            .Where(d => File.Exists(Path.Combine(d, "plugin.json"))
+                        && !File.Exists(Path.Combine(d, PendingDeleteMarker)))
             .ToArray();
 
         foreach (var dir in pluginDirs)
@@ -91,6 +100,30 @@ public sealed class PluginManager : IHostedService, IAsyncDisposable
             catch (Exception ex)
             {
                 _log.LogError(ex, "Failed to activate plugin from {Dir}", dir);
+            }
+        }
+    }
+
+    /// <summary>Marker file a deferred uninstall leaves in a plugin dir whose
+    /// files were still locked at uninstall time (Windows ALC file locks).
+    /// Marked dirs are deleted — and never activated — on the next boot.</summary>
+    public const string PendingDeleteMarker = ".pending-delete";
+
+    private void SweepPendingDeletes(string root)
+    {
+        foreach (var dir in Directory.EnumerateDirectories(root))
+        {
+            if (!File.Exists(Path.Combine(dir, PendingDeleteMarker))) continue;
+            try
+            {
+                Directory.Delete(dir, recursive: true);
+                _log.LogInformation("Completed deferred uninstall of {Dir}", dir);
+            }
+            catch (Exception ex)
+            {
+                // Still locked somehow — leave the marker in place so the dir
+                // stays excluded from activation and the next boot retries.
+                _log.LogWarning(ex, "Could not complete deferred uninstall of {Dir}; will retry next start.", dir);
             }
         }
     }
@@ -134,8 +167,13 @@ public sealed class PluginManager : IHostedService, IAsyncDisposable
                 : null,
             // Audio playback sink (local monitor + on-air TX inject). Provided
             // by the host when available; on-air only reaches the air under
-            // operator MOX, so this is not capability-gated here.
-            playback: _services.GetService<IAudioPlaybackSink>(),
+            // operator MOX, so this is not capability-gated here. Prefer the
+            // per-plugin factory — the sink's over-air resampler is stateful,
+            // so two plugins sharing one instance would leak residual samples
+            // into each other's first block — falling back to a host-wide
+            // singleton for hosts that only register that.
+            playback: _services.GetService<Func<IAudioPlaybackSink>>()?.Invoke()
+                ?? _services.GetService<IAudioPlaybackSink>(),
             // QRZ callsign lookup, gated on NetworkAccess — the host reuses the
             // operator's stored credentials + rate-limit gate (no second login).
             qrz: granted.HasFlag(PluginCapabilities.NetworkAccess)

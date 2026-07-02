@@ -9,6 +9,7 @@ import { createElement } from 'react';
 import { act, render } from '../../components/meters/__tests__/harness';
 import { Ft8DecodeTable } from './Ft8DecodeTable';
 import { useFt8Store, type Ft8Row } from '../../state/ft8-store';
+import { useDigitalWorkedStore } from '../../state/digital-worked-store';
 
 function row(text: string, i: number, extra?: Partial<Ft8Row>): Ft8Row {
   return {
@@ -40,6 +41,7 @@ describe('Ft8DecodeTable filters', () => {
   beforeEach(() => {
     act(() => {
       useFt8Store.setState({ rows: ROWS });
+      useDigitalWorkedStore.setState({ calls: new Set<string>(), loaded: false });
     });
   });
 
@@ -68,6 +70,33 @@ describe('Ft8DecodeTable filters', () => {
       }),
     );
     expect(bodyRowCount(container)).toBe(3); // the workedBefore W1AW row is hidden
+    unmount();
+  });
+
+  it('decorates worked-before at render time from digital-worked-store', () => {
+    act(() => {
+      // K9QQQ is the sender of the 'K7XYZ K9QQQ FN31' row — once the worked
+      // set lands, that row lights up WITHOUT re-ingesting anything.
+      useDigitalWorkedStore.setState({ calls: new Set(['K9QQQ']), loaded: true });
+    });
+    const { container, unmount } = render(
+      createElement(Ft8DecodeTable, { myCall: 'MYCALL' }),
+    );
+    const worked = container.querySelectorAll('tbody tr.ft8-row--worked');
+    // The set-decorated K9QQQ row + the legacy-flagged W1AW row.
+    expect(worked.length).toBe(2);
+    unmount();
+  });
+
+  it('Hide-worked-before also drops rows decorated from the worked set', () => {
+    act(() => {
+      useDigitalWorkedStore.setState({ calls: new Set(['K9QQQ']), loaded: true });
+    });
+    const { container, unmount } = render(
+      createElement(Ft8DecodeTable, { myCall: 'MYCALL', hideWorkedBefore: true }),
+    );
+    // 4 rows − legacy-flag W1AW − set-decorated K9QQQ = 2.
+    expect(bodyRowCount(container)).toBe(2);
     unmount();
   });
 

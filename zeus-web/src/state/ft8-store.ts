@@ -3,12 +3,15 @@
 // FT8/FT4 decode store. Holds the rolling list of decoded messages for the FT8
 // workspace decode table, plus the enable/protocol/native-availability state.
 //
-// Decodes arrive as 0x38 Ft8Decode WS frames (one per completed UTC slot),
-// parsed in realtime/ws-client.ts and applied via ingest(). Enable/disable and
-// status hydrate from /api/ft8 (server-authoritative). Mirrors the chat-store /
-// ptt-store split: REST for control state, WS push for the live stream.
+// Decodes arrive as `ft8decode` SSE events from the Zeus Digital plugin (one
+// per completed UTC slot — the payload is byte-identical to the old 0x38 WS
+// frame), dispatched in state/digital-plugin-store.ts and applied via
+// ingest(). Enable/disable and status hydrate from the plugin's /ft8 endpoints
+// (server-authoritative). Mirrors the chat-store / ptt-store split: REST for
+// control state, push for the live stream.
 
 import { create } from 'zustand';
+import { DIGITAL_PLUGIN_BASE } from '../api/digital-plugin';
 import { nearestDigitalBand } from '../dsp/digital-segments';
 import {
   configureRadioForDigital,
@@ -27,15 +30,17 @@ export interface Ft8DecodeDto {
   freqHz: number;
   score: number;
   text: string;
-  /** Server-side enrichment: the sender callsign has a prior FT8/FT4 QSO in the
-   *  logbook (digital worked-before — NOT SSB/CW). Absent on older servers. */
+  /** Legacy server-side enrichment (always false from the Zeus Digital plugin
+   *  — the plugin has no logbook access). The decode table derives worked-
+   *  before at render time from digital-worked-store instead; the field is
+   *  kept as a harmless fallback for older payloads. */
   workedBefore?: boolean;
   /** Server-side enrichment: abbreviated DXCC entity derived from the sender's
    *  callsign prefix (FT8 never transmits country). null/absent when unknown. */
   country?: string | null;
 }
 
-/** A completed slot's decodes for one receiver (the 0x38 payload). */
+/** A completed slot's decodes for one receiver (the `ft8decode` payload). */
 export interface Ft8DecodeBatch {
   receiver: number;
   slotStartUnixMs: number;
@@ -87,9 +92,9 @@ interface Ft8State {
   switchProtocol: (protocol: Ft8ProtocolName) => void;
   /** QSY to a band's dial for the active protocol (workspace band buttons). */
   qsyBand: (bandName: string) => void;
-  /** Apply a 0x38 decode batch (newest rows first). */
+  /** Apply a decode batch (`ft8decode` SSE event; newest rows first). */
   ingest: (batch: Ft8DecodeBatch) => void;
-  /** Hydrate enable/native/protocol from GET /api/ft8. */
+  /** Hydrate enable/native/protocol from the plugin's GET /ft8. */
   refreshStatus: (signal?: AbortSignal) => Promise<void>;
   /** Enter FT8/FT4 decode on a receiver. */
   enable: (opts?: { receiver?: number; protocol?: Ft8ProtocolName; passes?: number }) => Promise<boolean>;
@@ -178,8 +183,8 @@ export const useFt8Store = create<Ft8State>((set, get) => ({
 
   refreshStatus: async (signal) => {
     try {
-      const res = await fetch('/api/ft8', { signal });
-      if (!res.ok) throw new Error(`GET /api/ft8 → ${res.status}`);
+      const res = await fetch(`${DIGITAL_PLUGIN_BASE}/ft8`, { signal });
+      if (!res.ok) throw new Error(`GET ${DIGITAL_PLUGIN_BASE}/ft8 → ${res.status}`);
       const j = (await res.json()) as Record<string, unknown>;
       set({
         nativeAvailable: j.nativeAvailable === true,
@@ -196,7 +201,7 @@ export const useFt8Store = create<Ft8State>((set, get) => ({
 
   enable: async (opts) => {
     try {
-      const res = await fetch('/api/ft8/enable', {
+      const res = await fetch(`${DIGITAL_PLUGIN_BASE}/ft8/enable`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -205,7 +210,7 @@ export const useFt8Store = create<Ft8State>((set, get) => ({
           passes: opts?.passes ?? get().passes,
         }),
       });
-      if (!res.ok) throw new Error(`POST /api/ft8/enable → ${res.status}`);
+      if (!res.ok) throw new Error(`POST ${DIGITAL_PLUGIN_BASE}/ft8/enable → ${res.status}`);
       const j = (await res.json()) as Record<string, unknown>;
       const ok = j.enabled === true;
       set({
@@ -224,7 +229,7 @@ export const useFt8Store = create<Ft8State>((set, get) => ({
 
   disable: async () => {
     try {
-      await fetch('/api/ft8/disable', { method: 'POST' });
+      await fetch(`${DIGITAL_PLUGIN_BASE}/ft8/disable`, { method: 'POST' });
     } catch {
       /* best-effort */
     }

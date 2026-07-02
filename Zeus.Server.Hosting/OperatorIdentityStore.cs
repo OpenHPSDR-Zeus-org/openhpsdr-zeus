@@ -7,10 +7,11 @@
 //
 // OperatorIdentityStore — persists the single shared station callsign + grid
 // (OperatorIdentity) in a single-row LiteDB collection sharing zeus-prefs.db,
-// mirroring SpottingSettingsStore / FreeDvReporterSettingsStore. First run (no
-// row) returns the empty default, which means "no override — fall back to QRZ".
-// This is the one place operator identity is stored; the spotting / FreeDV /
-// FT8-TX resolvers all read it first (see OperatorIdentityResolver).
+// mirroring FreeDvReporterSettingsStore. First run (no row) returns the empty
+// default, which means "no override — fall back to QRZ". This is the one place
+// operator identity is stored; the FreeDV / log-broadcast resolvers read it
+// first (see OperatorIdentityResolver), and the Zeus Digital plugin gets it
+// pushed by the core UI.
 
 using LiteDB;
 using Zeus.Contracts;
