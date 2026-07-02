@@ -5,6 +5,7 @@
 
 const WORKSPACE_WINDOW_PARAM = 'workspaceWindow';
 const WORKSPACE_LAYOUT_PARAM = 'layout';
+const SETTINGS_WINDOW_PARAM = 'settingsWindow';
 
 interface PhotinoExternal {
   sendMessage?: (message: string) => void;
@@ -16,8 +17,18 @@ interface PhotinoWindowSurface {
 
 export function detachedWorkspaceUrl(layoutId: string): string {
   const url = new URL(window.location.href);
+  url.searchParams.delete(SETTINGS_WINDOW_PARAM);
   url.searchParams.set(WORKSPACE_WINDOW_PARAM, '1');
   url.searchParams.set(WORKSPACE_LAYOUT_PARAM, layoutId);
+  url.hash = '';
+  return url.toString();
+}
+
+export function detachedSettingsUrl(): string {
+  const url = new URL(window.location.href);
+  url.searchParams.delete(WORKSPACE_WINDOW_PARAM);
+  url.searchParams.delete(WORKSPACE_LAYOUT_PARAM);
+  url.searchParams.set(SETTINGS_WINDOW_PARAM, '1');
   url.hash = '';
   return url.toString();
 }
@@ -27,6 +38,11 @@ export function currentDetachedWorkspaceLayoutId(): string | null {
   return sp.get(WORKSPACE_WINDOW_PARAM) === '1'
     ? sp.get(WORKSPACE_LAYOUT_PARAM)
     : null;
+}
+
+export function isDetachedSettingsWindow(): boolean {
+  const sp = new URLSearchParams(window.location.search);
+  return sp.get(SETTINGS_WINDOW_PARAM) === '1';
 }
 
 /** True when running inside the Photino desktop shell (the host bridge that
@@ -81,6 +97,26 @@ export function openWorkspaceWindow(layoutId: string, title: string): void {
   window.open(
     url,
     `zeus-workspace-${layoutId}`,
+    'popup,width=1180,height=760,noopener,noreferrer',
+  );
+}
+
+export function openSettingsWindow(): void {
+  const url = detachedSettingsUrl();
+  const external = (window as unknown as PhotinoWindowSurface).external;
+  const sendMessage = external?.sendMessage;
+  if (typeof sendMessage === 'function') {
+    sendMessage(JSON.stringify({
+      type: 'zeus.openSettingsWindow',
+      title: 'Settings',
+      url,
+    }));
+    return;
+  }
+
+  window.open(
+    url,
+    'zeus-settings',
     'popup,width=1180,height=760,noopener,noreferrer',
   );
 }

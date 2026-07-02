@@ -349,6 +349,11 @@
 .left-layout-bar .lb-tab-settings {
   flex: 1;
 }
+.left-layout-bar .lb-settings-slot.dragging .lb-tab-settings {
+  border-color: var(--accent);
+  color: var(--accent);
+  opacity: 0.72;
+}
 .left-layout-bar .lb-tab-settings.active {
   border-color: var(--accent);
   color: var(--accent);

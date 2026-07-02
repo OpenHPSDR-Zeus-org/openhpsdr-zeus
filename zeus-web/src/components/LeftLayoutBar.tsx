@@ -41,7 +41,7 @@ import {
 } from '../layout/LayoutSettingsModal';
 import { EMPTY_WORKSPACE_LAYOUT } from '../layout/workspace';
 import { ConfirmDialog } from '../layout/ConfirmDialog';
-import { openWorkspaceWindow } from '../layout/workspace-windows';
+import { openSettingsWindow, openWorkspaceWindow } from '../layout/workspace-windows';
 
 type ModalState =
   | { kind: 'closed' }
@@ -100,6 +100,7 @@ export function LeftLayoutBar() {
   // Create-mode "Start from" selection: '' = blank, else a saved-layout id.
   const [createSourceId, setCreateSourceId] = useState('');
   const [draggingLayoutId, setDraggingLayoutId] = useState<string | null>(null);
+  const [settingsDragging, setSettingsDragging] = useState(false);
   const lockedLayoutIds = useMemo(
     () =>
       new Set(
@@ -202,22 +203,40 @@ export function LeftLayoutBar() {
     e.dataTransfer.setData('text/plain', name);
   };
 
+  const isDragEndOutsideDock = (e: DragEvent<HTMLButtonElement>) => {
+    const rect = barRef.current?.getBoundingClientRect();
+    if (!rect) return false;
+    const hasClientPoint = e.clientX !== 0 || e.clientY !== 0;
+    return !(
+      hasClientPoint &&
+      e.clientX >= rect.left &&
+      e.clientX <= rect.right &&
+      e.clientY >= rect.top &&
+      e.clientY <= rect.bottom
+    );
+  };
+
   const handleLayoutDragEnd = (
     e: DragEvent<HTMLButtonElement>,
     layout: { id: string; name: string },
   ) => {
     setDraggingLayoutId(null);
-    const rect = barRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const hasClientPoint = e.clientX !== 0 || e.clientY !== 0;
-    const inDock =
-      hasClientPoint &&
-      e.clientX >= rect.left &&
-      e.clientX <= rect.right &&
-      e.clientY >= rect.top &&
-      e.clientY <= rect.bottom;
-    if (!inDock) {
+    if (isDragEndOutsideDock(e)) {
       openWorkspaceWindow(layout.id, layout.name);
+    }
+  };
+
+  const handleSettingsDragStart = (e: DragEvent<HTMLButtonElement>) => {
+    setSettingsDragging(true);
+    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.setData('application/x-zeus-settings', '1');
+    e.dataTransfer.setData('text/plain', 'Settings');
+  };
+
+  const handleSettingsDragEnd = (e: DragEvent<HTMLButtonElement>) => {
+    setSettingsDragging(false);
+    if (isDragEndOutsideDock(e)) {
+      openSettingsWindow();
     }
   };
 
@@ -316,12 +335,15 @@ export function LeftLayoutBar() {
 
       <div className="lb-divider" aria-hidden />
 
-      <div className="lb-settings-slot">
+      <div className={`lb-settings-slot ${settingsDragging ? 'dragging' : ''}`}>
         <button
           type="button"
           className={`lb-tab lb-tab-settings ${settingsViewOpen ? 'active' : ''}`}
+          draggable
+          onDragStart={handleSettingsDragStart}
+          onDragEnd={handleSettingsDragEnd}
           onClick={() => setSettingsView(!settingsViewOpen)}
-          title="Open settings"
+          title="Open settings — drag off the dock to open in a window"
           aria-pressed={settingsViewOpen}
         >
           <span className="lb-tab-icon" aria-hidden>⚙</span>

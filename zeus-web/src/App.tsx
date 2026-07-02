@@ -53,6 +53,7 @@ import { WorkspaceErrorBoundary } from './layout/WorkspaceErrorBoundary';
 import { AppErrorBoundary } from './layout/AppErrorBoundary';
 import {
   currentDetachedWorkspaceLayoutId,
+  isDetachedSettingsWindow,
   restorePersistedWorkspaceWindows,
 } from './layout/workspace-windows';
 import { ConfirmDialog } from './layout/ConfirmDialog';
@@ -153,6 +154,7 @@ const MIDI_ACTIVE_STATE_POLL_MS = 250;
 
 export default function App() {
   const detachedLayoutId = useMemo(() => currentDetachedWorkspaceLayoutId(), []);
+  const detachedSettingsWindow = useMemo(() => isDetachedSettingsWindow(), []);
   // Remote (WebRTC) RX-monitoring mode — ?remote=<CALLSIGN>. Frames arrive over
   // the broker instead of the local /ws; RemoteGate prompts for the session
   // password and owns that transport.
@@ -162,7 +164,7 @@ export default function App() {
   // siblings) and not in remote/web mode. Runs once on mount; the helper is a
   // no-op outside the Photino desktop shell.
   useEffect(() => {
-    if (detachedLayoutId || remoteMode) return;
+    if (detachedLayoutId || detachedSettingsWindow || remoteMode) return;
     void restorePersistedWorkspaceWindows();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1062,6 +1064,33 @@ export default function App() {
           {remoteMode && <RemoteGate />}
         </SpectrumWheelActionsContext.Provider>
       </WorkspaceContext.Provider>
+    );
+  }
+
+  if (detachedSettingsWindow) {
+    return (
+      <BandPlanProvider>
+      <ThemeApplier />
+      <div
+        className="detached-workspace-app detached-settings-app"
+        data-screen-label="Detached Settings"
+      >
+        <div className="workspace-area detached-workspace-area">
+          <AppErrorBoundary
+            scope="Settings"
+            resetKey={settingsInitialTab}
+            recover={{ label: 'Close settings', run: () => window.close() }}
+          >
+            <Suspense fallback={null}>
+              <SettingsView
+                initialTab={settingsInitialTab as SettingsTabId | undefined}
+                onClose={() => window.close()}
+              />
+            </Suspense>
+          </AppErrorBoundary>
+        </div>
+      </div>
+      </BandPlanProvider>
     );
   }
 
