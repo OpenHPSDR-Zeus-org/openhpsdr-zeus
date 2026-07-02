@@ -26,6 +26,7 @@ import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
 import { usePaStore } from '../state/pa-store';
 import { useLiveSlider } from '../hooks/useLiveSlider';
+import { bandOf } from './design/data';
 
 // Same 0..100 range and stream-during-drag shape as DriveSlider; the backend
 // picks between the two sources based on TUN keying state so the UX/wire are
@@ -40,6 +41,13 @@ export function TunePowerSlider() {
   // Live target-watts readout (see DriveSlider for rationale).
   const paMaxWatts = usePaStore((s) => s.settings.global.paMaxPowerWatts);
   const targetWatts = paMaxWatts > 0 ? Math.round((paMaxWatts * tunePercent) / 100) : null;
+  // Per-band Tune lock (issue #1279). See DriveSlider for the rationale.
+  const vfoHz = useConnectionStore((s) => s.vfoHz);
+  const currentBand = bandOf(vfoHz);
+  const tuneLocked = usePaStore(
+    (s) => s.settings.bands.find((b) => b.band === currentBand)?.tuneLocked ?? false,
+  );
+  const toggleLock = usePaStore((s) => s.setBandLocks);
 
   const previousOnError = useRef<number>(tunePercent);
 
@@ -74,16 +82,48 @@ export function TunePowerSlider() {
     liveSlider.push(v);
   };
 
+  const onLockClick = () => {
+    if (!connected || currentBand === '—') return;
+    void toggleLock(currentBand, { tuneLocked: !tuneLocked });
+  };
+
   return (
     <label className="knob-group">
       <span className="label-xs">TUN</span>
+      <button
+        type="button"
+        onClick={onLockClick}
+        disabled={!connected || currentBand === '—'}
+        aria-pressed={tuneLocked}
+        aria-label={tuneLocked ? `Unlock Tune on ${currentBand}` : `Lock Tune on ${currentBand}`}
+        title={
+          tuneLocked
+            ? `Tune locked on ${currentBand} — the recalled value will hold across band changes`
+            : `Lock Tune on ${currentBand} so the current value is remembered and can't be nudged`
+        }
+        style={{
+          background: 'transparent',
+          border: 'none',
+          padding: 0,
+          cursor: connected && currentBand !== '—' ? 'pointer' : 'default',
+          color: tuneLocked ? 'var(--power)' : 'var(--neutral-400, #888)',
+          fontSize: 12,
+          lineHeight: 1,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 16,
+        }}
+      >
+        {tuneLocked ? '🔒' : '🔓'}
+      </button>
       <input
         type="range"
         min={MIN}
         max={MAX}
         step={1}
         value={tunePercent}
-        disabled={!connected}
+        disabled={!connected || tuneLocked}
         onChange={onChange}
         onMouseUp={() => liveSlider.flush()}
         onTouchEnd={() => liveSlider.flush()}

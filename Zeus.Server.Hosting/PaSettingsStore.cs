@@ -97,7 +97,8 @@ public sealed class PaSettingsStore : IDisposable
                     if (existing.TryGetValue(b, out var e))
                     {
                         var gain = ResolvePaGainDbForBoard(e.PaGainDb, e.Band, board, variant);
-                        return new PaBandSettingsDto(e.Band, gain, e.DisablePa, e.OcTx, e.OcRx, auto, e.OcDxTx, e.OcDxRx);
+                        return new PaBandSettingsDto(e.Band, gain, e.DisablePa, e.OcTx, e.OcRx, auto, e.OcDxTx, e.OcDxRx,
+                            e.DrivePct, e.TunePct, e.DriveLocked, e.TuneLocked);
                     }
                     return new PaBandSettingsDto(b, PaGainDb: PaDefaults.GetPaGainDb(board, b, variant), AutoOcMask: auto);
                 })
@@ -140,7 +141,8 @@ public sealed class PaSettingsStore : IDisposable
             if (e is null)
                 return new PaBandSettingsDto(band, PaGainDb: PaDefaults.GetPaGainDb(board, band, variant), AutoOcMask: auto);
             var gain = ResolvePaGainDbForBoard(e.PaGainDb, e.Band, board, variant);
-            return new PaBandSettingsDto(e.Band, gain, e.DisablePa, e.OcTx, e.OcRx, auto, e.OcDxTx, e.OcDxRx);
+            return new PaBandSettingsDto(e.Band, gain, e.DisablePa, e.OcTx, e.OcRx, auto, e.OcDxTx, e.OcDxRx,
+                e.DrivePct, e.TunePct, e.DriveLocked, e.TuneLocked);
         }
     }
 
@@ -258,6 +260,79 @@ public sealed class PaSettingsStore : IDisposable
         Changed?.Invoke();
     }
 
+    // Persist a per-band Drive% (drive=true) or Tune% (drive=false) value.
+    // Called from RadioService.SetDrive/SetTuneDrive on the write-back path
+    // AFTER checking the band's lock flag. Skips Save's OC/DisablePa/PaGainDb
+    // fan-out so a slider drag doesn't ripple through the PA panel. Fires
+    // Changed so the frontend pa-store can rehydrate the lock/recall preview.
+    // Issue #1279.
+    public void SetBandDrive(string band, int percent, bool drive)
+    {
+        if (!BandUtils.HfBands.Contains(band)) return;
+        int clamped = Math.Clamp(percent, 0, 100);
+        lock (_sync)
+        {
+            var existing = _bands.FindOne(x => x.Band == band);
+            if (existing is null)
+            {
+                var row = new PaBandEntry { Band = band, UpdatedUtc = DateTime.UtcNow };
+                if (drive) row.DrivePct = clamped; else row.TunePct = clamped;
+                _bands.Insert(row);
+            }
+            else
+            {
+                if (drive) existing.DrivePct = clamped; else existing.TunePct = clamped;
+                existing.UpdatedUtc = DateTime.UtcNow;
+                _bands.Update(existing);
+            }
+        }
+        Changed?.Invoke();
+    }
+
+    // Toggle the per-band Drive-lock and/or Tune-lock. Null on either flag
+    // leaves it untouched. Issue #1279.
+    public void SetBandLocks(string band, bool? driveLocked, bool? tuneLocked)
+    {
+        if (!BandUtils.HfBands.Contains(band)) return;
+        if (driveLocked is null && tuneLocked is null) return;
+        lock (_sync)
+        {
+            var existing = _bands.FindOne(x => x.Band == band);
+            if (existing is null)
+            {
+                var row = new PaBandEntry
+                {
+                    Band = band,
+                    DriveLocked = driveLocked ?? false,
+                    TuneLocked = tuneLocked ?? false,
+                    UpdatedUtc = DateTime.UtcNow,
+                };
+                _bands.Insert(row);
+            }
+            else
+            {
+                if (driveLocked is not null) existing.DriveLocked = driveLocked.Value;
+                if (tuneLocked is not null) existing.TuneLocked = tuneLocked.Value;
+                existing.UpdatedUtc = DateTime.UtcNow;
+                _bands.Update(existing);
+            }
+        }
+        Changed?.Invoke();
+    }
+
+    // Fast lookup for RadioService.RestoreBandDrive on a band-crossing event
+    // and the SetDrive/SetTuneDrive write-back-guard. Returns null on
+    // never-touched bands.
+    public (int? DrivePct, int? TunePct, bool DriveLocked, bool TuneLocked)? GetBandDrive(string band)
+    {
+        lock (_sync)
+        {
+            var e = _bands.FindOne(x => x.Band == band);
+            if (e is null) return null;
+            return (e.DrivePct, e.TunePct, e.DriveLocked, e.TuneLocked);
+        }
+    }
+
     public void Dispose() => _dbLease.Dispose();
 
 }
@@ -308,6 +383,15 @@ public sealed class PaBandEntry
     // only when the active radio is OrionMkII + AnvelinaPro3 on P2.
     public byte OcDxTx { get; set; }
     public byte OcDxRx { get; set; }
+    // Per-band Drive%/Tune% recall + lock (issue #1279). Null = no per-band
+    // value has ever been stored (band-crossing carries the current global
+    // value forward — legacy behaviour). Locked = SetDrive/SetTuneDrive
+    // write-back is skipped so the recalled value is stable across slider
+    // changes and band crossings until the operator unlocks.
+    public int? DrivePct { get; set; }
+    public int? TunePct { get; set; }
+    public bool DriveLocked { get; set; }
+    public bool TuneLocked { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }
 

@@ -1995,7 +1995,17 @@ public sealed record PaBandSettingsDto(
     byte OcRx = 0,
     byte AutoOcMask = 0,
     byte OcDxTx = 0,
-    byte OcDxRx = 0);
+    byte OcDxRx = 0,
+    // Per-band Drive/Tune recall (issue #1279). Null = never set for this band,
+    // so band-crossing carries the current global value forward (today's
+    // behaviour). Locked = write-back blocked; the recalled value is stable
+    // across slider changes and band crossings until the operator unlocks.
+    // PUT /api/pa-settings ignores these four (they are managed by the
+    // Drive/Tune write-back path and the dedicated /locks endpoint).
+    int? DrivePct = null,
+    int? TunePct = null,
+    bool DriveLocked = false,
+    bool TuneLocked = false);
 
 // Globals shared across bands. PaMaxPowerWatts=0 disables the watts
 // conversion path and falls back to the legacy "drive% = raw 0-255 byte"
@@ -2016,6 +2026,11 @@ public sealed record PaSettingsDto(
 public sealed record PaSettingsSetRequest(
     PaGlobalSettingsDto Global,
     IReadOnlyList<PaBandSettingsDto> Bands);
+
+// Per-band Drive/Tune lock toggle body (issue #1279). Null on either flag
+// leaves that lock untouched — lets the frontend flip a single lock without
+// having to know or re-send the other.
+public sealed record PaBandLocksSetRequest(bool? DriveLocked, bool? TuneLocked);
 
 // Radio-selection header for the Settings menu. `Preferred` is the operator's
 // explicit pick ("Auto" = no override); `Connected` is what discovery found

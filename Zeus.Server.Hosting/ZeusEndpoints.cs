@@ -2748,6 +2748,17 @@ public static class ZeusEndpoints
             return Results.Ok(store.GetAll(radio.EffectiveBoardKind));
         });
 
+        // Per-band Drive%/Tune% lock toggle (issue #1279). Null on either flag
+        // leaves it untouched so the frontend can flip a single lock without
+        // having to round-trip the other. Returns the updated PA snapshot so
+        // the pa-store picks up the new lock state without a follow-up GET.
+        app.MapPut("/api/pa-settings/band/{band}/locks",
+            (string band, PaBandLocksSetRequest req, PaSettingsStore store, RadioService radio) =>
+            {
+                store.SetBandLocks(band, req.DriveLocked, req.TuneLocked);
+                return Results.Ok(store.GetAll(radio.EffectiveBoardKind));
+            });
+
         // Panadapter background settings — Mode + Fit are JSON; image bytes are
         // kept on a separate endpoint so the lightweight GET that the frontend
         // hits on every load doesn't drag the picture across the wire. The image
