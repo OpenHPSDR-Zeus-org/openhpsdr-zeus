@@ -447,7 +447,9 @@ internal static class PacketParser
                 int q2 = ReadInt24BigEndian(payload.Slice(off + 15, 3));
                 int i3 = ReadInt24BigEndian(payload.Slice(off + 18, 3));
                 int q3 = ReadInt24BigEndian(payload.Slice(off + 21, 3));
-                // off+24, off+25 = mic (ignored).
+                // off+24, off+25 carry the 16-bit mic / line-in sample.
+                // Extracted on demand by ExtractMicSamples4Ddc when a
+                // radio-mic relay handler is attached (issue #992 pattern).
                 ddc0Out[wrote]     = ScaleInt24(i0);
                 ddc0Out[wrote + 1] = ScaleInt24(q0);
                 ddc1Out[wrote]     = ScaleInt24(i1);
@@ -462,6 +464,52 @@ internal static class PacketParser
 
         complexSamples = Hl2Ps4DdcSamplesPerPacket;
         return true;
+    }
+
+    /// <summary>
+    /// Extract the 38 codec mic / line-in samples (int16 big-endian) from a
+    /// PS-armed 4-DDC EP6 packet. Verified against the HermesC10 (ANAN-G2E,
+    /// P1) gateware EP6 packer — Hermes_Tx_fifo_ctrl.v: for IF_last_chan=3
+    /// each of the 19 slots per USB frame is 4 × (3I+3Q) = 24 bytes of DDC
+    /// data (AD_SEND_MJ1/2/3 per channel) followed by AD_SEND_PJ emitting
+    /// <c>Tx_IQ_mic_data[15:0]</c> = the TLV320 mic sample (Hermes.v:1740,
+    /// <c>IF_tx_IQ_mic_data = {IF_IQ_Data, IF_mic_Data}</c>) — i.e. the 2 mic
+    /// bytes ride slot offsets 24..25, same 16-bit BE encoding as the 1-DDC
+    /// path's offsets 6..7. As with <see cref="ExtractMicSamples"/>, the mic
+    /// stream is always 48 kHz: at higher IQ rates the same sample repeats
+    /// N = rate/48 kHz times across consecutive slots and the consumer
+    /// decimates. Keeps the G2E radio-mic TX source alive while PS is keyed
+    /// (HL2 has no codec, so its mic bytes are never extracted — the handler
+    /// is only attached for boards with an onboard codec).
+    /// </summary>
+    /// <param name="packet">1032-byte Metis EP6 data frame in the 4-DDC
+    /// layout <see cref="TryParseHl2Ps4DdcPacket"/> accepts.</param>
+    /// <param name="micOut">Destination buffer; must be ≥ 38 entries long.</param>
+    /// <returns>Number of mic samples written (38 on success, 0 on bad
+    /// header / sync / short packet).</returns>
+    public static int ExtractMicSamples4Ddc(ReadOnlySpan<byte> packet, Span<short> micOut)
+    {
+        if (packet.Length != PacketLength) return 0;
+        if (packet[0] != MetisMagic0 || packet[1] != MetisMagic1) return 0;
+        if (packet[2] != MetisTypeDataFrame) return 0;
+        if (packet[3] != MetisEp6) return 0;
+        if (micOut.Length < Hl2Ps4DdcSamplesPerPacket) return 0;
+
+        int written = 0;
+        for (int frame = 0; frame < 2; frame++)
+        {
+            int frameStart = MetisHeaderLength + frame * UsbFrameLength;
+            ReadOnlySpan<byte> usb = packet.Slice(frameStart, UsbFrameLength);
+            if (usb[0] != Sync || usb[1] != Sync || usb[2] != Sync) return 0;
+
+            ReadOnlySpan<byte> payload = usb[UsbHeaderLength..];
+            for (int g = 0; g < Hl2Ps4DdcSamplesPerUsbFrame; g++)
+            {
+                int off = g * Hl2Ps4DdcBytesPerSlot;
+                micOut[written++] = BinaryPrimitives.ReadInt16BigEndian(payload.Slice(off + 24, 2));
+            }
+        }
+        return written;
     }
 
     // ---- Standard HPSDR dual-receiver layout (2 DDCs) ---------------------

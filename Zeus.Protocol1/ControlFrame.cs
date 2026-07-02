@@ -242,6 +242,17 @@ internal static class ControlFrame
         // (mi0bot console.cs:2084 udTXStepAttData min=-28; +31 is the AD9866
         // TX PGA upper). Wire encoding lives in WriteAttenuatorPayload.
         int Hl2TxAttnDb = int.MinValue,
+        // HermesC10 (ANAN-G2E, P1) TX-time ADC attenuation in dB (0..31),
+        // written to atten_on_Tx via C3[4:0] of the LnaTxGainStable (wire
+        // 0x1c = register 0x0e) frame — G2E gateware Hermes.v:2187
+        // `atten_on_Tx <= IF_Rx_ctrl_3[4:0]`, muxed onto the step attenuator
+        // only while FPGA_PTT (Hermes.v:2278). NOT the same register, range,
+        // or semantics as Hl2TxAttnDb above (AD9866 TX PGA, -28..+31), so it
+        // gets its own field. Sentinel int.MinValue = "operator never set a
+        // value" → the writer emits 31, the silicon reset default
+        // (Hermes.v:2127), an honest no-op. The register is only scheduled by
+        // the PS-armed rotation, so no other board ever emits it.
+        int PsTxAttnOnTxDb = int.MinValue,
         // On-board CW keyer config (C&C 0x0B / wire 0x16). Speed is the
         // operator's WPM (clamped 0-60 to fit the 6-bit gateware field);
         // mode selects straight vs iambic A/B. Weight/spacing/reverse are
@@ -502,12 +513,16 @@ internal static class ControlFrame
         // HL2 PureSignal: register 0x0a bit 22 = puresignal_run. Bit 22 lives
         // in C2 bit 6 (22 - 16 = 6) of this same C0=0x14 frame. mi0bot
         // networkproto1.c:1102 — `C2 = (line_in_gain & 0b00011111) |
-        // ((puresignal_run & 1) << 6);`. Other boards (Hermes / ANAN-class)
-        // have their PS-enable bit elsewhere on the wire (Protocol 2's
-        // ALEX_PS_BIT) so we only flip C2[6] when we know we're talking to
-        // an HL2. Issue #172. PR #119 placed this in C3 — that bug is the
-        // canonical regression to guard.
-        if (s.Board == HpsdrBoardKind.HermesLite2 && s.PsEnabled)
+        // ((puresignal_run & 1) << 6);`. The HermesC10 (ANAN-G2E, P1) decodes
+        // the SAME bit — classic Hermes v3.3 gateware Hermes.v:2170-2173,
+        // `PureSignal_enable <= IF_Rx_ctrl_2[6]` under addr 0001_010 — where
+        // it muxes RX4 onto the TX DAC samples, acted on only under FPGA_PTT
+        // (Hermes.v:1401), so setting it while armed-at-rest is safe. Other
+        // boards (Hermes / ANAN-class) have their PS-enable bit elsewhere on
+        // the wire (Protocol 2's ALEX_PS_BIT) so we only flip C2[6] when we
+        // know we're talking to an HL2 or a HermesC10. Issue #172. PR #119
+        // placed this in C3 — that bug is the canonical regression to guard.
+        if ((s.Board is HpsdrBoardKind.HermesLite2 or HpsdrBoardKind.HermesC10) && s.PsEnabled)
         {
             c14[1] |= 1 << 6;   // C2 bit 6 = puresignal_run
         }
@@ -545,7 +560,30 @@ internal static class ControlFrame
         // operator's expectation that Zeus does not touch hardware-
         // managed TX LNA gain. Any operator UI for TX-managed LNA gain
         // would need its own register slot; today Zeus has none.
-        _ = s; // CcState reserved for future per-board branching.
+        //
+        // HermesC10 (ANAN-G2E, P1): the SAME wire byte 0x1c = register 0x0e
+        // is decoded completely differently by the classic Hermes v3.3
+        // gateware — `atten_on_Tx <= IF_Rx_ctrl_3[4:0]` (Hermes.v:2187),
+        // muxed onto the step attenuator only while FPGA_PTT (Hermes.v:2278).
+        // Reusing the HL2 all-zeros payload would command atten_on_Tx = 0 dB
+        // — the opposite extreme of the silicon reset value 31 (Hermes.v:
+        // 2127), an ADC-clip risk on a hot feedback tap. Board-branch: emit
+        // the operator's persisted attenuation in C3[4:0]; the int.MinValue
+        // sentinel ("never set") emits 31, the reset default — an honest
+        // no-op. This register is only ever scheduled by the PS-armed
+        // rotation, so no other board ever emits it; HL2 keeps the all-zero
+        // payload below byte-identically.
+        if (s.Board == HpsdrBoardKind.HermesC10)
+        {
+            int attn = s.PsTxAttnOnTxDb == int.MinValue
+                ? 31
+                : Math.Clamp(s.PsTxAttnOnTxDb, 0, 31);
+            c14[0] = 0;               // C1 — reserved at 0x0e on Hermes v3.3
+            c14[1] = 0;               // C2 — reserved at 0x0e on Hermes v3.3
+            c14[2] = (byte)attn;      // C3[4:0] = atten_on_Tx (0..31 dB)
+            c14[3] = 0;               // C4 — reserved at 0x0e on Hermes v3.3
+            return;
+        }
         c14[0] = 0;   // C1 — cmd_data[31:24]: not read by gateware at 0x0e
         c14[1] = 0;   // C2 — cmd_data[23:16]: not read by gateware at 0x0e
         c14[2] = 0;   // C3 — cmd_data[15:8]: en_tx_gain + TX gain. Zero → disabled.
@@ -659,8 +697,11 @@ internal static class ControlFrame
         // so the wire-layer HL2 clamp (single jack → ANT1) and the external-port
         // encoder seam emit identical bytes. Co-tenant bits C3[2] (preamp), C3[3]
         // (HL2 band-volts / LT2208 dither) and C3[4] (LT2208 random) are already
-        // OR'd above; the helper only touches [7:5].
-        c3 |= EncodeRxAntennaC3Bits(s.RxAntenna, s.Board);
+        // OR'd above; the helper only touches [7:5]. During HermesC10 PS+MOX the
+        // helper overrides the operator selection with the RX BYPASS relay code
+        // (see EncodePsBypassOrRxAntennaC3Bits) — it is the SOLE writer of
+        // C3[7:5] on this frame either way, so the two encodings can't collide.
+        c3 |= EncodePsBypassOrRxAntennaC3Bits(s.RxAntenna, s.Board, s.PsEnabled, s.Mox);
         c14[2] = c3;
 
         // C4: Alex TX antenna [1:0], duplex [2] = 1 (always, per
@@ -679,6 +720,37 @@ internal static class ControlFrame
         // → 0 → byte-identical to before this audit.
         c4 |= EncodeTxAntennaC4Bits(s.TxAntenna, s.Board);
         c14[3] = c4;
+    }
+
+    /// <summary>
+    /// Encode the Config-frame C3[7:5] antenna field, with the HermesC10
+    /// (ANAN-G2E, P1) PureSignal bypass override. While PS is armed AND the
+    /// radio is keyed on a HermesC10, the operator's RX-antenna selection is
+    /// replaced by the RX BYPASS relay code C3[6:5] = 01 — classic Hermes v3.3
+    /// gateware `IF_RX_relay &lt;= IF_Rx_ctrl_3[6:5]` (Hermes.v:2144) →
+    /// `C122_Rx_1_in = (IF_RX_relay == 2'b01)` (Hermes.v:2474) → Mk2PA Alex SPI
+    /// bit 11 = RX BYPASS OUT (Hermes.v:2492-2494), the same physical relay the
+    /// P2 fix routes via alex0 bit 11. That relay carries the external PS
+    /// feedback tap into the ADC; the gateware has no PTT term on it, so the
+    /// host must drive the dance — the continuous C&amp;C rotation re-sends
+    /// Config with MOX=0 at every unkey, restoring the operator's antenna via
+    /// the fall-through below. C3[7] (`IF_Rout`) is deliberately NOT emitted:
+    /// on the Mk2PA build it is decoded but never used (`C122_Rx_1_out` appears
+    /// only in the non-Mk2PA Alex word, Hermes.v:2468/2509) — Thetis sets it,
+    /// the gateware ignores it, byte-minimal wins. Deliberately independent of
+    /// the Internal/External feedback pick (#1249 `ab30ee59` — Internal is a
+    /// physically-impossible source on this board). This helper is the SINGLE
+    /// writer of C3[7:5] per Config frame; every other board falls straight
+    /// through to the plain antenna encoding, byte-identical to before.
+    /// </summary>
+    internal static byte EncodePsBypassOrRxAntennaC3Bits(
+        HpsdrAntenna rxAntenna, HpsdrBoardKind board, bool psEnabled, bool mox)
+    {
+        if (board == HpsdrBoardKind.HermesC10 && psEnabled && mox)
+        {
+            return 0b001 << 5;   // C3[6:5] = 01 → RX BYPASS relay; C3[7] stays 0
+        }
+        return EncodeRxAntennaC3Bits(rxAntenna, board);
     }
 
     /// <summary>
