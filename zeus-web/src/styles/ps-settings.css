@@ -538,6 +538,317 @@
   font-weight: 400;
 }
 
+/* ── RF filter matrix ───────────────────────────────────── */
+.rf-filter-card {
+  display: grid;
+  gap: 12px;
+}
+
+.rf-filter-card h4 {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.rf-filter-card h4 .ps-card-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rf-filter-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.rf-filter-status {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rf-filter-status-title,
+.rf-filter-profile-label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rf-filter-status-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rf-filter-status-title span,
+.rf-filter-profile-label span,
+.rf-filter-bank-title {
+  color: var(--fg-1);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.rf-filter-status-title em,
+.rf-filter-profile-label em {
+  overflow: hidden;
+  color: var(--fg-3);
+  font-size: 10.5px;
+  font-style: normal;
+  letter-spacing: 0.03em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rf-filter-active-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(124px, 1fr));
+  gap: 8px;
+  max-width: 650px;
+}
+
+.rf-filter-active-pill {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 7px 9px;
+  border: 1px solid var(--panel-border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+}
+
+.rf-filter-active-pill span {
+  overflow: hidden;
+  color: var(--fg-3);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.rf-filter-active-pill strong {
+  overflow: hidden;
+  color: var(--fg-0);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rf-filter-active-pill em {
+  color: var(--fg-2);
+  font-size: 10.5px;
+  font-style: normal;
+}
+
+.rf-filter-actions {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+
+.rf-filter-control-group,
+.rf-filter-bypass-group,
+.rf-filter-profile-tabs,
+.rf-filter-save-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.rf-filter-save-group {
+  padding-bottom: 2px;
+}
+
+.rf-filter-save,
+.rf-filter-reset {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.rf-filter-message {
+  padding: 7px 9px;
+  border: 1px solid var(--power);
+  border-radius: var(--r-sm);
+  background: var(--power-soft);
+  color: var(--fg-1);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.rf-filter-message.is-dirty {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.rf-filter-profile-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.rf-filter-profile-label {
+  flex: 1 1 180px;
+}
+
+.rf-filter-matrix-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.rf-filter-bank {
+  min-width: 0;
+}
+
+.rf-filter-bank-title {
+  margin-bottom: 6px;
+}
+
+.rf-filter-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 11.5px;
+}
+
+.rf-filter-table th,
+.rf-filter-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle;
+}
+
+.rf-filter-table thead th {
+  color: var(--fg-3);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.rf-filter-table th:first-child {
+  width: 36%;
+}
+
+.rf-filter-table th:nth-child(2),
+.rf-filter-table th:nth-child(3) {
+  width: 24%;
+}
+
+.rf-filter-table th:last-child {
+  width: 16%;
+  text-align: center;
+}
+
+.rf-filter-table tbody tr:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.rf-filter-table tbody th {
+  overflow: hidden;
+  color: var(--fg-1);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rf-filter-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 7px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+  background: var(--bg-0);
+  color: var(--fg-0);
+  font: inherit;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  text-align: right;
+}
+
+.rf-filter-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  outline: none;
+}
+
+.rf-filter-input.is-invalid {
+  border-color: var(--tx);
+  background: var(--tx-soft);
+}
+
+.rf-filter-check-cell {
+  text-align: center;
+}
+
+.rf-filter-check-cell .ps-check {
+  width: 100%;
+  justify-content: center;
+  gap: 0;
+}
+
+.rf-filter-check-cell .ps-check-box {
+  width: 15px;
+  height: 15px;
+}
+
+.rf-filter-empty {
+  color: var(--fg-3);
+  font-size: 11px;
+}
+
+@media (max-width: 760px) {
+  .rf-filter-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .rf-filter-actions,
+  .rf-filter-control-group,
+  .rf-filter-bypass-group,
+  .rf-filter-profile-tabs,
+  .rf-filter-save-group {
+    justify-content: flex-start;
+    justify-items: start;
+  }
+
+  .rf-filter-active-strip {
+    grid-template-columns: 1fr;
+    max-width: none;
+  }
+
+  .rf-filter-profile-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .rf-filter-table th,
+  .rf-filter-table td {
+    padding-right: 4px;
+    padding-left: 4px;
+  }
+}
+
 /* ── Hardware diagnostics inner navigation ───────────────── */
 .hardware-shell {
   gap: 12px;

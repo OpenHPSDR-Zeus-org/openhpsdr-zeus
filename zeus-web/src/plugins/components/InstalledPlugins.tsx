@@ -10,6 +10,31 @@ import { usePluginsStore } from '../state/plugins-store';
 import type { PluginDto } from '../api/plugins';
 import { ConfirmDialog } from '../../layout/ConfirmDialog';
 
+type InstalledListKind = 'plugins' | 'vsts';
+
+const LIST_COPY: Record<
+  InstalledListKind,
+  {
+    testId: string;
+    loading: string;
+    empty: string;
+    loadError: string;
+  }
+> = {
+  plugins: {
+    testId: 'plugins-installed',
+    loading: 'Loading installed plugins…',
+    empty: 'No plugins installed yet. Browse the registry or install from a URL.',
+    loadError: 'Couldn’t load plugins',
+  },
+  vsts: {
+    testId: 'plugins-installed-vsts',
+    loading: 'Loading installed VSTs…',
+    empty: 'No VSTs installed yet. Open the TX or RX Audio Suite and scan a VST3 folder.',
+    loadError: 'Couldn’t load VSTs',
+  },
+};
+
 function CapabilityChips({ caps }: { caps: string[] }) {
   if (caps.length === 0) {
     return (
@@ -180,8 +205,13 @@ function PluginCard({ p }: { p: PluginDto }) {
   );
 }
 
-export function InstalledPlugins() {
+export function InstalledPlugins({
+  kind = 'plugins',
+}: {
+  kind?: InstalledListKind;
+}) {
   const installed = usePluginsStore((s) => s.installed);
+  const installedVsts = usePluginsStore((s) => s.installedVsts);
   const load = usePluginsStore((s) => s.installedLoad);
   const sdkAbi = usePluginsStore((s) => s.sdkAbi);
   const sdkVersion = usePluginsStore((s) => s.sdkVersion);
@@ -196,9 +226,12 @@ export function InstalledPlugins() {
     }
   }, [load.loaded, load.inflight, refresh]);
 
+  const copy = LIST_COPY[kind];
+  const items = kind === 'vsts' ? installedVsts : installed;
+
   return (
     <div
-      data-testid="plugins-installed"
+      data-testid={copy.testId}
       style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
     >
       <div
@@ -285,15 +318,15 @@ export function InstalledPlugins() {
             color: 'var(--fg-0)',
           }}
         >
-          Couldn’t load plugins: {load.loadError}
+          {copy.loadError}: {load.loadError}
         </div>
       )}
 
       {!load.loaded && load.inflight && (
-        <div style={{ color: 'var(--fg-2)' }}>Loading installed plugins…</div>
+        <div style={{ color: 'var(--fg-2)' }}>{copy.loading}</div>
       )}
 
-      {load.loaded && installed.length === 0 && (
+      {load.loaded && items.length === 0 && (
         <div
           style={{
             padding: 16,
@@ -304,13 +337,17 @@ export function InstalledPlugins() {
             textAlign: 'center',
           }}
         >
-          No plugins installed yet. Browse the registry or install from a URL.
+          {copy.empty}
         </div>
       )}
 
-      {installed.map((p) => (
+      {items.map((p) => (
         <PluginCard key={p.id} p={p} />
       ))}
     </div>
   );
+}
+
+export function InstalledVsts() {
+  return <InstalledPlugins kind="vsts" />;
 }

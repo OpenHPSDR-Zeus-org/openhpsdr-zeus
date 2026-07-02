@@ -38,8 +38,10 @@ const INITIAL_LOAD: LoadState = {
 };
 
 export type PluginsStoreState = {
-  // Installed plugins
+  // Installed Zeus plugin-repo plugins. Operator-scanned VST3 / AU wrappers
+  // are split into installedVsts so the plugin store can show them separately.
   installed: PluginDto[];
+  installedVsts: PluginDto[];
   sdkAbi: number;
   sdkVersion: string;
   installedLoad: LoadState;
@@ -92,6 +94,7 @@ async function refreshRuntimePanels() {
 
 export const usePluginsStore = create<PluginsStoreState>((set, get) => ({
   installed: [],
+  installedVsts: [],
   sdkAbi: 0,
   sdkVersion: '',
   installedLoad: { ...INITIAL_LOAD },
@@ -117,10 +120,12 @@ export const usePluginsStore = create<PluginsStoreState>((set, get) => ({
       const resp: PluginListResponse = await fetchInstalledPlugins();
       set({
         // Operator-scanned VST3 / AU plugins (resp.plugins[].scanned) live in
-        // the Audio Suite rack only — they are not Zeus plugin-repo plugins, so
-        // the Settings ▸ Plugins list excludes them. The Audio Suite has its own
-        // consumer (pluginRuntime.fetchInstalledPlugins) that still sees them.
+        // their own Settings ▸ Plugins ▸ VSTs tab — they are not Zeus
+        // plugin-repo plugins, so the main Installed list excludes them. The
+        // Audio Suite has its own consumer (pluginRuntime.fetchInstalledPlugins)
+        // that still sees the full server list.
         installed: resp.plugins.filter((p) => !p.scanned),
+        installedVsts: resp.plugins.filter((p) => p.scanned),
         sdkAbi: resp.sdkAbi,
         sdkVersion: resp.sdkVersion,
         installedLoad: { loaded: true, inflight: false, loadError: null },

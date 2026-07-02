@@ -2,6 +2,7 @@
 //
 // PluginsPanel — three-tab container mounted from SettingsMenu.
 //   Installed  — currently loaded plugins (default)
+//   VSTs       — operator-scanned VST/AU wrappers
 //   Browse     — registry catalog
 //   Install from URL — BYOP form
 //
@@ -10,14 +11,15 @@
 
 import { useState } from 'react';
 
-import { InstalledPlugins } from './InstalledPlugins';
+import { InstalledPlugins, InstalledVsts } from './InstalledPlugins';
 import { PluginBrowser } from './PluginBrowser';
 import { InstallFromUrl } from './InstallFromUrl';
 
-type SubTabId = 'installed' | 'browse' | 'install-url';
+type SubTabId = 'installed' | 'vsts' | 'browse' | 'install-url';
 
 const SUB_TABS: ReadonlyArray<{ id: SubTabId; label: string }> = [
   { id: 'installed', label: 'INSTALLED' },
+  { id: 'vsts', label: 'VSTS' },
   { id: 'browse', label: 'BROWSE' },
   { id: 'install-url', label: 'INSTALL FROM URL' },
 ];
@@ -82,6 +84,7 @@ export function PluginsPanel() {
 
       <div role="tabpanel" style={{ flex: 1, minHeight: 0 }}>
         {active === 'installed' && <InstalledPlugins />}
+        {active === 'vsts' && <InstalledVsts />}
         {active === 'browse' && <PluginBrowser />}
         {active === 'install-url' && <InstallFromUrl />}
       </div>
