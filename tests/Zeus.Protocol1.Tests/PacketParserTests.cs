@@ -378,6 +378,93 @@ public class PacketParserTests
         Assert.Equal(0x03, bits);
     }
 
+    // ---- 4-DDC mic extraction (HermesC10 / ANAN-G2E radio-mic during PS) --
+    //
+    // The classic-Hermes EP6 packer emits the TLV320 mic sample as the last
+    // 2 bytes of every 26-byte 4-DDC slot (Hermes_Tx_fifo_ctrl.v AD_SEND_PJ,
+    // Tx_IQ_mic_data[15:0]) — offsets 24..25, int16 big-endian, same
+    // encoding as the 1-DDC path's offsets 6..7. ExtractMicSamples4Ddc keeps
+    // the G2E radio-mic TX source alive while PS is keyed; without it the
+    // operator's mic goes silent the instant the 4-DDC layout engages.
+
+    [Fact]
+    public void ExtractMicSamples4Ddc_ReadsInt16BeAtSlotOffset24()
+    {
+        // Distinct, sign-covering value per slot so a parser that walked the
+        // wrong stride, wrong offset, or dropped a frame fails loudly.
+        byte[] packet = BuildValid4DdcPacket(5);
+        static short MicValue(int index) => (short)(-4000 + index * 217);
+        for (int f = 0; f < 2; f++)
+        {
+            int payloadStart = 8 + f * 512 + 8;
+            for (int g = 0; g < PacketParser.Hl2Ps4DdcSamplesPerUsbFrame; g++)
+            {
+                int index = f * PacketParser.Hl2Ps4DdcSamplesPerUsbFrame + g;
+                BinaryPrimitives.WriteInt16BigEndian(
+                    packet.AsSpan(payloadStart + g * PacketParser.Hl2Ps4DdcBytesPerSlot + 24, 2),
+                    MicValue(index));
+            }
+        }
+
+        var mic = new short[PacketParser.Hl2Ps4DdcSamplesPerPacket];
+        int n = PacketParser.ExtractMicSamples4Ddc(packet, mic);
+
+        Assert.Equal(PacketParser.Hl2Ps4DdcSamplesPerPacket, n);   // 38
+        for (int i = 0; i < n; i++)
+        {
+            Assert.Equal(MicValue(i), mic[i]);
+        }
+    }
+
+    [Fact]
+    public void ExtractMicSamples4Ddc_MicBytesDoNotPerturbDdcStreams()
+    {
+        // The mic bytes co-tenant every slot with the four 24-bit IQ pairs —
+        // saturating them must leave the DDC extraction untouched (and vice
+        // versa: the IQ parser already ignores offsets 24..25).
+        byte[] packet = BuildValid4DdcPacket(6);
+        for (int f = 0; f < 2; f++)
+        {
+            int payloadStart = 8 + f * 512 + 8;
+            for (int g = 0; g < PacketParser.Hl2Ps4DdcSamplesPerUsbFrame; g++)
+            {
+                int off = payloadStart + g * PacketParser.Hl2Ps4DdcBytesPerSlot;
+                packet[off + 24] = 0xFF;
+                packet[off + 25] = 0xFF;
+            }
+        }
+
+        var (d0, d1, d2, d3) = Allocate4DdcBuffers();
+        Assert.True(PacketParser.TryParseHl2Ps4DdcPacket(
+            packet, d0, d1, d2, d3, out _, out int samples, out _, out _, out _));
+        Assert.Equal(PacketParser.Hl2Ps4DdcSamplesPerPacket, samples);
+        Assert.All(d0, v => Assert.Equal(0.0, v));
+        Assert.All(d3, v => Assert.Equal(0.0, v));
+    }
+
+    [Fact]
+    public void ExtractMicSamples4Ddc_RejectsBadFraming()
+    {
+        var mic = new short[PacketParser.Hl2Ps4DdcSamplesPerPacket];
+
+        // Wrong length.
+        Assert.Equal(0, PacketParser.ExtractMicSamples4Ddc(new byte[100], mic));
+
+        // Wrong Metis endpoint (EP4 wideband instead of EP6).
+        byte[] wrongEp = BuildValid4DdcPacket(1);
+        wrongEp[3] = 0x04;
+        Assert.Equal(0, PacketParser.ExtractMicSamples4Ddc(wrongEp, mic));
+
+        // Corrupted USB sync in the second frame.
+        byte[] badSync = BuildValid4DdcPacket(2);
+        badSync[8 + 512 + 1] = 0x00;
+        Assert.Equal(0, PacketParser.ExtractMicSamples4Ddc(badSync, mic));
+
+        // Destination too small for the 38 samples.
+        Assert.Equal(0, PacketParser.ExtractMicSamples4Ddc(
+            BuildValid4DdcPacket(3), new short[PacketParser.Hl2Ps4DdcSamplesPerPacket - 1]));
+    }
+
     // ---- Standard dual-receiver 2-DDC layout (RX2) ------------------------
     //
     // NumReceiversMinusOne=1 interleaves DDC0 (RX1) and DDC1 (RX2) in 14-byte

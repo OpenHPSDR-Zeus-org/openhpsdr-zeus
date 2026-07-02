@@ -267,6 +267,31 @@ public interface IProtocol1Client : IDisposable
     int Hl2TxStepAttenuationDb { get; }
 
     /// <summary>
+    /// HermesC10 (ANAN-G2E, P1) TX-time ADC attenuation target in dB, range
+    /// 0..31 (out-of-range values are clamped). Written to the gateware's
+    /// <c>atten_on_Tx</c> register — C3[4:0] of the LnaTxGainStable (wire
+    /// 0x1c = register 0x0e) frame, muxed onto the step attenuator only while
+    /// FPGA_PTT — which protects the relay-routed PS feedback tap from
+    /// clipping the ADC while keyed. The register is only scheduled by the
+    /// PS-armed rotation, and the payload writer branches on HermesC10, so no
+    /// other board's wire bytes change. Until this is called the writer emits
+    /// 31, the silicon reset default — never an unrequested 0 dB. Distinct
+    /// from <see cref="SetHl2TxStepAttenuationDb"/> (AD9866 TX PGA, -28..+31,
+    /// different register).
+    /// </summary>
+    void SetPsTxAttenOnTxDb(int db);
+
+    /// <summary>
+    /// Current HermesC10 atten_on_Tx value in dB — the value last written via
+    /// <see cref="SetPsTxAttenOnTxDb"/>, or 31 (the silicon reset default,
+    /// which the payload writer also emits while unset) when nothing has been
+    /// pushed yet. Read by <c>PsAutoAttenuateService</c> on a PS-arm edge so
+    /// the dance baselines its model to ground truth instead of assuming 0 —
+    /// mirrors <see cref="Hl2TxStepAttenuationDb"/>.
+    /// </summary>
+    int PsTxAttenOnTxDb { get; }
+
+    /// <summary>
     /// Push the on-board CW keyer config to C&amp;C register 0x0B: speed in
     /// WPM (clamped to the 6-bit 0..60 gateware field) and the keyer mode
     /// (straight / iambic A / iambic B). Sent via the register round-robin

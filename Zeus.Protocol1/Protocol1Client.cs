@@ -147,6 +147,13 @@ public sealed class Protocol1Client : IProtocol1Client
     // mi0bot console.cs:2084 (UI range -28..+31), networkproto1.c:1086-1088
     // (wire encoding).
     private int _hl2TxAttnDb = int.MinValue;
+    // HermesC10 (ANAN-G2E, P1) TX-time ADC attenuation in dB (0..31) —
+    // atten_on_Tx via C3[4:0] of the LnaTxGainStable (wire 0x1c) frame.
+    // Sentinel int.MinValue = "operator never set a value" → the wire emits
+    // 31, the silicon reset default (Hermes.v:2127), an honest no-op. NOT the
+    // same register / range / semantics as _hl2TxAttnDb above, so it gets its
+    // own field. See ControlFrame.CcState.PsTxAttnOnTxDb.
+    private int _psTxAttnOnTxDb = int.MinValue;
     // On-board CW keyer config (C&C 0x0B). Speed is the operator's WPM,
     // mode is CwKeyerMode (0=straight/1=A/2=B). Sent via the round-robin so
     // a dropped packet self-heals. Default mode 0 (straight) makes the write
@@ -347,8 +354,13 @@ public sealed class Protocol1Client : IProtocol1Client
     ///          demodulated to baseband).
     /// Pair DDC2 + DDC3 samples 1:1, accumulate 1024 paired complex samples,
     /// then emit a PsFeedbackFrame for the DspPipelineService pump.
+    /// <paramref name="micScratch"/> is RxLoop's per-thread mic scratch
+    /// (reused across packets, no per-packet alloc) for the codec radio-mic
+    /// relay — on a HermesC10 the TLV320 mic bytes keep riding each 26-byte
+    /// 4-DDC slot (offsets 24..25, Hermes_Tx_fifo_ctrl.v AD_SEND_PJ), so a
+    /// G2E operator on the radio-mic source keeps TX audio while PS is keyed.
     /// </summary>
-    private void HandlePs4DdcPacket(ReadOnlySpan<byte> packet)
+    private void HandlePs4DdcPacket(ReadOnlySpan<byte> packet, short[] micScratch)
     {
         int needed = 2 * PacketParser.Hl2Ps4DdcSamplesPerPacket;
         var ddc0 = ArrayPool<double>.Shared.Rent(needed);
@@ -407,6 +419,22 @@ public sealed class Protocol1Client : IProtocol1Client
                 HpsdrSampleRate.Rate384k => 384_000,
                 _ => 48_000,
             };
+
+            // Codec mic / line-in relay (issue #992) — mirror the standard
+            // 1-DDC path so the radio-mic TX source doesn't go silent the
+            // instant PS keys. Gated on the attached handler exactly like
+            // RxLoop: no handler (Host source / no codec) → no work.
+            var micHandlerSnap = _radioMicHandler;
+            if (micHandlerSnap is not null)
+            {
+                int micCount = PacketParser.ExtractMicSamples4Ddc(packet, micScratch);
+                if (micCount > 0)
+                {
+                    try { micHandlerSnap(new ReadOnlySpan<short>(micScratch, 0, micCount), rateHz); }
+                    catch (Exception ex) { _log.LogWarning(ex, "p1.rx radio-mic handler threw"); }
+                }
+            }
+
             var memory = new ReadOnlyMemory<double>(rented, 0, 2 * samples);
             var frame = new IqFrame(memory, samples, rateHz, seq, NowNs());
             // iter5: if a synchronous sink is attached, hand the frame off
@@ -863,6 +891,30 @@ public sealed class Protocol1Client : IProtocol1Client
         }
     }
 
+    public void SetPsTxAttenOnTxDb(int db)
+    {
+        // HermesC10 atten_on_Tx range is the 5-bit gateware field 0..31 dB
+        // (Hermes.v:2187 `atten_on_Tx <= IF_Rx_ctrl_3[4:0]`). ControlFrame.
+        // WriteLnaTxGainStablePayload writes the clamped value into C3[4:0]
+        // of the 0x1c frame on HermesC10 only.
+        int clamped = Math.Clamp(db, 0, 31);
+        Interlocked.Exchange(ref _psTxAttnOnTxDb, clamped);
+    }
+
+    public int PsTxAttenOnTxDb
+    {
+        // int.MinValue is the "never written" sentinel (see _psTxAttnOnTxDb
+        // decl). Surface it as 31 — the silicon reset default the payload
+        // writer also emits while unset (WriteLnaTxGainStablePayload) — so
+        // the PS-arm baseline sync reads the value the radio is actually
+        // holding, not a phantom 0.
+        get
+        {
+            int v = Volatile.Read(ref _psTxAttnOnTxDb);
+            return v == int.MinValue ? 31 : v;
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -882,7 +934,9 @@ public sealed class Protocol1Client : IProtocol1Client
 
         bool psOn = Volatile.Read(ref _psEnabled) != 0;
         bool moxOn = Volatile.Read(ref _mox) != 0;
-        bool isHl2 = (HpsdrBoardKind)Volatile.Read(ref _boardKind) == HpsdrBoardKind.HermesLite2;
+        var board = (HpsdrBoardKind)Volatile.Read(ref _boardKind);
+        bool isHl2 = board == HpsdrBoardKind.HermesLite2;
+        bool isC10 = board == HpsdrBoardKind.HermesC10;
         // Number of receivers requested in the Config payload (`(N-1) << 3`
         // in C4 bits [5:3]). mi0bot's HL2 path (Thetis console.cs:8186-8265)
         // uses **4 DDCs** during PS+MOX:
@@ -892,10 +946,16 @@ public sealed class Protocol1Client : IProtocol1Client
         //   DDC2 → mix2_0+adcpipe[0] at TX freq → pscc "rx". On HL2 this
         //          is RF leakage of the radiated TX (no coupler hardware).
         //   DDC3 → mix2_2+tx_data_dac at TX freq → pscc "tx" (pre-PA DAC).
+        // HermesC10 (ANAN-G2E, P1) is classic Hermes v3.3 — the ORIGIN of
+        // this exact 4-DDC layout (`IF_last_chan = 3` required for RX4 to
+        // stream, Hermes.v:2151; Thetis console.cs:8634-8674 groups Hermes/
+        // HermesC10 with psrx=2, pstx=3). Same gate, same indices; the only
+        // semantic upgrade is that DDC2 is a real relay-routed sampler tap
+        // there instead of HL2's radiated leakage.
         // See HandlePs4DdcPacket above for the cross-reference to upstream
         // gateware. Outside PS+MOX we stay at single-DDC so the existing
         // 1-DDC EP6 packet shape and parser are bit-exact unchanged.
-        byte numRxMinus1 = (byte)(psOn && isHl2 && moxOn ? 3 : 0);
+        byte numRxMinus1 = (byte)(psOn && (isHl2 || isC10) && moxOn ? 3 : 0);
 
         return new(
             VfoAHz: Interlocked.Read(ref _vfoAHz),
@@ -907,7 +967,7 @@ public sealed class Protocol1Client : IProtocol1Client
             EnableHl2BandVolts: Volatile.Read(ref _enableHl2BandVolts) != 0,
             AdcDitherEnabled: Volatile.Read(ref _adcDither) != 0,
             AdcRandomEnabled: Volatile.Read(ref _adcRandom) != 0,
-            Board: (HpsdrBoardKind)Volatile.Read(ref _boardKind),
+            Board: board,
             HasN2adr: Volatile.Read(ref _hasN2adr) != 0,
             DriveLevel: drive,
             UserOcTxMask: (byte)Volatile.Read(ref _ocTxMask),
@@ -921,6 +981,10 @@ public sealed class Protocol1Client : IProtocol1Client
             // rx_step_attn to tx_step_attn. Sentinel int.MinValue means
             // untouched, fall through to the RX-side encoding above.
             Hl2TxAttnDb: Volatile.Read(ref _hl2TxAttnDb),
+            // HermesC10 atten_on_Tx — carried on the 0x1c frame's C3[4:0],
+            // scheduled only by the PS-armed rotation. Sentinel int.MinValue
+            // makes the writer emit 31 (silicon reset), never 0.
+            PsTxAttnOnTxDb: Volatile.Read(ref _psTxAttnOnTxDb),
             CwKeyerSpeedWpm: Volatile.Read(ref _cwKeyerSpeedWpm),
             CwKeyerMode: (CwKeyerMode)Volatile.Read(ref _cwKeyerMode),
             MicBoost: Volatile.Read(ref _micBoost) != 0,
@@ -1024,24 +1088,29 @@ public sealed class Protocol1Client : IProtocol1Client
 
                 if (n != PacketParser.PacketLength) continue;
 
-                // PS-armed 4-DDC layout (HL2 only). HL2 emits the 26-byte-
-                // per-slot 4-DDC packet shape only when the last Config
-                // frame carried NumReceiversMinusOne=3 — and SnapshotState
-                // only requests that during MOX+PS+HL2. Outside that window
-                // the operator gets normal single-RX 8-byte packets, so the
-                // parser must follow the same gate (mi0bot Thetis
-                // console.cs:8186-8265 — the !_mox branch keeps single-DDC
-                // even with PS armed). Brief mismatch on MOX edges (1-3 ms
-                // while the new Config frame propagates) is tolerated;
-                // pscc resets cleanly on any garbage block via its
-                // MOX-delay state. The 4-DDC handler publishes DDC0 to
-                // the IqFrame channel (RX1 audio + panadapter stay alive)
-                // and DDC2/DDC3 to the PsFeedbackFrame channel.
+                // PS-armed 4-DDC layout (HL2 + HermesC10). The radio emits
+                // the 26-byte-per-slot 4-DDC packet shape only when the last
+                // Config frame carried NumReceiversMinusOne=3 — and
+                // SnapshotState only requests that during MOX+PS on those two
+                // boards. HermesC10 (ANAN-G2E, P1) is classic Hermes v3.3,
+                // the origin of this exact framing (Hermes_Tx_fifo_ctrl.v:
+                // num_loops=18 for IF_last_chan=3), so the HL2 parser is
+                // reused wholesale. Outside that window the operator gets
+                // normal single-RX 8-byte packets, so the parser must follow
+                // the same gate (mi0bot Thetis console.cs:8186-8265 — the
+                // !_mox branch keeps single-DDC even with PS armed). Brief
+                // mismatch on MOX edges (1-3 ms while the new Config frame
+                // propagates) is tolerated; pscc resets cleanly on any
+                // garbage block via its MOX-delay state. The 4-DDC handler
+                // publishes DDC0 to the IqFrame channel (RX1 audio +
+                // panadapter stay alive) and DDC2/DDC3 to the
+                // PsFeedbackFrame channel.
                 if (Volatile.Read(ref _psEnabled) != 0
                     && Volatile.Read(ref _mox) != 0
-                    && (HpsdrBoardKind)Volatile.Read(ref _boardKind) == HpsdrBoardKind.HermesLite2)
+                    && (HpsdrBoardKind)Volatile.Read(ref _boardKind)
+                        is HpsdrBoardKind.HermesLite2 or HpsdrBoardKind.HermesC10)
                 {
-                    HandlePs4DdcPacket(buffer.AsSpan(0, n));
+                    HandlePs4DdcPacket(buffer.AsSpan(0, n), micScratch);
                     // Pace the TX loop off the same RX clock so MOX TX
                     // continues to fire while PS is armed.
                     var psRateHz = (HpsdrSampleRate)Volatile.Read(ref _rate) switch
@@ -1221,6 +1290,20 @@ public sealed class Protocol1Client : IProtocol1Client
         => PhaseRegisters(phase, mox, psArmed: false);
 
     /// <summary>
+    /// Whether the given snapshot selects the PS-armed 16-phase C&amp;C
+    /// rotation. True only when PS is armed AND the board actually has a P1
+    /// PS feedback path — HermesLite2 (mi0bot 4-DDC layout) or HermesC10
+    /// (ANAN-G2E, classic Hermes v3.3 — the origin of that same layout).
+    /// Every other P1 board stays on the 5-phase rotation even with
+    /// PsEnabled set, so its wire traffic is byte-identical to a disarmed
+    /// session (the 0x1c / RxFreq2-4 registers are never scheduled). Single
+    /// source of the predicate for TxLoopAsync and the rotation tests.
+    /// </summary>
+    internal static bool PsArmedRotation(in ControlFrame.CcState state)
+        => state.PsEnabled
+           && state.Board is HpsdrBoardKind.HermesLite2 or HpsdrBoardKind.HermesC10;
+
+    /// <summary>
     /// Round-robin register selector. When <paramref name="psArmed"/> is true
     /// the rotation is widened to 16 phases and includes the HL2-PS
     /// registers — RxFreq2/3/4 (the four-DDC NCOs) and LnaTxGainStable
@@ -1243,7 +1326,7 @@ public sealed class Protocol1Client : IProtocol1Client
             int q = phase & 0xF;
             if (mox)
             {
-                // PS+MOX (HL2 4-DDC). Every 16-frame window emits each of
+                // PS+MOX (4-DDC). Every 16-frame window emits each of
                 // the nine PS-critical registers (Config, TxFreq, RxFreq,
                 // RxFreq2, RxFreq3, RxFreq4, LnaTxGainStable, Attenuator,
                 // DriveFilter) at least twice. RxFreq3/RxFreq4 carry the
@@ -1341,12 +1424,15 @@ public sealed class Protocol1Client : IProtocol1Client
             {
                 await _txSignal.WaitAsync(ct).ConfigureAwait(false);
                 var state = SnapshotState();
-                // PS-armed rotation widens to 8 phases to fit the
-                // Predistortion (0x2b) register without crowding TxFreq.
-                // The phase counter wraps modulo whichever rotation is in
-                // effect, recomputed every tick so a mid-stream PS toggle
-                // doesn't lose its slot.
-                bool psArmed = state.PsEnabled && state.Board == HpsdrBoardKind.HermesLite2;
+                // PS-armed rotation widens to 16 phases to fit the four-DDC
+                // NCOs and the 0x1c register without crowding TxFreq. The
+                // phase counter wraps modulo whichever rotation is in effect,
+                // recomputed every tick so a mid-stream PS toggle doesn't
+                // lose its slot. HermesC10 (ANAN-G2E, P1) shares the HL2
+                // rotation verbatim — its LnaTxGainStable slots carry
+                // atten_on_Tx via the board-branched payload writer, and the
+                // RxFreq3/RxFreq4 slots it needs are already there.
+                bool psArmed = PsArmedRotation(in state);
                 var (first, second) = PhaseRegisters(phase, state.Mox, psArmed);
                 phase = psArmed ? ((phase + 1) & 0xF) : ((phase + 1) % 5);
                 ControlFrame.BuildDataPacket(buf, sendSeq++, first, second, in state, _txIqSource, _rxAudioSource);

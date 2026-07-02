@@ -64,15 +64,28 @@ public class ControlFramePsEncoderTests
         Assert.Equal(0, cc[2] & (1 << 6));
     }
 
-    [Fact]
-    public void Attenuator_NonHl2_PsEnabled_Does_Not_Set_C2_Bit6()
+    [Theory]
+    [InlineData(HpsdrBoardKind.Metis)]
+    [InlineData(HpsdrBoardKind.Hermes)]
+    [InlineData(HpsdrBoardKind.HermesII)]
+    [InlineData(HpsdrBoardKind.Angelia)]
+    [InlineData(HpsdrBoardKind.Orion)]
+    [InlineData(HpsdrBoardKind.OrionMkII)]
+    public void Attenuator_NonHl2NonC10_PsEnabled_Does_Not_Set_C2_Bit6(HpsdrBoardKind board)
     {
         // Bare HPSDR / ANAN-class radios use a different PS path (Protocol 2
-        // ALEX_PS_BIT). Even with PsEnabled=true on a Hermes board, the
+        // ALEX_PS_BIT). Even with PsEnabled=true on these boards, the
         // C0=0x14 frame must not flip its C2 bit 6 — it would land on a
         // reserved bit and could confuse the gateware.
+        //
+        // DELIBERATE, REVIEWED CHANGE (G2E P1 PureSignal): this test was
+        // "non-HL2" until HermesC10 gained a P1 PS path — its classic Hermes
+        // v3.3 gateware decodes the SAME register-0x0a bit 22 as HL2
+        // (Hermes.v:2170-2173), so HermesC10 moved to the positive-lock suite
+        // in ControlFramePsHermesC10GoldenTests. Every remaining P1 board is
+        // enumerated here so the negative lock stays board-by-board.
         Span<byte> cc = stackalloc byte[5];
-        var s = BaseHl2(psEnabled: true) with { Board = HpsdrBoardKind.Hermes };
+        var s = BaseHl2(psEnabled: true) with { Board = board };
         ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Attenuator, s);
         Assert.Equal(0, cc[2] & (1 << 6));
     }

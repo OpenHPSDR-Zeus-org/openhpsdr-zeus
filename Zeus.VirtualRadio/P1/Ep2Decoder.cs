@@ -122,13 +122,18 @@ internal sealed class Ep2Decoder
                 else state.OcRxMask = ocMask;
                 // C3[2] = preamp / LNA gain on LT2208 boards.
                 state.PreampOn = (c3 & 0x04) != 0;
+                // C3[6:5] = RX-input relay code (IF_RX_relay). Carries the
+                // operator's RX antenna normally; 0b01 = the RX BYPASS relay
+                // (Mk2PA Alex SPI bit 11) — the HermesC10 PS feedback route
+                // while armed + keyed (EncodePsBypassOrRxAntennaC3Bits).
+                state.P1RxRelayCode = (byte)((c3 >> 5) & 0x03);
                 // C4[5:3] = number of receivers minus one.
                 state.NumReceiversMinusOne = (byte)((c4 >> 3) & 0x07);
 
                 return Make("Config",
                     $"rate={state.SampleRateKhz}k oc{(state.Mox ? "Tx" : "Rx")}=0x{ocMask:X2} " +
                     $"preamp={(state.PreampOn ? 1 : 0)} numRx={state.NumReceiversMinusOne + 1} " +
-                    $"mox={(state.Mox ? 1 : 0)}");
+                    $"rxRelay={state.P1RxRelayCode} mox={(state.Mox ? 1 : 0)}");
             }
 
             case ControlFrame.CcRegister.TxFreq:
@@ -181,9 +186,26 @@ internal sealed class Ep2Decoder
                 state.AttenuatorDb = attenDb;
                 // C2[4:0] = line-in gain (HL2 + ANAN-10E share this layout).
                 int lineInGain = c2 & 0x1F;
-                bool psRun = (c2 & 0x40) != 0;            // HL2 puresignal_run echo (observability only)
+                // C2[6] = puresignal_run — the receiver-mux enable the HL2
+                // AND the HermesC10 (ANAN-G2E, P1) gateware both decode at
+                // register 0x0a bit 22. Persisted into state so the
+                // composer→decoder tests pin the board gate non-vacuously.
+                state.P1PsRun = (c2 & 0x40) != 0;
                 return Make("Attenuator",
-                    $"atten={attenDb}dB lineInGain={lineInGain} psRun={(psRun ? 1 : 0)}");
+                    $"atten={attenDb}dB lineInGain={lineInGain} psRun={(state.P1PsRun ? 1 : 0)}");
+            }
+
+            case ControlFrame.CcRegister.LnaTxGainStable:
+            {
+                // Wire 0x1c = register 0x0e. On the HermesC10 (ANAN-G2E, P1)
+                // classic Hermes v3.3 gateware C3[4:0] is atten_on_Tx — the
+                // PTT-muxed TX-time ADC attenuation protecting the PS
+                // feedback tap (silicon reset 31). On HL2 the same address is
+                // the AD9866 FAST_LNA block and Zeus's payload is all-zero.
+                // Decoding C3[4:0] pins both shapes at the emulator seam.
+                state.P1AttenOnTxDb = (byte)(c3 & 0x1F);
+                return Make("LnaTxGainStable",
+                    $"attenOnTx={state.P1AttenOnTxDb}dB mox={(state.Mox ? 1 : 0)}");
             }
 
             default:

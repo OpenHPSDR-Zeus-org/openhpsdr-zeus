@@ -3227,7 +3227,8 @@ public class DspPipelineService : BackgroundService,
     /// <summary>
     /// Manually set the PS TX feedback attenuation (operator alternative to
     /// AutoAttenuate). Pushes the value to the connected radio — HL2 via the
-    /// AD9866 TX-PGA step, every other board via the P2 step attenuator — then
+    /// AD9866 TX-PGA step, HermesC10 on P1 via the gateware atten_on_Tx
+    /// register, every other board via the P2 step attenuator — then
     /// persists it per board and surfaces it in state via RadioService. This
     /// is what lets an operator on a fixed external-tap chain dial the
     /// feedback into calcc's range once and run with AutoAttenuate off.
@@ -3239,6 +3240,20 @@ public class DspPipelineService : BackgroundService,
         {
             int clamped = Math.Clamp(db, -28, 31);
             _radio.ActiveClient?.SetHl2TxStepAttenuationDb(clamped);
+            _radio.SetPsTxAttenuationDb(clamped);
+        }
+        else if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesC10
+                 && _radio.ActiveClient is { } c10P1)
+        {
+            // HermesC10 (ANAN-G2E) on Protocol 1: the classic-Hermes gateware
+            // muxes atten_on_Tx (0..31 dB) onto the step attenuator while
+            // FPGA_PTT, protecting the relay-routed PS feedback tap from
+            // clipping the ADC. Carried in C3[4:0] of the PS-armed rotation's
+            // 0x1c frame (board-branched in ControlFrame). The G2E's P2 side
+            // (native Saturn path) has no P1 ActiveClient and falls through
+            // to the P2 branch below.
+            int clamped = Math.Clamp(db, 0, 31);
+            c10P1.SetPsTxAttenOnTxDb(clamped);
             _radio.SetPsTxAttenuationDb(clamped);
         }
         else
@@ -3323,13 +3338,21 @@ public class DspPipelineService : BackgroundService,
         _radio.ApplyPsHwPeakForConnection(isProtocol2: false, _radio.ConnectedBoardKind);
         // Restore the persisted PS feedback attenuation so a hot external-tap
         // chain isn't sitting at 0 dB on a fresh connect — at 0 dB the
-        // feedback ADC rails and calcc can never fit. HL2 only on the P1 side
-        // (it owns the AD9866 TX-PGA step attenuator). No-op when nothing was
-        // saved for this board yet.
+        // feedback ADC rails and calcc can never fit. On the P1 side HL2 owns
+        // the AD9866 TX-PGA step attenuator and HermesC10 owns the gateware
+        // atten_on_Tx register (0x1c C3[4:0], PTT-muxed); other P1 boards
+        // have no PS feedback attenuator. No-op when nothing was saved for
+        // this board yet — HermesC10 then keeps emitting the silicon reset
+        // default 31 via the sentinel path (never a force-seeded value).
         if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2
             && _radio.GetPersistedPsTxAttnDb() is int hl2Attn)
         {
             _radio.ActiveClient?.SetHl2TxStepAttenuationDb(hl2Attn);
+        }
+        else if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesC10
+            && _radio.GetPersistedPsTxAttnDb() is int c10Attn)
+        {
+            _radio.ActiveClient?.SetPsTxAttenOnTxDb(c10Attn);
         }
         // P1's Connected event is raised after RadioService already broadcast
         // Status=Connected, so the first state callback can hit the synthetic
@@ -3814,19 +3837,20 @@ public class DspPipelineService : BackgroundService,
                 p1Active?.SetPsEnabled(true);
                 // PS engine arm requires a feedback path that delivers paired
                 // samples. On P2 ANAN-class that's SetPsFeedbackEnabled above.
-                // On P1, only HermesLite2 delivers the 2-DDC paired layout
-                // PS needs — Protocol1Client.cs:643 (NumReceiversMinusOne
-                // wire bump) and :1004 (4-DDC parser path) are both HL2-gated.
-                // On a non-HL2 P1 board WDSP arms with no possible feedback
+                // On P1, HermesLite2 and HermesC10 (ANAN-G2E, classic Hermes
+                // v3.3 gateware with the relay-routed feedback tap on DDC2 +
+                // DAC reference on DDC3) deliver the 4-DDC paired layout PS
+                // needs — the NumReceiversMinusOne wire bump and 4-DDC parser
+                // path in Protocol1Client are gated to those two boards.
+                // On any other P1 board WDSP arms with no possible feedback
                 // source, sits in COLLECT waiting on paired samples that
                 // never arrive, and the blocking 100 ms settle below stacks
                 // on the state-change thread — together that freezes RX
                 // audio + waterfall (GH #426). Skip the engine arm in that
-                // case; the wire calls above are no-ops on non-HL2 P1
-                // (board-gated in WriteAttenuatorPayload + SnapshotState).
-                bool p1Connected = p1Active is not null;
-                bool psEngineSupported = !p1Connected
-                    || _radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2;
+                // case; the wire calls above are no-ops on the other P1
+                // boards (board-gated in WriteAttenuatorPayload + SnapshotState).
+                bool psEngineSupported = P1PsEngineArmSupported(
+                    p1Connected: p1Active is not null, _radio.ConnectedBoardKind);
                 if (psEngineSupported)
                 {
                     try { Task.Delay(100).Wait(); } catch { /* ignore */ }
@@ -3950,6 +3974,22 @@ public class DspPipelineService : BackgroundService,
     // "16/256" → (16, 256). Falls back to (16, 256) on any parse failure
     // because that's the only ints/spi pair WDSP allows save/restore on
     // (Thetis PSForm.cs:865) — a safe default.
+    /// <summary>
+    /// Whether the WDSP PS engine may be armed for the live connection — the
+    /// GH #426 guard. On Protocol 2 (no P1 client) the ANAN-class feedback
+    /// DDC path always exists. On Protocol 1 only HermesLite2 and HermesC10
+    /// (ANAN-G2E, classic Hermes v3.3 — relay-routed feedback tap on DDC2 +
+    /// TX DAC reference on DDC3) deliver the 4-DDC paired layout PS needs;
+    /// on any other P1 board WDSP would arm with no possible feedback
+    /// source, park in COLLECT, and the blocking 100 ms settle would freeze
+    /// RX audio + waterfall (GH #426). Pure so the carve-out is pinned by
+    /// tests board-by-board.
+    /// </summary>
+    internal static bool P1PsEngineArmSupported(bool p1Connected, HpsdrBoardKind board) =>
+        !p1Connected
+        || board == HpsdrBoardKind.HermesLite2
+        || board == HpsdrBoardKind.HermesC10;
+
     private static (int Ints, int Spi) ParseIntsSpi(string preset)
     {
         if (string.IsNullOrWhiteSpace(preset)) return (16, 256);

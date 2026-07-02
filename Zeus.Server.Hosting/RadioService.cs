@@ -3953,9 +3953,10 @@ public sealed class RadioService : IDisposable
     /// board, which over-scaled the PS curve on non-Saturn variants.
     /// </summary>
     public static double ResolvePsHwPeak(bool isProtocol2, HpsdrBoardKind board, OrionMkIIVariant variant) =>
-        // Per-protocol switch shaped so the P1 follow-up (separately
-        // tracked) can wire HW-peak per-board too. P1 today is gated off
-        // in the frontend but the engine still receives the right number
+        // Per-protocol switch shaped so future P1 boards can wire HW-peak
+        // per-board too. On P1, PS is live on HermesLite2 and HermesC10
+        // (ANAN-G2E); the remaining P1 boards keep the engine-arm guard in
+        // DspPipelineService (GH #426) but still receive the right number
         // on connect — keeps Synthetic + tests deterministic.
         (isProtocol2, board) switch
         {
@@ -4350,6 +4351,20 @@ public sealed class RadioService : IDisposable
     /// Protocol 2 must not open the UDP→1028 path.</summary>
     internal void MarkConnectedNonP2ForTest(string endpoint) =>
         Mutate(s => s with { Status = ConnectionStatus.Connected, Endpoint = endpoint });
+
+    /// <summary>Test seam: inject a constructed-but-unconnected
+    /// <see cref="Protocol1Client"/> as the active P1 client, so
+    /// <see cref="ActiveClient"/> / <see cref="ConnectedBoardKind"/> /
+    /// <see cref="IsConnected"/> behave as a live P1 session without any
+    /// socket I/O (real network in unit tests crashes the Windows CI test
+    /// host). The caller owns the client's lifetime; nothing here starts
+    /// the RX/TX loops. Used by the PsAutoAttenuate HermesC10 suite to
+    /// exercise the board dispatch against the real client's atten_on_Tx
+    /// plumbing.</summary>
+    internal void SetActiveClientForTest(Protocol1Client? client)
+    {
+        lock (_sync) _activeClient = client;
+    }
 
     public void MarkProtocol2Disconnected()
     {
