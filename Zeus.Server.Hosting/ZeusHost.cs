@@ -582,23 +582,6 @@ public static class ZeusHost
         // and TxAudioIngest taps TX (pre-WDSP), both gated on FreeDV being the
         // active RX0 mode. No-op when the codec2 native library is absent.
         builder.Services.AddSingleton<FreeDvService>();
-        // Ft8Service — the built-in FT8/FT4 RX decode pipeline. Taps the same
-        // post-demod RX audio event AudioTapBridge uses (no hot-path changes),
-        // decimates 48k->12k, buffers UTC slots, and decodes on a worker. No-op
-        // (Enable() returns false) when the zeus_ft8 native library is absent.
-        builder.Services.AddSingleton<Ft8Service>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<Ft8Service>());
-        // Ft8BroadcastService — pushes each decoded slot to WS clients as a 0x38
-        // Ft8Decode frame for the FT8 workspace decode table.
-        builder.Services.AddHostedService<Ft8BroadcastService>();
-        // WsprService — native WSPR spotting: same RX-audio tap, 120 s UTC slots,
-        // decoded via the vendored K1JT/K9AN decoder. No-op (Enable returns false)
-        // when zeus_wspr decode is unavailable (e.g. Windows encode-only build).
-        builder.Services.AddSingleton<WsprService>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<WsprService>());
-        // WsprBroadcastService — pushes each completed 120 s slot's spots to WS
-        // clients as a 0x39 WsprSpot frame for the WSPR workspace spot table.
-        builder.Services.AddHostedService<WsprBroadcastService>();
         // FreeDvNativeInstaller — the in-app "Install FreeDV" downloader. codec2
         // can't be built on a stock operator machine, so when the bundled binary
         // is missing (older build / unshipped platform) this fetches the prebuilt
@@ -613,20 +596,6 @@ public static class ZeusHost
         builder.Services.AddSingleton<FreeDvNativeInstaller>();
         builder.Services.AddSingleton<TxService>();
         builder.Services.AddSingleton<TxAudioIngest>();
-        // Ft8TxService / WsprTxService — the ARMED FT8/FT4 + WSPR auto-sequence
-        // keyers (TX half; the RX decode/spot services above are untouched). They
-        // own the UTC slot clock, key MOX via TxService (MoxSource.Ft8) and stream
-        // synthesized tone audio through TxAudioIngest. They NEVER auto-arm (armed
-        // defaults false, operator-only) and a backend watchdog auto-disarms an
-        // unattended arm. No PureSignal / drive / power state is touched. A shared
-        // DigitalTxArbiter enforces that only ONE of FT8/FT4/WSPR is armed at a
-        // time (they share MoxSource.Ft8), so neither can drop MOX out from under
-        // the other or double-feed TXA.
-        builder.Services.AddSingleton<DigitalTxArbiter>();
-        builder.Services.AddSingleton<Ft8TxService>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<Ft8TxService>());
-        builder.Services.AddSingleton<WsprTxService>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<WsprTxService>());
         // Resolve at startup so the MicPcmReceived subscription attaches before the
         // first client connects (lazy resolution would leave early frames unhandled).
         builder.Services.AddHostedService<TxAudioIngestStartup>();
@@ -902,8 +871,17 @@ public static class ZeusHost
 
         // PluginPlaybackSink lets a plugin play a clip locally (preview) or
         // inject it on the air (TX chain, under operator MOX). Surfaced to
-        // plugins via IPluginContext.Playback.
-        builder.Services.AddSingleton<Zeus.Plugins.Contracts.Audio.IAudioPlaybackSink, PluginPlaybackSink>();
+        // plugins via IPluginContext.Playback. Registered as a FACTORY so
+        // PluginManager builds one sink PER PLUGIN CONTEXT: the sink's over-air
+        // resampler is stateful (carry-over output fill), so a shared instance
+        // would leak the residual tail of one plugin's clip into another
+        // plugin's first on-air block.
+        builder.Services.AddSingleton<Func<Zeus.Plugins.Contracts.Audio.IAudioPlaybackSink>>(sp =>
+            () => new PluginPlaybackSink(
+                sp.GetRequiredService<TxAudioIngest>(),
+                sp.GetRequiredService<DspPipelineService>(),
+                sp.GetRequiredService<TxService>(),
+                sp.GetRequiredService<ILogger<PluginPlaybackSink>>()));
 
         // RadioController lets a plugin holding the ControlRadio capability key
         // TX (MoxSource.Plugin) and set VFO/mode — the same surfaces the UI and
@@ -1008,9 +986,10 @@ public static class ZeusHost
         // OFF). Reporting only broadcasts the operator's callsign/grid/TX activity
         // to the public map after an explicit opt-in — see FreeDvReporterService.
         // Shared operator identity (callsign + Maidenhead grid). One store, read
-        // first by every operator resolver (spotting / FreeDV Reporter / FT8-FT4
-        // TX) via OperatorIdentityResolver, with the QRZ home station as the
-        // fallback. Replaces the per-store identity duplication and the frontend's
+        // first by every operator resolver (FreeDV Reporter / log broadcasters)
+        // via OperatorIdentityResolver, with the QRZ home station as the
+        // fallback; the Zeus Digital plugin gets it pushed by the core UI.
+        // Replaces the per-store identity duplication and the frontend's
         // port-scoped localStorage that lost the call on every desktop restart.
         builder.Services.AddSingleton<OperatorIdentityStore>();
         // Persisted FT8/FT4 workspace behaviour preferences (auto-seq, decode
@@ -1111,12 +1090,6 @@ public static class ZeusHost
         builder.Services.AddSingleton<WsjtxConfigStore>();
         builder.Services.AddSingleton<WsjtxManagementService>();
         builder.Services.AddSingleton<Wsjtx.WsjtxUdpBroadcaster>();
-        // WsjtxLiveEmitter — the optional live WSJT-X stream (Heartbeat/Status/
-        // Decode/WSPRDecode) GridTracker / JTAlert consume. Leaf subscriber to
-        // Ft8Service/WsprService/RadioService; gated on Enabled && SendLiveDecodes
-        // so the default path emits nothing. SEND-ONLY via the broadcaster.
-        builder.Services.AddSingleton<Wsjtx.WsjtxLiveEmitter>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<Wsjtx.WsjtxLiveEmitter>());
 
         // Logging v2 — N1MM-format UDP broadcaster (Class B). Sends the N1MM
         // "contactinfo" datagram (a DIFFERENT wire format from the WSJT-X type-12
@@ -1134,18 +1107,6 @@ public static class ZeusHost
         builder.Services.AddSingleton<CloudLog.WavelogClient>();
         builder.Services.AddSingleton<CloudLog.ClubLogClient>();
         builder.Services.AddSingleton<CloudLog.CloudLogService>();
-
-        // Digital-mode spotting uploaders — FT8/FT4 decodes to PSK Reporter and
-        // WSPR spots to WSPRnet. NEW network egress; both DISABLED by default and
-        // additionally no-op until operator callsign + grid are resolved. The two
-        // reporters are leaf subscribers to Ft8Service/WsprService — they enqueue/
-        // POST only and never touch the radio/DSP/TX path.
-        builder.Services.AddSingleton<SpottingSettingsStore>();
-        builder.Services.AddSingleton<SpottingManagementService>();
-        builder.Services.AddSingleton<Spotting.PskReporterReporter>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<Spotting.PskReporterReporter>());
-        builder.Services.AddSingleton<Spotting.WsprnetReporter>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<Spotting.WsprnetReporter>());
 
         // ZeusChat — operator-to-operator chat over the Cloudflare relay.
         // Singleton (API surface) + hosted service (relay connection lifecycle),

@@ -5,12 +5,13 @@
 // on even-minute 120 s slots, gated by a tx-percent probability. This cluster
 // only sets the beacon content/cadence, arms (explicit), and offers TUNE/HALT.
 //
-// Arm + transmit lamps come from the shared 0x3A status (mode === "WSPR"); the
-// backend is authoritative. No power model is duplicated here.
+// Arm + transmit lamps come from the shared txstatus SSE status (mode ===
+// "WSPR"); the backend is authoritative. No power model is duplicated here.
 
 import { useEffect } from 'react';
 import { useState } from 'react';
 import { setTun } from '../../api/client';
+import { DIGITAL_PLUGIN_BASE } from '../../api/digital-plugin';
 import { useFt8TxStore } from '../../state/ft8-tx-store';
 import { useWsprStore } from '../../state/wspr-store';
 
@@ -36,7 +37,7 @@ async function postJson(url: string, body: unknown): Promise<void> {
 function beaconDisarm(): void {
   try {
     const body = new Blob([JSON.stringify({ enabled: false })], { type: 'application/json' });
-    navigator.sendBeacon?.('/api/wspr/tx/arm', body);
+    navigator.sendBeacon?.(`${DIGITAL_PLUGIN_BASE}/wspr/tx/arm`, body);
   } catch {
     // sendBeacon unavailable / blocked — the backend watchdog is the backstop.
   }
@@ -74,7 +75,7 @@ export function WsprTxControl({ myCall, myGrid }: WsprTxControlProps) {
   const canBeacon = myCall.trim().length > 0 && myGrid.trim().length >= 4;
 
   const pushSettings = () =>
-    void postJson('/api/wspr/tx/settings', {
+    void postJson(`${DIGITAL_PLUGIN_BASE}/wspr/tx/settings`, {
       call: myCall,
       grid4: myGrid.slice(0, 4),
       dBm,
@@ -84,7 +85,7 @@ export function WsprTxControl({ myCall, myGrid }: WsprTxControlProps) {
 
   const toggleArm = () => {
     if (!armed) pushSettings(); // sync content before arming
-    void postJson('/api/wspr/tx/arm', { enabled: !armed });
+    void postJson(`${DIGITAL_PLUGIN_BASE}/wspr/tx/arm`, { enabled: !armed });
   };
 
   const toggleTune = () => {
@@ -168,7 +169,7 @@ export function WsprTxControl({ myCall, myGrid }: WsprTxControlProps) {
         <button
           type="button"
           className="ft8-tx__halt"
-          onClick={() => void postJson('/api/wspr/tx/halt', {})}
+          onClick={() => void postJson(`${DIGITAL_PLUGIN_BASE}/wspr/tx/halt`, {})}
           title="Abort: disarm and drop the beacon immediately"
         >
           HALT

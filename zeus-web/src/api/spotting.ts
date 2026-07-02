@@ -9,10 +9,14 @@
 // License for details.
 //
 // REST client for the digital-mode spotting uploaders (FT8/FT4 -> PSK Reporter,
-// WSPR -> WSPRnet). Mirrors api/wsjtx.ts: no port test (UDP/HTTP has no
-// listener) and applies live (no restart). Both uploaders default OFF.
+// WSPR -> WSPRnet). The uploaders live in the Zeus Digital plugin (they only
+// have decodes to upload while it runs), so these endpoints are plugin-hosted:
+// 404/503 while the plugin is absent — the Spotting panel greys out then.
+// Mirrors api/wsjtx.ts: no port test (UDP/HTTP has no listener) and applies
+// live (no restart). Both uploaders default OFF.
 
 import { ApiError } from './client';
+import { DIGITAL_PLUGIN_BASE } from './digital-plugin';
 
 export type SpottingStatus = {
   pskReporterEnabled: boolean;
@@ -67,12 +71,12 @@ async function jsonFetch<T>(
 }
 
 export function getSpottingStatus(signal?: AbortSignal): Promise<SpottingStatus> {
-  return jsonFetch('/api/spotting/status', { signal }, normalizeStatus);
+  return jsonFetch(`${DIGITAL_PLUGIN_BASE}/spotting/status`, { signal }, normalizeStatus);
 }
 
 export function postSpottingConfig(cfg: SpottingConfig, signal?: AbortSignal): Promise<SpottingStatus> {
   return jsonFetch(
-    '/api/spotting/config',
+    `${DIGITAL_PLUGIN_BASE}/config/spotting`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

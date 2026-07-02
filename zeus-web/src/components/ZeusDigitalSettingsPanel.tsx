@@ -36,6 +36,7 @@ import { useEffect, useState } from 'react';
 import { useOperatorStore } from '../state/operator-store';
 import { useFt8SettingsStore } from '../state/ft8-settings-store';
 import { useFt8Store } from '../state/ft8-store';
+import { useDigitalPluginStore } from '../state/digital-plugin-store';
 import { useSpottingStore } from '../state/spotting-store';
 import { useWsjtxStore } from '../state/wsjtx-store';
 import { useQrzStore } from '../state/qrz-store';
@@ -126,6 +127,14 @@ export function ZeusDigitalSettingsPanel({
   const setSettingsView = useLayoutStore((s) => s.setSettingsView);
   const openNetworkSettings = () => setSettingsView(true, 'network');
   const openQrzSettings = () => setSettingsView(true, 'qrz');
+  const openPluginSettings = () => setSettingsView(true, 'plugins');
+
+  // Zeus Digital plugin gate. Identity, auto-sequence, macros, decode depth and
+  // the logging groups are CORE-stored and stay editable without the plugin;
+  // decode/TX themselves and the plugin-hosted surfaces (spotting, WSJT-X live
+  // decodes) need it installed AND activated (one restart after install).
+  const pluginInstalled = useDigitalPluginStore((s) => s.installed);
+  const pluginReady = useDigitalPluginStore((s) => s.installed && s.live);
 
   const isWspr = mode === 'WSPR';
 
@@ -138,6 +147,25 @@ export function ZeusDigitalSettingsPanel({
 
   return (
     <div className="ps-shell zd-settings" aria-label="Zeus Digital settings">
+      {/* § Plugin banner — FT8/FT4 decode/TX live in the Zeus Digital plugin.
+          Settings below stay editable (they persist core-side); the modes
+          themselves stay greyed in the mode pickers until the gate opens. */}
+      {!pluginReady && (
+        <div className="ps-card" role="alert">
+          <h4>Zeus Digital plugin</h4>
+          <p className="zd-note">
+            {pluginInstalled
+              ? 'The Zeus Digital plugin is installed but not active yet — restart Zeus to activate it. FT8/FT4 stay greyed out until then.'
+              : 'FT8/FT4 decode, TX and spotting are provided by the Zeus Digital plugin, which is not installed. Settings edited here are kept and apply once it is running.'}
+          </p>
+          {!pluginInstalled && (
+            <button type="button" className="btn sm" onClick={openPluginSettings}>
+              Open Plugins →
+            </button>
+          )}
+        </div>
+      )}
+
       {/* § Mode selector — which per-mode config is being edited. */}
       <div className="ps-card">
         <h4>Mode</h4>
@@ -392,7 +420,9 @@ export function ZeusDigitalSettingsPanel({
           Open Network settings →
         </button>
         <p className="zd-note">
-          PSK Reporter and WSPRnet automatic spotting are configured on the Network tab.
+          {pluginReady
+            ? 'PSK Reporter and WSPRnet automatic spotting are configured on the Network tab.'
+            : 'Spotting is hosted by the Zeus Digital plugin — the Network-tab form activates once the plugin is installed and Zeus has restarted.'}
         </p>
       </div>
 
@@ -522,6 +552,11 @@ export function ExternalLoggingGroup() {
   const status = useWsjtxStore((s) => s.status);
   const saveConfig = useWsjtxStore((s) => s.saveConfig);
 
+  // Live decodes/status stream from the Zeus Digital plugin's emitter — the
+  // type-12 logged-ADIF push stays core (log-driven, any mode), so only THIS
+  // toggle greys out when the plugin is absent.
+  const pluginReady = useDigitalPluginStore((s) => s.installed && s.live);
+
   // Local form state — nothing is committed (no egress) until SAVE. Seeded from
   // the server-backed config and re-seeded whenever it changes.
   const [form, setForm] = useState<WsjtxConfig>(config);
@@ -641,8 +676,13 @@ export function ExternalLoggingGroup() {
           />
           <ToggleRow
             label="Send live decodes & status (for GridTracker)"
-            hint="Stream Decode/WSPRDecode/Status/Heartbeat so map & roster tools stay live."
+            hint={
+              pluginReady
+                ? 'Stream Decode/WSPRDecode/Status/Heartbeat so map & roster tools stay live.'
+                : 'Streamed by the Zeus Digital plugin — install/activate it to enable live decodes.'
+            }
             checked={form.sendLiveDecodes}
+            disabled={!pluginReady}
             onChange={(v) => editField({ sendLiveDecodes: v })}
           />
         </>

@@ -12,6 +12,7 @@ import {
 } from './ft8-tx-runner';
 import { Ft8TxController } from './ft8-tx-controller';
 import { startCq, type Slot } from './ft8-sequencer';
+import { DIGITAL_PLUGIN_BASE } from '../api/digital-plugin';
 import type { Ft8Row } from '../state/ft8-store';
 
 function row(slotStartUnixMs: number, text: string, i = 0, snrDb = -10): Ft8Row {
@@ -159,7 +160,7 @@ describe('startFt8SlotDriver (boundary → settle → decodes pipeline)', () => 
 
     vi.advanceTimersByTime(slotMs + settleMs);
 
-    const stage = posts.filter((p) => p.url === '/api/ft8/tx').at(-1);
+    const stage = posts.filter((p) => p.url === `${DIGITAL_PLUGIN_BASE}/ft8/tx`).at(-1);
     expect(stage).toBeDefined();
     expect(stage?.body.slot).toBe('odd'); // reply goes in the slot opposite the CQ
     expect(String(stage?.body.message)).toContain('K1ABC');
@@ -215,6 +216,6 @@ describe('beaconDisarm', () => {
       (navigator as unknown as { sendBeacon?: unknown }).sendBeacon = orig;
     }
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe('/api/ft8/tx/arm');
+    expect(calls[0]?.url).toBe(`${DIGITAL_PLUGIN_BASE}/ft8/tx/arm`);
   });
 });

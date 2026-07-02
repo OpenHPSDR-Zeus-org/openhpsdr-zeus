@@ -60,15 +60,12 @@ public enum MoxSource : byte
     /// auto-keys on connect — the operator (or an explicit Air playback)
     /// initiates every transmission.</summary>
     Wav = 6,
-    /// <summary>The built-in FT8/FT4/WSPR armed auto-sequence keyer
-    /// (<c>Ft8TxService</c> / <c>WsprTxService</c>) driving keying from the
-    /// digital-mode slot clock. One shared wire value covers all three digital
-    /// modes (they never key simultaneously). Same release rule as
-    /// <see cref="Tci"/> / <see cref="Cat"/>: only this source releases what it
-    /// itself claimed, and <see cref="UI"/> remains the master override. The
-    /// keyer arms ONLY on an explicit operator ENABLE-TX action and a freshly
-    /// staged message — it never arms PureSignal and never auto-keys on connect
-    /// or startup.</summary>
+    /// <summary>RESERVED — Zeus Digital plugin era; never reuse. This value
+    /// keyed the built-in FT8/FT4/WSPR armed auto-sequence keyer until the
+    /// suite moved into the installable com.kb2uka.digital plugin, which keys
+    /// through <see cref="Plugin"/> like every other plugin keyer. The wire
+    /// value stays burned so persisted state / logs / older clients that know
+    /// byte 7 as "FT8" can never collide with a future source.</summary>
     Ft8 = 7,
     /// <summary>A hardware MIDI controller (DJ deck / control surface) mapped
     /// to the MOX / TUNE / 2-Tone commands via the MIDI controller subsystem

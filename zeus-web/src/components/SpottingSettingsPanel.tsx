@@ -11,16 +11,23 @@
 import { useEffect, useState } from 'react';
 import { useSpottingStore } from '../state/spotting-store';
 import { useOperatorStore } from '../state/operator-store';
+import { useDigitalPluginStore } from '../state/digital-plugin-store';
 
 // Digital-mode spotting: upload RX decodes to the community spotting networks —
 // FT8/FT4 to PSK Reporter and WSPR to WSPRnet. New network egress — both
 // DISABLED by default. Uploads are spot reports OUT only; nothing controls the
 // radio or transmits. A callsign + Maidenhead grid are required (PSK Reporter /
-// WSPRnet attribute every spot to your station).
+// WSPRnet attribute every spot to your station). The uploaders live in the
+// Zeus Digital plugin — the form greys out (with an install/restart cue) when
+// the plugin is absent, since there is nothing to configure.
 export function SpottingSettingsPanel() {
   const config = useSpottingStore((s) => s.config);
   const status = useSpottingStore((s) => s.status);
   const saveConfig = useSpottingStore((s) => s.saveConfig);
+
+  // Plugin gate — spotting endpoints 404/503 without the Zeus Digital plugin.
+  const pluginInstalled = useDigitalPluginStore((s) => s.installed);
+  const pluginReady = useDigitalPluginStore((s) => s.installed && s.live);
 
   // Seed call/grid from the client operator identity so the operator usually
   // doesn't retype — but the authoritative value is what's persisted server-side.
@@ -104,11 +111,31 @@ export function SpottingSettingsPanel() {
         required (every spot is attributed to your station). Both networks are public.
       </div>
 
+      {!pluginReady && (
+        <div
+          style={{
+            padding: 10,
+            marginBottom: 16,
+            fontSize: 11,
+            color: 'var(--fg-1)',
+            background: 'var(--bg-0)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--r-sm)',
+          }}
+          role="alert"
+        >
+          {pluginInstalled
+            ? 'Restart Zeus to activate the Zeus Digital plugin — spotting is configured there.'
+            : 'Spotting is provided by the Zeus Digital plugin. Install it from Settings → Plugins.'}
+        </div>
+      )}
+
       <form onSubmit={onSave} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input
             type="checkbox"
             checked={psk}
+            disabled={!pluginReady}
             onChange={(e) => setPsk(e.target.checked)}
             style={{ accentColor: 'var(--accent)' }}
           />
@@ -121,6 +148,7 @@ export function SpottingSettingsPanel() {
           <input
             type="checkbox"
             checked={wsprnet}
+            disabled={!pluginReady}
             onChange={(e) => setWsprnet(e.target.checked)}
             style={{ accentColor: 'var(--accent)' }}
           />
@@ -134,6 +162,7 @@ export function SpottingSettingsPanel() {
           <input
             type="text"
             value={call}
+            disabled={!pluginReady}
             onChange={(e) => setCall(e.target.value)}
             spellCheck={false}
             placeholder="K1ABC"
@@ -148,6 +177,7 @@ export function SpottingSettingsPanel() {
           <input
             type="text"
             value={grid}
+            disabled={!pluginReady}
             onChange={(e) => setGrid(e.target.value)}
             spellCheck={false}
             placeholder="FN42"
@@ -209,7 +239,7 @@ export function SpottingSettingsPanel() {
 
         <div style={{ display: 'flex', gap: 6 }}>
           <span style={{ flex: 1 }} />
-          <button type="submit" disabled={saving} className="btn sm active">
+          <button type="submit" disabled={saving || !pluginReady} className="btn sm active">
             {saving ? 'SAVING…' : 'SAVE'}
           </button>
         </div>

@@ -205,49 +205,17 @@ public static class ZeusEndpoints
                 return Results.Json(new { error = result.Message, result }, statusCode: statusCode);
             });
 
-        // FT8/FT4 native decode control. The FT8 workspace POSTs enable on
-        // entering the mode and disable on leaving; decodes arrive out-of-band as
-        // 0x38 Ft8Decode WS frames. nativeAvailable is false on a platform whose
-        // zeus_ft8 binary wasn't shipped (the workspace then shows "unavailable").
-        app.MapGet("/api/ft8",
-            (Ft8Service ft8) => Results.Ok(new
-            {
-                nativeAvailable = ft8.NativeAvailable,
-                enabled = ft8.IsEnabled,
-                receiver = ft8.ActiveReceiver,
-                protocol = ft8.ActiveProtocol == Zeus.Dsp.Ft8.Ft8Protocol.Ft4 ? "FT4" : "FT8",
-                passes = ft8.DecodePasses,
-            }));
-
-        app.MapPost("/api/ft8/enable",
-            (Zeus.Contracts.Ft8EnableRequest body, Ft8Service ft8) =>
-            {
-                var proto = string.Equals(body.Protocol, "FT4", StringComparison.OrdinalIgnoreCase)
-                    ? Zeus.Dsp.Ft8.Ft8Protocol.Ft4 : Zeus.Dsp.Ft8.Ft8Protocol.Ft8;
-                if (body.Passes is int p) ft8.DecodePasses = Math.Clamp(p, 1, 4);
-                bool ok = ft8.Enable(body.Receiver ?? 0, proto);
-                log.LogInformation("api.ft8.enable rx={Rx} proto={Proto} ok={Ok}",
-                    body.Receiver ?? 0, proto, ok);
-                return ok
-                    ? Results.Ok(new { enabled = true, nativeAvailable = true })
-                    : Results.Ok(new { enabled = false, nativeAvailable = ft8.NativeAvailable });
-            });
-
-        // FT8/FT4 + WSPR ARMED auto-sequence TX keyer control surface (arm /
-        // stage / halt / status). Kept in its own extension file so this one
-        // stays manageable.
-        app.MapFt8TxEndpoints();
-
-        app.MapPost("/api/ft8/disable", (Ft8Service ft8) =>
-        {
-            ft8.Disable();
-            log.LogInformation("api.ft8.disable");
-            return Results.Ok(new { enabled = false });
-        });
+        // The FT8/FT4/WSPR decode + TX keyer suite (with its /api/ft8, /api/wspr
+        // and /api/spotting control surfaces) was extracted into the installable
+        // plugin com.kb2uka.digital (openhpsdr-zeus-plugins/modes/Digital); it
+        // now maps its routes under /api/plugins/com.kb2uka.digital/. Kept in
+        // core: the per-mode workspace settings store below (/api/ft8/settings),
+        // the shared operator identity, and the /api/log/digital-worked set.
 
         // Shared operator identity (callsign + Maidenhead grid). This is the SAME
-        // identity the spotting uploaders and FreeDV Reporter resolve from — set
-        // it once here and FT8/FT4 TX ungates everywhere. Server-persisted so the
+        // identity FreeDV Reporter and the log broadcasters resolve from, and the
+        // one the core UI pushes to the Zeus Digital plugin — set it once here and
+        // FT8/FT4 TX ungates everywhere. Server-persisted so the
         // desktop webview no longer loses it on restart. GET returns both the saved
         // override and the effective resolved value (override → QRZ home fallback),
         // so the Settings page can grey QRZ-sourced values.
@@ -284,36 +252,6 @@ public static class ZeusEndpoints
                     m, saved.AutoSequence, saved.DecodePasses, saved.AutoLog);
                 return Results.Ok(saved);
             });
-
-        // WSPR native spotting control. nativeAvailable is false where the
-        // zeus_wspr decoder isn't shipped (e.g. Windows encode-only build today).
-        app.MapGet("/api/wspr",
-            (WsprService wspr) => Results.Ok(new
-            {
-                nativeAvailable = wspr.NativeAvailable,
-                enabled = wspr.IsEnabled,
-                receiver = wspr.ActiveReceiver,
-                dialFreqMhz = wspr.DialFreqMhz,
-            }));
-
-        app.MapPost("/api/wspr/enable",
-            (Zeus.Contracts.WsprEnableRequest body, WsprService wspr) =>
-            {
-                double dial = body.DialFreqMhz ?? 14.0956; // 20 m default
-                bool ok = wspr.Enable(body.Receiver ?? 0, dial);
-                log.LogInformation("api.wspr.enable rx={Rx} dial={Dial:F4} ok={Ok}",
-                    body.Receiver ?? 0, dial, ok);
-                return ok
-                    ? Results.Ok(new { enabled = true, nativeAvailable = true })
-                    : Results.Ok(new { enabled = false, nativeAvailable = wspr.NativeAvailable });
-            });
-
-        app.MapPost("/api/wspr/disable", (WsprService wspr) =>
-        {
-            wspr.Disable();
-            log.LogInformation("api.wspr.disable");
-            return Results.Ok(new { enabled = false });
-        });
 
         // Activation spots — merged POTA + SOTA feed, polled server-side by
         // ActivationSpotsService. The Spots panel polls this and offers
@@ -3897,6 +3835,17 @@ public static class ZeusEndpoints
             return Results.Ok(response);
         });
 
+        // Digital worked-before set — every callsign with a prior FT8/FT4 QSO
+        // in the logbook (upper-cased; digital modes ONLY, never SSB/CW). The
+        // Zeus Digital pop-out fetches this to decorate decode rows with the
+        // worked-B4 highlight; the enrichment moved client-side when the decode
+        // pipeline moved into the com.kb2uka.digital plugin.
+        app.MapGet("/api/log/digital-worked", async (LogService logService, HttpContext ctx) =>
+        {
+            var worked = await logService.GetDigitalWorkedCallsignsAsync(ctx.RequestAborted);
+            return Results.Ok(new { calls = worked.ToArray() });
+        });
+
         app.MapPost("/api/log/entry", async (
             CreateLogEntryRequest req,
             LogService logService,
@@ -4252,20 +4201,6 @@ public static class ZeusEndpoints
                 req.Enabled, req.Transport, req.Host, req.Port, req.MulticastGroup, req.MulticastTtl,
                 req.SendQsoLogged, req.SendLiveDecodes);
             var status = wsjtx.SetConfig(req);
-            return Results.Ok(status);
-        });
-
-        // Digital-mode spotting uploaders (FT8/FT4 -> PSK Reporter, WSPR ->
-        // WSPRnet). NEW network egress, both DISABLED by default; config applies
-        // live (the uploaders only send UDP/HTTP — there is no listener).
-        app.MapGet("/api/spotting/status", (SpottingManagementService spotting) => spotting.GetStatus());
-
-        app.MapPost("/api/spotting/config", (SpottingRuntimeConfig req, SpottingManagementService spotting) =>
-        {
-            log.LogInformation(
-                "api.spotting.config psk={Psk} wsprnet={Wspr}",
-                req.PskReporterEnabled, req.WsprnetEnabled);
-            var status = spotting.SetConfig(req);
             return Results.Ok(status);
         });
 

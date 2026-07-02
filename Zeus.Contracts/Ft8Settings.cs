@@ -51,8 +51,8 @@ public sealed record Ft8Settings(
     // ── Decode ──────────────────────────────────────────────────────────────
     /// <summary>
     /// Decode depth as passes, matching the engine scale (1 = Normal/floor,
-    /// &gt;1 = Deep/multi). Default 3 mirrors Ft8Service.DecodePasses so the first
-    /// session decodes exactly as deep as before this page existed. 1..4.
+    /// &gt;1 = Deep/multi). Default 3 mirrors the decoder's default passes so the
+    /// first session decodes exactly as deep as before this page existed. 1..4.
     /// </summary>
     int DecodePasses = 3,
     bool ShowOnlyCq = false,

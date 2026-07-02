@@ -45,7 +45,12 @@
 
 import { useCallback } from 'react';
 import { type RxMode } from '../api/client';
-import { isDigitalEntryAvailable, toggleDigital } from '../state/enter-digital';
+import {
+  digitalEntryUnavailableReason,
+  isDigitalEntryAvailable,
+  toggleDigital,
+} from '../state/enter-digital';
+import { useDigitalPluginStore } from '../state/digital-plugin-store';
 import { useFt8Store } from '../state/ft8-store';
 import { useWsprStore } from '../state/wspr-store';
 import { useConnectionStore } from '../state/connection-store';
@@ -88,6 +93,10 @@ export function ModeBandwidth() {
   const wsprOpen = useWsprStore((s) => s.open);
   const digitalEngaged = (p: 'FT8' | 'FT4' | 'WSPR') =>
     p === 'WSPR' ? wsprOpen : ft8Open && ft8Protocol === p;
+
+  // Subscribe to the plugin gate so FT8/FT4 light up the moment the Zeus
+  // Digital plugin goes installed+live (isDigitalEntryAvailable reads it).
+  useDigitalPluginStore((s) => s.installed && s.live);
 
   const selectMode = useCallback(
     (m: RxMode) => {
@@ -154,7 +163,7 @@ export function ModeBandwidth() {
                 }
                 title={
                   !available
-                    ? `${p} — coming soon (not yet available)`
+                    ? (digitalEntryUnavailableReason(p) ?? `${p} — not available`)
                     : engaged
                       ? `Exit ${p} — restores the prior frequency and mode`
                       : `Enter ${p} — QSYs the radio and opens the ${p} pop-out`

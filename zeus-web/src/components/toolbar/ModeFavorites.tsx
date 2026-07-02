@@ -4,7 +4,7 @@
 // dropdown listing every mode. Drag any mode chip in the dropdown onto a
 // favorite slot to pin it.
 
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { type RxMode } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
 import {
@@ -14,12 +14,19 @@ import {
   postReceiverMode,
 } from '../../state/receiver-state';
 import { saveReceiverBandModeMemory } from '../../util/band-memory';
-import { isDigitalEntryAvailable, isDigitalEntryKey, toggleDigital } from '../../state/enter-digital';
+import {
+  DIGITAL_ENTRY_KEYS,
+  digitalEntryUnavailableReason,
+  isDigitalEntryAvailable,
+  isDigitalEntryKey,
+  toggleDigital,
+} from '../../state/enter-digital';
+import { useDigitalPluginStore } from '../../state/digital-plugin-store';
 import { useFt8Store } from '../../state/ft8-store';
 import { useWsprStore } from '../../state/wspr-store';
 import { ToolbarFavorites, type ToolbarOption } from './ToolbarFavorites';
 
-const MODE_OPTIONS: readonly ToolbarOption[] = [
+const WDSP_MODE_OPTIONS: readonly ToolbarOption[] = [
   { key: 'LSB', label: 'LSB' },
   { key: 'USB', label: 'USB' },
   { key: 'CWL', label: 'CWL' },
@@ -31,11 +38,6 @@ const MODE_OPTIONS: readonly ToolbarOption[] = [
   { key: 'DIGL', label: 'DIGL' },
   { key: 'DIGU', label: 'DIGU' },
   { key: 'FREEDV', label: 'FreeDV' },
-  // Zeus-level digital modes — these open the FT8/FT4/WSPR workspace and
-  // auto-configure the radio (handled in onSelect, not via setReceiverMode).
-  { key: 'FT8', label: 'FT8' },
-  { key: 'FT4', label: 'FT4' },
-  { key: 'WSPR', label: 'WSPR', disabled: !isDigitalEntryAvailable('WSPR'), title: 'WSPR — coming soon (not yet available)' },
 ];
 
 export function ModeFavorites() {
@@ -51,6 +53,33 @@ export function ModeFavorites() {
   const wsprOpen = useWsprStore((s) => s.open);
   const engagedDigital = wsprOpen ? 'WSPR' : ft8Open ? ft8Protocol : null;
   const currentKey = engagedDigital ?? activeMode;
+
+  // Zeus-level digital modes — these open the FT8/FT4/WSPR workspace and
+  // auto-configure the radio (handled in onSelect, not via setReceiverMode).
+  // disabled/title are computed HERE (not at module scope) so the entries
+  // re-enable live when the Zeus Digital plugin gate opens; the tooltip
+  // distinguishes not-installed / restart-pending / WSPR's coming-soon.
+  const digitalReady = useDigitalPluginStore((s) => s.installed && s.live);
+  const modeOptions = useMemo<readonly ToolbarOption[]>(
+    () => [
+      ...WDSP_MODE_OPTIONS,
+      ...DIGITAL_ENTRY_KEYS.map<ToolbarOption>((key) => {
+        const available = isDigitalEntryAvailable(key);
+        return available
+          ? { key, label: key }
+          : {
+              key,
+              label: key,
+              disabled: true,
+              title: digitalEntryUnavailableReason(key) ?? `${key} — not available`,
+            };
+      }),
+    ],
+    // digitalReady is the reactive input; the availability/reason helpers read
+    // the same store imperatively.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [digitalReady],
+  );
 
   const onSelect = useCallback(
     (key: string) => {
@@ -77,7 +106,7 @@ export function ModeFavorites() {
     <ToolbarFavorites
       kind="mode"
       label="MODE"
-      options={MODE_OPTIONS}
+      options={modeOptions}
       currentKey={currentKey}
       onSelect={onSelect}
       minWidth={142}

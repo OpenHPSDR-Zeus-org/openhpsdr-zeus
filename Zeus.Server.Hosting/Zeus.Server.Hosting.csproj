@@ -41,7 +41,6 @@
     <ProjectReference Include="..\Zeus.Midi\Zeus.Midi.csproj" />
     <ProjectReference Include="..\Zeus.Dsp\Zeus.Dsp.csproj" />
     <ProjectReference Include="..\Zeus.Dsp.FreeDv\Zeus.Dsp.FreeDv.csproj" />
-    <ProjectReference Include="..\Zeus.Dsp.Ft8\Zeus.Dsp.Ft8.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -70,11 +70,6 @@ internal enum MicBlockSource
     Tci,
     /// <summary>WAV-recording playback to the air. Operator-explicit override.</summary>
     Wav,
-    /// <summary>Built-in FT8/FT4/WSPR auto-sequence keyer audio (digital TX).
-    /// Operator-armed override — bypasses the host/radio single-select gate like
-    /// <see cref="Tci"/>/<see cref="Wav"/>, and suppresses the live mic for the
-    /// duration of a digital transmission so the two never double-feed TXA.</summary>
-    Ft8,
 }
 
 /// <summary>
@@ -169,11 +164,6 @@ public sealed class TxAudioIngest : IDisposable
     // concurrent native-mic frame within TciHysteresisMs is suppressed -- the
     // recording replaces the live mic on the air, they never mix.
     private long _lastWavTickMs;
-    // Digital-keyer-source recency: set on every OnMicPcmBytesFromFt8 call so a
-    // concurrent native/browser mic frame within TciHysteresisMs is suppressed --
-    // while the FT8/FT4/WSPR keyer is streaming its synthesized audio the live
-    // mic must never mix into TXA. Same hysteresis shape as TCI/WAV.
-    private long _lastFt8TickMs;
     // Browser/mobile mic recency: desktop mode has NativeMicCapture running
     // continuously, so remote WebSocket mic frames must temporarily own the
     // "live mic" source. Otherwise mobile PTT mixes phone audio with desktop
@@ -542,30 +532,12 @@ public sealed class TxAudioIngest : IDisposable
         OnMicPcmBytes(f32lePayload, MicBlockSource.RadioMic);
     }
 
-    /// <summary>
-    /// Source-tagged entry point for the built-in FT8/FT4/WSPR auto-sequence
-    /// keyer (from <see cref="Ft8TxService"/> / <see cref="WsprTxService"/>).
-    /// Mirrors <see cref="OnMicPcmBytesFromWav"/>: stamps the digital-keyer
-    /// recency marker so the live native/browser mic is suppressed for the
-    /// duration of the transmission, then feeds the synthesized block through the
-    /// normal TX chain. The block is tagged <see cref="MicBlockSource.Ft8"/>, an
-    /// operator-armed override that bypasses the host/radio single-select gate.
-    /// The caller keys MOX; this method does not touch MOX.
-    /// </summary>
-    internal void OnMicPcmBytesFromFt8(ReadOnlyMemory<byte> f32lePayload)
-    {
-        Volatile.Write(ref _lastFt8TickMs, Environment.TickCount64);
-        OnMicPcmBytes(f32lePayload, MicBlockSource.Ft8);
-    }
-
     private bool ShouldSuppressForAuthoritativeSource(long now)
     {
         long lastTci = Volatile.Read(ref _lastTciTickMs);
         if (lastTci != 0 && now - lastTci < TciHysteresisMs) return true;
         long lastWav = Volatile.Read(ref _lastWavTickMs);
-        if (lastWav != 0 && now - lastWav < TciHysteresisMs) return true;
-        long lastFt8 = Volatile.Read(ref _lastFt8TickMs);
-        return lastFt8 != 0 && now - lastFt8 < TciHysteresisMs;
+        return lastWav != 0 && now - lastWav < TciHysteresisMs;
     }
 
     /// <summary>Source-tagged entry point for WAV-recording playback to the

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import { describe, expect, it, vi } from 'vitest';
+import { DIGITAL_PLUGIN_BASE } from '../api/digital-plugin';
 import { Ft8TxController } from './ft8-tx-controller';
 
 interface PostCall {
@@ -17,9 +18,9 @@ function makeFetch(): { fn: typeof fetch; calls: PostCall[] } {
   return { fn, calls };
 }
 
-const tx = (calls: PostCall[]) => calls.filter((c) => c.url === '/api/ft8/tx');
-const arm = (calls: PostCall[]) => calls.filter((c) => c.url === '/api/ft8/tx/arm');
-const halt = (calls: PostCall[]) => calls.filter((c) => c.url === '/api/ft8/tx/halt');
+const tx = (calls: PostCall[]) => calls.filter((c) => c.url === `${DIGITAL_PLUGIN_BASE}/ft8/tx`);
+const arm = (calls: PostCall[]) => calls.filter((c) => c.url === `${DIGITAL_PLUGIN_BASE}/ft8/tx/arm`);
+const halt = (calls: PostCall[]) => calls.filter((c) => c.url === `${DIGITAL_PLUGIN_BASE}/ft8/tx/halt`);
 
 describe('Ft8TxController', () => {
   it('never POSTs /tx while disarmed', () => {

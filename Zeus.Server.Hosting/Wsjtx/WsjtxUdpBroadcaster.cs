@@ -23,8 +23,9 @@ namespace Zeus.Server.Wsjtx;
 ///     optionally a structured QSOLogged (type 5), on each logged QSO. Wired ONLY
 ///     at /api/log/entry (live + manual QSOs); ADIF bulk import does NOT route
 ///     here, so re-importing a log never re-broadcasts.
-///   * <see cref="SendDatagramAsync"/> — used by <see cref="WsjtxLiveEmitter"/>
-///     for the live Heartbeat/Status/Decode/WSPRDecode stream.
+///   * <see cref="SendDatagramAsync"/> — the raw-datagram seam the (now
+///     plugin-hosted) live Heartbeat/Status/Decode/WSPRDecode emitter used;
+///     kept for any future core caller.
 ///
 /// SEND-ONLY: there is no inbound socket anywhere in this namespace. Zeus never
 /// honours Reply(4)/HaltTx(8)/FreeText(9) — those are network TX-triggers into a
@@ -48,7 +49,8 @@ public sealed class WsjtxUdpBroadcaster : IDisposable
     private readonly ILogger<WsjtxUdpBroadcaster> _log;
     private readonly WsjtxManagementService _mgmt;
     private readonly LogService _logService;
-    private readonly SpottingManagementService? _operator;
+    private readonly OperatorIdentityStore? _identity;
+    private readonly QrzService? _qrz;
 
     // One cached send socket for the broadcaster's lifetime. Created lazily on the
     // first enabled send so the disabled-default path allocates no socket at all.
@@ -66,13 +68,16 @@ public sealed class WsjtxUdpBroadcaster : IDisposable
         LogService logService,
         // Optional so the existing broadcaster tests (which exercise the type-12
         // path only) keep their 3-arg construction. Supplies operator call/grid for
-        // the MY_* fields of the optional QSOLogged (type 5) message.
-        SpottingManagementService? operatorIdentity = null)
+        // the MY_* fields of the optional QSOLogged (type 5) message via
+        // OperatorIdentityResolver (override → QRZ home fallback).
+        OperatorIdentityStore? identity = null,
+        QrzService? qrz = null)
     {
         _log = log;
         _mgmt = mgmt;
         _logService = logService;
-        _operator = operatorIdentity;
+        _identity = identity;
+        _qrz = qrz;
     }
 
     /// <summary>Broadcast one logged QSO. No-op when the broadcaster is disabled;
@@ -90,7 +95,9 @@ public sealed class WsjtxUdpBroadcaster : IDisposable
 
             if (cfg.SendQsoLogged)
             {
-                var (call, grid) = _operator?.ResolveOperator() ?? ("", "");
+                var (call, grid) = _identity is not null && _qrz is not null
+                    ? OperatorIdentityResolver.Resolve(_identity, _qrz)
+                    : ("", "");
                 var qso = WsjtxMessage.EncodeQsoLogged(
                     instanceId: cfg.InstanceId,
                     dateTimeOffUtc: entry.QsoDateTimeUtc,

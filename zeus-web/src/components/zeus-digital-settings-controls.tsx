@@ -32,10 +32,14 @@ export function ToggleRow(props: {
   checked: boolean;
   /** Render disabled with a "coming soon" badge — persisted but not yet wired. */
   comingSoon?: boolean;
+  /** Render disabled WITHOUT the badge — gated by runtime state (e.g. the
+   *  backing plugin is not installed/active). */
+  disabled?: boolean;
   onChange: (v: boolean) => void;
 }) {
+  const inert = props.comingSoon || props.disabled;
   return (
-    <div className={`ps-field${props.comingSoon ? ' is-disabled' : ''}`}>
+    <div className={`ps-field${inert ? ' is-disabled' : ''}`}>
       <div className="ps-name">
         {props.label}
         {props.comingSoon && <Soon />}
@@ -46,10 +50,10 @@ export function ToggleRow(props: {
         role="switch"
         aria-checked={props.checked}
         aria-label={props.label}
-        aria-disabled={props.comingSoon}
-        disabled={props.comingSoon}
+        aria-disabled={inert}
+        disabled={inert}
         className={`btn sm${props.checked ? ' active' : ''}`}
-        onClick={() => !props.comingSoon && props.onChange(!props.checked)}
+        onClick={() => !inert && props.onChange(!props.checked)}
       >
         {props.checked ? 'ON' : 'OFF'}
       </button>

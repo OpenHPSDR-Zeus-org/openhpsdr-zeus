@@ -34,12 +34,24 @@ describe('classifyDecode', () => {
     expect(classifyDecode(row('RK9AX KB2UKA RR73'), 'KB2UKA')).toBe('normal');
   });
 
-  it('flags worked-before from the authoritative server row flag', () => {
+  it('flags worked-before from the legacy server row flag (fallback)', () => {
     expect(classifyDecode(row('GJ0KYZ RK9AX MO05', { workedBefore: true }))).toBe('worked');
-    // Same message WITHOUT the flag is not worked — the old client-side
-    // workedCalls heuristic is gone.
+    // Same message WITHOUT the flag and no worked set is not worked.
     expect(classifyDecode(row('GJ0KYZ RK9AX MO05', { workedBefore: false }))).toBe('normal');
     expect(classifyDecode(row('GJ0KYZ RK9AX MO05'))).toBe('normal');
+  });
+
+  it('flags worked-before at render time from the worked-calls set', () => {
+    const worked = new Set(['RK9AX']);
+    // Sender (DE call) is in the set → worked, regardless of the row flag.
+    expect(classifyDecode(row('GJ0KYZ RK9AX MO05'), undefined, undefined, worked)).toBe('worked');
+    // A different sender is untouched.
+    expect(classifyDecode(row('GJ0KYZ K1ABC MO05'), undefined, undefined, worked)).toBe('normal');
+    // The TARGET being worked must NOT flag the row (sender is token 1).
+    expect(classifyDecode(row('RK9AX K1ABC MO05'), undefined, undefined, worked)).toBe('normal');
+    // Precedence holds: CQ and 'me' still outrank worked.
+    expect(classifyDecode(row('CQ RK9AX MO05'), undefined, undefined, worked)).toBe('cq');
+    expect(classifyDecode(row('KB2UKA RK9AX -12'), 'KB2UKA', undefined, worked)).toBe('me');
   });
 
   it('defaults to normal', () => {
