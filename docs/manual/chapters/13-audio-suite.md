@@ -87,7 +87,7 @@ To bring plugins in, use the scan controls at the bottom of the Plugins browser:
 
 A hosted plugin chip in the chain carries a small format tag (**VST** / **AU**) and a star you can use to mark favourites (favourites sort to the top of the browser). Because a plugin's real interface is a native operating-system window — not browser HTML — Zeus can't draw it inside the suite window. Instead, selecting a plugin chip opens its **real editor as a separate desktop window**, exactly like a standalone host, with an Open Editor / Close Editor button in the detail pane. The plugin processes your audio whether or not its editor window is open; closing the editor just hides the GUI. If a plugin ever misbehaves, the host process is self-healing — it recovers on its own rather than taking the radio down with it.
 
-The RX suite header shows a **VST** status pill — ON when receive VSTs are processing, IDLE when the engine is available but unused, OFF when no VST engine is installed — plus its own Bypass toggle for the whole receive chain.
+The RX suite header shows a **VST** status pill — ON when receive VSTs are processing, IDLE when the engine is available but unused, OFF when no VST engine is installed — plus its own Bypass toggle for the whole receive chain. On Windows, when the engine is missing the RX Audio row in Settings → Audio Tools now offers its own **Download VST Engine** button, so you can enable receive VSTs without first switching your TX route to VST.
 
 ### Practical tips
 

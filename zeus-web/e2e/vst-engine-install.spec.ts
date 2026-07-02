@@ -213,14 +213,17 @@ test('new operator downloads, installs, and auto-configures the VST engine', asy
 
   // The TX tools panel is in VST mode (engine absent) → the download affordance
   // is offered, and "Download Audio Suite" (the native-mode peer) is not.
-  const getEngine = page.getByRole('button', { name: 'Download VST Engine' });
+  // Scope to the TX Audio rail — the RX Audio rail also offers a "Download VST
+  // Engine" button on Windows when the shared engine is missing (issue #1276).
+  const txRail = page.getByRole('region', { name: 'TX Audio' });
+  const getEngine = txRail.getByRole('button', { name: 'Download VST Engine' });
   await expect(getEngine).toBeVisible();
   await expect(page.getByRole('button', { name: 'Download Audio Suite' })).toHaveCount(0);
 
   await getEngine.click();
 
   // Install runs, then the configure step flips the route to an active engine.
-  await expect(page.getByRole('button', { name: 'VST Engine Ready' })).toBeVisible();
+  await expect(txRail.getByRole('button', { name: 'VST Engine Ready' })).toBeVisible();
   await expect(page.getByText('VST engine ready — TX audio now routes through VST.')).toBeVisible();
 
   // The engine was actually installed and configured exactly once.

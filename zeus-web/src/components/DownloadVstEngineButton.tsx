@@ -10,9 +10,14 @@
 // engine (upstream KlayaR/VSTHost, run headless) is fetched from its latest
 // release and staged by the server; it is never bundled (GPLv3 isolation — see
 // Zeus.Server.Hosting/VstEngineInstaller.cs). One click downloads, installs,
-// and then CONFIGURES (switches the TX route to VST) so the operator can use it
-// immediately. Visible only while no engine is present (or an install is in
-// flight / failed); it disappears once the engine is ready.
+// and then CONFIGURES so the operator can use it immediately. Visible only while
+// no engine is present (or an install is in flight / failed); it disappears once
+// the engine is ready.
+//
+// The `route` prop decides the configure step: 'tx' switches the TX processing
+// mode to VST (classic single-click TX flow); 'rx' leaves TX alone and just
+// refreshes the shared engine's RX view, so an operator installing purely for
+// RX VST doesn't get their TX route silently switched.
 
 import { useAudioSuiteStore } from '../state/audio-suite-store';
 
@@ -68,8 +73,18 @@ function dot(state: StageState): { color: string; glow: string; symbol: string }
   }
 }
 
-export function DownloadVstEngineButton() {
-  const engineAvailable = useAudioSuiteStore((s) => s.vstEngineAvailable);
+export function DownloadVstEngineButton({
+  route = 'tx',
+}: {
+  route?: 'tx' | 'rx';
+} = {}) {
+  // Both TX and RX check the same shared engine on disk (VstEngineController
+  // .FindEngineExe), so their availability flags reflect the same file. Pick
+  // the route-specific flag so RX doesn't wait on a TX processing-mode fetch
+  // it doesn't otherwise trigger.
+  const engineAvailable = useAudioSuiteStore((s) =>
+    route === 'rx' ? s.rxVstEngineAvailable : s.vstEngineAvailable,
+  );
   const install = useAudioSuiteStore((s) => s.vstEngineInstall);
   const installVstEngine = useAudioSuiteStore((s) => s.installVstEngine);
 
@@ -95,6 +110,11 @@ export function DownloadVstEngineButton() {
         ? 'VST Engine Ready'
         : 'Download VST Engine';
 
+  const tooltip =
+    route === 'rx'
+      ? 'Download and install the out-of-process VST engine so RX audio can run through VST plugins (installs once; shared with TX)'
+      : 'Download, install, and enable the out-of-process VST engine so TX audio can run through VST plugins';
+
   const showPanel = busy || failed || done;
 
   return (
@@ -104,9 +124,11 @@ export function DownloadVstEngineButton() {
         className="btn sm active"
         disabled={busy || done}
         onClick={() => {
-          if (!busy && !done) void installVstEngine();
+          if (!busy && !done) {
+            void installVstEngine('/api/tx-audio-suite/vst-engine/install', route);
+          }
         }}
-        title="Download, install, and enable the out-of-process VST engine so TX audio can run through VST plugins"
+        title={tooltip}
         style={{ whiteSpace: 'nowrap' }}
       >
         {label}
