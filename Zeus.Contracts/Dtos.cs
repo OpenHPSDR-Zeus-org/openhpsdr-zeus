@@ -2136,9 +2136,10 @@ public sealed record G2OptionsSetRequest(
 // server deal in named rows; Protocol2Client maps row keys to the verified Alex
 // bit constants so raw relay masks are never exposed as a user API.
 //
-// Ranges are inclusive, in Hz. StartHz/EndHz are clamped server-side to the HF+
-// 6m operating envelope and may intentionally use exact edge values such as
-// 1_499_999 to preserve the legacy strict-inequality Alex thresholds.
+// Ranges are inclusive, in Hz. StartHz/EndHz are clamped server-side to the
+// Thetis/Alex HF+6m envelope (0..61.44 MHz) and may intentionally use exact
+// edge values such as 1_499_999 to preserve the legacy strict-inequality Alex
+// thresholds.
 public sealed record RfFilterRangeDto(
     string Key,
     string Label,
