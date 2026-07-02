@@ -50,6 +50,7 @@ import type {
   AdifImportResponse,
   AdifExportToFileResponse,
   QrzPublishResponse,
+  LogDeleteResponse,
   WorkedCallsignSummary,
 } from '../api/log';
 import {
@@ -60,6 +61,7 @@ import {
   exportToAdif,
   importAdif,
   publishToQrz,
+  deleteLogEntries,
 } from '../api/log';
 import { useCapabilitiesStore } from './capabilities-store';
 
@@ -77,6 +79,9 @@ type LoggerState = {
   exportInFlight: boolean;
   exportError: string | null;
   lastExportResult: AdifExportToFileResponse | null;
+  deleteInFlight: boolean;
+  deleteError: string | null;
+  lastDeleteResult: LogDeleteResponse | null;
   selectedIds: Set<string>;
   workedSummary: WorkedCallsignSummary | null;
   workedSummaryLoading: boolean;
@@ -93,6 +98,8 @@ type LoggerState = {
   clearImportResult: () => void;
   publishSelectedToQrz: (logEntryIds: string[]) => Promise<void>;
   clearPublishResult: () => void;
+  deleteSelected: (logEntryIds: string[]) => Promise<void>;
+  clearDeleteResult: () => void;
   toggleSelected: (id: string) => void;
   setSelectedIds: (ids: Iterable<string>) => void;
   clearSelected: () => void;
@@ -112,6 +119,9 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
   exportInFlight: false,
   exportError: null,
   lastExportResult: null,
+  deleteInFlight: false,
+  deleteError: null,
+  lastDeleteResult: null,
   selectedIds: new Set<string>(),
   workedSummary: null,
   workedSummaryLoading: false,
@@ -242,6 +252,26 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
 
   clearPublishResult: () => {
     set({ lastPublishResult: null, publishError: null });
+  },
+
+  deleteSelected: async (logEntryIds: string[]) => {
+    if (logEntryIds.length === 0) return;
+    set({ deleteInFlight: true, deleteError: null, lastDeleteResult: null });
+    try {
+      const result = await deleteLogEntries({ logEntryIds });
+      set({ lastDeleteResult: result, deleteInFlight: false, selectedIds: new Set<string>() });
+      // Reload so the deleted rows disappear from the table.
+      await get().loadEntries();
+    } catch (err) {
+      set({
+        deleteError: err instanceof Error ? err.message : 'Failed to delete log entries',
+        deleteInFlight: false,
+      });
+    }
+  },
+
+  clearDeleteResult: () => {
+    set({ lastDeleteResult: null, deleteError: null });
   },
 
   toggleSelected: (id: string) => {

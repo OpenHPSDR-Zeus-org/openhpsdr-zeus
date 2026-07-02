@@ -114,6 +114,16 @@ public sealed record QrzPublishResult(
     string? Message);
 
 /// <summary>
+/// Delete one or more logbook entries by id. Mirrors <see cref="QrzPublishRequest"/>
+/// — the Logbook panel selects rows and acts on the whole selection at once.
+/// </summary>
+public sealed record LogDeleteRequest(
+    IEnumerable<string> LogEntryIds);
+
+public sealed record LogDeleteResponse(
+    int DeletedCount);
+
+/// <summary>
 /// Write the logbook (or a selected subset) to an ADIF file in a directory on
 /// the machine running the backend. <see cref="Directory"/> is optional — null
 /// or blank writes to the operator's Downloads folder. Used by the Logbook

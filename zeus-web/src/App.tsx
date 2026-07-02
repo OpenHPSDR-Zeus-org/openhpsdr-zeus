@@ -44,7 +44,7 @@
 // License for details.
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
-import { ChevronLeft, ChevronRight, Download, Upload } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, Trash2, Upload } from 'lucide-react';
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
 import { DigitalWindow } from './components/DigitalWindow';
@@ -545,6 +545,10 @@ export default function App() {
   const logImportError = useLoggerStore((s) => s.importError);
   const logSelectedIds = useLoggerStore((s) => s.selectedIds);
   const logPublishSelected = useLoggerStore((s) => s.publishSelectedToQrz);
+  const logDeleteSelected = useLoggerStore((s) => s.deleteSelected);
+  const logDeleteInFlight = useLoggerStore((s) => s.deleteInFlight);
+  const logDeleteError = useLoggerStore((s) => s.deleteError);
+  const logDeleteResult = useLoggerStore((s) => s.lastDeleteResult);
   const logExportAdif = useLoggerStore((s) => s.exportAdif);
   const logExportInFlight = useLoggerStore((s) => s.exportInFlight);
   const logExportResult = useLoggerStore((s) => s.lastExportResult);
@@ -557,6 +561,7 @@ export default function App() {
   const qrzHasApiKey = useQrzStore((s) => s.hasApiKey);
 
   const logImportInputRef = useRef<HTMLInputElement | null>(null);
+  const [logDeleteConfirm, setLogDeleteConfirm] = useState<string[] | null>(null);
   let logbookTitle = 'Logbook';
   if (logImportInFlight) {
     logbookTitle = 'Logbook · Importing…';
@@ -582,6 +587,12 @@ export default function App() {
   } else if (logExportResult) {
     const dir = logExportResult.path.replace(/[/\\][^/\\]*$/, '');
     logbookTitle = `Logbook · Exported ${logExportResult.count} → ${dir}`;
+  } else if (logDeleteInFlight) {
+    logbookTitle = 'Logbook · Deleting…';
+  } else if (logDeleteError) {
+    logbookTitle = `Logbook · ${logDeleteError.length > 28 ? 'Delete failed' : logDeleteError}`;
+  } else if (logDeleteResult) {
+    logbookTitle = `Logbook · Deleted ${logDeleteResult.deletedCount}`;
   }
 
   const logSelectedCount = logSelectedIds.size;
@@ -591,6 +602,10 @@ export default function App() {
     : logSelectedCount === 0
       ? 'Select one or more rows to publish'
       : 'Publish selected QSOs to QRZ logbook';
+  const deleteDisabled = logSelectedCount === 0 || logDeleteInFlight;
+  const deleteTitle = logSelectedCount === 0
+    ? 'Select one or more rows to delete'
+    : `Delete ${logSelectedCount} selected ${logSelectedCount === 1 ? 'entry' : 'entries'} from the logbook`;
 
   const handleLogImportFile = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.[0];
@@ -630,6 +645,17 @@ export default function App() {
       <button
         type="button"
         className="btn ghost sm"
+        onClick={() => setLogDeleteConfirm(Array.from(logSelectedIds))}
+        disabled={deleteDisabled}
+        title={deleteTitle}
+        aria-label="Delete selected log entries"
+      >
+        <Trash2 size={13} strokeWidth={2.2} aria-hidden="true" />
+        {logDeleteInFlight ? 'Deleting…' : `Delete (${logSelectedCount})`}
+      </button>
+      <button
+        type="button"
+        className="btn ghost sm"
         onClick={() => void logExportAdif()}
         title="Export all log entries to ADIF file"
       >
@@ -643,10 +669,13 @@ export default function App() {
     logImportInFlight,
     logPublishInFlight,
     logPublishSelected,
+    logDeleteInFlight,
     logSelectedCount,
     logSelectedIds,
     publishDisabled,
     publishTitle,
+    deleteDisabled,
+    deleteTitle,
   ]);
 
   // Live rotator heading — drives the map's beam lines when rotctld is up so
@@ -1281,6 +1310,24 @@ export default function App() {
         >
           <p>Reset {confirmResetLayout.name} to the default panel arrangement?</p>
           <p>This keeps the layout tab but replaces its current panel positions.</p>
+        </ConfirmDialog>
+      )}
+      {logDeleteConfirm && logDeleteConfirm.length > 0 && (
+        <ConfirmDialog
+          title="Delete log entries"
+          confirmLabel={`Delete ${logDeleteConfirm.length} ${logDeleteConfirm.length === 1 ? 'Entry' : 'Entries'}`}
+          onCancel={() => setLogDeleteConfirm(null)}
+          onConfirm={() => {
+            const ids = logDeleteConfirm;
+            setLogDeleteConfirm(null);
+            void logDeleteSelected(ids);
+          }}
+        >
+          <p>
+            Permanently delete {logDeleteConfirm.length} selected{' '}
+            {logDeleteConfirm.length === 1 ? 'QSO' : 'QSOs'} from the logbook?
+          </p>
+          <p>This cannot be undone. QSOs already uploaded to QRZ or a cloud logger are not retracted there.</p>
         </ConfirmDialog>
       )}
       <StartupUpdatePrompt

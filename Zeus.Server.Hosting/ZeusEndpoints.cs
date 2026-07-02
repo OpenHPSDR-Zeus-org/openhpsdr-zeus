@@ -4014,6 +4014,19 @@ public static class ZeusEndpoints
                 Results: results));
         });
 
+        // Permanently delete selected logbook entries. Mirrors the publish
+        // select-then-act pattern: the Logbook panel sends the ids of the
+        // selected rows. Local-only delete — nothing is retracted from QRZ or
+        // any cloud logger, only Zeus's own record is removed.
+        app.MapPost("/api/log/delete", async (LogDeleteRequest req, LogService logService, HttpContext ctx) =>
+        {
+            if (req.LogEntryIds == null || !req.LogEntryIds.Any())
+                return Results.BadRequest(new { error = "no log entry IDs provided" });
+
+            var deleted = await logService.DeleteLogEntriesAsync(req.LogEntryIds, ctx.RequestAborted);
+            return Results.Ok(new LogDeleteResponse(deleted));
+        });
+
         // -- Logging v2: HTTP cloud-log uploaders (Wavelog/Cloudlog + Club Log) --
         // Per-QSO realtime ADIF push. Egress OFF by default; fired automatically
         // from /api/log/entry. These endpoints manage config/secrets and a manual
