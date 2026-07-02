@@ -879,7 +879,15 @@ export default function App() {
         </>
       )
     ) : (
-      <>Panadapter · {(vfoHz / 1e6).toFixed(6)} MHz · {bandLabel}</>
+      // Opt the readout out of the .workspace-tile-title uppercase transform —
+      // the plate ("PANADAPTER") stays engraved-uppercase, but SI casing is
+      // preserved (MHz keeps its lowercase "z"; 80m stays lowercase "m").
+      <>
+        Panadapter ·{' '}
+        <span style={{ textTransform: 'none' }}>
+          {(vfoHz / 1e6).toFixed(6)} MHz · {bandLabel}
+        </span>
+      </>
     )
   ), [bandLabel, contact, dist, sp, terminatorActive, vfoHz]);
 
